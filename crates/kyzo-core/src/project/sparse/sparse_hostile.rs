@@ -15,11 +15,10 @@
 
 #![cfg(test)]
 
-use std::collections::BTreeMap;
-
 use crate::project::contract::search_rows;
 use crate::project::sparse::index::{
-    Sparse, SparseDoc, SparseSearchParams, setup_sparse_docs, sparse_total_docs,
+    Sparse, SparseDoc, SparseSearchParams, naive_sparse_dot_f64, setup_sparse_docs,
+    sparse_total_docs,
 };
 use crate::session::catalog::RelationHandle;
 use crate::store::fjall::new_fjall_storage;
@@ -142,23 +141,7 @@ fn insertion_order_is_irrelevant_to_score_bits() -> Result<()> {
 /// weight sets whose f32 accumulation is exact (small integers / exact
 /// binary fractions), the engine's f32 score must equal the f64 dot product.
 fn naive_dot_f64(docs: &[Doc], query: &[(u32, f32)]) -> Vec<(i64, f64)> {
-    let mut q = query.to_vec();
-    q.sort_by_key(|&(d, _)| d);
-    let mut out = vec![];
-    for (key, _t, vector) in docs {
-        let dmap: BTreeMap<u32, f32> = vector.iter().copied().collect();
-        let mut score = 0.0f64;
-        for &(qd, qw) in &q {
-            if let Some(&dw) = dmap.get(&qd) {
-                score += f64::from(qw) * f64::from(dw);
-            }
-        }
-        if score > 0.0 {
-            out.push((*key, score));
-        }
-    }
-    out.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
-    out
+    naive_sparse_dot_f64(docs, query)
 }
 
 #[test]

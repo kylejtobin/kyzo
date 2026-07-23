@@ -147,14 +147,7 @@ impl Supersession {
 /// Content digest for a correction — binds prior [`RecordId`] so the
 /// successor identity cannot collide with the prior.
 fn digest_correction(prior: RecordId, relation: &str, row: &[DataValue]) -> RecordContentDigest {
-    let mut h = Sha256::new();
-    h.update(b"kyzo.sugar.correction.v1");
-    h.update(prior.as_bytes());
-    h.update(relation.as_bytes());
-    for v in row {
-        h.update(encode_owned(v).as_bytes());
-    }
-    RecordContentDigest::from_digest(h.finalize().into())
+    super::digest_sugar_relation_row(b"kyzo.sugar.correction.v1", Some(&prior), relation, row)
 }
 
 /// Content digest for a semantic deletion — binds kind + prior so deletion

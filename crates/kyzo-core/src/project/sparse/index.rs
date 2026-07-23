@@ -608,14 +608,76 @@ pub(super) fn setup_sparse_docs(
     )
 }
 
+/// Naive full-scan dot-product reference core — ascending dimension order,
+/// positive scores only, sorted by descending score then key.
+#[cfg(test)]
+pub(crate) fn naive_sparse_dot<S>(
+    docs: &[SparseDoc<'_>],
+    query: &[(u32, f32)],
+    zero: S,
+    term: impl Fn(f32, f32) -> S,
+    score_positive: impl Fn(&S) -> bool,
+    score_cmp: impl Fn(&S, &S) -> std::cmp::Ordering,
+) -> Vec<(i64, S)>
+where
+    S: Copy + std::ops::AddAssign,
+{
+    use std::collections::BTreeMap;
+    let mut q = query.to_vec();
+    q.sort_by_key(|&(d, _)| d);
+    let mut out = vec![];
+    for (key, _tag, vector) in docs {
+        let dmap: BTreeMap<u32, f32> = vector.iter().copied().collect();
+        let mut score = zero;
+        for &(qd, qw) in &q {
+            if let Some(&dw) = dmap.get(&qd) {
+                score += term(qw, dw);
+            }
+        }
+        if score_positive(&score) {
+            out.push((*key, score));
+        }
+    }
+    out.sort_by(|a, b| score_cmp(&b.1, &a.1).then(a.0.cmp(&b.0)));
+    out
+}
+
+#[cfg(test)]
+pub(crate) fn naive_sparse_dot_f32(
+    docs: &[SparseDoc<'_>],
+    query: &[(u32, f32)],
+) -> Vec<(i64, f32)> {
+    naive_sparse_dot(
+        docs,
+        query,
+        0.0f32,
+        |qw, dw| qw * dw,
+        |score| *score > 0.0,
+        |a, b| a.total_cmp(b),
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn naive_sparse_dot_f64(
+    docs: &[SparseDoc<'_>],
+    query: &[(u32, f32)],
+) -> Vec<(i64, f64)> {
+    naive_sparse_dot(
+        docs,
+        query,
+        0.0f64,
+        |qw, dw| f64::from(qw) * f64::from(dw),
+        |score| *score > 0.0,
+        |a, b| a.total_cmp(b),
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Tests: the engine's executable law.
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
     use super::*;
     use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation};
     use crate::store::Storage;
@@ -697,23 +759,7 @@ mod tests {
     /// order (the same fixed order the engine uses). Obviously correct — a full
     /// scan, no inverted index — so `sparse_search` must agree byte-for-byte.
     fn naive_dot(docs: &[Doc], query: &[(u32, f32)]) -> Vec<(i64, f32)> {
-        let mut q = query.to_vec();
-        q.sort_by_key(|&(d, _)| d);
-        let mut out = vec![];
-        for (key, _tag, vector) in docs {
-            let dmap: BTreeMap<u32, f32> = vector.iter().copied().collect();
-            let mut score = 0.0f32;
-            for &(qd, qw) in &q {
-                if let Some(&dw) = dmap.get(&qd) {
-                    score += qw * dw; // ascending dimension order
-                }
-            }
-            if score > 0.0 {
-                out.push((*key, score));
-            }
-        }
-        out.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
-        out
+        super::naive_sparse_dot_f32(docs, query)
     }
 
     #[test]

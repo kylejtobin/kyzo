@@ -988,15 +988,29 @@ pub(crate) fn admit_record(
 // not records (source: kr-is-mandatory-durable-write-authority).
 // ─────────────────────────────────────────────────────────────────────────
 
-/// Digest a sugar relation row into a content-addressed record digest.
-fn digest_sugar_row(relation: &str, row: &[DataValue]) -> RecordContentDigest {
+/// Shared sugar-relation row digest scaffold — domain tag and optional prior
+/// [`RecordId`] are the caller's independence seat.
+pub(crate) fn digest_sugar_relation_row(
+    domain: &[u8],
+    prior: Option<&RecordId>,
+    relation: &str,
+    row: &[DataValue],
+) -> RecordContentDigest {
     let mut h = Sha256::new();
-    h.update(b"kyzo.sugar.row.v1");
+    h.update(domain);
+    if let Some(prior) = prior {
+        h.update(prior.as_bytes());
+    }
     h.update(relation.as_bytes());
     for v in row {
         h.update(encode_owned(v).as_bytes());
     }
     RecordContentDigest::from_digest(h.finalize().into())
+}
+
+/// Digest a sugar relation row into a content-addressed record digest.
+fn digest_sugar_row(relation: &str, row: &[DataValue]) -> RecordContentDigest {
+    digest_sugar_relation_row(b"kyzo.sugar.row.v1", None, relation, row)
 }
 
 /// One relation-row door into [`admit_record`]: statement construction +

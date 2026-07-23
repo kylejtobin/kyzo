@@ -1319,15 +1319,38 @@ impl<'a, T: ReadTx> SessionView<'a, T> {
         }
     }
 
+    fn route_scan(
+        &self,
+        handle: &RelationHandle,
+        as_of: Option<AsOf>,
+        kind: SessionScan<'_>,
+    ) -> TupleIter<'a> {
+        match (handle.residency(), as_of, kind) {
+            (Residency::Temp, None, SessionScan::All) => handle.scan_all(self.temp),
+            (Residency::Temp, Some(vld), SessionScan::All) => handle.skip_scan_all(self.temp, vld),
+            (Residency::Stored, None, SessionScan::All) => handle.scan_all(self.store),
+            (Residency::Stored, Some(vld), SessionScan::All) => {
+                handle.skip_scan_all(self.store, vld)
+            }
+            (Residency::Temp, None, SessionScan::Prefix(prefix)) => {
+                handle.scan_prefix(self.temp, prefix)
+            }
+            (Residency::Temp, Some(vld), SessionScan::Prefix(prefix)) => {
+                handle.skip_scan_prefix(self.temp, prefix, vld)
+            }
+            (Residency::Stored, None, SessionScan::Prefix(prefix)) => {
+                handle.scan_prefix(self.store, prefix)
+            }
+            (Residency::Stored, Some(vld), SessionScan::Prefix(prefix)) => {
+                handle.skip_scan_prefix(self.store, prefix, vld)
+            }
+        }
+    }
+
     /// Scan every row of a relation through the routed reader, as-of
     /// `as_of` when time travel is requested.
     pub(crate) fn scan_all(&self, handle: &RelationHandle, as_of: Option<AsOf>) -> TupleIter<'a> {
-        match (handle.residency(), as_of) {
-            (Residency::Temp, None) => handle.scan_all(self.temp),
-            (Residency::Temp, Some(vld)) => handle.skip_scan_all(self.temp, vld),
-            (Residency::Stored, None) => handle.scan_all(self.store),
-            (Residency::Stored, Some(vld)) => handle.skip_scan_all(self.store, vld),
-        }
+        self.route_scan(handle, as_of, SessionScan::All)
     }
 
     /// Prefix scan through the routed reader.
@@ -1337,13 +1360,13 @@ impl<'a, T: ReadTx> SessionView<'a, T> {
         prefix: &Tuple,
         as_of: Option<AsOf>,
     ) -> TupleIter<'a> {
-        match (handle.residency(), as_of) {
-            (Residency::Temp, None) => handle.scan_prefix(self.temp, prefix),
-            (Residency::Temp, Some(vld)) => handle.skip_scan_prefix(self.temp, prefix, vld),
-            (Residency::Stored, None) => handle.scan_prefix(self.store, prefix),
-            (Residency::Stored, Some(vld)) => handle.skip_scan_prefix(self.store, prefix, vld),
-        }
+        self.route_scan(handle, as_of, SessionScan::Prefix(prefix))
     }
+}
+
+enum SessionScan<'a> {
+    All,
+    Prefix(&'a Tuple),
 }
 
 /// The magic tier's schema seam, served by the session view.

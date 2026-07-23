@@ -1197,15 +1197,12 @@ impl RelationHandle {
         )
     }
 
-    pub(crate) fn scan_bounded_prefix<'a>(
+    fn scan_bounded_encoded<'a>(
         &self,
         tx: &'a impl ReadTx,
-        prefix: &[DataValue],
-        lower: &[ScanBound],
-        upper: &[ScanBound],
+        lower_encoded: Vec<u8>,
+        upper_encoded: Vec<u8>,
     ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
-        let lower_encoded = scan_key_lower(self.id, prefix, lower);
-        let upper_encoded = scan_key_upper(self.id, prefix, upper);
         match self.keyspace_kind {
             KeyspaceKind::Facts => {
                 let keys_len = self.metadata.keys.len();
@@ -1222,6 +1219,18 @@ impl RelationHandle {
         }
     }
 
+    pub(crate) fn scan_bounded_prefix<'a>(
+        &self,
+        tx: &'a impl ReadTx,
+        prefix: &[DataValue],
+        lower: &[ScanBound],
+        upper: &[ScanBound],
+    ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
+        let lower_encoded = scan_key_lower(self.id, prefix, lower);
+        let upper_encoded = scan_key_upper(self.id, prefix, upper);
+        self.scan_bounded_encoded(tx, lower_encoded, upper_encoded)
+    }
+
     /// [`scan_bounded_prefix`](Self::scan_bounded_prefix) with the prefix
     /// read THROUGH a projection of `row` — both scan bounds encoded
     /// straight from projected values plus the bound literals.
@@ -1235,20 +1244,7 @@ impl RelationHandle {
     ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
         let lower_encoded = scan_key_lower_projected(self.id, row, cols, lower);
         let upper_encoded = scan_key_upper_projected(self.id, row, cols, upper);
-        match self.keyspace_kind {
-            KeyspaceKind::Facts => {
-                let keys_len = self.metadata.keys.len();
-                Box::new(
-                    tx.range_skip_scan_tuple(
-                        &lower_encoded,
-                        &upper_encoded,
-                        AsOf::current(MAX_VALIDITY_TS),
-                    )
-                    .map(move |r| r.map(|t| Self::strip_time_slots(keys_len, t))),
-                )
-            }
-            KeyspaceKind::AlgorithmState => tx.range_scan_tuple(&lower_encoded, &upper_encoded),
-        }
+        self.scan_bounded_encoded(tx, lower_encoded, upper_encoded)
     }
 
     /// As-of variant of
