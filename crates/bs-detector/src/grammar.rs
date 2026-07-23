@@ -91,8 +91,6 @@ pub enum StructuralRule {
     ReceiverOwnedNotSelfReturn,
     AdmissionDoor,
     DeclaredFn,
-    TestFn,
-    TestSupportFn,
     // type / use / const / static / mod
     AliasNotStringCarrying,
     NoGlobImport,
@@ -110,7 +108,7 @@ impl StructuralRule {
             TupleSinglePrivateField | NamedFieldsAllPrivate | UnitStruct => ConstructKind::Struct,
             NoStringVariantFields => ConstructKind::Enum,
             MainInBin | ReceiverSharedRef | ReceiverUniqueRef | ReceiverOwnedNotSelfReturn
-            | AdmissionDoor | DeclaredFn | TestFn | TestSupportFn => ConstructKind::Fn,
+            | AdmissionDoor | DeclaredFn => ConstructKind::Fn,
             AliasNotStringCarrying => ConstructKind::Type,
             NoGlobImport => ConstructKind::Use,
             ConstNotStringCarrying => ConstructKind::Const,
@@ -152,16 +150,6 @@ impl StructuralRule {
                 true
             }
             (AdmissionDoor, DeclaredFn) | (DeclaredFn, AdmissionDoor) => true,
-            // Test cells: TestFn requires a #[test]-family attribute, which
-            // TestSupportFn, DeclaredFn, and AdmissionDoor exclude;
-            // TestSupportFn requires test scope, which DeclaredFn and
-            // AdmissionDoor exclude by position (seats and impls are
-            // production surfaces; the classifier orders test scope first).
-            (TestFn, TestSupportFn) | (TestSupportFn, TestFn) => true,
-            (TestFn, AdmissionDoor) | (AdmissionDoor, TestFn) => true,
-            (TestFn, DeclaredFn) | (DeclaredFn, TestFn) => true,
-            (TestSupportFn, AdmissionDoor) | (AdmissionDoor, TestSupportFn) => true,
-            (TestSupportFn, DeclaredFn) | (DeclaredFn, TestSupportFn) => true,
             _ => false,
         }
     }

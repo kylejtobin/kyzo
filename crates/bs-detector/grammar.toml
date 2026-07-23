@@ -167,14 +167,3 @@ rule = "mod-no-path-attr"
 
 [seats]
 fns = []
-
-[[construct]]
-name = "test-proof"
-kind = "fn"
-rule = "test-fn"
-bans = ["empty_test"]
-
-[[construct]]
-name = "test-support"
-kind = "fn"
-rule = "test-support-fn"

@@ -32,12 +32,12 @@ fn fixture_file(construct: &str, which: &str) -> Option<SourceFile> {
     let path = root.join(format!("fixtures/{construct}.{which}.rs"));
     let text = std::fs::read_to_string(&path).ok()?;
     let ast = syn::parse_file(&text).ok()?;
-    // composition-root discriminates on bin position, the test cells on
-    // test scope; everything else is judged as library code.
-    let rel = match construct {
-        "composition-root" => "crates/fx/src/main.rs",
-        "test-proof" | "test-support" => "crates/fx/tests/t.rs",
-        _ => "crates/fx/src/lib.rs",
+    // composition-root discriminates on bin position; everything else is
+    // judged as library code.
+    let rel = if construct == "composition-root" {
+        "crates/fx/src/main.rs"
+    } else {
+        "crates/fx/src/lib.rs"
     };
     Some(SourceFile {
         rel_path: rel.to_string(),

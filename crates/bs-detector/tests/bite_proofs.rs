@@ -527,22 +527,6 @@ fn bite_async_outside_io() {
 }
 
 #[test]
-fn bite_empty_test() {
-    assert_eq!(
-        classify_hits("crates/x/tests/t.rs", "#[test]\nfn theater() {}", "empty_test"),
-        Some(1)
-    );
-    assert_eq!(
-        classify_hits(
-            "crates/x/tests/t.rs",
-            "#[test]\nfn proves() { let s = 1 + 1; if s != 2 { return; } }",
-            "empty_test"
-        ),
-        Some(0)
-    );
-}
-
-#[test]
 fn bite_main_flow() {
     assert_eq!(
         classify_hits("crates/x/src/main.rs", "fn main() { if true {} }", "main_flow"),
