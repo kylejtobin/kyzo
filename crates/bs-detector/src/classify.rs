@@ -31,13 +31,14 @@ use crate::identity;
 
 /// The classify-side matcher names. Grammar::load accepts a ban name iff it
 /// is registered here or in `engines::shape`.
-pub const SCOPED_RULES: [&str; 6] = [
+pub const SCOPED_RULES: [&str; 7] = [
     "static_mut",
     "path_attr",
     "assign_expr",
     "nested_place_assign",
     "async_outside_io",
     "main_flow",
+    "empty_test",
 ];
 
 pub fn scoped_rule_registered(name: &str) -> bool {
@@ -273,6 +274,7 @@ pub fn classify_file(
         grammar,
         aliases,
         is_bin: file.rel_path.contains("src/main.rs") || file.rel_path.contains("/src/bin/"),
+        in_test_scope: file.rel_path.contains("/tests/") || file.rel_path.contains("/benches/"),
         out: vec![],
     };
     for item in &file.ast.items {
@@ -286,6 +288,9 @@ struct Walker<'a> {
     grammar: &'a Grammar,
     aliases: &'a AliasTable,
     is_bin: bool,
+    /// Inside a tests/ or benches/ file, or a #[cfg(test)] module: the two
+    /// test cells (test-proof, test-support) exist only here.
+    in_test_scope: bool,
     out: Vec<(String, Hit)>,
 }
 
@@ -322,9 +327,14 @@ impl<'a> Walker<'a> {
                     );
                 }
                 if let Some((_, items)) = &n.content {
+                    let was = self.in_test_scope;
+                    if is_cfg_test(&n.attrs) {
+                        self.in_test_scope = true;
+                    }
                     for i in items {
                         self.item(i);
                     }
+                    self.in_test_scope = was;
                 }
             }
             syn::Item::Use(n) => {
@@ -437,8 +447,32 @@ impl<'a> Walker<'a> {
 
     fn classify_module_fn(&mut self, n: &syn::ItemFn) {
         let line = span_line(&n.sig.ident.span());
+        if has_test_attr(&n.attrs) {
+            // test-proof: the #[test] attribute is the discriminator; the
+            // in-cell refusal is empty_test — a test with no body is
+            // theater wearing a green checkmark.
+            if n.block.stmts.is_empty() {
+                self.hit("empty_test", line, "empty_test".into());
+            }
+            self.fn_body_rules("test-proof", &n.sig, Some(&n.block), line, false);
+            return;
+        }
         if self.is_bin && n.sig.ident == "main" {
             self.fn_body_rules("composition-root", &n.sig, Some(&n.block), line, false);
+            return;
+        }
+        if self.in_test_scope {
+            // test-support: receiverless, test scope, module-internal. A
+            // pub helper is exported test scaffolding — refused.
+            if matches!(n.vis, syn::Visibility::Inherited) {
+                self.fn_body_rules("test-support", &n.sig, Some(&n.block), line, false);
+            } else {
+                self.hit(
+                    "unclassified",
+                    line,
+                    format!("unclassified-fn:{}", n.sig.ident),
+                );
+            }
             return;
         }
         match self.grammar.seat_for(self.rel, &n.sig.ident.to_string()) {
@@ -767,6 +801,35 @@ fn struct_rule_matches(rule: StructuralRule, n: &syn::ItemStruct) -> bool {
         StructuralRule::UnitStruct => matches!(&n.fields, syn::Fields::Unit),
         _ => false,
     }
+}
+
+/// The #[test] attribute family: any attribute whose path ends in `test`
+/// (`#[test]`, `#[tokio::test]`) — a parse fact, not a spelling guess on
+/// the whole path.
+fn has_test_attr(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|a| {
+        a.path()
+            .segments
+            .last()
+            .is_some_and(|s| s.ident == "test")
+    })
+}
+
+/// `#[cfg(test)]` on a module, matched structurally on the cfg argument.
+fn is_cfg_test(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|a| {
+        if !a.path().is_ident("cfg") {
+            return false;
+        }
+        let mut is_test = false;
+        let _ = a.parse_nested_meta(|meta| {
+            if meta.path.is_ident("test") {
+                is_test = true;
+            }
+            Ok(())
+        });
+        is_test
+    })
 }
 
 fn use_tree_has_glob(tree: &syn::UseTree) -> bool {
