@@ -888,6 +888,150 @@ fn begin_sealed_artifact(
     Ok(b)
 }
 
+/// One typed field on the CanonicalTranscript wire — the shared append authority.
+enum TranscriptWireField<'a> {
+    /// Big-endian u64.
+    U64(FieldId, u64),
+    /// Fixed 32-byte digest.
+    Digest(FieldId, &'a Digest32),
+}
+
+/// Append an ordered field list — sole loop authority for digest/u64 transcript bodies.
+fn append_transcript_fields(
+    b: &mut CanonicalTranscriptBuilder,
+    fields: &[TranscriptWireField<'_>],
+) -> Result<(), TranscriptRefuse> {
+    for field in fields {
+        match field {
+            TranscriptWireField::U64(id, value) => b.append_u64(*id, *value)?,
+            TranscriptWireField::Digest(id, digest) => b.append_digest32(*id, digest)?,
+        }
+    }
+    Ok(())
+}
+
+/// ForkGrant payload + fork StoreId derivation field order.
+fn fork_grant_identity_wire_fields<'a>(
+    grant_id: &'a Digest32,
+    predecessor_store: &'a Digest32,
+    fork_point_root: &'a Digest32,
+    successor_principal: &'a Digest32,
+    identity_seed: &'a Digest32,
+    key_material_commitment: &'a Digest32,
+) -> [TranscriptWireField<'a>; 6] {
+    [
+        TranscriptWireField::Digest(FieldId::GRANT_ID, grant_id),
+        TranscriptWireField::Digest(FieldId::PREDECESSOR_STORE, predecessor_store),
+        TranscriptWireField::Digest(FieldId::FORK_POINT_ROOT, fork_point_root),
+        TranscriptWireField::Digest(FieldId::SUCCESSOR_PRINCIPAL, successor_principal),
+        TranscriptWireField::Digest(FieldId::IDENTITY_SEED, identity_seed),
+        TranscriptWireField::Digest(FieldId::KEY_MATERIAL_COMMITMENT, key_material_commitment),
+    ]
+}
+
+/// Recovery grant / recovery WriteAuthority token identity + epoch tail field order.
+fn recovery_identity_and_epoch_wire_fields<'a>(
+    identity_seed: &'a Digest32,
+    key_material_commitment: &'a Digest32,
+    predecessor_epoch: u64,
+    predecessor_epoch_store_id: &'a Digest32,
+) -> [TranscriptWireField<'a>; 4] {
+    [
+        TranscriptWireField::Digest(FieldId::IDENTITY_SEED, identity_seed),
+        TranscriptWireField::Digest(FieldId::KEY_MATERIAL_COMMITMENT, key_material_commitment),
+        TranscriptWireField::U64(FieldId::PREDECESSOR_EPOCH, predecessor_epoch),
+        TranscriptWireField::Digest(
+            FieldId::PREDECESSOR_EPOCH_STORE_ID,
+            predecessor_epoch_store_id,
+        ),
+    ]
+}
+
+/// RecoveryGrant payload / recovery WriteAuthority token share header + identity tail.
+fn encode_recovery_scoped_transcript(
+    domain_label: &[u8],
+    scope_prefix: &[TranscriptWireField<'_>],
+    identity_seed: &Digest32,
+    key_material_commitment: &Digest32,
+    predecessor_epoch: u64,
+    predecessor_epoch_store_id: &Digest32,
+) -> Result<CanonicalTranscript, TranscriptRefuse> {
+    let mut b = begin_sealed_artifact(
+        SealedArtifactKind::RecoveryGrant,
+        FormatVersion::CURRENT,
+        domain_label,
+    )?;
+    append_transcript_fields(&mut b, scope_prefix)?;
+    append_transcript_fields(
+        &mut b,
+        &recovery_identity_and_epoch_wire_fields(
+            identity_seed,
+            key_material_commitment,
+            predecessor_epoch,
+            predecessor_epoch_store_id,
+        ),
+    )?;
+    Ok(b.seal())
+}
+
+/// Fork WriteAuthority token body after the sealed-artifact header.
+fn append_fork_write_authority_fields(
+    b: &mut CanonicalTranscriptBuilder,
+    store_id: &Digest32,
+    grant_id: &Digest32,
+    identity_seed: &Digest32,
+    key_material_commitment: &Digest32,
+) -> Result<(), TranscriptRefuse> {
+    b.append_digest32(FieldId::STORE_ID, store_id)?;
+    b.append_digest32(FieldId::GRANT_ID, grant_id)?;
+    b.append_digest32(FieldId::IDENTITY_SEED, identity_seed)?;
+    b.append_digest32(FieldId::KEY_MATERIAL_COMMITMENT, key_material_commitment)?;
+    Ok(())
+}
+
+/// StateRootHead compact digest body after the sealed-artifact header.
+fn append_state_root_head_fields(
+    b: &mut CanonicalTranscriptBuilder,
+    store_id: &Digest32,
+    fence_epoch: u64,
+    commit_ordinal: u64,
+    root: &Digest32,
+) -> Result<(), TranscriptRefuse> {
+    b.append_digest32(FieldId::STORE_ID, store_id)?;
+    b.append_u64(FieldId::CUT_FENCE_EPOCH, fence_epoch)?;
+    b.append_u64(FieldId::CUT_ORDINAL, commit_ordinal)?;
+    b.append_digest32(FieldId::STATE_ROOT, root)?;
+    Ok(())
+}
+
+/// Chained state-root bind body after the sealed-artifact header.
+fn append_chained_state_root_fields(
+    b: &mut CanonicalTranscriptBuilder,
+    content_root: &Digest32,
+    predecessor_root: &Digest32,
+    link_kind: u8,
+    commit_ordinal: u64,
+) -> Result<(), TranscriptRefuse> {
+    b.append_digest32(FieldId::CONTENT_ROOT, content_root)?;
+    b.append_digest32(FieldId::PREDECESSOR_ROOT, predecessor_root)?;
+    b.append_u64(FieldId::CHAIN_LINK_KIND, u64::from(link_kind))?;
+    b.append_u64(FieldId::CHAIN_COMMIT_ORDINAL, commit_ordinal)?;
+    Ok(())
+}
+
+/// RecoveryMatrix digest body after the sealed-artifact header.
+fn append_recovery_matrix_fields(
+    b: &mut CanonicalTranscriptBuilder,
+    threshold: u32,
+    max_signers: u32,
+    group_verifying_key: &Digest32,
+) -> Result<(), TranscriptRefuse> {
+    b.append_u64(FieldId::MATRIX_THRESHOLD, u64::from(threshold))?;
+    b.append_u64(FieldId::MATRIX_MAX_SIGNERS, u64::from(max_signers))?;
+    b.append_digest32(FieldId::GROUP_VERIFYING_KEY, group_verifying_key)?;
+    Ok(())
+}
+
 /// Mint the CMT-1 key-commitment transcript: domain-label + key-id + CryptoDomain.
 ///
 /// This is the ONE sealed-byte constructor for AEAD key-commitment (seat 59).
@@ -1072,12 +1216,17 @@ pub fn encode_fork_grant_payload(
         FormatVersion::CURRENT,
         FORK_GRANT_PAYLOAD_DOMAIN_LABEL,
     )?;
-    b.append_digest32(FieldId::GRANT_ID, grant_id)?;
-    b.append_digest32(FieldId::PREDECESSOR_STORE, predecessor_store)?;
-    b.append_digest32(FieldId::FORK_POINT_ROOT, fork_point_root)?;
-    b.append_digest32(FieldId::SUCCESSOR_PRINCIPAL, successor_principal)?;
-    b.append_digest32(FieldId::IDENTITY_SEED, identity_seed)?;
-    b.append_digest32(FieldId::KEY_MATERIAL_COMMITMENT, key_material_commitment)?;
+    append_transcript_fields(
+        &mut b,
+        &fork_grant_identity_wire_fields(
+            grant_id,
+            predecessor_store,
+            fork_point_root,
+            successor_principal,
+            identity_seed,
+            key_material_commitment,
+        ),
+    )?;
     Ok(b.seal())
 }
 
@@ -1090,22 +1239,18 @@ pub fn encode_recovery_grant_payload(
     successor_identity_seed: &Digest32,
     key_material_commitment: &Digest32,
 ) -> Result<CanonicalTranscript, TranscriptRefuse> {
-    let mut b = begin_sealed_artifact(
-        SealedArtifactKind::RecoveryGrant,
-        FormatVersion::CURRENT,
-        RECOVERY_GRANT_PAYLOAD_DOMAIN_LABEL,
-    )?;
     // FieldIds must be non-decreasing: named store + identity/key before epoch pair.
-    b.append_digest32(FieldId::GRANT_ID, grant_id)?;
-    b.append_digest32(FieldId::PREDECESSOR_STORE, store_id)?;
-    b.append_digest32(FieldId::IDENTITY_SEED, successor_identity_seed)?;
-    b.append_digest32(FieldId::KEY_MATERIAL_COMMITMENT, key_material_commitment)?;
-    b.append_u64(FieldId::PREDECESSOR_EPOCH, predecessor_epoch)?;
-    b.append_digest32(
-        FieldId::PREDECESSOR_EPOCH_STORE_ID,
+    encode_recovery_scoped_transcript(
+        RECOVERY_GRANT_PAYLOAD_DOMAIN_LABEL,
+        &[
+            TranscriptWireField::Digest(FieldId::GRANT_ID, grant_id),
+            TranscriptWireField::Digest(FieldId::PREDECESSOR_STORE, store_id),
+        ],
+        successor_identity_seed,
+        key_material_commitment,
+        predecessor_epoch,
         predecessor_epoch_store_id,
-    )?;
-    Ok(b.seal())
+    )
 }
 
 /// Encode a RecoveryMatrix digest transcript (former `recovery_matrix_digest`).
@@ -1119,9 +1264,7 @@ pub fn encode_recovery_matrix(
         FormatVersion::CURRENT,
         RECOVERY_MATRIX_DOMAIN_LABEL,
     )?;
-    b.append_u64(FieldId::MATRIX_THRESHOLD, u64::from(threshold))?;
-    b.append_u64(FieldId::MATRIX_MAX_SIGNERS, u64::from(max_signers))?;
-    b.append_digest32(FieldId::GROUP_VERIFYING_KEY, group_verifying_key)?;
+    append_recovery_matrix_fields(&mut b, threshold, max_signers, group_verifying_key)?;
     Ok(b.seal())
 }
 
@@ -1164,11 +1307,16 @@ pub fn encode_ancestor_read_grant_payload(
         FormatVersion::CURRENT,
         ANCESTOR_READ_GRANT_PAYLOAD_DOMAIN_LABEL,
     )?;
-    b.append_digest32(FieldId::STORE_ID, store_id)?;
-    b.append_u64(FieldId::FROM_EPOCH, from_epoch)?;
-    b.append_digest32(FieldId::FROM_EPOCH_STORE_ID, from_epoch_store_id)?;
-    b.append_u64(FieldId::TO_EPOCH, to_epoch)?;
-    b.append_digest32(FieldId::TO_EPOCH_STORE_ID, to_epoch_store_id)?;
+    append_transcript_fields(
+        &mut b,
+        &[
+            TranscriptWireField::Digest(FieldId::STORE_ID, store_id),
+            TranscriptWireField::U64(FieldId::FROM_EPOCH, from_epoch),
+            TranscriptWireField::Digest(FieldId::FROM_EPOCH_STORE_ID, from_epoch_store_id),
+            TranscriptWireField::U64(FieldId::TO_EPOCH, to_epoch),
+            TranscriptWireField::Digest(FieldId::TO_EPOCH_STORE_ID, to_epoch_store_id),
+        ],
+    )?;
     Ok(b.seal())
 }
 
@@ -1186,12 +1334,17 @@ pub fn encode_fork_store_id(
         FormatVersion::CURRENT,
         FORK_STORE_ID_DOMAIN_LABEL,
     )?;
-    b.append_digest32(FieldId::GRANT_ID, grant_id)?;
-    b.append_digest32(FieldId::PREDECESSOR_STORE, predecessor_store)?;
-    b.append_digest32(FieldId::FORK_POINT_ROOT, fork_point_root)?;
-    b.append_digest32(FieldId::SUCCESSOR_PRINCIPAL, successor_principal)?;
-    b.append_digest32(FieldId::IDENTITY_SEED, identity_seed)?;
-    b.append_digest32(FieldId::KEY_MATERIAL_COMMITMENT, key_material_commitment)?;
+    append_transcript_fields(
+        &mut b,
+        &fork_grant_identity_wire_fields(
+            grant_id,
+            predecessor_store,
+            fork_point_root,
+            successor_principal,
+            identity_seed,
+            key_material_commitment,
+        ),
+    )?;
     Ok(b.seal())
 }
 
@@ -1207,10 +1360,13 @@ pub fn encode_fork_write_token(
         FormatVersion::CURRENT,
         FORK_WRITE_TOKEN_DOMAIN_LABEL,
     )?;
-    b.append_digest32(FieldId::STORE_ID, store_id)?;
-    b.append_digest32(FieldId::GRANT_ID, grant_id)?;
-    b.append_digest32(FieldId::IDENTITY_SEED, identity_seed)?;
-    b.append_digest32(FieldId::KEY_MATERIAL_COMMITMENT, key_material_commitment)?;
+    append_fork_write_authority_fields(
+        &mut b,
+        store_id,
+        grant_id,
+        identity_seed,
+        key_material_commitment,
+    )?;
     Ok(b.seal())
 }
 
@@ -1223,22 +1379,18 @@ pub fn encode_recovery_write_token(
     successor_identity_seed: &Digest32,
     key_material_commitment: &Digest32,
 ) -> Result<CanonicalTranscript, TranscriptRefuse> {
-    let mut b = begin_sealed_artifact(
-        SealedArtifactKind::RecoveryGrant,
-        FormatVersion::CURRENT,
-        RECOVERY_WRITE_TOKEN_DOMAIN_LABEL,
-    )?;
     // FieldIds must be non-decreasing: identity/key before epoch pair.
-    b.append_digest32(FieldId::STORE_ID, store_id)?;
-    b.append_digest32(FieldId::GRANT_ID, grant_id)?;
-    b.append_digest32(FieldId::IDENTITY_SEED, successor_identity_seed)?;
-    b.append_digest32(FieldId::KEY_MATERIAL_COMMITMENT, key_material_commitment)?;
-    b.append_u64(FieldId::PREDECESSOR_EPOCH, predecessor_epoch)?;
-    b.append_digest32(
-        FieldId::PREDECESSOR_EPOCH_STORE_ID,
+    encode_recovery_scoped_transcript(
+        RECOVERY_WRITE_TOKEN_DOMAIN_LABEL,
+        &[
+            TranscriptWireField::Digest(FieldId::STORE_ID, store_id),
+            TranscriptWireField::Digest(FieldId::GRANT_ID, grant_id),
+        ],
+        successor_identity_seed,
+        key_material_commitment,
+        predecessor_epoch,
         predecessor_epoch_store_id,
-    )?;
-    Ok(b.seal())
+    )
 }
 
 /// Closed WAL record payload shapes for [`encode_wal_record`].
@@ -1316,10 +1468,7 @@ pub fn encode_state_root_head(
         FormatVersion::CURRENT,
         STATE_ROOT_HEAD_DOMAIN_LABEL,
     )?;
-    b.append_digest32(FieldId::STORE_ID, store_id)?;
-    b.append_u64(FieldId::CUT_FENCE_EPOCH, fence_epoch)?;
-    b.append_u64(FieldId::CUT_ORDINAL, commit_ordinal)?;
-    b.append_digest32(FieldId::STATE_ROOT, root)?;
+    append_state_root_head_fields(&mut b, store_id, fence_epoch, commit_ordinal, root)?;
     Ok(b.seal())
 }
 
@@ -1337,10 +1486,13 @@ pub fn encode_chained_state_root(
         FormatVersion::CURRENT,
         CHAINED_STATE_ROOT_DOMAIN_LABEL,
     )?;
-    b.append_digest32(FieldId::CONTENT_ROOT, content_root)?;
-    b.append_digest32(FieldId::PREDECESSOR_ROOT, predecessor_root)?;
-    b.append_u64(FieldId::CHAIN_LINK_KIND, u64::from(link_kind))?;
-    b.append_u64(FieldId::CHAIN_COMMIT_ORDINAL, commit_ordinal)?;
+    append_chained_state_root_fields(
+        &mut b,
+        content_root,
+        predecessor_root,
+        link_kind,
+        commit_ordinal,
+    )?;
     Ok(b.seal())
 }
 
