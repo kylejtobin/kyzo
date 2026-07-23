@@ -1324,24 +1324,31 @@ mod tests {
 
     // ── valid-but-stale rollback (§56–§58): stored prior tip catches swap ──
 
-    /// An older internally-consistent backup still has a well-formed content
-    /// root (cold merkle of that snapshot verifies). Detection is root
-    /// comparison against the stored prior tip on [`RootChain`] — without a
-    /// stored prior, cold rescan of the restored bytes alone cannot notice
-    /// the rollback. Swap state-at-cut-1 under a tip advanced to cut-3 →
-    /// [`roots_equal_at_cut`] is false.
-    #[test]
-    fn valid_but_stale_rollback_detected_against_stored_prior() -> Result<()> {
+    /// Three-cut mint/append chain shared by rollback and point-in-time tests.
+    struct ThreeCutChainFixture {
+        store_id: crate::store::open::StoreId,
+        fence: crate::store::epoch::FenceEpoch,
+        state_v1: Vec<(Vec<u8>, Vec<u8>)>,
+        content_v1: StateRoot,
+        content_v2: StateRoot,
+        content_v3: StateRoot,
+        o1: crate::store::sweep::CommitOrdinal,
+        o2: crate::store::sweep::CommitOrdinal,
+        o3: crate::store::sweep::CommitOrdinal,
+        chain: super::RootChain,
+        cut_root_o1: StateRoot,
+        cut_root_o2: StateRoot,
+        tip_root: StateRoot,
+    }
+
+    fn three_cut_mint_append_chain(
+        store_id: crate::store::open::StoreId,
+    ) -> Result<ThreeCutChainFixture> {
         use crate::store::epoch::FenceEpoch;
-        use crate::store::open::StoreId;
         use crate::store::sweep::CommitOrdinal;
 
-        use super::{
-            ChainLinkKind, ChainedStateRoot, GENESIS_ROOT, RootChain, as_of_root,
-            roots_equal_at_cut,
-        };
+        use super::{ChainLinkKind, ChainedStateRoot, RootChain};
 
-        let store_id = StoreId::from_digest([0x58; 32]);
         let fence = FenceEpoch::genesis(store_id);
 
         let state_v1: Vec<(Vec<u8>, Vec<u8>)> = vec![
@@ -1370,7 +1377,6 @@ mod tests {
         let o3 = o2.successor()?;
 
         let mut chain = RootChain::empty();
-        assert_eq!(chain.prior_root(), GENESIS_ROOT);
 
         let link1 = ChainedStateRoot::mint(
             store_id,
@@ -1380,8 +1386,8 @@ mod tests {
             chain.prior_root(),
             ChainLinkKind::Ordinary,
         )?;
+        let cut_root_o1 = link1.root();
         chain.append(link1)?;
-        let root_at_v1 = as_of_root(&chain, o1)?;
 
         let link2 = ChainedStateRoot::mint(
             store_id,
@@ -1391,6 +1397,7 @@ mod tests {
             chain.prior_root(),
             ChainLinkKind::Ordinary,
         )?;
+        let cut_root_o2 = link2.root();
         chain.append(link2)?;
 
         let link3 = ChainedStateRoot::mint(
@@ -1401,11 +1408,50 @@ mod tests {
             chain.prior_root(),
             ChainLinkKind::Ordinary,
         )?;
+        let tip_root = link3.root();
         chain.append(link3)?;
 
+        Ok(ThreeCutChainFixture {
+            store_id,
+            fence,
+            state_v1,
+            content_v1,
+            content_v2,
+            content_v3,
+            o1,
+            o2,
+            o3,
+            chain,
+            cut_root_o1,
+            cut_root_o2,
+            tip_root,
+        })
+    }
+
+    /// An older internally-consistent backup still has a well-formed content
+    /// root (cold merkle of that snapshot verifies). Detection is root
+    /// comparison against the stored prior tip on [`RootChain`] — without a
+    /// stored prior, cold rescan of the restored bytes alone cannot notice
+    /// the rollback. Swap state-at-cut-1 under a tip advanced to cut-3 →
+    /// [`roots_equal_at_cut`] is false.
+    #[test]
+    fn valid_but_stale_rollback_detected_against_stored_prior() -> Result<()> {
+        use crate::store::open::StoreId;
+
+        use super::{
+            ChainLinkKind, ChainedStateRoot, GENESIS_ROOT, RootChain, as_of_root,
+            roots_equal_at_cut,
+        };
+
+        let store_id = StoreId::from_digest([0x58; 32]);
+        assert_eq!(RootChain::empty().prior_root(), GENESIS_ROOT);
+
+        let fx = three_cut_mint_append_chain(store_id)?;
+        let root_at_v1 = as_of_root(&fx.chain, fx.o1)?;
+
         // T1 stores the prior tip on the SweepDoor — live tip after commit 3.
-        let stored_prior = chain.prior_root();
-        let tip_as_of = as_of_root(&chain, o3)?;
+        let stored_prior = fx.chain.prior_root();
+        let tip_as_of = as_of_root(&fx.chain, fx.o3)?;
         assert!(
             roots_equal_at_cut(stored_prior, tip_as_of),
             "live tip prior equals as-of root at tip cut"
@@ -1413,12 +1459,12 @@ mod tests {
 
         // Attacker swaps an older internally-consistent state (v1 snapshot).
         // Recompute: content root of the restored bytes is well-formed.
-        let restored_content = StateRoot::from_merkle(root_of_pairs(&state_v1)?);
+        let restored_content = StateRoot::from_merkle(root_of_pairs(&fx.state_v1)?);
         assert_eq!(
-            restored_content, content_v1,
+            restored_content, fx.content_v1,
             "older state remains internally consistent"
         );
-        let stale_as_of = as_of_root(&chain, o1)?;
+        let stale_as_of = as_of_root(&fx.chain, fx.o1)?;
         assert_eq!(stale_as_of, root_at_v1);
 
         // Detection: stored tip prior vs older cut — mismatch (§58).
@@ -1429,12 +1475,12 @@ mod tests {
 
         // Swap older content under the tip ordinal with the lawful predecessor:
         // still ≠ stored tip (content changed; chain bind notices).
-        let pred_at_o2 = as_of_root(&chain, o2)?;
+        let pred_at_o2 = as_of_root(&fx.chain, fx.o2)?;
         let forged_at_tip = ChainedStateRoot::mint(
-            store_id,
-            fence,
-            o3,
-            content_v1,
+            fx.store_id,
+            fx.fence,
+            fx.o3,
+            fx.content_v1,
             pred_at_o2,
             ChainLinkKind::Ordinary,
         )?;
@@ -1445,7 +1491,7 @@ mod tests {
 
         // Controls: same cut equals itself; tip equals tip.
         assert!(roots_equal_at_cut(stale_as_of, root_at_v1));
-        assert!(roots_equal_at_cut(stored_prior, chain.prior_root()));
+        assert!(roots_equal_at_cut(stored_prior, fx.chain.prior_root()));
 
         Ok(())
     }
@@ -1748,95 +1794,31 @@ mod tests {
     /// from tip and from a later cut.
     #[test]
     fn as_of_root_point_in_time_returns_past_cut_anchor() -> Result<()> {
-        use crate::store::epoch::FenceEpoch;
         use crate::store::open::StoreId;
-        use crate::store::sweep::CommitOrdinal;
 
-        use super::{
-            ChainLinkKind, ChainedStateRoot, GENESIS_ROOT, RootChain, as_of_root,
-            roots_equal_at_cut,
-        };
+        use super::{as_of_root, roots_equal_at_cut};
 
         let store_id = StoreId::from_digest([0x57; 32]);
-        let fence = FenceEpoch::genesis(store_id);
-
-        let state_v1: Vec<(Vec<u8>, Vec<u8>)> = vec![
-            (b"k00".to_vec(), b"v0".to_vec()),
-            (b"k01".to_vec(), b"v1".to_vec()),
-        ];
-        let state_v2: Vec<(Vec<u8>, Vec<u8>)> = {
-            let mut s = state_v1.clone();
-            s.push((b"k02".to_vec(), b"v2".to_vec()));
-            s
-        };
-        let state_v3: Vec<(Vec<u8>, Vec<u8>)> = {
-            let mut s = state_v2.clone();
-            s.push((b"k03".to_vec(), b"v3".to_vec()));
-            s
-        };
-
-        let content_v1 = StateRoot::from_merkle(root_of_pairs(&state_v1)?);
-        let content_v2 = StateRoot::from_merkle(root_of_pairs(&state_v2)?);
-        let content_v3 = StateRoot::from_merkle(root_of_pairs(&state_v3)?);
-        assert_ne!(content_v1, content_v2);
-        assert_ne!(content_v2, content_v3);
-
-        let o1 = CommitOrdinal::ZERO.successor()?;
-        let o2 = o1.successor()?;
-        let o3 = o2.successor()?;
-
-        let mut chain = RootChain::empty();
-        let link1 = ChainedStateRoot::mint(
-            store_id,
-            fence,
-            o1,
-            content_v1,
-            GENESIS_ROOT,
-            ChainLinkKind::Ordinary,
-        )?;
-        let cut_root_o1 = link1.root();
-        chain.append(link1)?;
-
-        let link2 = ChainedStateRoot::mint(
-            store_id,
-            fence,
-            o2,
-            content_v2,
-            chain.prior_root(),
-            ChainLinkKind::Ordinary,
-        )?;
-        let cut_root_o2 = link2.root();
-        chain.append(link2)?;
-
-        let link3 = ChainedStateRoot::mint(
-            store_id,
-            fence,
-            o3,
-            content_v3,
-            chain.prior_root(),
-            ChainLinkKind::Ordinary,
-        )?;
-        let tip_root = link3.root();
-        chain.append(link3)?;
+        let fx = three_cut_mint_append_chain(store_id)?;
 
         // Past cut: as_of_root equals the StateRoot minted at that cut.
-        let as_of_o1 = as_of_root(&chain, o1)?;
+        let as_of_o1 = as_of_root(&fx.chain, fx.o1)?;
         assert!(
-            roots_equal_at_cut(as_of_o1, cut_root_o1),
+            roots_equal_at_cut(as_of_o1, fx.cut_root_o1),
             "point-in-time: as_of_root at o1 equals that cut's StateRoot"
         );
 
         // Mid cut likewise.
-        let as_of_o2 = as_of_root(&chain, o2)?;
+        let as_of_o2 = as_of_root(&fx.chain, fx.o2)?;
         assert!(
-            roots_equal_at_cut(as_of_o2, cut_root_o2),
+            roots_equal_at_cut(as_of_o2, fx.cut_root_o2),
             "point-in-time: as_of_root at o2 equals that cut's StateRoot"
         );
 
         // Past ≠ tip; past ≠ later cut — who-believed-what-when is cut-scoped.
-        let tip_as_of = as_of_root(&chain, o3)?;
+        let tip_as_of = as_of_root(&fx.chain, fx.o3)?;
         assert!(
-            roots_equal_at_cut(tip_as_of, tip_root),
+            roots_equal_at_cut(tip_as_of, fx.tip_root),
             "point-in-time: as_of_root at tip equals tip StateRoot"
         );
         assert!(
