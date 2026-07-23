@@ -600,37 +600,64 @@ mod tests {
             .into_diagnostic()?)
     }
 
+    /// One arena sealed after interning `1`, with the pre-seal stamp.
+    fn stale_stamp_after_seal() -> Result<(Arena, StampedCode)> {
+        let mut arena = Arena::new();
+        let sc = intern_num(&mut arena, 1)?;
+        arena.seal().into_diagnostic()?;
+        Ok((arena, sc))
+    }
+
+    /// Foreign stamp from arena `a` against arena `b`'s live frame.
+    fn foreign_stamp_in_b() -> Result<(Arena, Arena, StampedCode)> {
+        let mut a = Arena::new();
+        let mut b = Arena::new();
+        let sa = intern_num(&mut a, 1)?;
+        b.intern(b"x").into_diagnostic()?;
+        Ok((a, b, sa))
+    }
+
     // ------------------------------------------------------------------
     // Write door: only domain-lawful stamps enter (typed refusal).
     // ------------------------------------------------------------------
 
-    #[test]
-    fn write_door_refuses_stale_stamps() -> Result<()> {
-        let mut arena = Arena::new();
-        let sc = intern_num(&mut arena, 1)?;
-        arena.seal().into_diagnostic()?;
-        let f = arena.frame();
-        let mut col = CodeColumn::new_in(&f);
+    /// Push that must refuse at the write door; panics if the column admits.
+    fn assert_push_refuses(col: &mut CodeColumn, sc: StampedCode) -> Denial {
+        col.push(sc).expect_err("write door must refuse typed")
+    }
+
+    fn expect_epoch_mismatch_on_push(col: &mut CodeColumn, sc: StampedCode) -> Result<()> {
+        let denial = assert_push_refuses(col, sc);
         assert!(
-            matches!(col.push(sc), Err(Denial::EpochMismatch { .. })),
+            matches!(denial, Denial::EpochMismatch { .. }),
             "epoch 0 stamp into an epoch 1 column must refuse typed"
         );
         Ok(())
     }
 
-    #[test]
-    fn write_door_refuses_foreign_stamps() -> Result<()> {
-        let mut a = Arena::new();
-        let mut b = Arena::new();
-        let sa = intern_num(&mut a, 1)?;
-        b.intern(b"x").into_diagnostic()?;
-        let fb = b.frame();
-        let mut col = CodeColumn::new_in(&fb);
+    fn expect_arena_mismatch_on_push(col: &mut CodeColumn, sc: StampedCode) -> Result<()> {
+        let denial = assert_push_refuses(col, sc);
         assert!(
-            matches!(col.push(sa), Err(Denial::ArenaMismatch { .. })),
+            matches!(denial, Denial::ArenaMismatch { .. }),
             "foreign-arena stamp must refuse typed"
         );
         Ok(())
+    }
+
+    #[test]
+    fn write_door_refuses_stale_stamps() -> Result<()> {
+        let (arena, sc) = stale_stamp_after_seal()?;
+        let f = arena.frame();
+        let mut col = CodeColumn::new_in(&f);
+        expect_epoch_mismatch_on_push(&mut col, sc)
+    }
+
+    #[test]
+    fn write_door_refuses_foreign_stamps() -> Result<()> {
+        let (_a, b, sa) = foreign_stamp_in_b()?;
+        let fb = b.frame();
+        let mut col = CodeColumn::new_in(&fb);
+        expect_arena_mismatch_on_push(&mut col, sa)
     }
 
     // ------------------------------------------------------------------

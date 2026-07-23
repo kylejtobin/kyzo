@@ -1930,6 +1930,35 @@ mod tests {
         Ok(Arena::intern(arena, b).into_diagnostic()?)
     }
 
+    /// After sealing epoch 0 with `x` interned, returns the remap and a
+    /// fresh epoch-1 stamp for `y`.
+    fn sealed_remap_with_epoch1_stamp() -> Result<(EpochRemap, StampedCode)> {
+        let mut arena = Arena::new();
+        must_intern(&mut arena, b"x")?;
+        let r1 = arena.seal().into_diagnostic()?;
+        let sc_new = must_intern(&mut arena, b"y")?;
+        Ok((r1, sc_new))
+    }
+
+    /// After snapshot with `x` interned, returns the snapshot and a
+    /// post-cut stamp for `y`.
+    fn snapshot_with_post_cut_stamp() -> Result<(Snapshot, StampedCode)> {
+        let mut arena = Arena::new();
+        must_intern(&mut arena, b"x")?;
+        let snap = arena.snapshot();
+        let later = must_intern(&mut arena, b"y")?;
+        Ok((snap, later))
+    }
+
+    /// Two arenas at epoch 0 with `alpha` stamped in `a` and `beta` in `b`.
+    fn cross_arena_alpha_in_a() -> Result<(Arena, Arena, StampedCode)> {
+        let mut a = Arena::new();
+        let mut b = Arena::new();
+        let sa = must_intern(&mut a, b"alpha")?;
+        must_intern(&mut b, b"beta")?;
+        Ok((a, b, sa))
+    }
+
     // ------------------------------------------------------------------
     // Naive oracle: the epoch-scoped interning architecture stated so
     // simply it is obviously correct. The arena must agree with it on
@@ -2349,10 +2378,7 @@ mod tests {
 
     #[test]
     fn remap_refuses_wrong_epoch_input() -> Result<()> {
-        let mut arena = Arena::new();
-        must_intern(&mut arena, b"x")?;
-        let r1 = arena.seal().into_diagnostic()?;
-        let sc_new = must_intern(&mut arena, b"y")?; // epoch 1
+        let (r1, sc_new) = sealed_remap_with_epoch1_stamp()?;
         assert!(
             matches!(r1.apply(sc_new), Err(Denial::EpochMismatch { .. })),
             "r1 reads epoch-0 codes only — typed refusal"
@@ -2378,10 +2404,7 @@ mod tests {
 
     #[test]
     fn cross_arena_stamp_refuses_in_frame_spend() -> Result<()> {
-        let mut a = Arena::new();
-        let mut b = Arena::new();
-        let sa = must_intern(&mut a, b"alpha")?;
-        must_intern(&mut b, b"beta")?;
+        let (_a, mut b, sa) = cross_arena_alpha_in_a()?;
         assert!(
             matches!(b.frame().resolve(sa), Err(Denial::ArenaMismatch { .. })),
             "foreign-arena stamp must refuse typed"
@@ -2488,10 +2511,7 @@ mod tests {
 
     #[test]
     fn snapshot_refuses_codes_past_its_cut() -> Result<()> {
-        let mut arena = Arena::new();
-        must_intern(&mut arena, b"x")?;
-        let snap = arena.snapshot();
-        let later = must_intern(&mut arena, b"y")?; // same epoch, after the cut
+        let (snap, later) = snapshot_with_post_cut_stamp()?;
         assert!(
             matches!(snap.resolve(later), Err(Denial::VisibilityOverflow { .. })),
             "same-epoch code past the snapshot cut must refuse typed"
@@ -2526,10 +2546,7 @@ mod tests {
 
     #[test]
     fn cross_arena_stamp_refuses_in_snapshots() -> Result<()> {
-        let mut a = Arena::new();
-        let mut b = Arena::new();
-        let sa = must_intern(&mut a, b"alpha")?;
-        must_intern(&mut b, b"beta")?;
+        let (_a, mut b, sa) = cross_arena_alpha_in_a()?;
         assert!(
             matches!(b.snapshot().resolve(sa), Err(Denial::ArenaMismatch { .. })),
             "foreign-arena stamp in snapshot must refuse typed"
