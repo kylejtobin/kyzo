@@ -19,7 +19,7 @@
 //! [`admit`] is that law made one function: EVERY input-declared reservation
 //! is admitted here, bounded by a `available` count that is itself proven
 //! finite (typically the number of candidate items that actually exist). The
-//! `allocation_admission` resonance check enforces the seam mechanically —
+//! `allocation_admission` gate check enforces the seam mechanically —
 //! no `with_capacity`/`reserve` argument may carry its own `.min(...)` cap;
 //! capacity capping happens in exactly this one place.
 
