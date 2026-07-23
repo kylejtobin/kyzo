@@ -195,10 +195,60 @@ pub struct SeatFn {
     pub io: bool,
 }
 
+/// One declared doctrine-construct instance: species pairs, lifecycles,
+/// capability handles, currencies, wire envelopes, drop-bound resources.
+/// Declaration is approval of existence; content is policed by the
+/// classifier like any item. The `dead_seat` pass reds a declaration whose
+/// type no longer exists — a seat is never allowed to outlive its item.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SeatType {
+    pub file: String,
+    pub name: String,
+    /// One of: wire-envelope, drop-bound-resource, species-pair,
+    /// sealed-lifecycle, capability-handle, epoch-scoped-currency.
+    pub construct: String,
+}
+
+pub const DECLARED_CONSTRUCTS: [&str; 6] = [
+    "wire-envelope",
+    "drop-bound-resource",
+    "species-pair",
+    "sealed-lifecycle",
+    "capability-handle",
+    "epoch-scoped-currency",
+];
+
+/// One declared config constructor: the only fn in its binary allowed to
+/// read the environment (config-once law).
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SeatConfig {
+    pub file: String,
+    pub path: String,
+}
+
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Seats {
     pub fns: Vec<SeatFn>,
+    #[serde(default)]
+    pub config_fns: Vec<SeatConfig>,
+    #[serde(default)]
+    pub declared: Vec<SeatType>,
+}
+
+/// The door law: every workspace crate holds exactly one declared role.
+/// Engine crates are the substrate; tool crates (verification harnesses,
+/// the gate itself) import freely but are NAMED here, never silent; host
+/// crates may import engine paths only from their allowed prefix list —
+/// which starts EMPTY: default deny, operator widens.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Door {
+    pub engine: Vec<String>,
+    pub tools: Vec<String>,
+    pub hosts: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -217,6 +267,7 @@ struct GrammarFile {
     bans: BansFile,
     construct: Vec<ConstructDef>,
     seats: Seats,
+    door: Door,
 }
 
 /// The loaded, validated grammar.
@@ -230,6 +281,7 @@ pub struct Grammar {
     pub absolute: BTreeSet<String>,
     pub constructs: Vec<ConstructDef>,
     pub seats: Seats,
+    pub door: Door,
 }
 
 impl Grammar {
@@ -378,6 +430,49 @@ impl Grammar {
                 bail!("duplicate seat {}#{}", s.file, s.path);
             }
         }
+        for s in &parsed.seats.declared {
+            if !DECLARED_CONSTRUCTS.contains(&s.construct.as_str()) {
+                bail!(
+                    "declared seat {}#{} names unknown construct `{}`",
+                    s.file,
+                    s.name,
+                    s.construct
+                );
+            }
+        }
+
+        // The door law is TOTAL over the workspace: every directory under
+        // crates/ holding a Cargo.toml is engine, tool, or host — exactly
+        // one. An undeclared crate is a silent exemption; refuse.
+        if let Some(crates_dir) = path.parent().and_then(|p| p.parent()) {
+            let mut roles: BTreeMap<&str, &str> = BTreeMap::new();
+            for (list, role) in [(&parsed.door.engine, "engine"), (&parsed.door.tools, "tool")] {
+                for name in list {
+                    if roles.insert(name.as_str(), role).is_some() {
+                        bail!("crate `{name}` holds two door roles");
+                    }
+                }
+            }
+            for name in parsed.door.hosts.keys() {
+                if roles.insert(name.as_str(), "host").is_some() {
+                    bail!("crate `{name}` holds two door roles");
+                }
+            }
+            let entries = std::fs::read_dir(crates_dir)
+                .with_context(|| format!("reading {}", crates_dir.display()))?;
+            for entry in entries {
+                let entry = entry.with_context(|| "walking crates/ for door totality")?;
+                if !entry.path().join("Cargo.toml").is_file() {
+                    continue;
+                }
+                let name = entry.file_name().to_string_lossy().to_string();
+                if !roles.contains_key(name.as_str()) {
+                    bail!(
+                        "crate `{name}` holds no door role — engine, tool, or host; nothing is silent"
+                    );
+                }
+            }
+        }
 
         Ok(Grammar {
             bans_expression: parsed.bans.expression,
@@ -385,6 +480,7 @@ impl Grammar {
             absolute: parsed.bans.absolute.into_iter().collect(),
             constructs: parsed.construct,
             seats: parsed.seats,
+            door: parsed.door,
         })
     }
 }

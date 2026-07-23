@@ -472,9 +472,10 @@ fn real_grammar() -> Option<bs_detector::grammar::Grammar> {
 fn classify_hits(rel: &str, src: &str, check: &str) -> Option<usize> {
     let f = parsed(rel, src)?;
     let aliases = bs_detector::classify::AliasTable::build(std::slice::from_ref(&f)).ok()?;
+    let enums = bs_detector::classify::enum_idents(std::slice::from_ref(&f));
     let g = real_grammar()?;
     Some(
-        bs_detector::classify::classify_file(&g, &aliases, &f)
+        bs_detector::classify::classify_file(&g, &aliases, &enums, &f)
             .into_iter()
             .filter(|(c, _)| c == check)
             .count(),

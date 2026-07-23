@@ -309,3 +309,33 @@ caught_by = "meta pass `dead_citation`: citation resolved against the tree and l
 name = "empty_test"
 law = "a #[test] fn with an empty body — test theater: a green checkmark certifying nothing"
 caught_by = "construct-scoped ban on `test-proof`"
+
+[[law]]
+name = "total_refusal"
+law = "a workspace Result whose error position is not a workspace enum or in-scope type parameter — String, anyhow, Box<dyn Error>, and elided errors are untyped refusal, which is no refusal"
+caught_by = "classifier signature check `total_refusal` on every fn"
+
+[[law]]
+name = "sealed_public_door"
+law = "a host crate importing an engine path outside its allowed prefix list — the engine's public door is a stated list, not whatever got imported"
+caught_by = "classifier use-item check against grammar.toml [door]"
+
+[[law]]
+name = "config_once"
+law = "an environment read outside the declared config constructor — configuration enters once, at one named door, or it is ambient state"
+caught_by = "classifier body rule `config_once` against [seats].config_fns"
+
+[[law]]
+name = "undeclared_wire"
+law = "a serde-derived struct not declared as a wire-envelope seat — serialization surface is stated law, never ambient"
+caught_by = "classifier derive check against [seats].declared"
+
+[[law]]
+name = "undeclared_resource"
+law = "a Drop impl whose type is not declared as a drop-bound-resource seat — resource lifecycle is stated law, never ambient"
+caught_by = "classifier impl check against [seats].declared"
+
+[[law]]
+name = "dead_seat"
+law = "a declared seat whose item no longer exists — a seat never outlives its item; no waiver can cover it"
+caught_by = "run-level pass resolving every seat against the tree"

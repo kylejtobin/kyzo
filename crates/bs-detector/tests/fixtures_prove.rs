@@ -48,8 +48,9 @@ fn fixture_file(construct: &str, which: &str) -> Option<SourceFile> {
 
 fn hits_for(grammar: &Grammar, file: &SourceFile) -> Option<Vec<(String, String)>> {
     let aliases = AliasTable::build(std::slice::from_ref(file)).ok()?;
+    let enums = classify::enum_idents(std::slice::from_ref(file));
     Some(
-        classify::classify_file(grammar, &aliases, file)
+        classify::classify_file(grammar, &aliases, &enums, file)
             .into_iter()
             .map(|(c, h)| (c, h.construct))
             .collect(),
