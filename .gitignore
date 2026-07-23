@@ -18,10 +18,6 @@
 CLAUDE-AND-CURSOR.md
 
 # Board context (#140) — generated from GitHub, never truth
-.claude/active-story.md
-.claude/next-work.md
-.claude/board-signal.md
-.claude/.work-context-cache.md
 __pycache__/
 .claude/.focus-gate-cache
 
@@ -35,8 +31,6 @@ __pycache__/
 *.vsix
 
 # Claude Code kyzo-plan 0.2.9 sync copies (operator-ordered; not story allowlist)
-.claude/agents/kyzo-plan-*.md
-.claude/skills/kyzo-plan-*/
 crates/xtask/resonance.log*
 /kyzo
 
