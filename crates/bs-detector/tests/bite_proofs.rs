@@ -438,7 +438,6 @@ fn the_real_grammar_and_laws_load_and_bind_to_this_file() {
         "unclassified",
         "condemned",
         "seat_drift",
-        "dead_citation",
         "derive_bypass",
         "copy_detector",
         "agreement_registry",

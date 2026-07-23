@@ -38,12 +38,6 @@ struct Cli {
     /// Print findings without writing the log/counts artifacts.
     #[arg(long)]
     dry_run: bool,
-    /// Print the identity hash of one item: <file>#<ident>. Grant
-    /// tooling: a waiver's site_hash/citation_hash come from here; a wrong
-    /// hash is self-defeating (the entry never consumes and stales), so
-    /// this door needs no trust.
-    #[arg(long)]
-    hash: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -52,22 +46,6 @@ fn main() -> Result<()> {
         .root
         .canonicalize()
         .with_context(|| format!("resolving root {}", cli.root.display()))?;
-
-    if let Some(spec) = &cli.hash {
-        let Some((file, ident)) = spec.split_once('#') else {
-            anyhow::bail!("--hash requires <file>#<ident>");
-        };
-        let text = std::fs::read_to_string(root.join(file))
-            .with_context(|| format!("reading {file}"))?;
-        let ast = syn::parse_file(&text).with_context(|| format!("parsing {file}"))?;
-        match bs_detector::identity::named_item_hash(&ast, ident) {
-            Some(h) => {
-                println!("{h}");
-                return Ok(());
-            }
-            None => anyhow::bail!("item `{ident}` absent or ambiguous in {file}"),
-        }
-    }
 
     let v = bs_detector::run::run(&root, cli.only.as_deref())?;
 
