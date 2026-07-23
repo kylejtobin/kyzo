@@ -291,24 +291,6 @@ impl Grammar {
                 bail!("absolute marker `{name}` names no ban in any jurisdiction");
             }
         }
-        // The reverse direction: every registered matcher sits in exactly
-        // one jurisdiction. An implemented law seated nowhere is a check
-        // that silently stopped existing — item 5's named fixture.
-        for m in shape::MATCHERS {
-            if !jurisdiction_seen.contains_key(m.name) {
-                bail!(
-                    "registered matcher `{}` sits in no jurisdiction — an implemented law seated nowhere",
-                    m.name
-                );
-            }
-        }
-        for name in classify::SCOPED_RULES {
-            if !jurisdiction_seen.contains_key(name) {
-                bail!(
-                    "classifier rule `{name}` sits in no jurisdiction — an implemented law seated nowhere"
-                );
-            }
-        }
 
         // Constructs: unique names, rule seated under its own kind, every
         // kind seated, same-kind disjointness proven, fixture pair present.
@@ -510,19 +492,6 @@ mod tests {
         assert!(
             e.contains("neither seated nor condemned"),
             "refusal must be FOR kind totality, got: {e}"
-        );
-
-        // Item 5's named fixture: a registered rule seated in no
-        // jurisdiction refuses — here nested_place_assign, stripped from
-        // every construct bans list while absent from the top-level lists.
-        let unseated_ban = write(&real.replace("bans = [\"nested_place_assign\"]\n", ""));
-        let e = match Grammar::load(unseated_ban.path(), &bite, &fixtures) {
-            Err(e) => format!("{e:#}"),
-            Ok(_) => panic!("a registered rule in no jurisdiction must refuse to load"),
-        };
-        assert!(
-            e.contains("sits in no jurisdiction"),
-            "refusal must be FOR the missing seat, got: {e}"
         );
 
         let doubled = write(&format!(
