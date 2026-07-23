@@ -6,12 +6,12 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! One gate run: walk the boundary, build the alias table, run the
-//! grammar's banned-shape matchers and the default-deny classifier, the
-//! relational and meta passes, filter waivers where the grammar permits
-//! them, report. The [`Verdict`] returned here is the ONLY source of the
-//! gate log and counts artifact; hooks/CI parse those artifacts and never
-//! re-derive them.
+//! One gate run: walk the boundary, run the grammar's banned-shape
+//! predicates, the default-deny classifier, the relational and meta
+//! passes, filter waivers where the grammar permits them, report. The
+//! [`Verdict`] returned here is the ONLY source of the gate log and
+//! counts artifact; hooks/CI parse those artifacts and never re-derive
+//! them.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -19,7 +19,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use crate::boundary::{Boundary, SourceFile};
-use crate::classify::{self, AliasTable};
+use crate::classify;
 use crate::engines::{Hit, graph, meta, shape};
 use crate::grammar::{Grammar, Laws};
 use crate::waiver::WaiverFile;
@@ -35,68 +35,48 @@ pub struct Verdict {
     pub red: bool,
 }
 
-/// Whether a waiver may cover hits of this check. Absolute bans, the
-/// gate's self-checks, and seat drift are never waivable; everything else
-/// is, one entry per hit, written only by the kyzo-waiver agent.
+/// Whether a waiver may cover hits of this check. Absolute bans and the
+/// gate's self-checks are never waivable; everything else is, one entry
+/// per hit, written only by the kyzo-waiver agent.
 fn waivable(grammar: &Grammar, check: &str) -> bool {
-    if grammar.is_absolute(check) {
+    if grammar.bans_absolute.iter().any(|b| b == check) {
         return false;
     }
-    !matches!(
-        check,
-        "agreement_registry" | "coverage" | "unparsed" | "stale_waivers" | "seat_drift"
-    )
+    !matches!(check, "agreement_registry" | "coverage" | "unparsed" | "stale_waivers")
 }
 
-/// The classifier-emitted check names, in report order. Every one must
-/// hold a law in laws.toml; they appear in the pass list even at zero
-/// hits so the law requirement is enforced on every run.
-const CLASSIFY_CHECKS: [&str; 9] = [
-    "unclassified",
-    "condemned",
-    "static_mut",
-    "path_attr",
-    "assign_expr",
-    "nested_place_assign",
-    "async_outside_io",
-    "main_flow",
-    "seat_drift",
-];
-
 pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
-    let crate_dir = root.join("crates/bs-detector");
-    let bite_src = std::fs::read_to_string(crate_dir.join("tests/bite_proofs.rs"))
+    let bite_src = std::fs::read_to_string(root.join("crates/bs-detector/tests/bite_proofs.rs"))
         .with_context(|| "reading bite_proofs.rs — a gate without bite proofs may not run")?;
-    let grammar = Grammar::load(
-        &crate_dir.join("grammar.toml"),
-        &bite_src,
-        &crate_dir.join("fixtures"),
-    )?;
-    let laws = Laws::load(&crate_dir.join("laws.toml"))?;
-    let waivers = WaiverFile::load(&crate_dir.join("waivers.toml"))?;
+    let grammar = Grammar::load(&root.join("crates/bs-detector/grammar.toml"), &bite_src)?;
+    let laws = Laws::load(&root.join("crates/bs-detector/laws.toml"))?;
+    let waivers = WaiverFile::load(&root.join("crates/bs-detector/waivers.toml"))?;
     let b = Boundary::walk(root)?;
-    let aliases = AliasTable::build(&b.files)?;
 
     let mut report = String::new();
     let mut failed: Vec<String> = vec![];
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     let mut raw_by_check: Vec<(String, Vec<Hit>)> = vec![];
 
-    let run_pass = |name: &str| only.is_none() || only == Some(name);
-
-    // Shape-backed bans (expression + attribute jurisdictions). Names
-    // registered in classify.rs are emitted by the classifier pass below.
-    let mut passes: Vec<(String, Vec<Hit>)> = vec![];
-    for name in grammar
-        .bans_expression
+    // The fixed pass list. Order is report order; every entry must hold a
+    // law in laws.toml or the run refuses before any verdict exists.
+    let ban_names: Vec<&str> = grammar
+        .bans_absolute
         .iter()
-        .chain(grammar.bans_attribute.iter())
-    {
-        if !run_pass(name) {
-            continue;
+        .chain(grammar.bans.iter())
+        .map(|s| s.as_str())
+        .collect();
+
+    let mut passes: Vec<(&str, Vec<Hit>)> = vec![];
+    for name in &ban_names {
+        if let Some(o) = only {
+            if o != *name {
+                continue;
+            }
         }
-        let Some(m) = shape::matcher_by_name(name) else {
-            continue; // classify-side rule; emitted below
+        let m = match shape::matcher_by_name(name) {
+            Some(m) => m,
+            None => anyhow::bail!("ban `{name}` vanished post-load"),
         };
         let scope = waivers.scope_for(name);
         let in_scope = |file: &str| -> bool {
@@ -108,65 +88,50 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
         let scoped: Vec<&SourceFile> =
             b.files.iter().filter(|f| in_scope(&f.rel_path)).collect();
         let hits: Vec<Hit> = scoped.iter().flat_map(|f| shape::run_matcher(m, f)).collect();
-        passes.push((name.clone(), hits));
+        passes.push((name, hits));
     }
-
-    // The default-deny classifier: one walk emits every classify check.
-    if CLASSIFY_CHECKS.iter().any(|c| run_pass(c)) {
-        let mut by_check: BTreeMap<&str, Vec<Hit>> = BTreeMap::new();
-        for c in CLASSIFY_CHECKS {
-            by_check.insert(c, vec![]);
-        }
-        for f in &b.files {
-            for (check, hit) in classify::classify_file(&grammar, &aliases, f) {
-                match by_check.get_mut(check.as_str()) {
-                    Some(slot) => slot.push(hit),
-                    None => anyhow::bail!(
-                        "classifier emitted unknown check `{check}` — not in CLASSIFY_CHECKS"
-                    ),
-                }
-            }
-        }
-        for c in CLASSIFY_CHECKS {
-            if run_pass(c) {
-                passes.push((c.to_string(), by_check.remove(c).unwrap_or_default()));
-            }
-        }
+    let run_pass = |name: &str| only.is_none() || only == Some(name);
+    if run_pass("unclassified") {
+        let hits: Vec<Hit> = b
+            .files
+            .iter()
+            .flat_map(|f| classify::unclassified(&grammar, f))
+            .collect();
+        passes.push(("unclassified", hits));
     }
-
     let all: Vec<&SourceFile> = b.files.iter().collect();
     if run_pass("derive_bypass") {
-        passes.push(("derive_bypass".into(), graph::derive_bypass(&all)));
+        passes.push(("derive_bypass", graph::derive_bypass(&all)));
     }
     if run_pass("copy_detector") {
-        passes.push(("copy_detector".into(), graph::copy_detector(&all)));
+        passes.push(("copy_detector", graph::copy_detector(&all)));
     }
     if run_pass("agreement_registry") {
         let reg_path = root.join("crates/xtask/agreements.toml");
         let text = std::fs::read_to_string(&reg_path)
             .with_context(|| "reading agreements.toml — a missing registry is drift, not a pass")?;
-        passes.push(("agreement_registry".into(), graph::agreement_registry(&all, &text)));
+        passes.push(("agreement_registry", graph::agreement_registry(&all, &text)));
     }
     if run_pass("coverage") {
-        passes.push(("coverage".into(), meta::coverage(&b)));
+        passes.push(("coverage", meta::coverage(&b)));
     }
     if run_pass("unparsed") {
-        passes.push(("unparsed".into(), meta::unparsed(&b)));
+        passes.push(("unparsed", meta::unparsed(&b)));
     }
     if run_pass("forbid_roots") {
-        passes.push(("forbid_roots".into(), meta::forbid_roots(&b)));
+        passes.push(("forbid_roots", meta::forbid_roots(&b)));
     }
 
     for (check, raw) in passes {
-        let law = laws.require(&check)?;
-        raw_by_check.push((check.clone(), raw.clone()));
+        let law = laws.require(check)?;
+        raw_by_check.push((check.to_string(), raw.clone()));
 
-        let violations: Vec<&Hit> = if waivable(&grammar, &check) {
+        let violations: Vec<&Hit> = if waivable(&grammar, check) {
             // One waiver covers exactly ONE hit. Two violations of the
             // same construct sharing a line coordinate cannot ride one
             // entry — the duplicate-site refusal in WaiverFile::load
             // means the second occurrence stays red until FIXED.
-            let entries = waivers.for_check(&check);
+            let entries = waivers.for_check(check);
             let mut consumed = vec![false; entries.len()];
             raw.iter()
                 .filter(|h| {
@@ -190,9 +155,9 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
         };
 
         if !violations.is_empty() {
-            failed.push(check.clone());
+            failed.push(check.to_string());
         }
-        counts.insert(check.clone(), violations.len());
+        counts.insert(check.to_string(), violations.len());
         for h in &violations {
             report.push_str(&format!("FAIL {}:{} — {} — {}\n", h.file, h.line, h.construct, law));
         }

@@ -58,11 +58,8 @@ pub struct CoverageProof {
 }
 
 impl Boundary {
-    /// Walk all of `crates/` under `root`. Two exclusions, both named:
-    /// `target/` build output (never code), and the gate's own specimen
-    /// corpus `crates/bs-detector/fixtures/` — deny fixtures are DESIGNED
-    /// violations proving constructs can refuse; judging the specimens as
-    /// tree claims would make the gate permanently red by its own teeth.
+    /// Walk all of `crates/` under `root`. The only exclusion is `target/`
+    /// build output — never a crate, never a directory of meaning.
     pub fn walk(root: &Path) -> Result<Boundary> {
         let crates_dir = root.join("crates");
         let mut files = Vec::new();
@@ -72,11 +69,7 @@ impl Boundary {
         for entry in WalkDir::new(&crates_dir)
             .sort_by_file_name()
             .into_iter()
-            .filter_entry(|e| {
-                e.file_name() != "target"
-                    && !(e.file_name() == "fixtures"
-                        && e.path().parent().is_some_and(|p| p.ends_with("bs-detector")))
-            })
+            .filter_entry(|e| e.file_name() != "target")
         {
             let entry = entry.with_context(|| "walking crates/")?;
             if !entry.file_type().is_file() {

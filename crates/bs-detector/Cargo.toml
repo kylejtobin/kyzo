@@ -8,7 +8,6 @@ publish = false
 description = "The Bullshit Detector: the one conduct-police binary for this tree. Every check is data in checks.toml, every exception is sworn testimony in waivers.toml, every check's boundary is all of crates/ unless a ScopeWaiver argues otherwise, the baseline is zero forever, and a check cannot register without a bite-proof that detonates on its historical bug. Dev tooling, never shipped — but a workspace member ON PURPOSE: the detector lives inside its own boundary and scans itself."
 
 [dependencies]
-blake3 = "1"
 syn = { version = "2", features = ["full", "visit", "extra-traits"] }
 # span-locations: Span::start() gives real file line numbers when run as a
 # plain binary (never a proc-macro) — every finding reports file:line off it.

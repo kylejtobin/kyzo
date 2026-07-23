@@ -16,6 +16,5 @@ pub mod boundary;
 pub mod classify;
 pub mod engines;
 pub mod grammar;
-pub mod identity;
 pub mod run;
 pub mod waiver;

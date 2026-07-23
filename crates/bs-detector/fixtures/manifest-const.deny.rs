@@ -1,1 +1,0 @@
-const NAME: &str = "x";

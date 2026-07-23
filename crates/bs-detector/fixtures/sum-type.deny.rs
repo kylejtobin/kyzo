@@ -1,3 +1,0 @@
-enum Status {
-    Named(String),
-}

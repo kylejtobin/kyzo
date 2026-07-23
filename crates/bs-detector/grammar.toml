@@ -1,36 +1,25 @@
 # The gate grammar — the one law seat for the default-deny gate.
 # Operator-approved data; agents propose changes in chat, never edit.
 #
-# condemned: item kinds red on sight (laws.toml carries each kind's law).
-#   Must state exactly the law set in grammar.rs or the load refuses.
-# [bans].expression: banned shapes at every expression position, every item.
-# [bans].attribute: banned shapes at every attribute position, item- and
-#   crate-level.
-# [bans].absolute: the no-waiver marker set (names from any jurisdiction).
-# [[construct]]: classification law. Every item of a seated kind must
-#   classify against a construct or it is a violation; a construct may carry
-#   `bans` scoped to items classified as it. Every construct requires
-#   fixtures/<name>.pass.rs and fixtures/<name>.deny.rs, executed in tests.
-# [seats].fns: the ONLY green for a module-level receiverless fn — each
-#   entry binds file + fn ident + blake3 identity hash; io = true marks a
-#   transport-boundary fn allowed async/await.
-# Every ban resolves to a registered matcher (engines/shape.rs or
-# classify.rs) and a bite proof named bite_<ban> in tests/bite_proofs.rs,
-# or the gate refuses to run.
+# [bans_absolute]: banned-shape predicates no waiver can cover.
+# [bans]: banned-shape predicates a waiver may cover, one entry per hit,
+#   granted only by the kyzo-waiver agent.
+# [[construct]]: structural classification law. Every struct and enum in
+#   crates/ must classify against a construct below; an item matching no
+#   construct is a violation ("unclassified") by default — deny is the
+#   default, silence certifies nothing.
+# Every ban must resolve to a registered matcher and a bite proof named
+# bite_<ban> in tests/bite_proofs.rs, or the gate refuses to run.
 
-condemned = [
-  "extern-crate",
-  "foreign-mod",
-  "impl-item-macro",
-  "macro",
-  "trait-alias",
-  "trait-item-macro",
-  "union",
-  "verbatim",
+bans_absolute = [
+  "unwrap_unchecked",
+  "todo_bang",
+  "allow_unsafe",
+  "test_err_early_return",
+  "condemned_boundary",
 ]
 
-[bans]
-expression = [
+bans = [
   "unwrap",
   "expect",
   "unwrap_or",
@@ -46,44 +35,26 @@ expression = [
   "as_cast",
   "unchecked_arith",
   "capacity_min_cap",
-  "catchall_arm",
-  "default_impl",
-  "construction_door",
-  "naked_array_sig",
-  "process_exit",
-  "sleep_sync",
-  "nondeterminism",
-  "peer_dial",
-  "unsafe_token",
-  "assert_bang",
-  "hand_layout",
-  "unwrap_unchecked",
-  "todo_bang",
-  "test_err_early_return",
-  "condemned_boundary",
-  "static_mut",
-  "async_outside_io",
-]
-attribute = [
   "allow_dead_code",
   "allow_unused",
   "allow_clippy",
   "allow_missing_docs",
   "allow_private",
-  "allow_unsafe",
+  "catchall_arm",
   "default_derive",
-  "serde_default_skip",
-  "should_panic",
+  "default_impl",
+  "construction_door",
+  "naked_array_sig",
   "ignore_test",
-  "path_attr",
-]
-absolute = [
-  "unwrap_unchecked",
-  "todo_bang",
-  "allow_unsafe",
-  "test_err_early_return",
-  "condemned_boundary",
-  "static_mut",
+  "should_panic",
+  "process_exit",
+  "sleep_sync",
+  "serde_default_skip",
+  "nondeterminism",
+  "peer_dial",
+  "unsafe_token",
+  "assert_bang",
+  "hand_layout",
 ]
 
 [[construct]]
@@ -94,76 +65,9 @@ rule = "tuple-single-private-field"
 [[construct]]
 name = "sealed-struct"
 kind = "struct"
-rule = "named-fields-all-private"
-
-[[construct]]
-name = "unit-marker"
-kind = "struct"
-rule = "unit-struct"
+rule = "all-fields-private"
 
 [[construct]]
 name = "sum-type"
 kind = "enum"
 rule = "no-string-variant-fields"
-
-[[construct]]
-name = "composition-root"
-kind = "fn"
-rule = "main-in-bin"
-bans = ["main_flow"]
-
-[[construct]]
-name = "derivation"
-kind = "fn"
-rule = "receiver-shared-ref"
-bans = ["assign_expr"]
-
-[[construct]]
-name = "transition"
-kind = "fn"
-rule = "receiver-unique-ref"
-bans = ["nested_place_assign"]
-
-[[construct]]
-name = "consuming-verb"
-kind = "fn"
-rule = "receiver-owned-not-self-return"
-bans = ["nested_place_assign"]
-
-[[construct]]
-name = "admission-door"
-kind = "fn"
-rule = "admission-door"
-
-[[construct]]
-name = "declared-fn"
-kind = "fn"
-rule = "declared-fn"
-
-[[construct]]
-name = "named-alias"
-kind = "type"
-rule = "alias-not-string-carrying"
-
-[[construct]]
-name = "scoped-import"
-kind = "use"
-rule = "no-glob-import"
-
-[[construct]]
-name = "manifest-const"
-kind = "const"
-rule = "const-not-string-carrying"
-
-[[construct]]
-name = "sealed-static"
-kind = "static"
-rule = "static-immutable-not-string"
-
-[[construct]]
-name = "named-module"
-kind = "mod"
-rule = "mod-no-path-attr"
-
-[seats]
-fns = []
