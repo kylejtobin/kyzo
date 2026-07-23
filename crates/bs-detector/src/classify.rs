@@ -6,100 +6,790 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! The default-deny classifier: every struct and enum in the boundary must
-//! be an instance of a grammar construct; an item matching no construct is
-//! a violation. The classifier only accepts — it never argues. Code
-//! conforms to the grammar; the grammar never chases code.
+//! The default-deny classifier: every item in the boundary — every kind,
+//! every impl/trait interior — is an instance of a grammar construct, a
+//! condemned kind, or a violation. The classifier only accepts — it never
+//! argues. Code conforms to the grammar; the grammar never chases code.
+//!
+//! String-carrying is decided by type STRUCTURE (a syn::Type walk joined
+//! to a workspace alias table), never by spelling — `Restrict` is clean,
+//! `type Name = String` is red at the alias and at every use.
 
-use syn::visit::{self, Visit};
+use std::collections::{BTreeMap, BTreeSet};
+
+use quote::ToTokens;
+use syn::visit::Visit;
 
 use crate::boundary::{SourceFile, span_line};
 use crate::engines::Hit;
 use crate::grammar::{ConstructKind, Grammar, StructuralRule};
+use crate::identity;
 
-/// Classify every struct and enum in `file`; return one hit per item that
-/// matches no construct.
-pub fn unclassified(grammar: &Grammar, file: &SourceFile) -> Vec<Hit> {
-    struct V<'a> {
-        rel: &'a str,
-        grammar: &'a Grammar,
-        hits: Vec<Hit>,
-    }
+// ---------------------------------------------------------------------------
+// classify-side rule registry (bans implemented here, not in engines/shape)
+// ---------------------------------------------------------------------------
 
-    fn fields_all_private(fields: &syn::Fields) -> bool {
-        fields
-            .iter()
-            .all(|f| matches!(f.vis, syn::Visibility::Inherited))
-    }
+/// The classify-side matcher names. Grammar::load accepts a ban name iff it
+/// is registered here or in `engines::shape`.
+pub const SCOPED_RULES: [&str; 6] = [
+    "static_mut",
+    "path_attr",
+    "assign_expr",
+    "nested_place_assign",
+    "async_outside_io",
+    "main_flow",
+];
 
-    fn struct_matches(rule: StructuralRule, node: &syn::ItemStruct) -> bool {
-        match rule {
-            StructuralRule::TupleSinglePrivateField => matches!(
-                &node.fields,
-                syn::Fields::Unnamed(u) if u.unnamed.len() == 1
-            ) && fields_all_private(&node.fields),
-            StructuralRule::AllFieldsPrivate => fields_all_private(&node.fields),
-            StructuralRule::NoStringVariantFields => false,
+pub fn scoped_rule_registered(name: &str) -> bool {
+    SCOPED_RULES.contains(&name)
+}
+
+// ---------------------------------------------------------------------------
+// the alias table: type Name = ... and use path as Name, workspace-wide
+// ---------------------------------------------------------------------------
+
+/// The alias table. `type Name = T` aliases are workspace-global (a
+/// collision — one ident aliased to different targets — resolves
+/// CONSERVATIVELY: if any target is string-carrying, the ident is; the
+/// safe direction for a deny gate is the loud one). `use path as Name`
+/// renames are FILE-scoped: imports bind per module, and keying them
+/// globally manufactures false cycles between unrelated modules (the
+/// recorded IncLiteral↔Literal swap between kyzo-core and kyzo-trials).
+pub struct AliasTable {
+    types: BTreeMap<String, Vec<syn::Type>>,
+    renames_by_file: BTreeMap<String, BTreeMap<String, Vec<syn::Type>>>,
+}
+
+impl AliasTable {
+    /// Build from every `type Name = T` and every `use path as Name` in the
+    /// boundary, then prove every chain resolves: a cycle refuses at load.
+    pub fn build(files: &[SourceFile]) -> anyhow::Result<AliasTable> {
+        struct V {
+            types: BTreeMap<String, Vec<syn::Type>>,
+            renames: BTreeMap<String, Vec<syn::Type>>,
         }
-    }
-
-    fn enum_matches(rule: StructuralRule, node: &syn::ItemEnum) -> bool {
-        match rule {
-            StructuralRule::NoStringVariantFields => {
-                use quote::ToTokens;
-                node.variants.iter().all(|v| {
-                    v.fields.iter().all(|f| {
-                        let ty = f.ty.to_token_stream().to_string();
-                        !ty.contains("String") && !ty.contains("str")
-                    })
-                })
+        impl<'ast> Visit<'ast> for V {
+            fn visit_item_type(&mut self, node: &'ast syn::ItemType) {
+                self.types
+                    .entry(node.ident.to_string())
+                    .or_default()
+                    .push((*node.ty).clone());
+                syn::visit::visit_item_type(self, node);
             }
-            StructuralRule::TupleSinglePrivateField | StructuralRule::AllFieldsPrivate => false,
+            fn visit_item_use(&mut self, node: &'ast syn::ItemUse) {
+                collect_renames(&node.tree, &mut Vec::new(), &mut self.renames);
+                syn::visit::visit_item_use(self, node);
+            }
         }
+        fn collect_renames(
+            tree: &syn::UseTree,
+            prefix: &mut Vec<String>,
+            out: &mut BTreeMap<String, Vec<syn::Type>>,
+        ) {
+            match tree {
+                syn::UseTree::Path(p) => {
+                    prefix.push(p.ident.to_string());
+                    collect_renames(&p.tree, prefix, out);
+                    prefix.pop();
+                }
+                syn::UseTree::Rename(r) => {
+                    let mut segs = prefix.clone();
+                    segs.push(r.ident.to_string());
+                    let path = segs.join("::");
+                    if let Ok(ty) = syn::parse_str::<syn::Type>(&path) {
+                        out.entry(r.rename.to_string()).or_default().push(ty);
+                    }
+                }
+                syn::UseTree::Group(g) => {
+                    for t in &g.items {
+                        collect_renames(t, prefix, out);
+                    }
+                }
+                syn::UseTree::Name(_) | syn::UseTree::Glob(_) => {}
+            }
+        }
+
+        let mut types = BTreeMap::new();
+        let mut renames_by_file = BTreeMap::new();
+        for f in files {
+            let mut v = V {
+                types: std::mem::take(&mut types),
+                renames: BTreeMap::new(),
+            };
+            v.visit_file(&f.ast);
+            types = v.types;
+            if !v.renames.is_empty() {
+                renames_by_file.insert(f.rel_path.clone(), v.renames);
+            }
+        }
+        let table = AliasTable {
+            types,
+            renames_by_file,
+        };
+        // Prove resolution: every chain terminates in every file context.
+        // Re-entry = cycle = load Err.
+        let no_renames = BTreeMap::new();
+        for ident in table.types.keys() {
+            let mut visiting = BTreeSet::new();
+            table.resolve_ident(ident, &no_renames, &mut visiting)?;
+        }
+        for renames in table.renames_by_file.values() {
+            for ident in renames.keys() {
+                let mut visiting = BTreeSet::new();
+                table.resolve_ident(ident, renames, &mut visiting)?;
+            }
+        }
+        Ok(table)
     }
 
-    impl<'ast, 'a> Visit<'ast> for V<'a> {
-        fn visit_item_struct(&mut self, node: &'ast syn::ItemStruct) {
-            let classified = self
-                .grammar
-                .constructs
-                .iter()
-                .filter(|c| c.kind == ConstructKind::Struct)
-                .any(|c| struct_matches(c.rule, node));
-            if !classified {
-                self.hits.push(Hit {
-                    file: self.rel.to_string(),
-                    line: span_line(&node.ident.span()),
-                    construct: format!("unclassified-struct:{}", node.ident),
-                });
-            }
-            visit::visit_item_struct(self, node);
+    fn resolve_ident(
+        &self,
+        ident: &str,
+        renames: &BTreeMap<String, Vec<syn::Type>>,
+        visiting: &mut BTreeSet<String>,
+    ) -> anyhow::Result<bool> {
+        if !visiting.insert(ident.to_string()) {
+            anyhow::bail!("alias cycle through `{ident}` — resolution cannot terminate");
         }
-        fn visit_item_enum(&mut self, node: &'ast syn::ItemEnum) {
-            let classified = self
-                .grammar
-                .constructs
-                .iter()
-                .filter(|c| c.kind == ConstructKind::Enum)
-                .any(|c| enum_matches(c.rule, node));
-            if !classified {
-                self.hits.push(Hit {
-                    file: self.rel.to_string(),
-                    line: span_line(&node.ident.span()),
-                    construct: format!("unclassified-enum:{}", node.ident),
-                });
+        let mut any = false;
+        for tys in [self.types.get(ident), renames.get(ident)].into_iter().flatten() {
+            for ty in tys {
+                if self.string_carrying_inner(ty, renames, visiting)? {
+                    any = true;
+                }
             }
-            visit::visit_item_enum(self, node);
         }
+        visiting.remove(ident);
+        Ok(any)
     }
 
-    let mut v = V {
+    /// The string rule: structure, never spelling. `rel_path` selects the
+    /// file's rename scope.
+    pub fn string_carrying(&self, rel_path: &str, ty: &syn::Type) -> bool {
+        let empty = BTreeMap::new();
+        let renames = self.renames_by_file.get(rel_path).unwrap_or(&empty);
+        // Cycles were refused at build; re-entry cannot occur here.
+        let mut visiting = BTreeSet::new();
+        self.string_carrying_inner(ty, renames, &mut visiting)
+            .unwrap_or(true)
+    }
+
+    fn string_carrying_inner(
+        &self,
+        ty: &syn::Type,
+        renames: &BTreeMap<String, Vec<syn::Type>>,
+        visiting: &mut BTreeSet<String>,
+    ) -> anyhow::Result<bool> {
+        Ok(match ty {
+            syn::Type::Reference(r) => self.string_carrying_inner(&r.elem, renames, visiting)?,
+            syn::Type::Paren(p) => self.string_carrying_inner(&p.elem, renames, visiting)?,
+            syn::Type::Group(g) => self.string_carrying_inner(&g.elem, renames, visiting)?,
+            syn::Type::Slice(s) => self.string_carrying_inner(&s.elem, renames, visiting)?,
+            syn::Type::Array(a) => self.string_carrying_inner(&a.elem, renames, visiting)?,
+            syn::Type::Tuple(t) => {
+                let mut any = false;
+                for e in &t.elems {
+                    if self.string_carrying_inner(e, renames, visiting)? {
+                        any = true;
+                    }
+                }
+                any
+            }
+            syn::Type::Path(p) => {
+                let Some(last) = p.path.segments.last() else {
+                    return Ok(false);
+                };
+                let ident = last.ident.to_string();
+                let terminal = matches!(ident.as_str(), "String" | "str")
+                    && is_string_namespace(&p.path);
+                // Only a bare ident can be a table alias: a qualified path
+                // names its own module's item — external ones are the R1
+                // residual, and recursing on their last segment manufactures
+                // false cycles (the recorded pest::iterators::Pair
+                // self-alias).
+                let aliased = if terminal || p.path.segments.len() != 1 {
+                    false
+                } else {
+                    self.resolve_ident(&ident, renames, visiting)?
+                };
+                let mut generic = false;
+                for seg in &p.path.segments {
+                    if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
+                        for a in &args.args {
+                            if let syn::GenericArgument::Type(t) = a {
+                                if self.string_carrying_inner(t, renames, visiting)? {
+                                    generic = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                terminal || aliased || generic
+            }
+            _ => false,
+        })
+    }
+}
+
+/// True when a String/str terminal actually names the std string types:
+/// bare `String`/`str`, or a path through `std::string`/`alloc::string`/
+/// `core`/`std` primitives. A user type named `String` in a module path
+/// that is visibly not std still matches bare use — conservative, loud.
+fn is_string_namespace(path: &syn::Path) -> bool {
+    if path.segments.len() == 1 {
+        return true;
+    }
+    let segs: Vec<String> = path.segments.iter().map(|s| s.ident.to_string()).collect();
+    matches!(
+        segs.iter().map(String::as_str).collect::<Vec<_>>().as_slice(),
+        ["std", "string", "String"]
+            | ["alloc", "string", "String"]
+            | ["std", "str"]
+            | ["core", "str"]
+    )
+}
+
+// ---------------------------------------------------------------------------
+// classification
+// ---------------------------------------------------------------------------
+
+/// Where a fn sits: the position half of the skeleton discriminator.
+#[derive(Clone, Copy, PartialEq)]
+enum FnPosition {
+    ModuleLevel,
+    InImpl,
+    InTrait,
+}
+
+/// One classification pass over one file. Returns (check, hit) pairs;
+/// check names group hits for laws.toml and waiver jurisdiction.
+pub fn classify_file(
+    grammar: &Grammar,
+    aliases: &AliasTable,
+    file: &SourceFile,
+) -> Vec<(String, Hit)> {
+    let mut w = Walker {
         rel: &file.rel_path,
         grammar,
-        hits: vec![],
+        aliases,
+        is_bin: file.rel_path.contains("src/main.rs") || file.rel_path.contains("/src/bin/"),
+        out: vec![],
     };
-    v.visit_file(&file.ast);
-    v.hits
+    for item in &file.ast.items {
+        w.item(item);
+    }
+    w.out
+}
+
+struct Walker<'a> {
+    rel: &'a str,
+    grammar: &'a Grammar,
+    aliases: &'a AliasTable,
+    is_bin: bool,
+    out: Vec<(String, Hit)>,
+}
+
+impl<'a> Walker<'a> {
+    fn hit(&mut self, check: &str, line: usize, construct: String) {
+        self.out.push((
+            check.to_string(),
+            Hit {
+                file: self.rel.to_string(),
+                line,
+                construct,
+            },
+        ));
+    }
+
+    fn condemned(&mut self, kind: &str, line: usize) {
+        self.hit("condemned", line, format!("condemned-{kind}"));
+    }
+
+    fn item(&mut self, item: &syn::Item) {
+        match item {
+            syn::Item::Struct(n) => self.classify_struct(n),
+            syn::Item::Enum(n) => self.classify_enum(n),
+            syn::Item::Fn(n) => self.classify_module_fn(n),
+            syn::Item::Impl(n) => self.classify_impl(n),
+            syn::Item::Trait(n) => self.classify_trait(n),
+            syn::Item::Mod(n) => {
+                if n.attrs.iter().any(|a| a.path().is_ident("path")) {
+                    self.hit("path_attr", span_line(&n.ident.span()), "path_attr".into());
+                    self.hit(
+                        "unclassified",
+                        span_line(&n.ident.span()),
+                        format!("unclassified-mod:{}", n.ident),
+                    );
+                }
+                if let Some((_, items)) = &n.content {
+                    for i in items {
+                        self.item(i);
+                    }
+                }
+            }
+            syn::Item::Use(n) => {
+                if use_tree_has_glob(&n.tree) {
+                    let rendered = n.tree.to_token_stream().to_string().replace(' ', "");
+                    self.hit(
+                        "unclassified",
+                        span_line(&n.use_token.span),
+                        format!("unclassified-use:{rendered}"),
+                    );
+                }
+            }
+            syn::Item::Const(n) => {
+                if self.aliases.string_carrying(self.rel, &n.ty) {
+                    self.hit(
+                        "unclassified",
+                        span_line(&n.ident.span()),
+                        format!("unclassified-const:{}", n.ident),
+                    );
+                }
+            }
+            syn::Item::Static(n) => {
+                if matches!(n.mutability, syn::StaticMutability::Mut(_)) {
+                    self.hit("static_mut", span_line(&n.ident.span()), "static_mut".into());
+                    self.hit(
+                        "unclassified",
+                        span_line(&n.ident.span()),
+                        format!("unclassified-static:{}", n.ident),
+                    );
+                } else if self.aliases.string_carrying(self.rel, &n.ty) {
+                    self.hit(
+                        "unclassified",
+                        span_line(&n.ident.span()),
+                        format!("unclassified-static:{}", n.ident),
+                    );
+                }
+            }
+            syn::Item::Type(n) => {
+                if self.aliases.string_carrying(self.rel, &n.ty) {
+                    self.hit(
+                        "unclassified",
+                        span_line(&n.ident.span()),
+                        format!("unclassified-type:{}", n.ident),
+                    );
+                }
+            }
+            syn::Item::ExternCrate(n) => self.condemned("extern-crate", span_line(&n.ident.span())),
+            syn::Item::ForeignMod(n) => {
+                self.condemned("foreign-mod", span_line(&n.abi.extern_token.span))
+            }
+            syn::Item::Union(n) => self.condemned("union", span_line(&n.ident.span())),
+            syn::Item::TraitAlias(n) => self.condemned("trait-alias", span_line(&n.ident.span())),
+            syn::Item::Macro(n) => {
+                let line = n
+                    .ident
+                    .as_ref()
+                    .map(|i| span_line(&i.span()))
+                    .unwrap_or_else(|| span_line(&n.mac.path.segments[0].ident.span()));
+                self.condemned("macro", line)
+            }
+            syn::Item::Verbatim(ts) => {
+                let line = ts
+                    .clone()
+                    .into_iter()
+                    .next()
+                    .map(|t| span_line(&t.span()))
+                    .unwrap_or(1);
+                self.condemned("verbatim", line)
+            }
+            _ => {}
+        }
+    }
+
+    fn classify_struct(&mut self, n: &syn::ItemStruct) {
+        let matches: Vec<&str> = self
+            .grammar
+            .constructs
+            .iter()
+            .filter(|c| c.kind == ConstructKind::Struct)
+            .filter(|c| struct_rule_matches(c.rule, n))
+            .map(|c| c.name.as_str())
+            .collect();
+        let string_field = n
+            .fields
+            .iter()
+            .any(|f| self.aliases.string_carrying(self.rel, &f.ty));
+        if matches.len() != 1 || string_field {
+            self.hit(
+                "unclassified",
+                span_line(&n.ident.span()),
+                format!("unclassified-struct:{}", n.ident),
+            );
+        }
+    }
+
+    fn classify_enum(&mut self, n: &syn::ItemEnum) {
+        let clean = n.variants.iter().all(|v| {
+            v.fields
+                .iter()
+                .all(|f| !self.aliases.string_carrying(self.rel, &f.ty))
+        });
+        if !clean {
+            self.hit(
+                "unclassified",
+                span_line(&n.ident.span()),
+                format!("unclassified-enum:{}", n.ident),
+            );
+        }
+    }
+
+    fn classify_module_fn(&mut self, n: &syn::ItemFn) {
+        let line = span_line(&n.sig.ident.span());
+        if self.is_bin && n.sig.ident == "main" {
+            self.fn_body_rules("composition-root", &n.sig, Some(&n.block), line, false);
+            return;
+        }
+        match self.grammar.seat_for(self.rel, &n.sig.ident.to_string()) {
+            Some(seat) => {
+                let current = identity::site_hash(n);
+                if current != seat.hash {
+                    self.hit(
+                        "seat_drift",
+                        line,
+                        format!("seat-drift:{}", n.sig.ident),
+                    );
+                } else {
+                    self.fn_body_rules("declared-fn", &n.sig, Some(&n.block), line, seat.io);
+                }
+            }
+            None => {
+                self.hit(
+                    "unclassified",
+                    line,
+                    format!("unclassified-fn:{}", n.sig.ident),
+                );
+            }
+        }
+    }
+
+    fn classify_impl(&mut self, n: &syn::ItemImpl) {
+        let self_ident = impl_self_ident(n);
+        for it in &n.items {
+            match it {
+                syn::ImplItem::Fn(f) => {
+                    self.classify_method(&f.sig, Some(&f.block), self_ident.as_deref(), FnPosition::InImpl)
+                }
+                syn::ImplItem::Const(c) => {
+                    if self.aliases.string_carrying(self.rel, &c.ty) {
+                        self.hit(
+                            "unclassified",
+                            span_line(&c.ident.span()),
+                            format!("unclassified-const:{}", c.ident),
+                        );
+                    }
+                }
+                syn::ImplItem::Type(t) => {
+                    if self.aliases.string_carrying(self.rel, &t.ty) {
+                        self.hit(
+                            "unclassified",
+                            span_line(&t.ident.span()),
+                            format!("unclassified-type:{}", t.ident),
+                        );
+                    }
+                }
+                syn::ImplItem::Macro(m) => self.condemned(
+                    "impl-item-macro",
+                    span_line(&m.mac.path.segments[0].ident.span()),
+                ),
+                _ => {}
+            }
+        }
+    }
+
+    fn classify_trait(&mut self, n: &syn::ItemTrait) {
+        for it in &n.items {
+            match it {
+                syn::TraitItem::Fn(f) => {
+                    self.classify_method(&f.sig, f.default.as_ref(), None, FnPosition::InTrait)
+                }
+                syn::TraitItem::Const(c) => {
+                    if self.aliases.string_carrying(self.rel, &c.ty) {
+                        self.hit(
+                            "unclassified",
+                            span_line(&c.ident.span()),
+                            format!("unclassified-const:{}", c.ident),
+                        );
+                    }
+                }
+                syn::TraitItem::Type(t) => {
+                    if let Some((_, ty)) = &t.default {
+                        if self.aliases.string_carrying(self.rel, ty) {
+                            self.hit(
+                                "unclassified",
+                                span_line(&t.ident.span()),
+                                format!("unclassified-type:{}", t.ident),
+                            );
+                        }
+                    }
+                }
+                syn::TraitItem::Macro(m) => self.condemned(
+                    "trait-item-macro",
+                    span_line(&m.mac.path.segments[0].ident.span()),
+                ),
+                _ => {}
+            }
+        }
+    }
+
+    /// The receiver-skeleton partition for impl and trait fns.
+    fn classify_method(
+        &mut self,
+        sig: &syn::Signature,
+        body: Option<&syn::Block>,
+        self_ident: Option<&str>,
+        pos: FnPosition,
+    ) {
+        let line = span_line(&sig.ident.span());
+        match receiver_form(sig) {
+            ReceiverForm::SharedRef => self.fn_body_rules("derivation", sig, body, line, false),
+            ReceiverForm::UniqueRef => self.fn_body_rules("transition", sig, body, line, false),
+            ReceiverForm::Owned => {
+                if returns_self(sig, self_ident) {
+                    // A self-consuming fn returning Self is a builder chain:
+                    // multi-step construction the values doctrine forbids.
+                    self.hit(
+                        "unclassified",
+                        line,
+                        format!("unclassified-fn:{}", sig.ident),
+                    );
+                } else {
+                    self.fn_body_rules("consuming-verb", sig, body, line, false);
+                }
+            }
+            ReceiverForm::Exotic => {
+                self.hit(
+                    "unclassified",
+                    line,
+                    format!("unclassified-fn:{}", sig.ident),
+                );
+            }
+            ReceiverForm::None => {
+                if pos == FnPosition::InImpl && returns_self(sig, self_ident) {
+                    self.fn_body_rules("admission-door", sig, body, line, false);
+                } else {
+                    self.hit(
+                        "unclassified",
+                        line,
+                        format!("unclassified-fn:{}", sig.ident),
+                    );
+                }
+            }
+        }
+    }
+
+    /// The construct-scoped body rules, driven by the grammar's `bans` list
+    /// for the classified construct, plus the async law (uniform: await and
+    /// async are red everywhere except an io=true declared seat).
+    fn fn_body_rules(
+        &mut self,
+        construct: &str,
+        sig: &syn::Signature,
+        body: Option<&syn::Block>,
+        line: usize,
+        io_seat: bool,
+    ) {
+        if !io_seat && sig.asyncness.is_some() {
+            self.hit("async_outside_io", line, "async_outside_io".into());
+        }
+        let Some(body) = body else { return };
+        let scoped: Vec<&str> = self
+            .grammar
+            .constructs
+            .iter()
+            .find(|c| c.name == construct)
+            .map(|c| c.bans.iter().map(String::as_str).collect())
+            .unwrap_or_default();
+        let mut v = BodyRules {
+            rel: self.rel,
+            scoped: &scoped,
+            io_seat,
+            out: &mut self.out,
+        };
+        v.visit_block(body);
+    }
+}
+
+struct BodyRules<'a, 'o> {
+    rel: &'a str,
+    scoped: &'a [&'a str],
+    io_seat: bool,
+    out: &'o mut Vec<(String, Hit)>,
+}
+
+impl<'a, 'o> BodyRules<'a, 'o> {
+    fn hit(&mut self, check: &str, line: usize) {
+        self.out.push((
+            check.to_string(),
+            Hit {
+                file: self.rel.to_string(),
+                line,
+                construct: check.to_string(),
+            },
+        ));
+    }
+}
+
+impl<'a, 'o, 'ast> Visit<'ast> for BodyRules<'a, 'o> {
+    fn visit_expr(&mut self, e: &'ast syn::Expr) {
+        match e {
+            syn::Expr::Await(a) => {
+                if !self.io_seat {
+                    self.hit("async_outside_io", span_line(&a.await_token.span));
+                }
+            }
+            syn::Expr::Assign(a) => {
+                if self.scoped.contains(&"assign_expr") {
+                    self.hit("assign_expr", span_line(&a.eq_token.span));
+                }
+                if self.scoped.contains(&"nested_place_assign")
+                    && self_place_depth(&a.left) > 1
+                {
+                    self.hit("nested_place_assign", span_line(&a.eq_token.span));
+                }
+            }
+            syn::Expr::If(n) => {
+                if self.scoped.contains(&"main_flow") {
+                    self.hit("main_flow", span_line(&n.if_token.span));
+                }
+            }
+            syn::Expr::Match(n) => {
+                if self.scoped.contains(&"main_flow") {
+                    self.hit("main_flow", span_line(&n.match_token.span));
+                }
+            }
+            syn::Expr::Loop(n) => {
+                if self.scoped.contains(&"main_flow") {
+                    self.hit("main_flow", span_line(&n.loop_token.span));
+                }
+            }
+            syn::Expr::While(n) => {
+                if self.scoped.contains(&"main_flow") {
+                    self.hit("main_flow", span_line(&n.while_token.span));
+                }
+            }
+            syn::Expr::ForLoop(n) => {
+                if self.scoped.contains(&"main_flow") {
+                    self.hit("main_flow", span_line(&n.for_token.span));
+                }
+            }
+            _ => {}
+        }
+        syn::visit::visit_expr(self, e);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// parse-fact helpers (the discriminators)
+// ---------------------------------------------------------------------------
+
+enum ReceiverForm {
+    SharedRef,
+    UniqueRef,
+    Owned,
+    Exotic,
+    None,
+}
+
+fn receiver_form(sig: &syn::Signature) -> ReceiverForm {
+    match sig.inputs.first() {
+        Some(syn::FnArg::Receiver(r)) => {
+            if r.colon_token.is_some() {
+                ReceiverForm::Exotic // self: Box<Self> and kin
+            } else if r.reference.is_some() {
+                if r.mutability.is_some() {
+                    ReceiverForm::UniqueRef
+                } else {
+                    ReceiverForm::SharedRef
+                }
+            } else {
+                ReceiverForm::Owned
+            }
+        }
+        _ => ReceiverForm::None,
+    }
+}
+
+/// Structural Self-return: `Self`, the impl type's own ident, or either as
+/// the success type of `Result`/`Option` — path comparison, not token
+/// search.
+fn returns_self(sig: &syn::Signature, self_ident: Option<&str>) -> bool {
+    let syn::ReturnType::Type(_, ty) = &sig.output else {
+        return false;
+    };
+    type_is_self(ty, self_ident)
+}
+
+fn type_is_self(ty: &syn::Type, self_ident: Option<&str>) -> bool {
+    match ty {
+        syn::Type::Path(p) => {
+            let Some(last) = p.path.segments.last() else {
+                return false;
+            };
+            let ident = last.ident.to_string();
+            if ident == "Self" || Some(ident.as_str()) == self_ident {
+                return true;
+            }
+            if matches!(ident.as_str(), "Result" | "Option") {
+                if let syn::PathArguments::AngleBracketed(args) = &last.arguments {
+                    if let Some(syn::GenericArgument::Type(t)) = args.args.first() {
+                        return type_is_self(t, self_ident);
+                    }
+                }
+            }
+            false
+        }
+        syn::Type::Paren(p) => type_is_self(&p.elem, self_ident),
+        _ => false,
+    }
+}
+
+fn impl_self_ident(n: &syn::ItemImpl) -> Option<String> {
+    match n.self_ty.as_ref() {
+        syn::Type::Path(p) => p.path.segments.last().map(|s| s.ident.to_string()),
+        _ => None,
+    }
+}
+
+fn struct_rule_matches(rule: StructuralRule, n: &syn::ItemStruct) -> bool {
+    let all_private = n
+        .fields
+        .iter()
+        .all(|f| matches!(f.vis, syn::Visibility::Inherited));
+    match rule {
+        StructuralRule::TupleSinglePrivateField => {
+            matches!(&n.fields, syn::Fields::Unnamed(u) if u.unnamed.len() == 1) && all_private
+        }
+        StructuralRule::NamedFieldsAllPrivate => {
+            matches!(&n.fields, syn::Fields::Named(_)) && all_private
+        }
+        StructuralRule::UnitStruct => matches!(&n.fields, syn::Fields::Unit),
+        _ => false,
+    }
+}
+
+fn use_tree_has_glob(tree: &syn::UseTree) -> bool {
+    match tree {
+        syn::UseTree::Glob(_) => true,
+        syn::UseTree::Path(p) => use_tree_has_glob(&p.tree),
+        syn::UseTree::Group(g) => g.items.iter().any(use_tree_has_glob),
+        syn::UseTree::Name(_) | syn::UseTree::Rename(_) => false,
+    }
+}
+
+/// Depth of a self-rooted place chain: `self.a` = 1, `self.a.b` = 2,
+/// `self.a[i]` = 2. Non-self-rooted places are 0 — locals are not state.
+fn self_place_depth(e: &syn::Expr) -> usize {
+    fn walk(e: &syn::Expr) -> Option<usize> {
+        match e {
+            syn::Expr::Path(p) if p.path.is_ident("self") => Some(0),
+            syn::Expr::Field(f) => walk(&f.base).map(|d| d + 1),
+            syn::Expr::Index(i) => walk(&i.expr).map(|d| d + 1),
+            _ => None,
+        }
+    }
+    walk(e).unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -109,51 +799,129 @@ mod tests {
 
     fn test_grammar() -> Grammar {
         Grammar {
-            bans_absolute: vec!["todo_bang".to_string()],
-            bans: vec!["unwrap".to_string()],
+            bans_expression: vec!["unwrap".into()],
+            bans_attribute: vec![],
+            absolute: std::collections::BTreeSet::new(),
             constructs: vec![
                 ConstructDef {
-                    name: "newtype-scalar".to_string(),
+                    name: "newtype-scalar".into(),
                     kind: ConstructKind::Struct,
                     rule: StructuralRule::TupleSinglePrivateField,
+                    bans: vec![],
                 },
                 ConstructDef {
-                    name: "sealed-struct".to_string(),
+                    name: "sealed-struct".into(),
                     kind: ConstructKind::Struct,
-                    rule: StructuralRule::AllFieldsPrivate,
+                    rule: StructuralRule::NamedFieldsAllPrivate,
+                    bans: vec![],
                 },
                 ConstructDef {
-                    name: "sum-type".to_string(),
-                    kind: ConstructKind::Enum,
-                    rule: StructuralRule::NoStringVariantFields,
+                    name: "unit-marker".into(),
+                    kind: ConstructKind::Struct,
+                    rule: StructuralRule::UnitStruct,
+                    bans: vec![],
+                },
+                ConstructDef {
+                    name: "derivation".into(),
+                    kind: ConstructKind::Fn,
+                    rule: StructuralRule::ReceiverSharedRef,
+                    bans: vec!["assign_expr".into()],
+                },
+                ConstructDef {
+                    name: "transition".into(),
+                    kind: ConstructKind::Fn,
+                    rule: StructuralRule::ReceiverUniqueRef,
+                    bans: vec!["nested_place_assign".into()],
                 },
             ],
+            seats: crate::grammar::Seats { fns: vec![] },
         }
     }
 
-    fn parse(src: &str) -> SourceFile {
-        SourceFile {
+    fn classify(src: &str) -> Vec<(String, Hit)> {
+        let file = SourceFile {
             rel_path: "crates/x/src/a.rs".to_string(),
             text: src.to_string(),
             ast: syn::parse_file(src).expect("fixture parses"),
-        }
+        };
+        let aliases = AliasTable::build(std::slice::from_ref(&file)).expect("aliases");
+        classify_file(&test_grammar(), &aliases, &file)
+    }
+
+    fn checks(hits: &[(String, Hit)]) -> Vec<&str> {
+        hits.iter().map(|(c, _)| c.as_str()).collect()
     }
 
     #[test]
-    fn bite_unclassified_pub_field_struct_is_denied() {
-        let f = parse("pub struct Open { pub name: u64 }");
-        let hits = unclassified(&test_grammar(), &f);
-        assert_eq!(hits.len(), 1, "a pub field matches no construct");
-        assert_eq!(hits[0].construct, "unclassified-struct:Open");
-    }
-
-    #[test]
-    fn bite_unclassified_string_enum_is_denied_and_clean_items_pass() {
-        let f = parse(
-            "struct Sealed { a: u64 }\nstruct Newtype(u64);\nenum Kind { A, B(u64) }\nenum Status { Named(String) }",
+    fn bite_alias_and_rename_are_red_and_restrict_is_clean() {
+        let hits = classify(
+            "type Name = String;\nstruct S { n: Name }\nuse std::string::String as Text;\nstruct T { t: Text }\nstruct R { r: Restrict }",
         );
-        let hits = unclassified(&test_grammar(), &f);
-        assert_eq!(hits.len(), 1, "only the String-carrying enum is denied");
-        assert_eq!(hits[0].construct, "unclassified-enum:Status");
+        let c = checks(&hits);
+        assert_eq!(
+            c.iter().filter(|x| **x == "unclassified").count(),
+            3,
+            "alias itself, S, T red; R clean: {hits:?}"
+        );
+    }
+
+    #[test]
+    fn bite_alias_cycle_refuses_at_build() {
+        let file = SourceFile {
+            rel_path: "crates/x/src/a.rs".into(),
+            text: String::new(),
+            ast: syn::parse_file("type A = B;\ntype B = A;").expect("parses"),
+        };
+        assert!(AliasTable::build(std::slice::from_ref(&file)).is_err());
+    }
+
+    #[test]
+    fn bite_glob_import_and_exotic_receiver_and_builder_are_red() {
+        let hits = classify(
+            "use std::collections::*;\nstruct T { a: u64 }\nimpl T { fn with_a(mut self) -> Self { self } fn boxed(self: Box<Self>) {} }",
+        );
+        let c = checks(&hits);
+        assert_eq!(c.iter().filter(|x| **x == "unclassified").count(), 3, "{hits:?}");
+    }
+
+    #[test]
+    fn bite_static_mut_is_red_and_condemned_kinds_report() {
+        let hits = classify("static mut G: u64 = 0;\nmacro_rules! m { () => {} }");
+        let c = checks(&hits);
+        assert!(c.contains(&"static_mut"), "{hits:?}");
+        assert!(c.contains(&"condemned"), "{hits:?}");
+    }
+
+    #[test]
+    fn bite_scoped_bans_fire_only_in_their_construct() {
+        let hits = classify(
+            "struct T { a: u64, b: Vec<u64> }\nimpl T { fn read(&self) -> u64 { let mut x = 0; x = 1; x }\n fn step(&mut self) { self.b[0] = 1; } }",
+        );
+        let c = checks(&hits);
+        assert!(c.contains(&"assign_expr"), "derivation assignment: {hits:?}");
+        assert!(c.contains(&"nested_place_assign"), "nested place: {hits:?}");
+    }
+
+    #[test]
+    fn bite_await_outside_io_seat_is_red() {
+        let hits = classify(
+            "struct T { a: u64 }\nimpl T { async fn go(&self) { other().await; } }\nasync fn other() {}",
+        );
+        let c = checks(&hits);
+        assert!(
+            c.iter().filter(|x| **x == "async_outside_io").count() >= 2,
+            "async fn + await both red: {hits:?}"
+        );
+    }
+
+    #[test]
+    fn bite_admission_door_result_self_classifies() {
+        let hits = classify(
+            "struct T { a: u64 }\nimpl T { fn new() -> Result<Self, u8> { Ok(T { a: 0 }) } }",
+        );
+        assert!(
+            checks(&hits).iter().all(|x| *x != "unclassified"),
+            "Result<Self, E> door must classify: {hits:?}"
+        );
     }
 }

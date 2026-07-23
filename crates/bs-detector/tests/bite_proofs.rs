@@ -416,28 +416,129 @@ fn the_real_grammar_and_laws_load_and_bind_to_this_file() {
     let g = match bs_detector::grammar::Grammar::load(
         &root.join("grammar.toml"),
         include_str!("bite_proofs.rs"),
+        &root.join("fixtures"),
     ) {
         Ok(g) => g,
         Err(e) => panic!("grammar.toml must be lawful: {e:#}"),
     };
     assert!(
-        g.bans.len() + g.bans_absolute.len() >= 40,
+        g.bans_expression.len() + g.bans_attribute.len() >= 40,
         "every banned shape stays registered"
     );
     let laws = match bs_detector::grammar::Laws::load(&root.join("laws.toml")) {
         Ok(l) => l,
         Err(e) => panic!("laws.toml must be lawful: {e:#}"),
     };
-    for name in g.bans_absolute.iter().chain(g.bans.iter()) {
+    for name in g.bans_expression.iter().chain(g.bans_attribute.iter()) {
         if laws.require(name).is_err() {
             panic!("ban `{name}` has no retained law — coverage proof broken");
         }
     }
-    for pass in ["unclassified", "derive_bypass", "copy_detector", "agreement_registry", "coverage", "unparsed", "forbid_roots", "stale_waivers"] {
+    for pass in [
+        "unclassified",
+        "condemned",
+        "seat_drift",
+        "derive_bypass",
+        "copy_detector",
+        "agreement_registry",
+        "coverage",
+        "unparsed",
+        "forbid_roots",
+        "stale_waivers",
+        "r_int",
+        "r_external_alias",
+        "r_macro_expansion",
+    ] {
         if laws.require(pass).is_err() {
             panic!("pass `{pass}` has no retained law — coverage proof broken");
         }
     }
+}
+
+// --- classify-side rules: one detonation each --------------------------------
+
+fn real_grammar() -> Option<bs_detector::grammar::Grammar> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    bs_detector::grammar::Grammar::load(
+        &root.join("grammar.toml"),
+        include_str!("bite_proofs.rs"),
+        &root.join("fixtures"),
+    )
+    .ok()
+}
+
+/// Hits with the given check name for one classified fixture.
+fn classify_hits(rel: &str, src: &str, check: &str) -> Option<usize> {
+    let f = parsed(rel, src)?;
+    let aliases = bs_detector::classify::AliasTable::build(std::slice::from_ref(&f)).ok()?;
+    let g = real_grammar()?;
+    Some(
+        bs_detector::classify::classify_file(&g, &aliases, &f)
+            .into_iter()
+            .filter(|(c, _)| c == check)
+            .count(),
+    )
+}
+
+#[test]
+fn bite_static_mut() {
+    assert_eq!(
+        classify_hits("crates/x/src/a.rs", "static mut G: u64 = 0;", "static_mut"),
+        Some(1)
+    );
+    assert_eq!(
+        classify_hits("crates/x/src/a.rs", "static G: u64 = 0;", "static_mut"),
+        Some(0)
+    );
+}
+
+#[test]
+fn bite_path_attr() {
+    assert_eq!(
+        classify_hits("crates/x/src/a.rs", "#[path = \"z.rs\"]\nmod m;", "path_attr"),
+        Some(1)
+    );
+    assert_eq!(classify_hits("crates/x/src/a.rs", "mod m {}", "path_attr"), Some(0));
+}
+
+#[test]
+fn bite_assign_expr() {
+    let red = "struct T { a: u64 }\nimpl T { fn read(&self) -> u64 { let mut x = 0; x = self.a; x } }";
+    let clean = "struct T { a: u64 }\nimpl T { fn read(&self) -> u64 { self.a } }";
+    assert_eq!(classify_hits("crates/x/src/a.rs", red, "assign_expr"), Some(1));
+    assert_eq!(classify_hits("crates/x/src/a.rs", clean, "assign_expr"), Some(0));
+}
+
+#[test]
+fn bite_nested_place_assign() {
+    let red = "struct T { a: [u64; 2] }\nimpl T { fn step(&mut self) { self.a[0] = 1; } }";
+    let clean = "struct T { a: u64 }\nimpl T { fn step(&mut self) { self.a = 1; } }";
+    assert_eq!(classify_hits("crates/x/src/a.rs", red, "nested_place_assign"), Some(1));
+    assert_eq!(classify_hits("crates/x/src/a.rs", clean, "nested_place_assign"), Some(0));
+}
+
+#[test]
+fn bite_async_outside_io() {
+    let red = "struct T { a: u64 }\nimpl T { async fn go(&self) {} }";
+    assert_eq!(classify_hits("crates/x/src/a.rs", red, "async_outside_io"), Some(1));
+    let clean = "struct T { a: u64 }\nimpl T { fn go(&self) -> u64 { self.a } }";
+    assert_eq!(classify_hits("crates/x/src/a.rs", clean, "async_outside_io"), Some(0));
+}
+
+#[test]
+fn bite_main_flow() {
+    assert_eq!(
+        classify_hits("crates/x/src/main.rs", "fn main() { if true {} }", "main_flow"),
+        Some(1)
+    );
+    assert_eq!(
+        classify_hits(
+            "crates/x/src/main.rs",
+            "struct App { p: u64 }\nimpl App { fn new() -> Self { App { p: 0 } } fn run(self) {} }\nfn main() { let a = App::new(); a.run() }",
+            "main_flow"
+        ),
+        Some(0)
+    );
 }
 
 // --- ported ratchets: the old xtask checks' historical bugs still bite ---------------------------
