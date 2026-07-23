@@ -1181,6 +1181,70 @@ mod import_verify {
         ))
     }
 
+    /// Shared #359/#374 fail-closed scaffold: pack cut self-verify refuses;
+    /// returns fresh ledger for the per-test import door assertion.
+    fn foreign_history_self_cut_refuse_scaffold(
+        pack: &LeaveIsFreePack,
+    ) -> Result<(ReplicaCutRecompute, ShredLedger)> {
+        let cut = pack.replica_cut_recompute()?;
+        assert!(matches!(
+            ImportCapability::after_chain_root_verify(cut, cut),
+            Err(PackRefuse::ForeignHistoryUnverified)
+        ));
+        Ok((cut, ShredLedger::new()))
+    }
+
+    /// #359 T5 leave-is-free door: scaffold + verbatim refusal assertion.
+    fn external_leave_is_free_import_refuse_scaffold(pack: &LeaveIsFreePack) -> Result<()> {
+        let (_, ledger) = foreign_history_self_cut_refuse_scaffold(pack)?;
+        // Only externally constructible capability is unverified → import refuses.
+        assert!(matches!(
+            import_leave_is_free(
+                pack,
+                ImportCapability::unverified(),
+                ObjectsCompleteness::Complete,
+                &ledger
+            ),
+            Err(PackRefuse::ForeignHistoryUnverified)
+        ));
+        Ok(())
+    }
+
+    /// #374 T7 self-anchor forge: scaffold + verbatim import_verify refusal.
+    fn self_anchor_forge_refuse_scaffold(pack: &LeaveIsFreePack) -> Result<()> {
+        let (_, ledger) = foreign_history_self_cut_refuse_scaffold(pack)?;
+        // No verified cap exists to pass import_verify; unverified still refuses.
+        assert!(matches!(
+            import_verify(
+                pack,
+                ImportCapability::unverified(),
+                ObjectsCompleteness::Complete,
+                &ledger
+            ),
+            Err(PackRefuse::ForeignHistoryUnverified)
+        ));
+        Ok(())
+    }
+
+    /// Verified-capability setup + verbatim incomplete-objects refusal.
+    fn incomplete_objects_refuse_scaffold(pack: &LeaveIsFreePack) -> Result<()> {
+        let (cap, ledger) = trusted_verified_import_setup(pack)?;
+        assert!(matches!(
+            import_verify(pack, cap, ObjectsCompleteness::Incomplete, &ledger),
+            Err(PackRefuse::IncompleteRestore)
+        ));
+        Ok(())
+    }
+
+    /// Shared verified-capability + ledger scaffold for completeness/shred doors.
+    fn trusted_verified_import_setup(
+        pack: &LeaveIsFreePack,
+    ) -> Result<(ImportCapability, ShredLedger)> {
+        let registry = registry_trusting(pack)?;
+        let cap = registry.after_chain_root_verify(pack)?;
+        Ok((cap, ShredLedger::new()))
+    }
+
     /// DELIBERATE fail-closed (#359 / #375 T5): the external leave-is-free
     /// import path — public [`ImportCapability::after_chain_root_verify`] plus
     /// [`import_leave_is_free`] — always refuses
@@ -1190,25 +1254,7 @@ mod import_verify {
     #[test]
     fn external_leave_is_free_import_fail_closed_refuses_foreign_history() -> Result<()> {
         let (pack, _) = sample_pack()?;
-        let cut = pack.replica_cut_recompute()?;
-        // Public mint door: even matching cuts never yield Verified.
-        assert!(matches!(
-            ImportCapability::after_chain_root_verify(cut, cut),
-            Err(PackRefuse::ForeignHistoryUnverified)
-        ));
-        let ledger = ShredLedger::new();
-        // Only externally constructible capability is unverified → import refuses.
-        assert!(matches!(
-            import_leave_is_free(
-                &pack,
-                ImportCapability::unverified(),
-                ObjectsCompleteness::Complete,
-                &ledger
-            ),
-            Err(PackRefuse::ForeignHistoryUnverified)
-        ));
-
-        Ok(())
+        external_leave_is_free_import_refuse_scaffold(&pack)
     }
 
     /// NASTY (#374 T7): minting a capability from the pack's OWN cut must refuse
@@ -1216,25 +1262,7 @@ mod import_verify {
     #[test]
     fn self_anchor_forge_from_pack_own_cut_refuses() -> Result<()> {
         let (pack, _) = sample_pack()?;
-        let cut = pack.replica_cut_recompute()?;
-        // Old forge: compare pack cut to itself → always equal → free Verified.
-        assert!(matches!(
-            ImportCapability::after_chain_root_verify(cut, cut),
-            Err(PackRefuse::ForeignHistoryUnverified)
-        ));
-        // No verified cap exists to pass import_verify; unverified still refuses.
-        let ledger = ShredLedger::new();
-        assert!(matches!(
-            import_verify(
-                &pack,
-                ImportCapability::unverified(),
-                ObjectsCompleteness::Complete,
-                &ledger
-            ),
-            Err(PackRefuse::ForeignHistoryUnverified)
-        ));
-
-        Ok(())
+        self_anchor_forge_refuse_scaffold(&pack)
     }
 
     /// NASTY (#374 T7): pack origin StoreId absent from sealed registry → refuse.
@@ -1398,24 +1426,14 @@ mod import_verify {
     #[test]
     fn incomplete_objects_refuse_even_when_verified() -> Result<()> {
         let (pack, _) = sample_pack()?;
-        let registry = registry_trusting(&pack)?;
-        let cap = registry.after_chain_root_verify(&pack)?;
-        let ledger = ShredLedger::new();
-        assert!(matches!(
-            import_verify(&pack, cap, ObjectsCompleteness::Incomplete, &ledger),
-            Err(PackRefuse::IncompleteRestore)
-        ));
-
-        Ok(())
+        incomplete_objects_refuse_scaffold(&pack)
     }
 
     #[test]
     fn post_shred_restore_refuses_shredded() -> Result<()> {
         let (pack, wrapped) = sample_pack()?;
-        let registry = registry_trusting(&pack)?;
-        let cap = registry.after_chain_root_verify(&pack)?;
+        let (cap, mut ledger) = trusted_verified_import_setup(&pack)?;
         let (_receipt, tombstone) = shred(wrapped);
-        let mut ledger = ShredLedger::new();
         ledger.record(tombstone);
         assert!(matches!(
             import_verify(&pack, cap, ObjectsCompleteness::Complete, &ledger),

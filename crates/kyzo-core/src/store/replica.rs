@@ -600,6 +600,16 @@ impl AsRef<[u8]> for TenantId {
     }
 }
 
+/// Domain-separated SHA-256 digest over labeled seat bytes (copy_detector).
+fn domain_separated_digest(label: &[u8], seats: &[&[u8; 32]]) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(label);
+    for seat in seats {
+        h.update(*seat);
+    }
+    h.finalize().into()
+}
+
 /// Namespaced federation record identity (#270 T2 / seat 70).
 ///
 /// Four-tuple: **local id + origin authority + tenant + content**. Content
@@ -667,13 +677,15 @@ impl NamespacedRecordIdentity {
 
     /// Federation-stable digest of the four-tuple (not a custody key).
     pub fn digest(&self) -> Digest32 {
-        let mut h = Sha256::new();
-        h.update(b"kyzo.namespaced_record_identity.v1");
-        h.update(self.local_id.as_bytes());
-        h.update(self.origin_authority.as_bytes());
-        h.update(self.tenant.as_bytes());
-        h.update(self.content.as_bytes());
-        Digest32::admit(h.finalize().into())
+        Digest32::admit(domain_separated_digest(
+            b"kyzo.namespaced_record_identity.v1",
+            &[
+                self.local_id.as_bytes(),
+                self.origin_authority.as_bytes(),
+                self.tenant.as_bytes(),
+                self.content.as_bytes(),
+            ],
+        ))
     }
 
     /// Custody key under origin coordinates — delegates to [`ReplicaKey`]
@@ -1768,13 +1780,15 @@ impl PromotionMeaning {
 
     /// Stable digest over all four seats (replay meter).
     pub fn digest(&self) -> Digest32 {
-        let mut h = Sha256::new();
-        h.update(b"kyzo.promotion_meaning.v1");
-        h.update(self.identity.digest().as_bytes());
-        h.update(self.valid_time.as_bytes());
-        h.update(self.provenance.as_bytes());
-        h.update(self.schema_cut.as_bytes());
-        Digest32::admit(h.finalize().into())
+        Digest32::admit(domain_separated_digest(
+            b"kyzo.promotion_meaning.v1",
+            &[
+                self.identity.digest().as_bytes(),
+                self.valid_time.as_bytes(),
+                self.provenance.as_bytes(),
+                self.schema_cut.as_bytes(),
+            ],
+        ))
     }
 
     /// Replay equality: every seat identical (where it runs may change).
@@ -2578,26 +2592,59 @@ mod identity {
         mint_admission_certificate(parts).into_diagnostic()
     }
 
-    #[test]
-    fn distinct_origins_never_collapse_on_same_content() {
+    /// Shared non-collapse scaffold: distinct identities must diverge on digest too.
+    fn assert_non_collapsing_identities(
+        a: NamespacedRecordIdentity,
+        b: NamespacedRecordIdentity,
+        reason: &str,
+    ) {
+        assert_ne!(a, b, "{reason}");
+        assert_ne!(a.digest(), b.digest());
+    }
+
+    /// Positive control: rebinding the same four-tuple is equal and digest-stable.
+    fn assert_same_namespace_tuple_is_equal_and_stable() {
+        let content = RecordContentDigest::from_digest([0xE1; 32]);
+        let auth = AuthorizingKeyId::from_digest([0xA1; 32]);
+        let tenant = TenantId::from_digest([0x7E; 32]);
+        let local = LocalRecordId::from_digest(*content.as_bytes());
+        let a = NamespacedRecordIdentity::bind(local, auth, tenant, content);
+        let b = NamespacedRecordIdentity::bind(local, auth, tenant, content);
+        assert_eq!(a, b);
+        assert_eq!(a.digest(), b.digest());
+    }
+
+    /// Bind two identities that share local/tenant/content but differ on origin authority.
+    fn distinct_origin_authority_identities(
+    ) -> (
+        NamespacedRecordIdentity,
+        NamespacedRecordIdentity,
+        RecordContentDigest,
+        LocalRecordId,
+        TenantId,
+    ) {
         // Same local id + content; only origin authority differs → identities diverge.
         let content = RecordContentDigest::from_digest([0xE1; 32]);
         let local_id = LocalRecordId::from_digest(*content.as_bytes()); // admission law: RecordId is a view of content
         let tenant = TenantId::from_digest([0x7E; 32]);
         let auth_a = AuthorizingKeyId::from_digest([0xA1; 32]);
         let auth_b = AuthorizingKeyId::from_digest([0xB2; 32]);
-
         let a = NamespacedRecordIdentity::bind(local_id, auth_a, tenant, content);
         let b = NamespacedRecordIdentity::bind(local_id, auth_b, tenant, content);
+        (a, b, content, local_id, tenant)
+    }
 
-        assert_ne!(
-            a, b,
-            "distinct origin authorities must not collapse into one identity"
+    #[test]
+    fn distinct_origins_never_collapse_on_same_content() {
+        let (a, b, _content, local_id, tenant) = distinct_origin_authority_identities();
+        assert_non_collapsing_identities(
+            a,
+            b,
+            "distinct origin authorities must not collapse into one identity",
         );
-        assert_ne!(a.digest(), b.digest());
         assert_eq!(a.content(), b.content());
-        assert_eq!(a.local_id(), b.local_id());
-        assert_eq!(a.tenant(), b.tenant());
+        assert_eq!(a.local_id(), local_id);
+        assert_eq!(a.tenant(), tenant);
     }
 
     #[test]
@@ -2611,8 +2658,7 @@ mod identity {
         let a = NamespacedRecordIdentity::bind(local_id, auth, tenant_a, content);
         let b = NamespacedRecordIdentity::bind(local_id, auth, tenant_b, content);
 
-        assert_ne!(a, b, "distinct tenants must not collapse into one identity");
-        assert_ne!(a.digest(), b.digest());
+        assert_non_collapsing_identities(a, b, "distinct tenants must not collapse into one identity");
     }
 
     #[test]
@@ -2643,14 +2689,7 @@ mod identity {
 
     #[test]
     fn same_namespace_tuple_is_equal_and_stable() {
-        let content = RecordContentDigest::from_digest([0xE1; 32]);
-        let auth = AuthorizingKeyId::from_digest([0xA1; 32]);
-        let tenant = TenantId::from_digest([0x7E; 32]);
-        let local = LocalRecordId::from_digest(*content.as_bytes());
-        let a = NamespacedRecordIdentity::bind(local, auth, tenant, content);
-        let b = NamespacedRecordIdentity::bind(local, auth, tenant, content);
-        assert_eq!(a, b);
-        assert_eq!(a.digest(), b.digest());
+        assert_same_namespace_tuple_is_equal_and_stable();
     }
 
     #[test]

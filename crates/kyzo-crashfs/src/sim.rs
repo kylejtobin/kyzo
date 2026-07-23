@@ -662,6 +662,12 @@ pub(crate) struct SimWriteTx {
     inner: Option<SimWriteInner>,
 }
 
+/// Write-overlay vs snapshot resolution for tracked key reads (copy_detector).
+enum OverlayOrSnapshot<'a> {
+    Overlay(Option<&'a Vec<u8>>),
+    Snapshot(&'a BTreeMap<Vec<u8>, Vec<u8>>),
+}
+
 impl SimWriteTx {
     fn open(&self) -> &SimWriteInner {
         match self.inner.as_ref() {
@@ -795,6 +801,21 @@ impl SimWriteTx {
             .ranges
             .push((lower.to_vec(), upper.map(<[u8]>::to_vec)));
         Ok(())
+    }
+
+    /// Shared tracked-read scaffold for get/exists (copy_detector).
+    fn tracked_key_overlay_or_snapshot(
+        &self,
+        tag: u64,
+        key: &[u8],
+    ) -> Result<OverlayOrSnapshot<'_>> {
+        let open = self.open();
+        self.track_key(key)?;
+        open.ctx.check_read_fault(op_identity(tag, &[key]))?;
+        Ok(match open.writes.get(key) {
+            Some(w) => OverlayOrSnapshot::Overlay(w.as_ref()),
+            None => OverlayOrSnapshot::Snapshot(&open.snapshot),
+        })
     }
 
     fn commit_inner(mut self, durable: bool) -> std::result::Result<(), CommitFailure> {
@@ -1076,22 +1097,17 @@ impl ReadTx for SimReadTx {
 
 impl ReadTx for SimWriteTx {
     fn get(&self, key: &[u8]) -> Result<Option<Slice>> {
-        let open = self.open();
-        self.track_key(key)?;
-        open.ctx.check_read_fault(op_identity(TAG_GET, &[key]))?;
-        Ok(match open.writes.get(key) {
-            Some(w) => w.as_deref().map(Slice::from),
-            None => open.snapshot.get(key).map(Slice::from),
+        Ok(match self.tracked_key_overlay_or_snapshot(TAG_GET, key)? {
+            OverlayOrSnapshot::Overlay(Some(v)) => Some(Slice::from(v)),
+            OverlayOrSnapshot::Overlay(None) => None,
+            OverlayOrSnapshot::Snapshot(snap) => snap.get(key).map(Slice::from),
         })
     }
 
     fn exists(&self, key: &[u8]) -> Result<bool> {
-        let open = self.open();
-        self.track_key(key)?;
-        open.ctx.check_read_fault(op_identity(TAG_EXISTS, &[key]))?;
-        Ok(match open.writes.get(key) {
-            Some(w) => w.is_some(),
-            None => open.snapshot.contains_key(key),
+        Ok(match self.tracked_key_overlay_or_snapshot(TAG_EXISTS, key)? {
+            OverlayOrSnapshot::Overlay(w) => w.is_some(),
+            OverlayOrSnapshot::Snapshot(snap) => snap.contains_key(key),
         })
     }
 
@@ -1193,6 +1209,45 @@ impl Drop for SimWriteTx {
     }
 }
 
+/// Shared fjall/sim time-travel pin fixtures (copy_detector — ONE seat).
+#[cfg(test)]
+pub(crate) mod time_travel_pins {
+    use std::collections::BTreeMap;
+
+    use kyzo_model::TupleT;
+    use kyzo_model::value::{
+        DataValue, RelationId, StorageKey, Tuple, ValiditySlot, ValidityTs,
+    };
+
+    /// Naive as-of reference: full-scan every version, group by payload, pick
+    /// newest at-or-before `at`, keep only assertive. Seek-based scans must match.
+    pub fn as_of_oracle(history: &[(&str, i64, bool)], at: i64) -> Vec<(String, i64)> {
+        let mut newest: BTreeMap<String, (i64, bool)> = BTreeMap::new();
+        for (name, ts, assert) in history {
+            if *ts <= at {
+                let e = newest.entry(name.to_string()).or_insert((*ts, *assert));
+                if *ts > e.0 {
+                    *e = (*ts, *assert);
+                }
+            }
+        }
+        newest
+            .into_iter()
+            .filter(|(_, (_, assert))| *assert)
+            .map(|(name, (ts, _))| (name, ts))
+            .collect()
+    }
+
+    pub fn bitemp_key(rel: RelationId, name: &str, ts: i64, sys_ts: i64) -> StorageKey {
+        let slot = |t: i64| {
+            DataValue::Validity(ValiditySlot::from_stored(ValidityTs::of_micros(t), true))
+        };
+        let tuple: Tuple =
+            Tuple::from_vec(vec![DataValue::Str(name.into()), slot(ts), slot(sys_ts)]);
+        tuple.encode_as_key(rel)
+    }
+}
+
 #[cfg(test)]
 mod battery {
     /// DST instrument proof battery (re-homed from storage/tests.rs).
@@ -1238,31 +1293,7 @@ mod battery {
         must(tx.put(k, v), "put");
     }
 
-    /// Naive as-of oracle — same reference the fjall pin uses.
-    fn as_of_oracle(history: &[(&str, i64, bool)], at: i64) -> Vec<(String, i64)> {
-        let mut newest: BTreeMap<String, (i64, bool)> = BTreeMap::new();
-        for (name, ts, assert) in history {
-            if *ts <= at {
-                let e = newest.entry(name.to_string()).or_insert((*ts, *assert));
-                if *ts > e.0 {
-                    *e = (*ts, *assert);
-                }
-            }
-        }
-        newest
-            .into_iter()
-            .filter(|(_, (_, assert))| *assert)
-            .map(|(name, (ts, _))| (name, ts))
-            .collect()
-    }
-
-    fn bitemp_key(rel: RelationId, name: &str, ts: i64, sys_ts: i64) -> StorageKey {
-        let slot =
-            |t: i64| DataValue::Validity(ValiditySlot::from_stored(ValidityTs::of_micros(t), true));
-        let tuple: Tuple =
-            Tuple::from_vec(vec![DataValue::Str(name.into()), slot(ts), slot(sys_ts)]);
-        tuple.encode_as_key(rel)
-    }
+    use super::time_travel_pins::{as_of_oracle, bitemp_key};
 
     fn pol_val(assert: bool) -> Vec<u8> {
         vec![

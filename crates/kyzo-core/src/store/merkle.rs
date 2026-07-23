@@ -2417,6 +2417,16 @@ mod tests {
 
     // ── STH gossip non-equivocation (CT; seats 2/56/58/69) ────────────────
 
+    /// Shared two-step STH content roots for cross-store / equivocation proofs.
+    fn sth_two_link_content_roots() -> Result<(StateRoot, StateRoot)> {
+        let c1 = StateRoot::from_merkle(root_of_pairs(&[(b"x".to_vec(), b"1".to_vec())])?);
+        let c2 = StateRoot::from_merkle(root_of_pairs(&[
+            (b"x".to_vec(), b"1".to_vec()),
+            (b"y".to_vec(), b"2".to_vec()),
+        ])?);
+        Ok((c1, c2))
+    }
+
     fn sth_demo_chain() -> Result<(
         crate::store::open::StoreId,
         crate::store::epoch::FenceEpoch,
@@ -2590,12 +2600,9 @@ mod tests {
         let o1 = CommitOrdinal::ZERO.successor()?;
         let o2 = o1.successor()?;
 
+        let (c1, c2) = sth_two_link_content_roots()?;
+
         let mut chain_a = RootChain::empty();
-        let c1 = StateRoot::from_merkle(root_of_pairs(&[(b"x".to_vec(), b"1".to_vec())])?);
-        let c2 = StateRoot::from_merkle(root_of_pairs(&[
-            (b"x".to_vec(), b"1".to_vec()),
-            (b"y".to_vec(), b"2".to_vec()),
-        ])?);
         chain_a.append(ChainedStateRoot::mint(
             store_a,
             fence_a,
@@ -2686,12 +2693,9 @@ mod tests {
         let o1 = CommitOrdinal::ZERO.successor()?;
         let o2 = o1.successor()?;
 
+        let (c1, c2) = sth_two_link_content_roots()?;
+
         let mut honest = RootChain::empty();
-        let c1 = StateRoot::from_merkle(root_of_pairs(&[(b"x".to_vec(), b"1".to_vec())])?);
-        let c2 = StateRoot::from_merkle(root_of_pairs(&[
-            (b"x".to_vec(), b"1".to_vec()),
-            (b"y".to_vec(), b"2".to_vec()),
-        ])?);
         honest.append(ChainedStateRoot::mint(
             store_id,
             fence,

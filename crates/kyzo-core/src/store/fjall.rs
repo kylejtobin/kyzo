@@ -1104,8 +1104,6 @@ mod tests {
     use kyzo_model::TupleT;
     use miette::{IntoDiagnostic, Result, miette};
     /// Per-backend fjall pins + time-travel oracle (re-homed from storage/tests.rs).
-    use std::collections::BTreeMap;
-
     use fjall::Slice;
     use kyzo_model::value::{
         AsOf, DataValue, RelationId, StorageKey, Tuple, ValiditySlot, ValidityTs,
@@ -1115,35 +1113,9 @@ mod tests {
         FjallRefuse, MIN_JOURNALING_SIZE_BYTES, StorageOptions, new_fjall_storage,
         new_fjall_storage_with,
     };
+    use crate::store::sim::time_travel_pins::{as_of_oracle, bitemp_key};
     use crate::store::time::ClaimPolarity;
     use crate::store::{ConflictError, FormatVersion, ReadTx, Storage, WriteTx};
-
-    /// Naive as-of reference: full-scan every version, group by payload, pick
-    /// newest at-or-before `at`, keep only assertive. Seek-based scans must match.
-    fn as_of_oracle(history: &[(&str, i64, bool)], at: i64) -> Vec<(String, i64)> {
-        let mut newest: BTreeMap<String, (i64, bool)> = BTreeMap::new();
-        for (name, ts, assert) in history {
-            if *ts <= at {
-                let e = newest.entry(name.to_string()).or_insert((*ts, *assert));
-                if *ts > e.0 {
-                    *e = (*ts, *assert);
-                }
-            }
-        }
-        newest
-            .into_iter()
-            .filter(|(_, (_, assert))| *assert)
-            .map(|(name, (ts, _))| (name, ts))
-            .collect()
-    }
-
-    fn bitemp_key(rel: RelationId, name: &str, ts: i64, sys_ts: i64) -> StorageKey {
-        let slot =
-            |t: i64| DataValue::Validity(ValiditySlot::from_stored(ValidityTs::of_micros(t), true));
-        let tuple: Tuple =
-            Tuple::from_vec(vec![DataValue::Str(name.into()), slot(ts), slot(sys_ts)]);
-        tuple.encode_as_key(rel)
-    }
 
     fn pol_val(assert: bool) -> Vec<u8> {
         vec![

@@ -397,6 +397,46 @@ fn wrap_nonce(transcript: &CanonicalTranscript) -> Nonce {
     Nonce::admit(nonce)
 }
 
+/// ONE RustCrypto AEAD primitive body — Siv vs Gcm arm, seal vs open (copy_detector).
+fn run_aead_arm_primitive(
+    arm: AeadArm,
+    seal: bool,
+    key: &AeadRawKey,
+    nonce: &Nonce,
+    aad: &[u8],
+    msg: &[u8],
+) -> Result<Vec<u8>, CryptoRefuse> {
+    use aes_gcm_siv::aead::{Aead as _, KeyInit as _};
+    use chacha20poly1305::aead::{Aead as _, KeyInit as _};
+
+    let payload = aes_gcm_siv::aead::Payload { msg, aad };
+    match arm {
+        AeadArm::Siv => {
+            use aes_gcm_siv::{Aes256GcmSiv, Nonce as AeadNonce};
+            let cipher = Aes256GcmSiv::new_from_slice(key.as_bytes())
+                .map_err(|_| CryptoRefuse::AeadFailed)?;
+            let nonce = AeadNonce::from_slice(nonce.as_bytes());
+            if seal {
+                cipher.encrypt(nonce, payload).map_err(|_| CryptoRefuse::AeadFailed)
+            } else {
+                cipher.decrypt(nonce, payload).map_err(|_| CryptoRefuse::AeadFailed)
+            }
+        }
+        AeadArm::Gcm => {
+            use chacha20poly1305::{ChaCha20Poly1305, Nonce as AeadNonce};
+            let cipher = ChaCha20Poly1305::new_from_slice(key.as_bytes())
+                .map_err(|_| CryptoRefuse::AeadFailed)?;
+            let nonce = AeadNonce::from_slice(nonce.as_bytes());
+            let payload = chacha20poly1305::aead::Payload { msg, aad };
+            if seal {
+                cipher.encrypt(nonce, payload).map_err(|_| CryptoRefuse::AeadFailed)
+            } else {
+                cipher.decrypt(nonce, payload).map_err(|_| CryptoRefuse::AeadFailed)
+            }
+        }
+    }
+}
+
 /// Seal bytes under AES-256-GCM-SIV (misuse-resistant).
 fn aes_gcm_siv_seal(
     key: &AeadRawKey,
@@ -404,21 +444,7 @@ fn aes_gcm_siv_seal(
     aad: &[u8],
     plaintext: &[u8],
 ) -> Result<Vec<u8>, CryptoRefuse> {
-    use aes_gcm_siv::aead::{Aead, KeyInit, Payload};
-    use aes_gcm_siv::{Aes256GcmSiv, Nonce as AeadNonce};
-
-    let cipher =
-        Aes256GcmSiv::new_from_slice(key.as_bytes()).map_err(|_| CryptoRefuse::AeadFailed)?;
-    let nonce = AeadNonce::from_slice(nonce.as_bytes());
-    cipher
-        .encrypt(
-            nonce,
-            Payload {
-                msg: plaintext,
-                aad,
-            },
-        )
-        .map_err(|_| CryptoRefuse::AeadFailed)
+    run_aead_arm_primitive(AeadArm::Siv, true, key, nonce, aad, plaintext)
 }
 
 /// Open bytes under AES-256-GCM-SIV.
@@ -428,21 +454,7 @@ fn aes_gcm_siv_open(
     aad: &[u8],
     ciphertext: &[u8],
 ) -> Result<Vec<u8>, CryptoRefuse> {
-    use aes_gcm_siv::aead::{Aead, KeyInit, Payload};
-    use aes_gcm_siv::{Aes256GcmSiv, Nonce as AeadNonce};
-
-    let cipher =
-        Aes256GcmSiv::new_from_slice(key.as_bytes()).map_err(|_| CryptoRefuse::AeadFailed)?;
-    let nonce = AeadNonce::from_slice(nonce.as_bytes());
-    cipher
-        .decrypt(
-            nonce,
-            Payload {
-                msg: ciphertext,
-                aad,
-            },
-        )
-        .map_err(|_| CryptoRefuse::AeadFailed)
+    run_aead_arm_primitive(AeadArm::Siv, false, key, nonce, aad, ciphertext)
 }
 
 /// Seal bytes under ChaCha20-Poly1305 (Gcm arm).
@@ -452,21 +464,7 @@ fn chacha20poly1305_seal(
     aad: &[u8],
     plaintext: &[u8],
 ) -> Result<Vec<u8>, CryptoRefuse> {
-    use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-    use chacha20poly1305::{ChaCha20Poly1305, Nonce as AeadNonce};
-
-    let cipher =
-        ChaCha20Poly1305::new_from_slice(key.as_bytes()).map_err(|_| CryptoRefuse::AeadFailed)?;
-    let nonce = AeadNonce::from_slice(nonce.as_bytes());
-    cipher
-        .encrypt(
-            nonce,
-            Payload {
-                msg: plaintext,
-                aad,
-            },
-        )
-        .map_err(|_| CryptoRefuse::AeadFailed)
+    run_aead_arm_primitive(AeadArm::Gcm, true, key, nonce, aad, plaintext)
 }
 
 /// Open bytes under ChaCha20-Poly1305 (Gcm arm).
@@ -476,21 +474,7 @@ fn chacha20poly1305_open(
     aad: &[u8],
     ciphertext: &[u8],
 ) -> Result<Vec<u8>, CryptoRefuse> {
-    use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-    use chacha20poly1305::{ChaCha20Poly1305, Nonce as AeadNonce};
-
-    let cipher =
-        ChaCha20Poly1305::new_from_slice(key.as_bytes()).map_err(|_| CryptoRefuse::AeadFailed)?;
-    let nonce = AeadNonce::from_slice(nonce.as_bytes());
-    cipher
-        .decrypt(
-            nonce,
-            Payload {
-                msg: ciphertext,
-                aad,
-            },
-        )
-        .map_err(|_| CryptoRefuse::AeadFailed)
+    run_aead_arm_primitive(AeadArm::Gcm, false, key, nonce, aad, ciphertext)
 }
 
 /// Base AEAD seal over raw key bytes — after [`AeadRawKey::from_dek`] / [`from_kek`] only.
