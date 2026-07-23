@@ -207,24 +207,12 @@ impl PredecessorConsentProof {
         payload_digest: &Digest,
         signature: &Signature,
     ) -> Result<Self, MaterializeRefuse> {
-        let Some(consent_verifying_key) = consent_table.get(predecessor_store) else {
-            return Err(MaterializeRefuse::ConsentKeyUnknown);
-        };
-        if !verify_domain_signature(
-            FORK_CONSENT_DOMAIN,
-            consent_verifying_key,
+        verify_predecessor_consent_at_table(
+            consent_table,
             predecessor_store,
             payload_digest,
             signature,
-        ) {
-            return Err(MaterializeRefuse::ConsentUnverified);
-        }
-        Ok(Self {
-            predecessor_store,
-            payload_digest: *payload_digest,
-            key_id_digest: consent_key_id_digest(&Digest32::admit(*consent_verifying_key.as_bytes()))?,
-            _priv: (),
-        })
+        )
     }
 
     /// Predecessor StoreId sealed into this proof.
@@ -274,21 +262,7 @@ impl ForkGrant {
         key_material_commitment: KeyMaterialCommitment,
         consent_proof: PredecessorConsentProof,
     ) -> Result<Self, MaterializeRefuse> {
-        if consent_proof.predecessor_store() != predecessor_store {
-            return Err(MaterializeRefuse::ConsentMismatch);
-        }
-        let expected = fork_grant_payload_digest(
-            grant_id,
-            predecessor_store,
-            &fork_point_root,
-            &successor_principal,
-            &identity_seed,
-            &key_material_commitment,
-        )?;
-        if consent_proof.payload_digest() != &expected {
-            return Err(MaterializeRefuse::ConsentUnverified);
-        }
-        Ok(Self {
+        new_fork_grant_from_consent(
             grant_id,
             predecessor_store,
             fork_point_root,
@@ -296,7 +270,7 @@ impl ForkGrant {
             identity_seed,
             key_material_commitment,
             consent_proof,
-        })
+        )
     }
 
     /// Grant identity.
@@ -437,27 +411,14 @@ impl RecoveryGrant {
         key_material_commitment: KeyMaterialCommitment,
         quorum_proof: RecoveryQuorumProof,
     ) -> Result<Self, MaterializeRefuse> {
-        if predecessor_epoch.store_id() != store_id {
-            return Err(MaterializeRefuse::EpochStoreMismatch);
-        }
-        let expected = recovery_grant_payload_digest(
-            grant_id,
-            store_id,
-            predecessor_epoch,
-            &successor_identity_seed,
-            &key_material_commitment,
-        )?;
-        if quorum_proof.payload_digest() != &expected {
-            return Err(MaterializeRefuse::QuorumUnverified);
-        }
-        Ok(Self {
+        new_recovery_grant_from_quorum(
             grant_id,
             store_id,
             predecessor_epoch,
             successor_identity_seed,
             key_material_commitment,
             quorum_proof,
-        })
+        )
     }
 
     /// Grant identity.
@@ -954,24 +915,12 @@ impl AncestorEntitlementProof {
         payload_digest: &Digest,
         signature: &Signature,
     ) -> Result<Self, AncestorReadRefuse> {
-        let Some(entitlement_verifying_key) = entitlement_table.get(store_id) else {
-            return Err(AncestorReadRefuse::EntitlementKeyUnknown);
-        };
-        if !verify_domain_signature(
-            ANCESTOR_ENTITLEMENT_DOMAIN,
-            entitlement_verifying_key,
+        verify_ancestor_entitlement_at_table(
+            entitlement_table,
             store_id,
             payload_digest,
             signature,
-        ) {
-            return Err(AncestorReadRefuse::EntitlementUnverified);
-        }
-        Ok(Self {
-            store_id,
-            payload_digest: *payload_digest,
-            key_id_digest: entitlement_key_id_digest(&Digest32::admit(*entitlement_verifying_key.as_bytes()))?,
-            _priv: (),
-        })
+        )
     }
 
     /// StoreId sealed into this proof.
@@ -1130,10 +1079,418 @@ fn hash_transcript(transcript: &CanonicalTranscript) -> Digest {
     Digest::admit(h.finalize().into())
 }
 
+/// Encode → hash scaffold shared by every grant-surface payload digest.
+fn digest_from_encoded_transcript(
+    encode: impl FnOnce() -> Result<CanonicalTranscript, TranscriptRefuse>,
+) -> Result<Digest, TranscriptRefuse> {
+    Ok(hash_transcript(&encode()?))
+}
+
+/// Encode → hash → StoreId scaffold for fork successor identity derivation.
+fn store_id_from_encoded_transcript(
+    encode: impl FnOnce() -> Result<CanonicalTranscript, TranscriptRefuse>,
+) -> Result<StoreId, TranscriptRefuse> {
+    Ok(StoreId::from_digest(
+        *digest_from_encoded_transcript(encode)?.as_bytes(),
+    ))
+}
+
+/// Encode → hash → WriteTokenId scaffold for grant write-authority derivation.
+fn write_token_from_encoded_transcript(
+    encode: impl FnOnce() -> Result<CanonicalTranscript, TranscriptRefuse>,
+) -> Result<WriteTokenId, TranscriptRefuse> {
+    Ok(WriteTokenId::from_digest(
+        *digest_from_encoded_transcript(encode)?.as_bytes(),
+    ))
+}
+
+/// Shared verify scaffold: table-resolved key + domain-separated signature +
+/// key-id digest seal. Each proof type supplies its domain and typed refuses.
+fn seal_table_domain_proof<E>(
+    table_verifying_key: Option<&VerifyingPublicKey>,
+    domain: &[u8],
+    store_id: StoreId,
+    payload_digest: &Digest,
+    signature: &Signature,
+    key_id_of: impl FnOnce(&VerifyingPublicKey) -> Result<Digest, TranscriptRefuse>,
+    key_unknown: E,
+    unverified: E,
+) -> Result<Digest, E>
+where
+    E: From<TranscriptRefuse>,
+{
+    let Some(verifying_key) = table_verifying_key else {
+        return Err(key_unknown);
+    };
+    if !verify_domain_signature(domain, verifying_key, store_id, payload_digest, signature) {
+        return Err(unverified);
+    }
+    Ok(key_id_of(verifying_key)?)
+}
+
+/// Seal a domain-table proof struct from the shared verify scaffold.
+fn seal_domain_table_proof_struct<P, E>(
+    table_verifying_key: Option<&VerifyingPublicKey>,
+    domain: &[u8],
+    store_id: StoreId,
+    payload_digest: &Digest,
+    signature: &Signature,
+    key_id_of: impl FnOnce(&VerifyingPublicKey) -> Result<Digest, TranscriptRefuse>,
+    key_unknown: E,
+    unverified: E,
+    construct: impl FnOnce(StoreId, Digest, Digest) -> P,
+) -> Result<P, E>
+where
+    E: From<TranscriptRefuse>,
+{
+    let key_id_digest = seal_table_domain_proof(
+        table_verifying_key,
+        domain,
+        store_id,
+        payload_digest,
+        signature,
+        key_id_of,
+        key_unknown,
+        unverified,
+    )?;
+    Ok(construct(store_id, *payload_digest, key_id_digest))
+}
+
+/// Shared grant-seed scaffold: binding check, expected payload digest, proof bind.
+fn bind_sealed_proof_payload<E>(
+    binding_holds: bool,
+    binding_refuse: E,
+    expected_digest: Result<Digest, TranscriptRefuse>,
+    proof_digest: &Digest,
+    digest_refuse: E,
+) -> Result<(), E>
+where
+    E: From<TranscriptRefuse>,
+{
+    if !binding_holds {
+        return Err(binding_refuse);
+    }
+    let expected = expected_digest?;
+    if proof_digest != &expected {
+        return Err(digest_refuse);
+    }
+    Ok(())
+}
+
+/// Construct a grant seed after proof payload binding succeeds.
+fn construct_grant_seed<G, E>(
+    binding_holds: bool,
+    binding_refuse: E,
+    expected_digest: Result<Digest, TranscriptRefuse>,
+    proof_digest: &Digest,
+    digest_refuse: E,
+    construct: impl FnOnce() -> G,
+) -> Result<G, E>
+where
+    E: From<TranscriptRefuse>,
+{
+    bind_sealed_proof_payload(
+        binding_holds,
+        binding_refuse,
+        expected_digest,
+        proof_digest,
+        digest_refuse,
+    )?;
+    Ok(construct())
+}
+
+fn verify_predecessor_consent_at_table(
+    consent_table: &PredecessorConsentTable,
+    predecessor_store: StoreId,
+    payload_digest: &Digest,
+    signature: &Signature,
+) -> Result<PredecessorConsentProof, MaterializeRefuse> {
+    seal_domain_table_proof_struct(
+        consent_table.get(predecessor_store),
+        FORK_CONSENT_DOMAIN,
+        predecessor_store,
+        payload_digest,
+        signature,
+        |vk| consent_key_id_digest(&Digest32::admit(*vk.as_bytes())),
+        MaterializeRefuse::ConsentKeyUnknown,
+        MaterializeRefuse::ConsentUnverified,
+        |predecessor_store, payload_digest, key_id_digest| PredecessorConsentProof {
+            predecessor_store,
+            payload_digest,
+            key_id_digest,
+            _priv: (),
+        },
+    )
+}
+
+fn verify_ancestor_entitlement_at_table(
+    entitlement_table: &AncestorEntitlementTable,
+    store_id: StoreId,
+    payload_digest: &Digest,
+    signature: &Signature,
+) -> Result<AncestorEntitlementProof, AncestorReadRefuse> {
+    seal_domain_table_proof_struct(
+        entitlement_table.get(store_id),
+        ANCESTOR_ENTITLEMENT_DOMAIN,
+        store_id,
+        payload_digest,
+        signature,
+        |vk| entitlement_key_id_digest(&Digest32::admit(*vk.as_bytes())),
+        AncestorReadRefuse::EntitlementKeyUnknown,
+        AncestorReadRefuse::EntitlementUnverified,
+        |store_id, payload_digest, key_id_digest| AncestorEntitlementProof {
+            store_id,
+            payload_digest,
+            key_id_digest,
+            _priv: (),
+        },
+    )
+}
+
+fn new_fork_grant_from_consent(
+    grant_id: GrantId,
+    predecessor_store: StoreId,
+    fork_point_root: ForkPointRoot,
+    successor_principal: SuccessorPrincipal,
+    identity_seed: IdentitySeed,
+    key_material_commitment: KeyMaterialCommitment,
+    consent_proof: PredecessorConsentProof,
+) -> Result<ForkGrant, MaterializeRefuse> {
+    let sealed_payload = *consent_proof.payload_digest();
+    construct_grant_seed(
+        consent_proof.predecessor_store() == predecessor_store,
+        MaterializeRefuse::ConsentMismatch,
+        fork_grant_payload_digest(
+            grant_id,
+            predecessor_store,
+            &fork_point_root,
+            &successor_principal,
+            &identity_seed,
+            &key_material_commitment,
+        ),
+        &sealed_payload,
+        MaterializeRefuse::ConsentUnverified,
+        || ForkGrant {
+            grant_id,
+            predecessor_store,
+            fork_point_root,
+            successor_principal,
+            identity_seed,
+            key_material_commitment,
+            consent_proof,
+        },
+    )
+}
+
+fn new_recovery_grant_from_quorum(
+    grant_id: GrantId,
+    store_id: StoreId,
+    predecessor_epoch: FenceEpoch,
+    successor_identity_seed: IdentitySeed,
+    key_material_commitment: KeyMaterialCommitment,
+    quorum_proof: RecoveryQuorumProof,
+) -> Result<RecoveryGrant, MaterializeRefuse> {
+    let sealed_payload = *quorum_proof.payload_digest();
+    construct_grant_seed(
+        predecessor_epoch.store_id() == store_id,
+        MaterializeRefuse::EpochStoreMismatch,
+        recovery_grant_payload_digest(
+            grant_id,
+            store_id,
+            predecessor_epoch,
+            &successor_identity_seed,
+            &key_material_commitment,
+        ),
+        &sealed_payload,
+        MaterializeRefuse::QuorumUnverified,
+        || RecoveryGrant {
+            grant_id,
+            store_id,
+            predecessor_epoch,
+            successor_identity_seed,
+            key_material_commitment,
+            quorum_proof,
+        },
+    )
+}
+
+fn fork_lineage_digest32_fields(
+    grant_id: GrantId,
+    predecessor_store: StoreId,
+    fork_point_root: &ForkPointRoot,
+    successor_principal: &SuccessorPrincipal,
+    identity_seed: &IdentitySeed,
+    key_material_commitment: &KeyMaterialCommitment,
+) -> (
+    Digest32,
+    Digest32,
+    Digest32,
+    Digest32,
+    Digest32,
+    Digest32,
+) {
+    (
+        Digest32::admit(*grant_id.as_bytes()),
+        Digest32::admit(*predecessor_store.as_bytes()),
+        Digest32::admit(*fork_point_root.as_bytes()),
+        Digest32::admit(*successor_principal.as_bytes()),
+        Digest32::admit(*identity_seed.as_bytes()),
+        Digest32::admit(*key_material_commitment.as_bytes()),
+    )
+}
+
+fn fork_lineage_digest32_from_grant(
+    fork: &ForkGrant,
+) -> (
+    Digest32,
+    Digest32,
+    Digest32,
+    Digest32,
+    Digest32,
+    Digest32,
+) {
+    fork_lineage_digest32_fields(
+        fork.grant_id(),
+        fork.predecessor_store(),
+        fork.fork_point_root(),
+        fork.successor_principal(),
+        fork.identity_seed(),
+        fork.key_material_commitment(),
+    )
+}
+
+fn fork_grant_lineage_transcript(
+    grant_id: GrantId,
+    predecessor_store: StoreId,
+    fork_point_root: &ForkPointRoot,
+    successor_principal: &SuccessorPrincipal,
+    identity_seed: &IdentitySeed,
+    key_material_commitment: &KeyMaterialCommitment,
+) -> Result<CanonicalTranscript, TranscriptRefuse> {
+    let (grant_id, predecessor_store, fork_point_root, successor_principal, identity_seed, key_material) =
+        fork_lineage_digest32_fields(
+            grant_id,
+            predecessor_store,
+            fork_point_root,
+            successor_principal,
+            identity_seed,
+            key_material_commitment,
+        );
+    encode_fork_grant_payload(
+        &grant_id,
+        &predecessor_store,
+        &fork_point_root,
+        &successor_principal,
+        &identity_seed,
+        &key_material,
+    )
+}
+
+fn fork_store_id_transcript(fork: &ForkGrant) -> Result<CanonicalTranscript, TranscriptRefuse> {
+    let (grant_id, predecessor_store, fork_point_root, successor_principal, identity_seed, key_material) =
+        fork_lineage_digest32_from_grant(fork);
+    encode_fork_store_id(
+        &grant_id,
+        &predecessor_store,
+        &fork_point_root,
+        &successor_principal,
+        &identity_seed,
+        &key_material,
+    )
+}
+
+fn fork_write_token_transcript(
+    fork: &ForkGrant,
+    store_id: StoreId,
+) -> Result<CanonicalTranscript, TranscriptRefuse> {
+    encode_fork_write_token(
+        &Digest32::admit(*store_id.as_bytes()),
+        &Digest32::admit(*fork.grant_id().as_bytes()),
+        &Digest32::admit(*fork.identity_seed().as_bytes()),
+        &Digest32::admit(*fork.key_material_commitment().as_bytes()),
+    )
+}
+
+fn recovery_payload_digest32_fields(
+    grant_id: GrantId,
+    store_id: StoreId,
+    predecessor_epoch: FenceEpoch,
+    successor_identity_seed: &IdentitySeed,
+    key_material_commitment: &KeyMaterialCommitment,
+) -> (Digest32, Digest32, u64, Digest32, Digest32, Digest32) {
+    (
+        Digest32::admit(*grant_id.as_bytes()),
+        Digest32::admit(*store_id.as_bytes()),
+        predecessor_epoch.get(),
+        Digest32::admit(*predecessor_epoch.store_id().as_bytes()),
+        Digest32::admit(*successor_identity_seed.as_bytes()),
+        Digest32::admit(*key_material_commitment.as_bytes()),
+    )
+}
+
+fn recovery_grant_payload_transcript(
+    grant_id: GrantId,
+    store_id: StoreId,
+    predecessor_epoch: FenceEpoch,
+    successor_identity_seed: &IdentitySeed,
+    key_material_commitment: &KeyMaterialCommitment,
+) -> Result<CanonicalTranscript, TranscriptRefuse> {
+    let (grant_id, store_id, epoch, epoch_store, successor_seed, key_material) =
+        recovery_payload_digest32_fields(
+            grant_id,
+            store_id,
+            predecessor_epoch,
+            successor_identity_seed,
+            key_material_commitment,
+        );
+    encode_recovery_grant_payload(
+        &grant_id,
+        &store_id,
+        epoch,
+        &epoch_store,
+        &successor_seed,
+        &key_material,
+    )
+}
+
+fn recovery_write_token_transcript(
+    recovery: &RecoveryGrant,
+) -> Result<CanonicalTranscript, TranscriptRefuse> {
+    let (store_id, grant_id, epoch, epoch_store, successor_seed, key_material) =
+        recovery_payload_digest32_fields(
+            recovery.grant_id(),
+            recovery.store_id(),
+            recovery.predecessor_epoch(),
+            recovery.successor_identity_seed(),
+            recovery.key_material_commitment(),
+        );
+    encode_recovery_write_token(
+        &store_id,
+        &grant_id,
+        epoch,
+        &epoch_store,
+        &successor_seed,
+        &key_material,
+    )
+}
+
+fn ancestor_read_grant_payload_transcript(
+    store_id: StoreId,
+    from_epoch: FenceEpoch,
+    to_epoch: FenceEpoch,
+) -> Result<CanonicalTranscript, TranscriptRefuse> {
+    encode_ancestor_read_grant_payload(
+        &Digest32::admit(*store_id.as_bytes()),
+        from_epoch.get(),
+        &Digest32::admit(*from_epoch.store_id().as_bytes()),
+        to_epoch.get(),
+        &Digest32::admit(*to_epoch.store_id().as_bytes()),
+    )
+}
+
 /// Fork-consent verifying-key id via [`encode_fork_consent_key_id`].
 fn consent_key_id_digest(verifying_key: &Digest32) -> Result<Digest, TranscriptRefuse> {
-    let transcript = encode_fork_consent_key_id(verifying_key)?;
-    Ok(hash_transcript(&transcript))
+    digest_from_encoded_transcript(|| encode_fork_consent_key_id(verifying_key))
 }
 
 /// ForkGrant payload digest via [`encode_fork_grant_payload`].
@@ -1145,25 +1502,27 @@ pub(crate) fn fork_grant_payload_digest(
     identity_seed: &IdentitySeed,
     key_material_commitment: &KeyMaterialCommitment,
 ) -> Result<Digest, TranscriptRefuse> {
-    let transcript = encode_fork_grant_payload(
-        &Digest32::admit(*grant_id.as_bytes()),
-        &Digest32::admit(*predecessor_store.as_bytes()),
-        &Digest32::admit(*fork_point_root.as_bytes()),
-        &Digest32::admit(*successor_principal.as_bytes()),
-        &Digest32::admit(*identity_seed.as_bytes()),
-        &Digest32::admit(*key_material_commitment.as_bytes()),
-    )?;
-    Ok(hash_transcript(&transcript))
+    digest_from_encoded_transcript(|| {
+        fork_grant_lineage_transcript(
+            grant_id,
+            predecessor_store,
+            fork_point_root,
+            successor_principal,
+            identity_seed,
+            key_material_commitment,
+        )
+    })
 }
 
 /// RecoveryMatrix digest via [`encode_recovery_matrix`].
 fn recovery_matrix_digest(matrix: &RecoveryMatrix) -> Result<Digest, TranscriptRefuse> {
-    let transcript = encode_recovery_matrix(
-        matrix.threshold(),
-        matrix.max_signers(),
-        &Digest32::admit(*matrix.group_verifying_key().as_bytes()),
-    )?;
-    Ok(hash_transcript(&transcript))
+    digest_from_encoded_transcript(|| {
+        encode_recovery_matrix(
+            matrix.threshold(),
+            matrix.max_signers(),
+            &Digest32::admit(*matrix.group_verifying_key().as_bytes()),
+        )
+    })
 }
 
 /// RecoveryGrant payload digest via [`encode_recovery_grant_payload`].
@@ -1174,30 +1533,20 @@ pub(crate) fn recovery_grant_payload_digest(
     successor_identity_seed: &IdentitySeed,
     key_material_commitment: &KeyMaterialCommitment,
 ) -> Result<Digest, TranscriptRefuse> {
-    let transcript = encode_recovery_grant_payload(
-        &Digest32::admit(*grant_id.as_bytes()),
-        &Digest32::admit(*store_id.as_bytes()),
-        predecessor_epoch.get(),
-        &Digest32::admit(*predecessor_epoch.store_id().as_bytes()),
-        &Digest32::admit(*successor_identity_seed.as_bytes()),
-        &Digest32::admit(*key_material_commitment.as_bytes()),
-    )?;
-    Ok(hash_transcript(&transcript))
+    digest_from_encoded_transcript(|| {
+        recovery_grant_payload_transcript(
+            grant_id,
+            store_id,
+            predecessor_epoch,
+            successor_identity_seed,
+            key_material_commitment,
+        )
+    })
 }
 
 /// Successor StoreId for a fork — hash of [`encode_fork_store_id`] bytes once.
 fn derive_fork_store_id(fork: &ForkGrant) -> Result<StoreId, TranscriptRefuse> {
-    let transcript = encode_fork_store_id(
-        &Digest32::admit(*fork.grant_id().as_bytes()),
-        &Digest32::admit(*fork.predecessor_store().as_bytes()),
-        &Digest32::admit(*fork.fork_point_root().as_bytes()),
-        &Digest32::admit(*fork.successor_principal().as_bytes()),
-        &Digest32::admit(*fork.identity_seed().as_bytes()),
-        &Digest32::admit(*fork.key_material_commitment().as_bytes()),
-    )?;
-    Ok(StoreId::from_digest(
-        *hash_transcript(&transcript).as_bytes(),
-    ))
+    store_id_from_encoded_transcript(|| fork_store_id_transcript(fork))
 }
 
 /// Fork WriteAuthority token — hash of [`encode_fork_write_token`] bytes once.
@@ -1205,37 +1554,17 @@ fn derive_fork_write_token(
     fork: &ForkGrant,
     store_id: StoreId,
 ) -> Result<WriteTokenId, TranscriptRefuse> {
-    let transcript = encode_fork_write_token(
-        &Digest32::admit(*store_id.as_bytes()),
-        &Digest32::admit(*fork.grant_id().as_bytes()),
-        &Digest32::admit(*fork.identity_seed().as_bytes()),
-        &Digest32::admit(*fork.key_material_commitment().as_bytes()),
-    )?;
-    Ok(WriteTokenId::from_digest(
-        *hash_transcript(&transcript).as_bytes(),
-    ))
+    write_token_from_encoded_transcript(|| fork_write_token_transcript(fork, store_id))
 }
 
 /// Recovery WriteAuthority token — hash of [`encode_recovery_write_token`] bytes once.
 fn derive_recovery_write_token(recovery: &RecoveryGrant) -> Result<WriteTokenId, TranscriptRefuse> {
-    let pred = recovery.predecessor_epoch();
-    let transcript = encode_recovery_write_token(
-        &Digest32::admit(*recovery.store_id().as_bytes()),
-        &Digest32::admit(*recovery.grant_id().as_bytes()),
-        pred.get(),
-        &Digest32::admit(*pred.store_id().as_bytes()),
-        &Digest32::admit(*recovery.successor_identity_seed().as_bytes()),
-        &Digest32::admit(*recovery.key_material_commitment().as_bytes()),
-    )?;
-    Ok(WriteTokenId::from_digest(
-        *hash_transcript(&transcript).as_bytes(),
-    ))
+    write_token_from_encoded_transcript(|| recovery_write_token_transcript(recovery))
 }
 
 /// Ancestor-entitlement verifying-key id via [`encode_ancestor_entitlement_key_id`].
 fn entitlement_key_id_digest(verifying_key: &Digest32) -> Result<Digest, TranscriptRefuse> {
-    let transcript = encode_ancestor_entitlement_key_id(verifying_key)?;
-    Ok(hash_transcript(&transcript))
+    digest_from_encoded_transcript(|| encode_ancestor_entitlement_key_id(verifying_key))
 }
 
 /// AncestorReadGrant payload digest via [`encode_ancestor_read_grant_payload`].
@@ -1244,14 +1573,9 @@ fn ancestor_read_grant_payload_digest(
     from_epoch: FenceEpoch,
     to_epoch: FenceEpoch,
 ) -> Result<Digest, TranscriptRefuse> {
-    let transcript = encode_ancestor_read_grant_payload(
-        &Digest32::admit(*store_id.as_bytes()),
-        from_epoch.get(),
-        &Digest32::admit(*from_epoch.store_id().as_bytes()),
-        to_epoch.get(),
-        &Digest32::admit(*to_epoch.store_id().as_bytes()),
-    )?;
-    Ok(hash_transcript(&transcript))
+    digest_from_encoded_transcript(|| {
+        ancestor_read_grant_payload_transcript(store_id, from_epoch, to_epoch)
+    })
 }
 
 #[cfg(test)]
@@ -1567,24 +1891,12 @@ mod tests {
     #[test]
     fn verify_strict_refuses_weak_key_forged_fork_consent() -> Result<()> {
         let store = StoreId::from_digest([0x72; 32]);
-        let mut weak = [0u8; 32];
-        weak[0] = 1;
-        let mut table = PredecessorConsentTable::new();
-        table.insert(store, VerifyingPublicKey::admit(weak))?;
-        let mut forged = [0u8; 64];
-        forged[0] = 1;
-        assert!(
-            PredecessorConsentProof::verify(
-                &table,
-                store,
-                &Digest::admit([0x33; 32]),
-                &Signature::admit(forged),
-            )
-            .is_err(),
-            "FORGED CONSENT: small-order consent key + weak-key forgery must refuse \
-             at PredecessorConsentProof::verify (verify_strict)"
-        );
-
+        let (table, forged) = weak_key_sealed_table_and_forged_signature(
+            store,
+            PredecessorConsentTable::new,
+            |table, store_id, key| table.insert(store_id, key),
+        )?;
+        assert_weak_key_forged_fork_consent_verify_refuses(&table, store, &forged);
         Ok(())
     }
 
@@ -1592,24 +1904,12 @@ mod tests {
     #[test]
     fn verify_strict_refuses_weak_key_forged_ancestor_entitlement() -> Result<()> {
         let store = StoreId::from_digest([0x73; 32]);
-        let mut weak = [0u8; 32];
-        weak[0] = 1;
-        let mut table = AncestorEntitlementTable::new();
-        table.insert(store, VerifyingPublicKey::admit(weak))?;
-        let mut forged = [0u8; 64];
-        forged[0] = 1;
-        assert!(
-            AncestorEntitlementProof::verify(
-                &table,
-                store,
-                &Digest::admit([0x33; 32]),
-                &Signature::admit(forged),
-            )
-            .is_err(),
-            "FORGED ENTITLEMENT: small-order entitlement key + weak-key forgery must refuse \
-             at AncestorEntitlementProof::verify (verify_strict)"
-        );
-
+        let (table, forged) = weak_key_sealed_table_and_forged_signature(
+            store,
+            AncestorEntitlementTable::new,
+            |table, store_id, key| table.insert(store_id, key),
+        )?;
+        assert_weak_key_forged_ancestor_entitlement_verify_refuses(&table, store, &forged);
         Ok(())
     }
     // -----------------------------------------------------------------------
@@ -2143,6 +2443,128 @@ mod tests {
         Signature::admit(signing.sign(message.as_slice()).to_bytes())
     }
 
+    /// Shared #376 weak-key scaffold: small-order verifying key sealed in table
+    /// plus identity-R / S=0 forged signature bytes.
+    fn weak_key_sealed_table_and_forged_signature<T, E>(
+        store: StoreId,
+        new_table: impl FnOnce() -> T,
+        insert: impl FnOnce(&mut T, StoreId, VerifyingPublicKey) -> Result<(), E>,
+    ) -> Result<(T, Signature), E> {
+        let (weak, forged) = weak_small_order_key_and_forged_signature();
+        let mut table = new_table();
+        insert(&mut table, store, VerifyingPublicKey::admit(weak))?;
+        Ok((table, Signature::admit(forged)))
+    }
+
+    /// Small-order ed25519 key material and matching weak-key forgery bytes.
+    fn weak_small_order_key_and_forged_signature() -> ([u8; 32], [u8; 64]) {
+        let mut weak = [0u8; 32];
+        weak[0] = 1;
+        let mut forged = [0u8; 64];
+        forged[0] = 1;
+        (weak, forged)
+    }
+
+    fn assert_weak_key_forged_fork_consent_verify_refuses(
+        table: &PredecessorConsentTable,
+        store: StoreId,
+        forged: &Signature,
+    ) {
+        assert!(
+            PredecessorConsentProof::verify(
+                table,
+                store,
+                &Digest::admit([0x33; 32]),
+                forged,
+            )
+            .is_err(),
+            "FORGED CONSENT: small-order consent key + weak-key forgery must refuse \
+             at PredecessorConsentProof::verify (verify_strict)"
+        );
+    }
+
+    fn assert_weak_key_forged_ancestor_entitlement_verify_refuses(
+        table: &AncestorEntitlementTable,
+        store: StoreId,
+        forged: &Signature,
+    ) {
+        assert!(
+            AncestorEntitlementProof::verify(
+                table,
+                store,
+                &Digest::admit([0x33; 32]),
+                forged,
+            )
+            .is_err(),
+            "FORGED ENTITLEMENT: small-order entitlement key + weak-key forgery must refuse \
+             at AncestorEntitlementProof::verify (verify_strict)"
+        );
+    }
+
+    fn assert_predecessor_consent_registration_attacker_overwrite_refuses(
+        victim: StoreId,
+        key_a: &ConsentSigningKey,
+        key_b: &ConsentSigningKey,
+        table: &mut PredecessorConsentTable,
+    ) -> Result<(), MaterializeRefuse> {
+        seal_once_registration_attacker_overwrite_refuses(
+            victim,
+            *key_a.verifying_key(),
+            *key_b.verifying_key(),
+            table,
+            |table, store_id, key| table.insert(store_id, key),
+            |table, store_id| table.get(store_id),
+            MaterializeRefuse::TrustRootAlreadySealed { store_id: victim },
+        )
+    }
+
+    fn assert_ancestor_entitlement_registration_attacker_overwrite_refuses(
+        victim: StoreId,
+        key_a: &EntitlementSigningKey,
+        key_b: &EntitlementSigningKey,
+        table: &mut AncestorEntitlementTable,
+    ) -> Result<(), AncestorReadRefuse> {
+        seal_once_registration_attacker_overwrite_refuses(
+            victim,
+            *key_a.verifying_key(),
+            *key_b.verifying_key(),
+            table,
+            |table, store_id, key| table.insert(store_id, key),
+            |table, store_id| table.get(store_id),
+            AncestorReadRefuse::TrustRootAlreadySealed { store_id: victim },
+        )
+    }
+
+    /// Shared #375 T3 seal-once registration scaffold: seal key A, idempotent
+    /// re-register, attacker key B refused, sealed key A survives.
+    fn seal_once_registration_attacker_overwrite_refuses<T, E: PartialEq + std::fmt::Debug>(
+        victim: StoreId,
+        key_a: VerifyingPublicKey,
+        key_b: VerifyingPublicKey,
+        table: &mut T,
+        mut insert: impl FnMut(&mut T, StoreId, VerifyingPublicKey) -> Result<(), E>,
+        get: impl Fn(&T, StoreId) -> Option<&VerifyingPublicKey>,
+        conflict: E,
+    ) -> Result<(), E> {
+        assert_ne!(
+            key_a, key_b,
+            "control: attacker key must differ from sealed key A"
+        );
+        insert(table, victim, key_a)?;
+        assert_eq!(get(table, victim), Some(&key_a));
+        // Same key re-register → idempotent Ok (seal-once, not one-shot grief).
+        insert(table, victim, key_a)?;
+        assert_eq!(get(table, victim), Some(&key_a));
+        // Attacker key B for the already-sealed StoreId → TrustRootAlreadySealed.
+        assert_eq!(insert(table, victim, key_b), Err(conflict));
+        assert_eq!(
+            get(table, victim),
+            Some(&key_a),
+            "sealed key A must survive the refused overwrite attempt"
+        );
+        Ok(())
+    }
+
     /// Test-only ancestor-entitlement signing key.
     struct EntitlementSigningKey {
         signing: SigningKey,
@@ -2260,66 +2682,28 @@ mod tests {
         let victim = StoreId::from_digest([0x91; 32]);
         let key_a = ConsentSigningKey::from_seed([0xA1; 32]);
         let key_b = ConsentSigningKey::from_seed([0xB2; 32]);
-        assert_ne!(
-            key_a.verifying_key(),
-            key_b.verifying_key(),
-            "control: attacker key must differ from sealed key A"
-        );
-
         let mut table = PredecessorConsentTable::new();
-        table.insert(victim, *key_a.verifying_key())?;
-        assert_eq!(table.get(victim), Some(key_a.verifying_key()));
-
-        // Same key re-register → idempotent Ok (seal-once, not one-shot grief).
-        table.insert(victim, *key_a.verifying_key())?;
-        assert_eq!(table.get(victim), Some(key_a.verifying_key()));
-
-        // Attacker key B for the already-sealed StoreId → TrustRootAlreadySealed.
-        assert_eq!(
-            table.insert(victim, *key_b.verifying_key()),
-            Err(MaterializeRefuse::TrustRootAlreadySealed { store_id: victim })
-        );
-        assert_eq!(
-            table.get(victim),
-            Some(key_a.verifying_key()),
-            "sealed key A must survive the refused overwrite attempt"
-        );
-
+        assert_predecessor_consent_registration_attacker_overwrite_refuses(
+            victim,
+            &key_a,
+            &key_b,
+            &mut table,
+        )?;
         Ok(())
     }
 
-    /// NASTY (#375 T3): register key A for victim StoreId, then attacker key
-    /// B(!=A) for the same StoreId on the production
-    /// [`AncestorEntitlementTable::insert`] door → typed refuse (never silent
-    /// overwrite of the sealed entitlement trust root).
     #[test]
     fn ancestor_entitlement_registration_attacker_key_refuses_overwrite() -> Result<()> {
         let victim = StoreId::from_digest([0x92; 32]);
         let key_a = EntitlementSigningKey::from_seed([0xC1; 32]);
         let key_b = EntitlementSigningKey::from_seed([0xD2; 32]);
-        assert_ne!(
-            key_a.verifying_key(),
-            key_b.verifying_key(),
-            "control: attacker key must differ from sealed key A"
-        );
-
         let mut table = AncestorEntitlementTable::new();
-        table.insert(victim, *key_a.verifying_key())?;
-        assert_eq!(table.get(victim), Some(key_a.verifying_key()));
-
-        table.insert(victim, *key_a.verifying_key())?;
-        assert_eq!(table.get(victim), Some(key_a.verifying_key()));
-
-        assert_eq!(
-            table.insert(victim, *key_b.verifying_key()),
-            Err(AncestorReadRefuse::TrustRootAlreadySealed { store_id: victim })
-        );
-        assert_eq!(
-            table.get(victim),
-            Some(key_a.verifying_key()),
-            "sealed key A must survive the refused overwrite attempt"
-        );
-
+        assert_ancestor_entitlement_registration_attacker_overwrite_refuses(
+            victim,
+            &key_a,
+            &key_b,
+            &mut table,
+        )?;
         Ok(())
     }
 }
