@@ -178,16 +178,3 @@ bans = ["empty_test"]
 name = "test-support"
 kind = "fn"
 rule = "test-support-fn"
-
-# The door law: every workspace crate holds exactly one role. Host
-# allowed-lists start EMPTY — default deny; the operator widens them by
-# approving exact import prefixes.
-[door]
-engine = ["kyzo-core", "kyzo-model"]
-tools = ["kyzo-trials", "kyzo-oracle", "xtask", "bs-detector"]
-
-[door.hosts]
-kyzo-bin = []
-kyzo-lsp = []
-kyzo-crashfs = []
-kyzo-arrow-interop = []

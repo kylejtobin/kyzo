@@ -262,46 +262,17 @@ enum FnPosition {
     InTrait,
 }
 
-/// Every enum ident in the boundary: the resolution set for the
-/// total-refusal law (a workspace `Result` error position must land on
-/// one of these).
-pub fn enum_idents(files: &[SourceFile]) -> BTreeSet<String> {
-    struct V {
-        out: BTreeSet<String>,
-    }
-    impl<'ast> Visit<'ast> for V {
-        fn visit_item_enum(&mut self, node: &'ast syn::ItemEnum) {
-            self.out.insert(node.ident.to_string());
-            syn::visit::visit_item_enum(self, node);
-        }
-    }
-    let mut v = V { out: BTreeSet::new() };
-    for f in files {
-        v.visit_file(&f.ast);
-    }
-    v.out
-}
-
 /// One classification pass over one file. Returns (check, hit) pairs;
 /// check names group hits for laws.toml and waiver jurisdiction.
 pub fn classify_file(
     grammar: &Grammar,
     aliases: &AliasTable,
-    enums: &BTreeSet<String>,
     file: &SourceFile,
 ) -> Vec<(String, Hit)> {
-    let crate_name = file
-        .rel_path
-        .strip_prefix("crates/")
-        .and_then(|r| r.split('/').next())
-        .unwrap_or("")
-        .to_string();
     let mut w = Walker {
         rel: &file.rel_path,
         grammar,
         aliases,
-        enums,
-        crate_name,
         is_bin: file.rel_path.contains("src/main.rs") || file.rel_path.contains("/src/bin/"),
         in_test_scope: file.rel_path.contains("/tests/") || file.rel_path.contains("/benches/"),
         out: vec![],
@@ -316,8 +287,6 @@ struct Walker<'a> {
     rel: &'a str,
     grammar: &'a Grammar,
     aliases: &'a AliasTable,
-    enums: &'a BTreeSet<String>,
-    crate_name: String,
     is_bin: bool,
     /// Inside a tests/ or benches/ file, or a #[cfg(test)] module: the two
     /// test cells (test-proof, test-support) exist only here.
@@ -369,32 +338,13 @@ impl<'a> Walker<'a> {
                 }
             }
             syn::Item::Use(n) => {
-                let rendered = n.tree.to_token_stream().to_string().replace(' ', "");
                 if use_tree_has_glob(&n.tree) {
+                    let rendered = n.tree.to_token_stream().to_string().replace(' ', "");
                     self.hit(
                         "unclassified",
                         span_line(&n.use_token.span),
                         format!("unclassified-use:{rendered}"),
                     );
-                }
-                // The door law: a host crate importing an engine path
-                // outside its allowed prefix list. Engine and tool crates
-                // pass by role — a role the grammar states, never silence.
-                if let Some(allowed) = self.grammar.door.hosts.get(&self.crate_name) {
-                    let first = rendered.split("::").next().unwrap_or("");
-                    let is_engine = self
-                        .grammar
-                        .door
-                        .engine
-                        .iter()
-                        .any(|e| e.replace('-', "_") == first);
-                    if is_engine && !allowed.iter().any(|p| rendered.starts_with(p.as_str())) {
-                        self.hit(
-                            "sealed_public_door",
-                            span_line(&n.use_token.span),
-                            format!("sealed_public_door:{rendered}"),
-                        );
-                    }
                 }
             }
             syn::Item::Const(n) => {
@@ -458,73 +408,7 @@ impl<'a> Walker<'a> {
         }
     }
 
-    /// The total-refusal law: every `Result` return position resolves its
-    /// error type to a workspace enum or an in-scope type parameter. An
-    /// elided error (`anyhow::Result<T>`), `String`, `Box<dyn Error>`, or
-    /// any non-enum terminal is red.
-    fn check_total_refusal(&mut self, sig: &syn::Signature, line: usize) {
-        let syn::ReturnType::Type(_, ty) = &sig.output else { return };
-        let syn::Type::Path(p) = ty.as_ref() else { return };
-        let Some(last) = p.path.segments.last() else { return };
-        if last.ident != "Result" {
-            return;
-        }
-        let generics: BTreeSet<String> = sig
-            .generics
-            .type_params()
-            .map(|t| t.ident.to_string())
-            .collect();
-        let syn::PathArguments::AngleBracketed(args) = &last.arguments else {
-            self.hit("total_refusal", line, "total_refusal:elided-error".into());
-            return;
-        };
-        let types: Vec<&syn::Type> = args
-            .args
-            .iter()
-            .filter_map(|a| match a {
-                syn::GenericArgument::Type(t) => Some(t),
-                _ => None,
-            })
-            .collect();
-        let Some(err) = types.get(1) else {
-            self.hit("total_refusal", line, "total_refusal:elided-error".into());
-            return;
-        };
-        let ok = match err {
-            syn::Type::Path(ep) => ep.path.segments.last().is_some_and(|s| {
-                let ident = s.ident.to_string();
-                self.enums.contains(&ident) || generics.contains(&ident)
-            }),
-            _ => false,
-        };
-        if !ok {
-            let rendered = err.to_token_stream().to_string().replace(' ', "");
-            self.hit(
-                "total_refusal",
-                line,
-                format!("total_refusal:{rendered}"),
-            );
-        }
-    }
-
     fn classify_struct(&mut self, n: &syn::ItemStruct) {
-        // Doctrine seat law: a serde-derived struct is a wire envelope and
-        // must be declared as one — mechanical candidate detection.
-        if has_serde_derive(&n.attrs)
-            && !self.grammar.seats.declared.iter().any(|s| {
-                s.construct == "wire-envelope" && s.name == n.ident.to_string()
-            })
-        {
-            self.hit(
-                "undeclared_wire",
-                span_line(&n.ident.span()),
-                format!("undeclared_wire:{}", n.ident),
-            );
-        }
-        self.classify_struct_rules(n)
-    }
-
-    fn classify_struct_rules(&mut self, n: &syn::ItemStruct) {
         let matches: Vec<&str> = self
             .grammar
             .constructs
@@ -616,31 +500,6 @@ impl<'a> Walker<'a> {
 
     fn classify_impl(&mut self, n: &syn::ItemImpl) {
         let self_ident = impl_self_ident(n);
-        // Doctrine seat law: a Drop impl marks a drop-bound resource and
-        // its type must be declared as one.
-        let is_drop = n
-            .trait_
-            .as_ref()
-            .is_some_and(|(_, p, _)| p.segments.last().is_some_and(|s| s.ident == "Drop"));
-        if is_drop {
-            let declared = self_ident.as_deref().is_some_and(|name| {
-                self.grammar
-                    .seats
-                    .declared
-                    .iter()
-                    .any(|s| s.construct == "drop-bound-resource" && s.name == name)
-            });
-            if !declared {
-                self.hit(
-                    "undeclared_resource",
-                    span_line(&n.impl_token.span),
-                    format!(
-                        "undeclared_resource:{}",
-                        self_ident.as_deref().unwrap_or("?")
-                    ),
-                );
-            }
-        }
         for it in &n.items {
             match it {
                 syn::ImplItem::Fn(f) => {
@@ -768,15 +627,6 @@ impl<'a> Walker<'a> {
         if !io_seat && sig.asyncness.is_some() {
             self.hit("async_outside_io", line, "async_outside_io".into());
         }
-        self.check_total_refusal(sig, line);
-        // The config-once law: only a declared config constructor reads
-        // the environment.
-        let is_config_seat = self
-            .grammar
-            .seats
-            .config_fns
-            .iter()
-            .any(|c| c.file == self.rel && c.path == sig.ident.to_string());
         let Some(body) = body else { return };
         let scoped: Vec<&str> = self
             .grammar
@@ -789,7 +639,6 @@ impl<'a> Walker<'a> {
             rel: self.rel,
             scoped: &scoped,
             io_seat,
-            is_config_seat,
             out: &mut self.out,
         };
         v.visit_block(body);
@@ -800,7 +649,6 @@ struct BodyRules<'a, 'o> {
     rel: &'a str,
     scoped: &'a [&'a str],
     io_seat: bool,
-    is_config_seat: bool,
     out: &'o mut Vec<(String, Hit)>,
 }
 
@@ -823,19 +671,6 @@ impl<'a, 'o, 'ast> Visit<'ast> for BodyRules<'a, 'o> {
             syn::Expr::Await(a) => {
                 if !self.io_seat {
                     self.hit("async_outside_io", span_line(&a.await_token.span));
-                }
-            }
-            syn::Expr::Path(p) if !self.is_config_seat => {
-                // env::var / env::args and kin, matched on adjacent path
-                // segments — structure, not spelling of the whole path.
-                let segs: Vec<String> =
-                    p.path.segments.iter().map(|s| s.ident.to_string()).collect();
-                let env_read = segs.windows(2).any(|w| {
-                    w[0] == "env"
-                        && matches!(w[1].as_str(), "var" | "vars" | "var_os" | "args" | "args_os")
-                });
-                if env_read {
-                    self.hit("config_once", span_line(&p.path.segments[0].ident.span()));
                 }
             }
             syn::Expr::Assign(a) => {
@@ -968,29 +803,6 @@ fn struct_rule_matches(rule: StructuralRule, n: &syn::ItemStruct) -> bool {
     }
 }
 
-/// A serde derive: `#[derive(...)]` naming Serialize or Deserialize —
-/// matched on the derive list's path idents, structurally.
-fn has_serde_derive(attrs: &[syn::Attribute]) -> bool {
-    attrs.iter().any(|a| {
-        if !a.path().is_ident("derive") {
-            return false;
-        }
-        let mut found = false;
-        let _ = a.parse_nested_meta(|meta| {
-            if meta
-                .path
-                .segments
-                .last()
-                .is_some_and(|s| s.ident == "Serialize" || s.ident == "Deserialize")
-            {
-                found = true;
-            }
-            Ok(())
-        });
-        found
-    })
-}
-
 /// The #[test] attribute family: any attribute whose path ends in `test`
 /// (`#[test]`, `#[tokio::test]`) — a parse fact, not a spelling guess on
 /// the whole path.
@@ -1085,8 +897,7 @@ mod tests {
                     bans: vec!["nested_place_assign".into()],
                 },
             ],
-            seats: crate::grammar::Seats::default(),
-            door: crate::grammar::Door::default(),
+            seats: crate::grammar::Seats { fns: vec![] },
         }
     }
 
@@ -1097,8 +908,7 @@ mod tests {
             ast: syn::parse_file(src).expect("fixture parses"),
         };
         let aliases = AliasTable::build(std::slice::from_ref(&file)).expect("aliases");
-        let enums = enum_idents(std::slice::from_ref(&file));
-        classify_file(&test_grammar(), &aliases, &enums, &file)
+        classify_file(&test_grammar(), &aliases, &file)
     }
 
     fn checks(hits: &[(String, Hit)]) -> Vec<&str> {

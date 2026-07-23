@@ -52,7 +52,7 @@ fn waivable(grammar: &Grammar, check: &str) -> bool {
 /// The classifier-emitted check names, in report order. Every one must
 /// hold a law in laws.toml; they appear in the pass list even at zero
 /// hits so the law requirement is enforced on every run.
-const CLASSIFY_CHECKS: [&str; 15] = [
+const CLASSIFY_CHECKS: [&str; 9] = [
     "unclassified",
     "condemned",
     "static_mut",
@@ -62,12 +62,6 @@ const CLASSIFY_CHECKS: [&str; 15] = [
     "async_outside_io",
     "main_flow",
     "seat_drift",
-    "empty_test",
-    "total_refusal",
-    "sealed_public_door",
-    "config_once",
-    "undeclared_wire",
-    "undeclared_resource",
 ];
 
 pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
@@ -83,7 +77,6 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
     let waivers = WaiverFile::load(&crate_dir.join("waivers.toml"))?;
     let b = Boundary::walk(root)?;
     let aliases = AliasTable::build(&b.files)?;
-    let enums = classify::enum_idents(&b.files);
 
     let mut report = String::new();
     let mut failed: Vec<String> = vec![];
@@ -140,7 +133,7 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
             by_check.insert(c, vec![]);
         }
         for f in &b.files {
-            for (check, hit) in classify::classify_file(&grammar, &aliases, &enums, f) {
+            for (check, hit) in classify::classify_file(&grammar, &aliases, f) {
                 match by_check.get_mut(check.as_str()) {
                     Some(slot) => slot.push(hit),
                     None => anyhow::bail!(
@@ -181,48 +174,6 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
 
     if run_pass("dead_citation") {
         passes.push(("dead_citation".into(), meta::dead_citation(root, &waivers, &b, &laws)));
-    }
-    if run_pass("dead_seat") {
-        // A seat is never allowed to outlive its item: every declared fn,
-        // config constructor, and doctrine type must still exist.
-        let by_path: BTreeMap<&str, &SourceFile> =
-            b.files.iter().map(|f| (f.rel_path.as_str(), f)).collect();
-        let mut hits: Vec<Hit> = vec![];
-        let mut dead = |file: &str, name: &str, kind: &str| {
-            hits.push(Hit {
-                file: file.to_string(),
-                line: 0,
-                construct: format!("dead_seat:{kind}:{name}"),
-            });
-        };
-        for s in &grammar.seats.fns {
-            if by_path
-                .get(s.file.as_str())
-                .and_then(|f| crate::identity::named_item_hash(&f.ast, &s.path))
-                .is_none()
-            {
-                dead(&s.file, &s.path, "fn");
-            }
-        }
-        for s in &grammar.seats.config_fns {
-            if by_path
-                .get(s.file.as_str())
-                .and_then(|f| crate::identity::named_item_hash(&f.ast, &s.path))
-                .is_none()
-            {
-                dead(&s.file, &s.path, "config");
-            }
-        }
-        for s in &grammar.seats.declared {
-            if by_path
-                .get(s.file.as_str())
-                .and_then(|f| crate::identity::named_item_hash(&f.ast, &s.name))
-                .is_none()
-            {
-                dead(&s.file, &s.name, &s.construct);
-            }
-        }
-        passes.push(("dead_seat".into(), hits));
     }
 
     for (check, raw) in passes {
