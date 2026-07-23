@@ -17,7 +17,7 @@ use anyhow::{Context, Result};
 
 pub fn repo_root() -> Result<PathBuf> {
     // Overridable so tooling can point at a throwaway copy.
-    if let Ok(r) = std::env::var("RESONANCE_ROOT") {
+    if let Ok(r) = std::env::var("GATE_ROOT") {
         return Ok(PathBuf::from(r));
     }
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")

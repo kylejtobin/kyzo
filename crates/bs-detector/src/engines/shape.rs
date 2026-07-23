@@ -28,7 +28,7 @@
 //!
 //! This file applies its own law to itself: no `unwrap`/`expect`, no `as`
 //! casts, and no `_ =>` arms — foreign non-exhaustive enums are handled
-//! with `if let`/`matches!` so there is no catch-all to confess.
+//! with `if let`/`matches!` so there is no catch-all left unnamed.
 
 use quote::ToTokens;
 use syn::visit::{self, Visit};
@@ -407,7 +407,7 @@ fn m_ok_drop(f: &SourceFile) -> Vec<Hit> {
 
 /// Numeric `as` casts — truncation costumes. (Discriminant extractions like
 /// a repr(u8) enum's `self as u8` are detected too; the two lawful ones
-/// carry sworn waivers, which is the point: visible, not structural.)
+/// carry approved waivers, which is the point: visible, not structural.)
 fn m_as_cast(f: &SourceFile) -> Vec<Hit> {
     // Every `as` cast, no numeric shortlist: `type W = u8; x as W` dodges
     // any list of names. Lossless and pointer-shaped casts buy waivers.
@@ -430,7 +430,7 @@ fn m_as_cast(f: &SourceFile) -> Vec<Hit> {
 }
 
 /// wrapping_*/saturating_*/overflowing_*/unchecked_* arithmetic — every
-/// site, unconditionally. A comment is not a confession: a site whose wrap
+/// site, unconditionally. A comment is not a waiver entry: a site whose wrap
 /// IS the published contract swears a [[waiver]] the operator can audit,
 /// never a magic string the author grants themself.
 fn m_unchecked_arith(f: &SourceFile) -> Vec<Hit> {
@@ -457,7 +457,7 @@ fn m_unchecked_arith(f: &SourceFile) -> Vec<Hit> {
 /// `with_capacity`/`reserve` whose argument carries a `.min(...)` cap —
 /// inline OR hoisted through a let binding — a reservation bound decided
 /// at the wrong door. The hoisted net is file-wide by ident name: wider
-/// than scope truth on purpose; a false neighbor buys a waiver.
+/// than scope truth on purpose; a false neighbor costs a wrong report.
 fn m_capacity_min_cap(f: &SourceFile) -> Vec<Hit> {
     struct Clamped {
         idents: std::collections::BTreeSet<String>,
@@ -862,7 +862,7 @@ fn m_err_costume(f: &SourceFile) -> Vec<Hit> {
 
 /// Every `exit`/`abort` path ident. Wide on purpose: an imported
 /// `use std::process::exit; exit(1)` carries no `process::` on its line —
-/// a state machine's own `exit` verb buys its life with a sworn waiver.
+/// a state machine's own `exit` verb survives only through an approved waiver.
 fn m_process_exit(f: &SourceFile) -> Vec<Hit> {
     path_idents(f, &["exit", "abort"], "process_exit")
 }
@@ -946,7 +946,7 @@ fn m_peer_dial(f: &SourceFile) -> Vec<Hit> {
 /// `as_bytes_mut`, `from_*`, `of_*`.
 fn m_naked_array_sig(f: &SourceFile) -> Vec<Hit> {
     // Every fn signature trafficking a naked [u8; 32/12/64], no name
-    // exemptions: a newtype's genuine wrap door is one sworn waiver, not a
+    // exemptions: a newtype's genuine wrap door is one approved waiver, not a
     // prefix anybody can borrow.
     fn naked_site(sig: &syn::Signature) -> Option<usize> {
         let text = sig.to_token_stream().to_string();
@@ -1130,8 +1130,8 @@ fn m_condemned_boundary(f: &SourceFile) -> Vec<Hit> {
 /// opening move of a hand-rolled sealed-artifact layout. There is ONE
 /// canonical constructor — `kyzo-core/src/store/transcript.rs` — and its
 /// own sites ARE the authority, exempt structurally by name; every other
-/// site is a second serializer until sworn otherwise (KDFs and internal
-/// identity digests are real and confess individually — no ratchet, no
+/// site is a second serializer until approved otherwise (KDFs and internal
+/// identity digests are real and are entered individually — no ratchet, no
 /// baseline).
 fn m_hand_layout(f: &SourceFile) -> Vec<Hit> {
     struct V<'a> {
@@ -1274,7 +1274,7 @@ mod tests {
     }
 
     #[test]
-    fn unchecked_arith_accepts_no_comment_as_confession() {
+    fn unchecked_arith_accepts_no_comment_as_waiver() {
         let naked = run("unchecked_arith", "fn f(a: u64, b: u64) -> u64 { a.wrapping_mul(b) }");
         assert_eq!(naked.len(), 1, "every site is a violation");
         let commented = run(
@@ -1284,7 +1284,7 @@ mod tests {
         assert_eq!(
             commented.len(),
             1,
-            "a comment is not a confession — only a sworn waiver stands"
+            "a comment is not a waiver entry — only an approved waiver stands"
         );
     }
 

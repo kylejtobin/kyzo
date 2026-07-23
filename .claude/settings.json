@@ -64,7 +64,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/ensure-resonance-watch.sh"
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/ensure-gate-watch.sh"
           }
         ]
       }
@@ -74,7 +74,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/resonance-stop-guard.sh"
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/gate-stop-guard.sh"
           }
         ]
       }

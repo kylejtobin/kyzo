@@ -1,0 +1,246 @@
+# The retained law ledger and the coverage proof, in one file.
+# Every lie-shape the old 46-check gate caught is listed here with the
+# mechanism in the default-deny gate that catches it now. The gate refuses
+# to run if any active check has no [[law]] entry — done means every old
+# catch has a present-tense answer to "this is how we'd catch that".
+# Operator-approved data.
+
+[[law]]
+name = "unwrap"
+law = "a panic on a path reachable from a caller where a typed refusal is owed"
+caught_by = "grammar ban `unwrap` — matcher and bite proof unchanged"
+
+[[law]]
+name = "expect"
+law = "a panic with a message is still a panic where a typed refusal is owed"
+caught_by = "grammar ban `expect` — matcher and bite proof unchanged"
+
+[[law]]
+name = "unwrap_or"
+law = "an error silently replaced by a fabricated value the caller never sees refused"
+caught_by = "grammar ban `unwrap_or` — matcher and bite proof unchanged"
+
+[[law]]
+name = "unwrap_or_else"
+law = "an error silently replaced by a computed fallback instead of a refusal"
+caught_by = "grammar ban `unwrap_or_else` — matcher and bite proof unchanged"
+
+[[law]]
+name = "unwrap_or_default"
+law = "an error silently replaced by a type's default — the quietest possible lie"
+caught_by = "grammar ban `unwrap_or_default` — matcher and bite proof unchanged"
+
+[[law]]
+name = "unwrap_unchecked"
+law = "undefined behavior the moment the assumption is wrong; no waiver makes UB lawful"
+caught_by = "grammar absolute ban `unwrap_unchecked` — no waiver can cover it"
+
+[[law]]
+name = "panic_bang"
+law = "an explicit crash on a caller-reachable path where a typed refusal is owed"
+caught_by = "grammar ban `panic_bang` — matcher and bite proof unchanged"
+
+[[law]]
+name = "unreachable_bang"
+law = "a claim of impossibility that crashes instead of refusing when it is wrong"
+caught_by = "grammar ban `unreachable_bang` — matcher and bite proof unchanged"
+
+[[law]]
+name = "todo_bang"
+law = "an unfinished hole committed as if it were an implementation"
+caught_by = "grammar absolute ban `todo_bang` — no waiver can cover it"
+
+[[law]]
+name = "debug_assert"
+law = "an invariant enforced only in debug builds — release ships with the law compiled out"
+caught_by = "grammar ban `debug_assert` — matcher and bite proof unchanged"
+
+[[law]]
+name = "let_underscore"
+law = "a value with something to say bound to _ so it can never say it"
+caught_by = "grammar ban `let_underscore` — matcher and bite proof unchanged"
+
+[[law]]
+name = "ok_drop"
+law = "a Result told to shut up: .ok() in statement position discards the error"
+caught_by = "grammar ban `ok_drop` — matcher and bite proof unchanged"
+
+[[law]]
+name = "err_costume"
+law = "an error laundered into a normal-looking value (Null, 0, MAX, empty slice)"
+caught_by = "grammar ban `err_costume` — matcher and bite proof unchanged"
+
+[[law]]
+name = "poison_continue"
+law = "a poisoned lock recovered with into_inner and execution carrying on over corrupt state"
+caught_by = "grammar ban `poison_continue` — matcher and bite proof unchanged"
+
+[[law]]
+name = "as_cast"
+law = "a numeric as-cast that silently truncates or wraps instead of proving the conversion"
+caught_by = "grammar ban `as_cast` — matcher and bite proof unchanged"
+
+[[law]]
+name = "unchecked_arith"
+law = "wrapping/saturating/overflowing arithmetic without a named INVARIANT proof adjacent"
+caught_by = "grammar ban `unchecked_arith` — matcher and bite proof unchanged"
+
+[[law]]
+name = "capacity_min_cap"
+law = "a reservation silently capped with .min() at the wrong door, hiding the real demand"
+caught_by = "grammar ban `capacity_min_cap` — matcher and bite proof unchanged"
+
+[[law]]
+name = "allow_dead_code"
+law = "dead code silenced instead of deleted — unreachable law is not law"
+caught_by = "grammar ban `allow_dead_code` — matcher and bite proof unchanged"
+
+[[law]]
+name = "allow_unused"
+law = "unused warnings silenced instead of resolved — the compiler was telling the truth"
+caught_by = "grammar ban `allow_unused` — matcher and bite proof unchanged"
+
+[[law]]
+name = "allow_clippy"
+law = "a clippy lint silenced at the site instead of the defect being fixed"
+caught_by = "grammar ban `allow_clippy` — matcher and bite proof unchanged"
+
+[[law]]
+name = "allow_missing_docs"
+law = "missing documentation silenced instead of written"
+caught_by = "grammar ban `allow_missing_docs` — matcher and bite proof unchanged"
+
+[[law]]
+name = "allow_private"
+law = "private-interface leakage silenced instead of the visibility being fixed"
+caught_by = "grammar ban `allow_private` — matcher and bite proof unchanged"
+
+[[law]]
+name = "allow_unsafe"
+law = "allow(unsafe_code) reopens a door the crate roots forbid; nothing reopens it"
+caught_by = "grammar absolute ban `allow_unsafe` — no waiver can cover it"
+
+[[law]]
+name = "catchall_arm"
+law = "a _ arm swallowing variants nobody enumerated — new variants silently fall in"
+caught_by = "grammar ban `catchall_arm` — matcher and bite proof unchanged"
+
+[[law]]
+name = "default_derive"
+law = "derive(Default) mints a value with no admission proof — a second construction door"
+caught_by = "grammar ban `default_derive` — matcher and bite proof unchanged"
+
+[[law]]
+name = "default_impl"
+law = "a hand-written Default mints a value with no admission proof"
+caught_by = "grammar ban `default_impl` — matcher and bite proof unchanged"
+
+[[law]]
+name = "construction_door"
+law = "from_raw/*_unchecked construction doors that bypass the validated constructor"
+caught_by = "grammar ban `construction_door` — matcher and bite proof unchanged"
+
+[[law]]
+name = "naked_array_sig"
+law = "a crypto/auth door trafficking naked [u8; N] instead of a typed key/digest/nonce"
+caught_by = "grammar ban `naked_array_sig` — matcher and bite proof unchanged"
+
+[[law]]
+name = "test_err_early_return"
+law = "a test that returns on Err instead of failing — it passes precisely when it should scream"
+caught_by = "grammar absolute ban `test_err_early_return` — no waiver can cover it"
+
+[[law]]
+name = "ignore_test"
+law = "an ignored test is law on the books that no court ever hears"
+caught_by = "grammar ban `ignore_test` — matcher and bite proof unchanged"
+
+[[law]]
+name = "should_panic"
+law = "should_panic passes on ANY panic, certifying nothing about which law fired"
+caught_by = "grammar ban `should_panic` — matcher and bite proof unchanged"
+
+[[law]]
+name = "process_exit"
+law = "process::exit/abort skips every destructor and swallows every pending refusal"
+caught_by = "grammar ban `process_exit` — matcher and bite proof unchanged"
+
+[[law]]
+name = "sleep_sync"
+law = "thread::sleep standing in for a real happens-before — a race with a timer on it"
+caught_by = "grammar ban `sleep_sync` — matcher and bite proof unchanged"
+
+[[law]]
+name = "serde_default_skip"
+law = "serde(default)/serde(skip) lets a wire field silently vanish or self-invent"
+caught_by = "grammar ban `serde_default_skip` — matcher and bite proof unchanged"
+
+[[law]]
+name = "nondeterminism"
+law = "wall-clock or unseeded randomness in production — unreplayable, unprovable behavior"
+caught_by = "grammar ban `nondeterminism` — matcher and bite proof unchanged"
+
+[[law]]
+name = "peer_dial"
+law = "a raw TCP/UDP/Unix socket where NATS is the only lawful nervous system"
+caught_by = "grammar ban `peer_dial` — matcher and bite proof unchanged"
+
+[[law]]
+name = "unsafe_token"
+law = "an unsafe block/fn/impl — every one is a hole in the memory-safety proof"
+caught_by = "grammar ban `unsafe_token` — matcher and bite proof unchanged"
+
+[[law]]
+name = "assert_bang"
+law = "assert! on a caller-reachable path is a panic in an invariant costume — hostile bytes must be refused typed, never asserted"
+caught_by = "grammar ban `assert_bang` — matcher and bite proof unchanged"
+
+[[law]]
+name = "condemned_boundary"
+law = "story #299's condemned shapes returning: raw-source trigger fields, Display-spliced or to_string-captured extractors"
+caught_by = "grammar absolute ban `condemned_boundary` — no waiver can cover it"
+
+[[law]]
+name = "hand_layout"
+law = "a byte-literal domain tag fed to a hasher outside the one transcript constructor — a second sealed-artifact serializer until waived"
+caught_by = "grammar ban `hand_layout` — matcher and bite proof unchanged"
+
+[[law]]
+name = "derive_bypass"
+law = "a type with a fallible constructor also deriving Deserialize/Default/From — a second door around the admission proof"
+caught_by = "relational pass, unchanged"
+
+[[law]]
+name = "copy_detector"
+law = "near-identical fn bodies (>=60 shared tokens, >=60% shingle overlap) — a second authority created by copy-paste"
+caught_by = "relational pass, unchanged"
+
+[[law]]
+name = "agreement_registry"
+law = "a test named in agreements.toml that no longer exists — recorded law silently deleted"
+caught_by = "relational pass, unchanged; no waiver can cover it"
+
+[[law]]
+name = "coverage"
+law = "a file that exists in the boundary but was never delivered to the engines"
+caught_by = "meta pass, unchanged; no waiver can cover it"
+
+[[law]]
+name = "unparsed"
+law = "a file syn cannot read is invisible to every syn check — reported, never skipped"
+caught_by = "meta pass, unchanged; no waiver can cover it"
+
+[[law]]
+name = "forbid_roots"
+law = "a crate root without #![forbid(unsafe_code)] leaves the whole crate's proof open"
+caught_by = "meta pass, unchanged"
+
+[[law]]
+name = "stale_waivers"
+law = "a waiver whose site no longer matches any live hit is itself a violation"
+caught_by = "meta pass, unchanged; no waiver can cover it"
+
+[[law]]
+name = "unclassified"
+law = "an item matching no approved construct in the grammar — unknown shape is guilty by default"
+caught_by = "default-deny classifier over grammar.toml constructs"

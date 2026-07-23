@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stop hook: block stopping while the combined gate (resonance + fast lib tests)
+# Stop hook: block stopping while the combined gate (bs-detector + fast lib tests)
 # is dirty or mid-run.
 #
 # OPERATOR CONTROL: crates/bs-detector/pester-hook.txt owns this hook.
@@ -16,7 +16,7 @@ if [ "$switch" != "on" ]; then
   exit 0
 fi
 
-LOG="${CLAUDE_PROJECT_DIR:-.}/crates/xtask/resonance.log"
+LOG="${CLAUDE_PROJECT_DIR:-.}/crates/xtask/gate.log"
 LOCK="$LOG.lock"
 
 if [ -d "$LOCK" ]; then
@@ -40,8 +40,8 @@ fi
 head1="$(head -n 1 "$LOG")"
 
 case "$head1" in
-  "GATE: PASS"* | "RESONANCE: PASS"*) exit 0 ;;
-  "GATE: FAIL"* | "RESONANCE: FAIL"*)
+  "GATE: PASS"* ) exit 0 ;;
+  "GATE: FAIL"* )
     echo "$now" > "$STAMP"
     {
       echo "GATE VIOLATION — STOP BLOCKED (gate is RED)."

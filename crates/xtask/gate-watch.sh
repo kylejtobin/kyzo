@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
-# resonance-watch.sh — file monitor for the bs-detector conduct gate.
+# gate-watch.sh — file monitor for the bs-detector conduct gate.
 #
 # Watches the source tree; on any relevant change, debounces ~2s and runs
 # the bs-detector in the kyzo-dev container. The detector binary itself is
 # the writer of the verdict artifacts:
-#   crates/xtask/resonance.log   (line 1: "RESONANCE: PASS" or
-#                                 "RESONANCE: FAIL <failing checks>")
-#   crates/xtask/bs-counts.txt   (one line: "name:N ... = TOTAL unconfessed")
+#   crates/xtask/gate.log   (line 1: "GATE: PASS" or
+#                                 "GATE: FAIL <failing checks>")
+#   crates/xtask/gate-counts.txt   (one line: "name:N ... = TOTAL unconfessed")
 # This script only writes the log when the detector could not run at all
 # (compile error, container failure) — that is a FAIL too, never a stale
-# green. A lock dir (resonance.log.lock) exists while a run is
+# green. A lock dir (gate.log.lock) exists while a run is
 # pending/active; a dirty flag set by mid-run edits triggers one more run,
 # so the verdict always converges to the latest tree.
 set -u
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
-LOG="$REPO/crates/xtask/resonance.log"
+LOG="$REPO/crates/xtask/gate.log"
 LOCK="$LOG.lock"
 DIRTY="$LOG.dirty"
 STAMP="$LOG.stamp"
@@ -33,7 +33,7 @@ run_gate_until_clean() {
     # FAIL). If the log is older than this run started, the run died
     # before verdict — report THAT as the verdict.
     if [ "$LOG" -ot "$STAMP" ]; then
-      printf 'RESONANCE: FAIL detector-did-not-run (rc=%s)\n%s\n' "$rc" \
+      printf 'GATE: FAIL detector-did-not-run (rc=%s)\n%s\n' "$rc" \
         "$(printf '%s\n' "$raw" | grep -v '^ Container kyzo-kyzo-dev-run-')" \
         > "$LOG.tmp"
       mv -f "$LOG.tmp" "$LOG"

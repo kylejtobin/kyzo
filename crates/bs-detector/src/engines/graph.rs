@@ -259,7 +259,7 @@ pub fn copy_detector(files: &[&SourceFile]) -> Vec<Hit> {
             continue;
         }
         // The construct is the bare pair — stable across edits, so a
-        // sworn waiver binds to the twins, not to a drifting score.
+        // approved waiver binds to the twins, not to a drifting score.
         hits.push(Hit {
             file: a.file.clone(),
             line: a.line,

@@ -6,17 +6,17 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! Sworn testimony: the ONLY way a detector hit survives without a fix.
+//! An approved waiver: the ONLY way a detector hit survives without a fix.
 //!
 //! A waiver binds to exactly one site (check, file, line, construct) and
 //! carries a `why_not_sabotage` the operator audits — earned by argument,
 //! never by incumbency. The moment its site drifts, the waiver does not
-//! quietly keep counting as confessed: it becomes a reported violation of
-//! its own (BANNED #22). Blanket confessions are not representable: there
+//! quietly keep counting as waived: it becomes a reported violation of
+//! its own (BANNED #22). Blanket waiver entrys are not representable: there
 //! is no pattern-wide or file-wide waiver constructor.
 //!
 //! File format: `crates/bs-detector/waivers.toml`, one `[[waiver]]` table
-//! per confession, plus `[[scope_waiver]]` for the single lawful way a
+//! per waiver entry, plus `[[scope_waiver]]` for the single lawful way a
 //! check runs narrower than all of `crates/` (BANNED #20 made data).
 
 use std::collections::BTreeSet;
@@ -25,21 +25,21 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
-/// One sworn, site-bound confession.
+/// One approved, site-bound waiver entry.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Waiver {
-    /// The registered check this confesses a hit of (must exist in
+    /// The registered check this covers a hit of (must exist in
     /// checks.toml — a waiver naming an unknown check is a load error).
     pub check: String,
-    /// Repo-root-relative file of the confessed site.
+    /// Repo-root-relative file of the waived site.
     pub file: String,
-    /// 1-indexed line of the confessed site.
+    /// 1-indexed line of the waived site.
     pub line: usize,
     /// The construct at the site, exactly as the check reports it (pattern
     /// name for shape checks, function/member name for graph checks).
     pub construct: String,
-    /// The testimony. Validated substantive at load; audited by the
+    /// The justification. Validated substantive at load; audited by the
     /// operator; a lie here is the highest-severity fraud in this repo.
     pub why_not_sabotage: String,
 }
@@ -54,7 +54,7 @@ pub struct ScopeWaiver {
     pub check: String,
     /// Path prefixes (repo-root-relative) the check is limited to.
     pub scope: Vec<String>,
-    /// Why the full boundary would break us — sworn, audited.
+    /// Why the full boundary would break us — written, audited.
     pub why_full_scope_breaks: String,
 }
 
@@ -62,15 +62,15 @@ pub struct ScopeWaiver {
 #[serde(deny_unknown_fields)]
 pub struct WaiverFile {
     /// Both ledgers are REQUIRED keys: an empty ledger is written
-    /// `waiver = []`, stated on purpose — zero confessions is a claim the
+    /// `waiver = []`, stated on purpose — zero waiver entrys is a claim the
     /// file makes, never a shape it defaults into.
     pub waiver: Vec<Waiver>,
     pub scope_waiver: Vec<ScopeWaiver>,
 }
 
 impl WaiverFile {
-    /// Load and validate. Refuses: empty/uncited testimony, duplicate
-    /// site entries (one confession per site — a duplicate means someone
+    /// Load and validate. Refuses: empty/uncited justification, duplicate
+    /// site entries (one waiver entry per site — a duplicate means someone
     /// is padding), and unknown fields (a typo'd field name silently
     /// weakening a waiver is itself a lie-shape).
     pub fn load(path: &Path) -> Result<WaiverFile> {
@@ -83,7 +83,7 @@ impl WaiverFile {
         for w in &parsed.waiver {
             if w.why_not_sabotage.trim().len() < 20 {
                 bail!(
-                    "waiver {}:{} ({}) — testimony under 20 chars is not testimony",
+                    "waiver {}:{} ({}) — justification under 20 chars is not justification",
                     w.file,
                     w.line,
                     w.construct
@@ -97,7 +97,7 @@ impl WaiverFile {
             );
             if !seen.insert(key) {
                 bail!(
-                    "duplicate waiver for {}:{} ({}) — one confession per site",
+                    "duplicate waiver for {}:{} ({}) — one waiver entry per site",
                     w.file,
                     w.line,
                     w.construct
@@ -121,7 +121,7 @@ impl WaiverFile {
         Ok(parsed)
     }
 
-    /// The waivers sworn for one check.
+    /// The waivers approved for one check.
     pub fn for_check<'a>(&'a self, check: &str) -> Vec<&'a Waiver> {
         self.waiver.iter().filter(|w| w.check == check).collect()
     }
@@ -163,7 +163,7 @@ why_not_sabotage = "LSP Position.character is u32 by wire protocol; a >4B-unit l
     }
 
     #[test]
-    fn refuses_thin_testimony() {
+    fn refuses_thin_justification() {
         let e = load_str(
             r#"
 scope_waiver = []
@@ -176,7 +176,7 @@ construct = "expect"
 why_not_sabotage = "it's fine"
 "#,
         );
-        assert!(e.is_err(), "sub-20-char testimony must refuse to load");
+        assert!(e.is_err(), "sub-20-char justification must refuse to load");
     }
 
     #[test]
@@ -190,14 +190,14 @@ check = "expect"
 file = "a.rs"
 line = 1
 construct = "expect"
-why_not_sabotage = "a genuinely long enough testimony string here"
+why_not_sabotage = "a genuinely long enough justification string here"
 
 [[waiver]]
 check = "expect"
 file = "a.rs"
 line = 1
 construct = "expect"
-why_not_sabotage = "a second confession for the same site is padding"
+why_not_sabotage = "a second waiver entry for the same site is padding"
 "#,
         );
         assert!(e.is_err(), "duplicate site must refuse to load");
@@ -206,7 +206,7 @@ why_not_sabotage = "a second confession for the same site is padding"
     #[test]
     fn refuses_unknown_fields_and_empty_scope() {
         assert!(
-            load_str("scope_waiver = []\n[[waiver]]\ncheck='x'\nfile='a'\nline=1\nconstruct='c'\nwhy_not_sabotage='long enough testimony right here'\nbaseline=5\n").is_err(),
+            load_str("scope_waiver = []\n[[waiver]]\ncheck='x'\nfile='a'\nline=1\nconstruct='c'\nwhy_not_sabotage='long enough justification right here'\nbaseline=5\n").is_err(),
             "unknown field (e.g. a smuggled 'baseline') must refuse"
         );
         assert!(

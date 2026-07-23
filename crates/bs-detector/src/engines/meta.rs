@@ -10,7 +10,7 @@
 //! - coverage: a run must prove it saw every file in the boundary.
 //! - unparsed: a file syn can't read is invisible to every syn check, so
 //!   it is reported, never skipped.
-//! - stale waivers: a confession whose site no longer matches is itself a
+//! - stale waivers: a waiver entry whose site no longer matches is itself a
 //!   violation (BANNED #22).
 //! - forbid roots: every crate root carries `#![forbid(unsafe_code)]`.
 
@@ -99,7 +99,7 @@ check = "expect"
 file = "crates/x/src/a.rs"
 line = 3
 construct = "expect"
-why_not_sabotage = "a genuinely long testimony for the fixture"
+why_not_sabotage = "a genuinely long justification for the fixture"
 "#;
         let mut tf = tempfile::NamedTempFile::new().expect("tempfile");
         std::io::Write::write_all(&mut tf, toml.as_bytes()).expect("write");

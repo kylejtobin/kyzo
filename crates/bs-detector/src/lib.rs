@@ -7,14 +7,14 @@
  */
 
 //! Library surface of the Bullshit Detector — the bite-proof suite imports
-//! the engines through here; the binary (`main.rs`) is a thin door over
+//! the passes through here; the binary (`main.rs`) is a thin door over
 //! [`run`].
 
 #![forbid(unsafe_code)]
 
 pub mod boundary;
+pub mod classify;
 pub mod engines;
-pub mod policy;
-pub mod registry;
+pub mod grammar;
 pub mod run;
 pub mod waiver;

@@ -18,19 +18,19 @@ deny() {
 
 write_shaped='>|(^|[^[:alnum:]_.-])(tee|mv|cp|rm|truncate|dd|python3?|perl|patch)([^[:alnum:]_.-]|$)|sed[[:space:]]+-i|awk[[:space:]]+-i|git[[:space:]]+(checkout|restore|apply|stash|reset|clean)'
 
-# The standards skill is operator-written law: denied to EVERY agent,
-# kyzo-waiver included. Checked before the agent exemption on purpose.
+# The standards skill and the retired ledger are history/law no agent may
+# rewrite, kyzo-waiver included. Checked before the agent exemption on purpose.
 if [ "$tool" = "Bash" ]; then
   cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // ""')
-  if printf '%s' "$cmd" | grep -q 'kyzo-architecture-standards' \
+  if printf '%s' "$cmd" | grep -Eq 'kyzo-architecture-standards|waivers-legacy' \
      && printf '%s' "$cmd" | grep -Eq "$write_shaped"; then
-    deny "kyzo-architecture-standards/SKILL.md is operator-written law. Propose the change to the operator in chat; do not edit it."
+    deny "Operator-owned law/history (standards skill, retired ledger). Propose the change to the operator in chat; do not edit."
   fi
 else
   path=$(printf '%s' "$input" | jq -r '.tool_input.file_path // .tool_input.notebook_path // ""')
   case "$path" in
-    *kyzo-architecture-standards/SKILL.md)
-      deny "kyzo-architecture-standards/SKILL.md is operator-written law. Propose the change to the operator in chat; do not edit it."
+    *kyzo-architecture-standards/SKILL.md|*waivers-legacy.toml)
+      deny "Operator-owned law/history (standards skill, retired ledger). Propose the change to the operator in chat; do not edit."
       ;;
   esac
 fi

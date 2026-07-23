@@ -72,7 +72,7 @@ fn bite_unwrap_or_default() {
 }
 
 #[test]
-fn bite_unchecked_unwrap() {
+fn bite_unwrap_unchecked() {
     assert_eq!(detonates("unwrap_unchecked", "fn f(x: Option<u8>) -> u8 { unsafe { x.unwrap_unchecked() } }"), Some(1));
 }
 
@@ -146,7 +146,7 @@ fn bite_unchecked_arith() {
             "fn f(a: u64, b: u64) -> u64 {\n    // INVARIANT(SeedMix): wrap is the published mix contract.\n    a.wrapping_mul(b)\n}"
         ),
         Some(1),
-        "a comment is not a confession — only a sworn waiver stands"
+        "a comment is not a waiver entry — only an approved waiver stands"
     );
 }
 
@@ -256,7 +256,7 @@ fn bite_construction_door() {
 fn bite_naked_array_sig() {
     assert_eq!(detonates("naked_array_sig", "fn seal_key(k: [u8; 32]) -> [u8; 32] { k }"), Some(1));
     // No name exemptions anywhere — impl doors included; the real wrap
-    // doors buy their lives one sworn waiver each.
+    // doors buy their lives one approved waiver each.
     assert_eq!(detonates("naked_array_sig", "fn from_bytes(k: [u8; 32]) -> [u8; 32] { k }"), Some(1));
     assert_eq!(
         detonates("naked_array_sig", "struct D([u8; 32]);\nimpl D { fn from_derived(b: [u8; 32]) -> D { D(b) } }"),
@@ -404,24 +404,40 @@ fn bite_forbid_roots() {
     assert_eq!(meta::forbid_roots(&b).len(), 1);
 }
 
-// --- the registry binds to THIS file ----------------------------------------------------------
+// --- the grammar and law ledger bind to THIS file ----------------------------------------------
 
 #[test]
-fn the_real_registry_loads_and_binds_to_this_file() {
+fn the_real_grammar_and_laws_load_and_bind_to_this_file() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let waivers = match bs_detector::waiver::WaiverFile::load(&root.join("waivers.toml")) {
-        Ok(w) => w,
+    match bs_detector::waiver::WaiverFile::load(&root.join("waivers.toml")) {
+        Ok(_) => {}
         Err(e) => panic!("waivers.toml must be lawful: {e:#}"),
-    };
-    let reg = match bs_detector::registry::Registry::load(
-        &root.join("checks.toml"),
-        &waivers,
+    }
+    let g = match bs_detector::grammar::Grammar::load(
+        &root.join("grammar.toml"),
         include_str!("bite_proofs.rs"),
     ) {
-        Ok(r) => r,
-        Err(e) => panic!("checks.toml must be lawful: {e:#}"),
+        Ok(g) => g,
+        Err(e) => panic!("grammar.toml must be lawful: {e:#}"),
     };
-    assert!(reg.checks.len() >= 43, "every engine's checks are registered");
+    assert!(
+        g.bans.len() + g.bans_absolute.len() >= 40,
+        "every banned shape stays registered"
+    );
+    let laws = match bs_detector::grammar::Laws::load(&root.join("laws.toml")) {
+        Ok(l) => l,
+        Err(e) => panic!("laws.toml must be lawful: {e:#}"),
+    };
+    for name in g.bans_absolute.iter().chain(g.bans.iter()) {
+        if laws.require(name).is_err() {
+            panic!("ban `{name}` has no retained law — coverage proof broken");
+        }
+    }
+    for pass in ["unclassified", "derive_bypass", "copy_detector", "agreement_registry", "coverage", "unparsed", "forbid_roots", "stale_waivers"] {
+        if laws.require(pass).is_err() {
+            panic!("pass `{pass}` has no retained law — coverage proof broken");
+        }
+    }
 }
 
 // --- ported ratchets: the old xtask checks' historical bugs still bite ---------------------------
@@ -467,7 +483,7 @@ fn bite_hand_layout() {
         None => panic!("matcher registered and fixture parses"),
     };
     assert_eq!(hits.len(), 1);
-    // No file is exempt — the canonical constructor's own sites confess in
+    // No file is exempt — the canonical constructor's own sites are entered in
     // waivers.toml like everyone else's.
     let m = match shape::matcher_by_name("hand_layout") {
         Some(m) => m,

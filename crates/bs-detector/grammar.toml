@@ -1,0 +1,73 @@
+# The gate grammar — the one law seat for the default-deny gate.
+# Operator-approved data; agents propose changes in chat, never edit.
+#
+# [bans_absolute]: banned-shape predicates no waiver can cover.
+# [bans]: banned-shape predicates a waiver may cover, one entry per hit,
+#   granted only by the kyzo-waiver agent.
+# [[construct]]: structural classification law. Every struct and enum in
+#   crates/ must classify against a construct below; an item matching no
+#   construct is a violation ("unclassified") by default — deny is the
+#   default, silence certifies nothing.
+# Every ban must resolve to a registered matcher and a bite proof named
+# bite_<ban> in tests/bite_proofs.rs, or the gate refuses to run.
+
+bans_absolute = [
+  "unwrap_unchecked",
+  "todo_bang",
+  "allow_unsafe",
+  "test_err_early_return",
+  "condemned_boundary",
+]
+
+bans = [
+  "unwrap",
+  "expect",
+  "unwrap_or",
+  "unwrap_or_else",
+  "unwrap_or_default",
+  "panic_bang",
+  "unreachable_bang",
+  "debug_assert",
+  "let_underscore",
+  "ok_drop",
+  "err_costume",
+  "poison_continue",
+  "as_cast",
+  "unchecked_arith",
+  "capacity_min_cap",
+  "allow_dead_code",
+  "allow_unused",
+  "allow_clippy",
+  "allow_missing_docs",
+  "allow_private",
+  "catchall_arm",
+  "default_derive",
+  "default_impl",
+  "construction_door",
+  "naked_array_sig",
+  "ignore_test",
+  "should_panic",
+  "process_exit",
+  "sleep_sync",
+  "serde_default_skip",
+  "nondeterminism",
+  "peer_dial",
+  "unsafe_token",
+  "assert_bang",
+  "hand_layout",
+]
+
+[[construct]]
+name = "newtype-scalar"
+kind = "struct"
+rule = "tuple-single-private-field"
+
+[[construct]]
+name = "sealed-struct"
+kind = "struct"
+rule = "all-fields-private"
+
+[[construct]]
+name = "sum-type"
+kind = "enum"
+rule = "no-string-variant-fields"

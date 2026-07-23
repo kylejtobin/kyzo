@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # gate-fast.sh — one-shot combined bs-detector + fast lib-test run.
 #
-# Mirrors resonance-watch.sh's lock/log convention but covers the heavier
+# Mirrors gate-watch.sh's lock/log convention but covers the heavier
 # cycle (isolated container, conduct gate, then the workspace lib tests).
 # Always invoke this backgrounded; never run it synchronously in a terminal
 # someone is watching.
 #
-# The bs-detector binary writes crates/xtask/resonance.log and
+# The bs-detector binary writes crates/xtask/gate.log and
 # bs-counts.txt itself; this script then overlays the combined GATE verdict
 # the stop hook parses:
 #   line 1: "GATE: PASS"  or  "GATE: FAIL fast-tests"  or  "GATE: FAIL <checks>"
@@ -15,7 +15,7 @@
 set -u
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
-LOG="$REPO/crates/xtask/resonance.log"
+LOG="$REPO/crates/xtask/gate.log"
 LOCK="$LOG.lock"
 
 if ! mkdir "$LOCK" 2>/dev/null; then
@@ -39,7 +39,7 @@ detector_rc=$?
 
 if [ "$detector_rc" -ne 0 ]; then
   checks="$(printf '%s\n' "$detector_out" \
-    | sed -n 's/^RESONANCE: FAIL //p' | tail -1)"
+    | sed -n 's/^GATE: FAIL //p' | tail -1)"
   {
     printf 'GATE: FAIL %s\ncommit %s\n' "${checks:-bs-detector}" "$commit"
     printf '%s\n' "$detector_out" | grep -v '^ Container '
