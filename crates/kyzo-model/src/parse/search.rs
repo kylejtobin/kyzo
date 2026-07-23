@@ -47,7 +47,6 @@
 
 use std::hash::{Hash, Hasher};
 use std::ops::Index;
-use std::sync::OnceLock;
 
 use miette::{Diagnostic, Result};
 use pest::Parser;
@@ -58,7 +57,7 @@ use thiserror::Error;
 
 use crate::program::span::SourceSpan;
 
-use super::expr::parse_string;
+use super::expr::{fts_pratt_parser, parse_string};
 use super::{
     EmptyParseRoot, ExtractSpan, IntoChildren, KyzoScriptParser, Pair, ParseError, Rule, unexpected,
 };
@@ -538,7 +537,7 @@ fn parse_fts_expr(pair: Pair<'_>, depth: usize, ops_left: &mut usize) -> Result<
         }
     }
 
-    fts_pratt()
+    fts_pratt_parser()
         .map_primary(|p| build_term(p, weight, ops_left))
         .map_infix(build_infix)
         .parse(pair.children())
@@ -662,18 +661,6 @@ fn build_phrase(pair: Pair<'_>) -> Result<FtsLiteral> {
         }
     }
     FtsLiteral::new(core_text, is_prefix, booster).ok_or_else(|| BadFtsLiteral(span).into())
-}
-
-/// The FTS boolean precedence: `NOT` binds tightest, then `AND`, then `OR`,
-/// all left-associative — the same ladder the CozoDB original used.
-fn fts_pratt() -> &'static PrattParser<Rule> {
-    static PARSER: OnceLock<PrattParser<Rule>> = OnceLock::new();
-    PARSER.get_or_init(|| {
-        PrattParser::new()
-            .op(Op::infix(Rule::fts_not, Assoc::Left))
-            .op(Op::infix(Rule::fts_and, Assoc::Left))
-            .op(Op::infix(Rule::fts_or, Assoc::Left))
-    })
 }
 
 #[cfg(test)]
