@@ -391,6 +391,54 @@ mod tests {
         Ok((record, cert))
     }
 
+    /// Shared create → admit original → append correction → commit scaffold for
+    /// as-of supersession tests. Parameterized by storage seed and correction
+    /// valid-time only; assertion-specific queries stay in each test.
+    fn admit_correction_through_store(
+        storage_seed: u64,
+        correction_valid: ValidityTs,
+    ) -> Result<(Engine<SimStorage>, Supersession)> {
+        let db = open_engine(SimStorage::new(storage_seed))?;
+        db.run_script(
+            "?[id, price] <- [[1, 100]] :create quote {id => price} @ 100",
+            no_params(),
+        )
+        .map_err(|e| miette!("create original @100: {e}"))?;
+
+        let original_row = [DataValue::from(1i64), DataValue::from(100i64)];
+        let seats = LiveAdmissionSeats::mint_genesis();
+        // Admit the create's logical prior through the correction door's
+        // identity plane, then append the correction on the real store.
+        let (prior_record, _) = admit_original(
+            &seats,
+            "quote",
+            &original_row,
+            1,
+            ValidityTs::of_micros(100),
+        )?;
+        let prior = prior_record.record_id();
+
+        let mut tx = db
+            .store
+            .write_tx()
+            .map_err(|e| miette!("correction tx: {e}"))?;
+        let handle = get_relation(&tx, "quote").map_err(|e| miette!("quote: {e}"))?;
+        let corrected = [DataValue::from(1i64), DataValue::from(150i64)];
+        let link = append_corrected_fact(
+            &seats,
+            &handle,
+            &mut tx,
+            prior,
+            &corrected,
+            correction_valid,
+            SourceSpan::empty(),
+        )
+        .map_err(|e| miette!("append correction: {e}"))?;
+        tx.commit().map_err(|e| miette!("commit correction: {e}"))?;
+
+        Ok((db, link))
+    }
+
     #[test]
     fn correction_supersedes_by_record_id_with_dense_commit_ordinal() -> Result<()> {
         let seats = LiveAdmissionSeats::mint_genesis();
@@ -445,43 +493,8 @@ mod tests {
 
     #[test]
     fn as_of_pre_correction_replays_original_exactly() -> Result<()> {
-        let db = open_engine(SimStorage::new(0x2680_0004))?;
-        db.run_script(
-            "?[id, price] <- [[1, 100]] :create quote {id => price} @ 100",
-            no_params(),
-        )
-        .map_err(|e| miette!("create original @100: {e}"))?;
-
-        let original_row = [DataValue::from(1i64), DataValue::from(100i64)];
-        let seats = LiveAdmissionSeats::mint_genesis();
-        // Admit the create's logical prior through the correction door's
-        // identity plane, then append the correction on the real store.
-        let (prior_record, _) = admit_original(
-            &seats,
-            "quote",
-            &original_row,
-            1,
-            ValidityTs::of_micros(100),
-        )?;
-        let prior = prior_record.record_id();
-
-        let mut tx = db
-            .store
-            .write_tx()
-            .map_err(|e| miette!("correction tx: {e}"))?;
-        let handle = get_relation(&tx, "quote").map_err(|e| miette!("quote: {e}"))?;
-        let corrected = [DataValue::from(1i64), DataValue::from(150i64)];
-        let link = append_corrected_fact(
-            &seats,
-            &handle,
-            &mut tx,
-            prior,
-            &corrected,
-            ValidityTs::of_micros(200),
-            SourceSpan::empty(),
-        )
-        .map_err(|e| miette!("append correction: {e}"))?;
-        tx.commit().map_err(|e| miette!("commit correction: {e}"))?;
+        let (db, link) =
+            admit_correction_through_store(0x2680_0004, ValidityTs::of_micros(200))?;
 
         assert_ne!(link.prior(), link.successor());
 
@@ -517,42 +530,9 @@ mod tests {
     /// rows for a single-valued key), history is being read wrong.
     #[test]
     fn as_of_same_valid_time_correction_supersedes_stale_value() -> Result<()> {
-        let db = open_engine(SimStorage::new(0x2680_0006))?;
-        db.run_script(
-            "?[id, price] <- [[1, 100]] :create quote {id => price} @ 100",
-            no_params(),
-        )
-        .map_err(|e| miette!("create original @100: {e}"))?;
-
-        let original_row = [DataValue::from(1i64), DataValue::from(100i64)];
-        let seats = LiveAdmissionSeats::mint_genesis();
-        let (prior_record, _) = admit_original(
-            &seats,
-            "quote",
-            &original_row,
-            1,
-            ValidityTs::of_micros(100),
-        )?;
-        let prior = prior_record.record_id();
-
-        let mut tx = db
-            .store
-            .write_tx()
-            .map_err(|e| miette!("correction tx: {e}"))?;
-        let handle = get_relation(&tx, "quote").map_err(|e| miette!("quote: {e}"))?;
-        let corrected = [DataValue::from(1i64), DataValue::from(150i64)];
         // SAME valid-time (100) as the original: the canonical correction.
-        append_corrected_fact(
-            &seats,
-            &handle,
-            &mut tx,
-            prior,
-            &corrected,
-            ValidityTs::of_micros(100),
-            SourceSpan::empty(),
-        )
-        .map_err(|e| miette!("append same-valid correction: {e}"))?;
-        tx.commit().map_err(|e| miette!("commit correction: {e}"))?;
+        let (db, _link) =
+            admit_correction_through_store(0x2680_0006, ValidityTs::of_micros(100))?;
 
         // As-of valid 150 (latest knowledge): the correction at valid 100 must
         // win over the original at valid 100 (later system-time supersedes).
