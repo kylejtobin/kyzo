@@ -224,11 +224,15 @@ impl RunningTotal {
 
     fn finish(self) -> DataValue {
         match self {
-            RunningTotal::Exact(acc) => match i64::try_from(acc) {
-                Ok(i) => DataValue::from(i),
-                Err(_acc_exceeds_i64) => DataValue::from(i128_approx_f64(acc)),
-            },
+            RunningTotal::Exact(acc) => Self::finish_exact(acc),
             RunningTotal::Approx(f) => DataValue::from(f),
+        }
+    }
+
+    fn finish_exact(acc: i128) -> DataValue {
+        match i64::try_from(acc) {
+            Ok(i) => DataValue::from(i),
+            Err(_acc_exceeds_i64) => DataValue::from(i128_approx_f64(acc)),
         }
     }
 }

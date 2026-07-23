@@ -193,6 +193,28 @@ pub(crate) fn pull_nonempty_left_batch<'a>(
     }
 }
 
+/// True when the batched join left cursor needs a new batch (or first row).
+pub(crate) fn batch_join_left_row_exhausted(cur: &Option<(Batch, usize)>) -> bool {
+    match cur {
+        Some((b, idx)) => *idx >= b.len(),
+        None => true,
+    }
+}
+
+pub(crate) fn batch_join_plan_err(msg: &'static str) -> miette::Report {
+    PlanInvariantError(msg).into()
+}
+
+pub(crate) fn batch_join_current_left_row<'a>(
+    cur: &'a Option<(Batch, usize)>,
+    invariant: &'static str,
+) -> Result<&'a [DataValue], miette::Report> {
+    let Some((b, idx)) = cur.as_ref() else {
+        return Err(batch_join_plan_err(invariant));
+    };
+    b.row(*idx).map_err(Into::into)
+}
+
 impl<'a> PrefixProbeBatchJoin<'a> {
     /// Pull left batches until a non-empty one arrives (or the stream
     /// ends), positioning the cursor at its first row.
@@ -201,132 +223,214 @@ impl<'a> PrefixProbeBatchJoin<'a> {
     }
 }
 
+/// Shared batched prefix-join `Iterator::next` scaffold (copy_detector).
+#[macro_export]
+macro_rules! batch_prefix_join_next {
+    (
+        $self:ident,
+        batch: $batch:ident,
+        advance_missing: $advance_missing:expr,
+        probing_missing: $probing_missing:expr,
+        active_missing: $active_missing:expr,
+        probe: |$row:ident| $probe_body:expr,
+        on_item: |$item:ident, $batch_out:ident, $left_owned:ident, $left_premises:ident| $on_item:block
+    ) => {{
+        let mut $batch = Batch::new();
+        loop {
+            if $self.active.is_none() {
+                if $crate::exec::op::join::batch_join_left_row_exhausted(&$self.cur) {
+                    match $self.advance_left_batch() {
+                        Ok(false) => {
+                            return if $batch.is_empty() { None } else { Some(Ok($batch)) };
+                        }
+                        Ok(true) => {}
+                        Err(e) => return Some(Err(e)),
+                    }
+                }
+                let $row = match $crate::exec::op::join::batch_join_current_left_row(
+                    &$self.cur,
+                    $advance_missing,
+                ) {
+                    Ok(row) => row,
+                    Err(e) => return Some(Err(e)),
+                };
+                match $probe_body {
+                    Ok(it) => $self.active = Some(it),
+                    Err(e) => return Some(Err(e)),
+                }
+            }
+
+            let Some((b, idx)) = $self.cur.as_ref() else {
+                return Some(Err($crate::exec::op::join::batch_join_plan_err(
+                    $probing_missing,
+                )));
+            };
+            let left_idx = *idx;
+            let $left_owned = match b.row(left_idx) {
+                Ok(r) => r.to_vec(),
+                Err(e) => return Some(Err(e.into())),
+            };
+            let $left_premises = if $self.want_premises {
+                b.row_premises(left_idx)
+            } else {
+                Vec::new()
+            };
+            let mut drained = false;
+            let Some(active) = $self.active.as_mut() else {
+                return Some(Err($crate::exec::op::join::batch_join_plan_err(
+                    $active_missing,
+                )));
+            };
+            while $batch.len() < BATCH_ROWS {
+                match active.next() {
+                    None => {
+                        drained = true;
+                        break;
+                    }
+                    Some(item) => {
+                        let $item = item;
+                        let $batch_out = &mut $batch;
+                        $on_item
+                    }
+                }
+            }
+            if !drained {
+                return Some(Ok($batch));
+            }
+            $self.active = None;
+            if let Some((_, idx)) = $self.cur.as_mut() {
+                *idx += 1;
+            }
+        }
+    }};
+    (
+        $self:ident,
+        batch: $batch:ident,
+        advance_missing: $advance_missing:expr,
+        probing_missing: $probing_missing:expr,
+        active_missing: $active_missing:expr,
+        probe: |$row:ident| $probe_body:expr,
+        on_result_item: |$item:ident, $batch_out:ident, $left_owned:ident, $left_premises:ident| $on_item:block
+    ) => {{
+        let mut $batch = Batch::new();
+        loop {
+            if $self.active.is_none() {
+                if $crate::exec::op::join::batch_join_left_row_exhausted(&$self.cur) {
+                    match $self.advance_left_batch() {
+                        Ok(false) => {
+                            return if $batch.is_empty() { None } else { Some(Ok($batch)) };
+                        }
+                        Ok(true) => {}
+                        Err(e) => return Some(Err(e)),
+                    }
+                }
+                let $row = match $crate::exec::op::join::batch_join_current_left_row(
+                    &$self.cur,
+                    $advance_missing,
+                ) {
+                    Ok(row) => row,
+                    Err(e) => return Some(Err(e)),
+                };
+                match $probe_body {
+                    Ok(it) => $self.active = Some(it),
+                    Err(e) => return Some(Err(e)),
+                }
+            }
+
+            let Some((b, idx)) = $self.cur.as_ref() else {
+                return Some(Err($crate::exec::op::join::batch_join_plan_err(
+                    $probing_missing,
+                )));
+            };
+            let left_idx = *idx;
+            let $left_owned = match b.row(left_idx) {
+                Ok(r) => r.to_vec(),
+                Err(e) => return Some(Err(e.into())),
+            };
+            let $left_premises = if $self.want_premises {
+                b.row_premises(left_idx)
+            } else {
+                Vec::new()
+            };
+            let mut drained = false;
+            let Some(active) = $self.active.as_mut() else {
+                return Some(Err($crate::exec::op::join::batch_join_plan_err(
+                    $active_missing,
+                )));
+            };
+            while $batch.len() < BATCH_ROWS {
+                match active.next() {
+                    None => {
+                        drained = true;
+                        break;
+                    }
+                    Some(Err(e)) => return Some(Err(e)),
+                    Some(Ok(item)) => {
+                        let $item = item;
+                        let $batch_out = &mut $batch;
+                        $on_item
+                    }
+                }
+            }
+            if !drained {
+                return Some(Ok($batch));
+            }
+            $self.active = None;
+            if let Some((_, idx)) = $self.cur.as_mut() {
+                *idx += 1;
+            }
+        }
+    }};
+}
+
 impl<'a> Iterator for PrefixProbeBatchJoin<'a> {
     type Item = Result<Batch>;
     fn next(&mut self) -> Option<Self::Item> {
-        let mut out = Batch::new();
-        loop {
-            if self.active.is_none() {
-                let need_new_batch = match &self.cur {
-                    Some((b, idx)) => *idx >= b.len(),
-                    None => {
-                        // No current batch — must advance.
-                        let need_first_batch = true;
-                        need_first_batch
-                    }
-                };
-                if need_new_batch {
-                    match self.advance_left_batch() {
-                        Ok(false) => return if out.is_empty() { None } else { Some(Ok(out)) },
+        crate::batch_prefix_join_next!(
+            self,
+            batch: out,
+            advance_missing: "join left cursor missing after batch advance",
+            probing_missing: "join left cursor missing while probing",
+            active_missing: "join active probe missing after setup",
+            probe: |left_row| (self.probe)(left_row),
+            on_result_item: |found, out, left_owned, left_premises| {
+                let mut keep = true;
+                for p in self.filters.iter() {
+                    match crate::exec::expr::eval_pred(p, &found) {
                         Ok(true) => {}
+                        Ok(false) => {
+                            keep = false;
+                            break;
+                        }
                         Err(e) => {
                             return Some(Err(e));
                         }
                     }
                 }
-                let left_row = {
-                    let Some((b, idx)) = self.cur.as_ref() else {
-                        return Some(Err(crate::exec::op::PlanInvariantError(
-                            "join left cursor missing after batch advance",
-                        )
-                        .into()));
-                    };
-                    match b.row(*idx) {
-                        Ok(r) => r,
-                        Err(e) => {
-                            return Some(Err(e.into()));
-                        }
-                    }
-                };
-                match (self.probe)(left_row) {
-                    Ok(it) => self.active = Some(it),
-                    Err(e) => {
+                if keep {
+                    let right_premise =
+                        if self.want_premises && self.capture_right_as_premise {
+                            Some(found.clone())
+                        } else {
+                            None
+                        };
+                    if let Err(e) = push_joined_row(
+                        out,
+                        &left_owned,
+                        found.iter().cloned(),
+                        &self.eliminate_indices,
+                    ) {
                         return Some(Err(e));
                     }
+                    push_join_premises(
+                        out,
+                        left_premises.clone(),
+                        right_premise.as_ref(),
+                        self.want_premises,
+                    );
                 }
             }
-
-            let Some((b, idx)) = self.cur.as_ref() else {
-                return Some(Err(crate::exec::op::PlanInvariantError(
-                    "join left cursor missing while probing",
-                )
-                .into()));
-            };
-            let left_idx = *idx;
-            let left_owned = match b.row(left_idx) {
-                Ok(r) => r.to_vec(),
-                Err(e) => {
-                    return Some(Err(e.into()));
-                }
-            };
-            let left_premises = if self.want_premises {
-                b.row_premises(left_idx)
-            } else {
-                Vec::new()
-            };
-            let mut exhausted = false;
-            let Some(active) = self.active.as_mut() else {
-                return Some(Err(crate::exec::op::PlanInvariantError(
-                    "join active probe missing after setup",
-                )
-                .into()));
-            };
-            while out.len() < BATCH_ROWS {
-                match active.next() {
-                    None => {
-                        exhausted = true;
-                        break;
-                    }
-                    Some(Err(e)) => {
-                        return Some(Err(e));
-                    }
-                    Some(Ok(found)) => {
-                        let mut keep = true;
-                        for p in self.filters.iter() {
-                            match crate::exec::expr::eval_pred(p, &found) {
-                                Ok(true) => {}
-                                Ok(false) => {
-                                    keep = false;
-                                    break;
-                                }
-                                Err(e) => {
-                                    return Some(Err(e));
-                                }
-                            }
-                        }
-                        if keep {
-                            let right_premise =
-                                if self.want_premises && self.capture_right_as_premise {
-                                    Some(found.clone())
-                                } else {
-                                    None
-                                };
-                            if let Err(e) = push_joined_row(
-                                &mut out,
-                                &left_owned,
-                                found.iter().cloned(),
-                                &self.eliminate_indices,
-                            ) {
-                                return Some(Err(e));
-                            }
-                            push_join_premises(
-                                &mut out,
-                                left_premises.clone(),
-                                right_premise.as_ref(),
-                                self.want_premises,
-                            );
-                        }
-                    }
-                }
-            }
-            if !exhausted {
-                return Some(Ok(out));
-            }
-            self.active = None;
-            if let Some((_, idx)) = self.cur.as_mut() {
-                *idx += 1;
-            }
-        }
+        )
     }
 }
 

@@ -224,6 +224,14 @@ struct TarjanScc<'a> {
     stack: Vec<usize>,
 }
 
+fn group_sccs_by_low(low: Vec<usize>) -> Vec<Vec<usize>> {
+    let mut low_map: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for (idx, grp) in low.into_iter().enumerate() {
+        low_map.entry(grp).or_default().push(idx);
+    }
+    low_map.into_values().collect()
+}
+
 impl<'a> TarjanScc<'a> {
     /// Validates every edge target up front, so all index arithmetic in the
     /// traversal below is proven in-range once, here.
@@ -258,12 +266,7 @@ impl<'a> TarjanScc<'a> {
 
         // After every DFS completes, `low` holds each node's component
         // label (its root's discovery id): grouping by it yields the SCCs.
-        let mut low_map: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
-        for (idx, grp) in self.low.into_iter().enumerate() {
-            low_map.entry(grp).or_default().push(idx);
-        }
-
-        low_map.into_values().collect()
+        group_sccs_by_low(self.low)
     }
 
     /// Assign `at` its discovery id and put it on the component stack.
@@ -414,11 +417,7 @@ mod tests {
                     self.dfs(i);
                 }
             }
-            let mut low_map: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
-            for (idx, grp) in self.low.into_iter().enumerate() {
-                low_map.entry(grp).or_default().push(idx);
-            }
-            low_map.into_values().collect()
+            super::group_sccs_by_low(self.low)
         }
         fn dfs(&mut self, at: usize) {
             self.stack.push(at);

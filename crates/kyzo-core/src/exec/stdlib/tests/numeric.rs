@@ -240,6 +240,18 @@ fn test_max_min() -> Result<()> {
     Ok(())
 }
 
+fn assert_i64_min_boundary<F>(op: F) -> Result<()>
+where
+    F: Fn(&[DataValue]) -> Result<DataValue>,
+{
+    assert_eq!(
+        op(&[DataValue::from(i64::MIN + 1)])?,
+        DataValue::from(i64::MAX)
+    );
+    assert!(op(&[DataValue::from(i64::MIN)]).is_err());
+    Ok(())
+}
+
 #[test]
 fn test_minus() -> Result<()> {
     assert_eq!(op_minus(&[DataValue::from(-1)])?, DataValue::from(1));
@@ -254,11 +266,7 @@ fn test_minus() -> Result<()> {
     );
     // Boundary: i64::MIN has no positive i64 counterpart (i64::MAX is one
     // short of |i64::MIN|), so negating it errors instead of wrapping.
-    assert_eq!(
-        op_minus(&[DataValue::from(i64::MIN + 1)])?,
-        DataValue::from(i64::MAX)
-    );
-    assert!(op_minus(&[DataValue::from(i64::MIN)]).is_err());
+    assert_i64_min_boundary(op_minus)?;
     Ok(())
 }
 
@@ -268,11 +276,7 @@ fn test_abs() -> Result<()> {
     assert_eq!(op_abs(&[DataValue::from(1)])?, DataValue::from(1));
     assert_eq!(op_abs(&[DataValue::from(-1.5)])?, DataValue::from(1.5));
     // Boundary: same asymmetry as unary minus.
-    assert_eq!(
-        op_abs(&[DataValue::from(i64::MIN + 1)])?,
-        DataValue::from(i64::MAX)
-    );
-    assert!(op_abs(&[DataValue::from(i64::MIN)]).is_err());
+    assert_i64_min_boundary(op_abs)?;
     Ok(())
 }
 

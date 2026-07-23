@@ -131,23 +131,32 @@ pub(crate) fn op_regex_matches(args: &[DataValue]) -> Result<DataValue> {
 }
 
 pub(crate) fn op_regex_replace(args: &[DataValue]) -> Result<DataValue> {
-    match (&args[0], &args[1], &args[2]) {
-        (DataValue::Str(s), DataValue::Regex(r), DataValue::Str(rp)) => Ok(DataValue::Str(
-            compile_regex_value(r)?.replace(s, rp).into_owned(),
-        )),
-        (data_value_any!(), data_value_any!(), data_value_any!()) => {
-            bail!("'regex_replace' requires strings")
-        }
-    }
+    op_regex_replace_with(args, "regex_replace", |compiled, s, rp| {
+        compiled.replace(s, rp)
+    })
 }
 
 pub(crate) fn op_regex_replace_all(args: &[DataValue]) -> Result<DataValue> {
+    op_regex_replace_with(args, "regex_replace_all", |compiled, s, rp| {
+        compiled.replace_all(s, rp)
+    })
+}
+
+fn op_regex_replace_with(
+    args: &[DataValue],
+    op_name: &str,
+    replace: impl for<'a, 'b, 'c> FnOnce(
+        &'a kyzo_model::value::CompiledRegexV1,
+        &'b str,
+        &'c str,
+    ) -> std::borrow::Cow<'b, str>,
+) -> Result<DataValue> {
     match (&args[0], &args[1], &args[2]) {
         (DataValue::Str(s), DataValue::Regex(r), DataValue::Str(rp)) => Ok(DataValue::Str(
-            compile_regex_value(r)?.replace_all(s, rp).into_owned(),
+            replace(&compile_regex_value(r)?, s, rp).into_owned(),
         )),
         (data_value_any!(), data_value_any!(), data_value_any!()) => {
-            bail!("'regex_replace_all' requires strings")
+            bail!("'{op_name}' requires strings")
         }
     }
 }

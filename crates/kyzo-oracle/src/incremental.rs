@@ -776,8 +776,12 @@ mod tests {
         assert!(matches!(err, Rejection::Unstratifiable(_)));
     }
 
-    #[test]
-    fn incremental_aggregation_sum_grows_on_assertion() {
+    fn incremental_aggregation_patch_scaffold(
+        aggr_name: &'static str,
+        patch: SignedFact,
+        label: &str,
+        expected: BTreeSet<SignedFact>,
+    ) {
         let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
         facts.insert(
             "p".into(),
@@ -790,65 +794,46 @@ mod tests {
             vec![Rule::aggregated(
                 "total",
                 vec![x(), y()],
-                vec![HeadAggr::Plain, HeadAggr::named("sum")],
+                vec![HeadAggr::Plain, HeadAggr::named(aggr_name)],
                 vec![lit("p", vec![x(), y()], false)],
             )],
             vec![],
             facts,
         );
-        let patch = patch_of(vec![(
-            "p",
-            SignedFact::Plus(Tuple::from_vec(vec![v(1), v(30)])),
-        )]);
-        assert_incremental_matches_recompute(&program, &patch, "aggregation sum grows");
+        let patch = patch_of(vec![("p", patch)]);
+        assert_incremental_matches_recompute(&program, &patch, label);
         let got = incremental_eval(&program, &patch)
             .expect("incremental on non-recursive program");
-        assert_eq!(
-            got[&Rel::from("total")],
+        assert_eq!(got[&Rel::from("total")], expected);
+    }
+
+    #[test]
+    fn incremental_aggregation_sum_grows_on_assertion() {
+        incremental_aggregation_patch_scaffold(
+            "sum",
+            SignedFact::Plus(Tuple::from_vec(vec![v(1), v(30)])),
+            "aggregation sum grows",
             [
                 SignedFact::Minus(Tuple::from_vec(vec![v(1), v(30)])),
                 SignedFact::Plus(Tuple::from_vec(vec![v(1), v(60)])),
             ]
             .into_iter()
-            .collect()
+            .collect(),
         );
     }
 
     #[test]
     fn incremental_aggregation_min_rescans_on_retracting_the_current_min() {
-        let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
-        facts.insert(
-            "p".into(),
-            [vec![v(1), v(10)], vec![v(1), v(20)]]
-                .into_iter()
-                .map(Tuple::from_vec)
-                .collect(),
-        );
-        let program = Program::untimed(
-            vec![Rule::aggregated(
-                "total",
-                vec![x(), y()],
-                vec![HeadAggr::Plain, HeadAggr::named("min")],
-                vec![lit("p", vec![x(), y()], false)],
-            )],
-            vec![],
-            facts,
-        );
-        let patch = patch_of(vec![(
-            "p",
+        incremental_aggregation_patch_scaffold(
+            "min",
             SignedFact::Minus(Tuple::from_vec(vec![v(1), v(10)])),
-        )]);
-        assert_incremental_matches_recompute(&program, &patch, "min rescans on retract");
-        let got = incremental_eval(&program, &patch)
-            .expect("incremental on non-recursive program");
-        assert_eq!(
-            got[&Rel::from("total")],
+            "min rescans on retract",
             [
                 SignedFact::Minus(Tuple::from_vec(vec![v(1), v(10)])),
                 SignedFact::Plus(Tuple::from_vec(vec![v(1), v(20)])),
             ]
             .into_iter()
-            .collect()
+            .collect(),
         );
     }
 

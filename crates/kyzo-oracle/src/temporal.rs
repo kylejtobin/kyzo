@@ -371,6 +371,20 @@ mod tests {
         }
     }
 
+    fn assert_resolve_none_at(history: &[Event], key: &Tuple, valid_points: &[i64]) {
+        for &v in valid_points {
+            assert_eq!(resolve(history, key, AsOf::current_at(v)), None);
+        }
+    }
+
+    fn history_assert_erase_retract(key: &Tuple, retract_valid: i64) -> Vec<Event> {
+        vec![
+            ev_assert(key.clone(), pay(10), 0, 0),
+            ev_erase(key.clone(), 0, 1),
+            ev_retract(key.clone(), retract_valid, 2),
+        ]
+    }
+
     #[test]
     fn retract_clips_start_to_retract_exclusive() {
         let key = k(1);
@@ -383,13 +397,8 @@ mod tests {
     #[test]
     fn dangling_retract_blocks_erase_fall_through() {
         let key = k(1);
-        let history = vec![
-            ev_assert(key.clone(), pay(10), 0, 0),
-            ev_erase(key.clone(), 0, 1),
-            ev_retract(key.clone(), 5, 2),
-        ];
-        assert_eq!(resolve(&history, &key, AsOf::current_at(4)), None);
-        assert_eq!(resolve(&history, &key, AsOf::current_at(5)), None);
+        let history = history_assert_erase_retract(&key, 5);
+        assert_resolve_none_at(&history, &key, &[4, 5]);
     }
 
     #[test]

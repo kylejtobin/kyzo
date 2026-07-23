@@ -858,41 +858,11 @@ impl EpochStore {
         cols: &[usize],
         delta_only: bool,
     ) -> Result<impl Iterator<Item = TupleInIter<'s>> + use<'s>, TempStoreCorruptRefuse> {
-        match &self.kind {
-            LevelKind::Normal(levels) => {
-                let picked: Vec<&'s NormalLevel> = if delta_only {
-                    vec![levels.last()]
-                } else {
-                    levels.iter().collect()
-                };
-                let mut cursors: Vec<(&'s NormalLevel, usize, usize)> = picked
-                    .into_iter()
-                    .map(|l| {
-                        let (lo, hi) = l.prefix_bounds(row, cols);
-                        (l, lo, hi)
-                    })
-                    .collect();
-                Ok(Either::Left(std::iter::from_fn(move || {
-                    normal_merge_next(&mut cursors, delta_only)
-                })))
-            }
-            LevelKind::Meet { spec, levels } => {
-                let prefix: Tuple = cols.iter().map(|&c| row[c].clone()).collect();
-                let lower = LevelBoundKey::from_tuple_prefix(prefix.as_slice());
-                let mut upper = lower.clone();
-                upper.push_exclusive_sentinel();
-                let all: Vec<&'s MeetLevel> = levels.iter().collect();
-                let picked: Vec<&'s MeetLevel> = if delta_only {
-                    vec![levels.last()]
-                } else {
-                    all.clone()
-                };
-                let newer: Vec<&'s MeetLevel> = if delta_only { vec![] } else { all };
-                Ok(Either::Right(meet_ranged(
-                    spec, picked, newer, lower, upper, true,
-                )?))
-            }
-        }
+        kind_scoped_iter(
+            &self.kind,
+            delta_only,
+            NormalBounds::Projected { row, cols },
+        )
     }
 
     pub fn all_iter(
@@ -923,44 +893,106 @@ impl EpochStore {
         upper_inclusive: bool,
         delta_only: bool,
     ) -> Result<impl Iterator<Item = TupleInIter<'s>> + use<'s>, TempStoreCorruptRefuse> {
-        match &self.kind {
-            LevelKind::Normal(levels) => {
-                let picked: Vec<&'s NormalLevel> = if delta_only {
-                    vec![levels.last()]
-                } else {
-                    levels.iter().collect()
-                };
-                // Index cursors over the flat rows: (level, next, end).
-                let mut cursors: Vec<(&'s NormalLevel, usize, usize)> = picked
-                    .into_iter()
-                    .map(|l| {
-                        let (lo, hi) = l.bounds(&lower, &upper, upper_inclusive);
-                        (l, lo, hi)
-                    })
-                    .collect();
-                Ok(Either::Left(std::iter::from_fn(move || {
-                    normal_merge_next(&mut cursors, delta_only)
-                })))
-            }
-            LevelKind::Meet { spec, levels } => {
-                let all: Vec<&'s MeetLevel> = levels.iter().collect();
-                let picked: Vec<&'s MeetLevel> = if delta_only {
-                    vec![levels.last()]
-                } else {
-                    all.clone()
-                };
-                let newer: Vec<&'s MeetLevel> = if delta_only { vec![] } else { all };
-                Ok(Either::Right(meet_ranged(
-                    spec,
-                    picked,
-                    newer,
+        kind_scoped_iter(
+            &self.kind,
+            delta_only,
+            NormalBounds::Ranged {
+                lower: &lower,
+                upper: &upper,
+                upper_inclusive,
+            },
+        )
+    }
+}
+
+enum NormalBounds<'a> {
+    Projected {
+        row: &'a [DataValue],
+        cols: &'a [usize],
+    },
+    Ranged {
+        lower: &'a LevelBoundKey,
+        upper: &'a LevelBoundKey,
+        upper_inclusive: bool,
+    },
+}
+
+fn kind_scoped_iter<'s>(
+    kind: &'s LevelKind,
+    delta_only: bool,
+    bounds: NormalBounds<'_>,
+) -> Result<impl Iterator<Item = TupleInIter<'s>> + use<'s>, TempStoreCorruptRefuse> {
+    match kind {
+        LevelKind::Normal(levels) => {
+            let picked = level_stack_for_scope(levels, delta_only);
+            let mut cursors: Vec<(&'s NormalLevel, usize, usize)> = picked
+                .into_iter()
+                .map(|l| {
+                    let (lo, hi) = match bounds {
+                        NormalBounds::Projected { row, cols } => l.prefix_bounds(row, cols),
+                        NormalBounds::Ranged {
+                            lower,
+                            upper,
+                            upper_inclusive,
+                        } => l.bounds(lower, upper, upper_inclusive),
+                    };
+                    (l, lo, hi)
+                })
+                .collect();
+            Ok(Either::Left(std::iter::from_fn(move || {
+                normal_merge_next(&mut cursors, delta_only)
+            })))
+        }
+        LevelKind::Meet { spec, levels } => {
+            let (lower, upper, upper_inclusive) = match bounds {
+                NormalBounds::Projected { row, cols } => {
+                    let prefix: Tuple = cols.iter().map(|&c| row[c].clone()).collect();
+                    let lower = LevelBoundKey::from_tuple_prefix(prefix.as_slice());
+                    let mut upper = lower.clone();
+                    upper.push_exclusive_sentinel();
+                    (lower, upper, true)
+                }
+                NormalBounds::Ranged {
                     lower,
                     upper,
                     upper_inclusive,
-                )?))
-            }
+                } => (lower.clone(), upper.clone(), upper_inclusive),
+            };
+            let (picked, newer) = meet_level_stack_views(levels, delta_only);
+            Ok(Either::Right(meet_ranged(
+                spec,
+                picked,
+                newer,
+                lower,
+                upper,
+                upper_inclusive,
+            )?))
         }
     }
+}
+
+/// Delta scope reads the newest level alone; total scope reads the full stack.
+fn level_stack_for_scope<'s, L>(levels: &'s LevelStack<L>, delta_only: bool) -> Vec<&'s L> {
+    if delta_only {
+        vec![levels.last()]
+    } else {
+        levels.iter().collect()
+    }
+}
+
+/// Meet-tier picked levels (merge input) and newer levels (filter input).
+fn meet_level_stack_views<'s>(
+    levels: &'s LevelStack<MeetLevel>,
+    delta_only: bool,
+) -> (Vec<&'s MeetLevel>, Vec<&'s MeetLevel>) {
+    let all: Vec<&'s MeetLevel> = levels.iter().collect();
+    let picked = if delta_only {
+        vec![levels.last()]
+    } else {
+        all.clone()
+    };
+    let newer = if delta_only { vec![] } else { all };
+    (picked, newer)
 }
 
 /// One step of the k-way newest-wins merge over normal-level cursors:

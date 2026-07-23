@@ -242,133 +242,58 @@ impl<'a> TempStorePrefixBatchJoin<'a> {
 impl<'a> Iterator for TempStorePrefixBatchJoin<'a> {
     type Item = Result<Batch>;
     fn next(&mut self) -> Option<Self::Item> {
-        let mut out = Batch::new();
-        loop {
-            if self.active.is_none() {
-                let need_new_batch = match &self.cur {
-                    Some((b, idx)) => *idx >= b.len(),
-                    None => {
-                        // No current batch — must advance.
-                        let need_first_batch = true;
-                        need_first_batch
-                    }
-                };
-                if need_new_batch {
-                    match self.advance_left_batch() {
-                        Ok(false) => return if out.is_empty() { None } else { Some(Ok(out)) },
-                        Ok(true) => {}
-                        Err(e) => {
-                            return Some(Err(e));
-                        }
-                    }
-                }
-                let left_row = {
-                    let Some((b, idx)) = self.cur.as_ref() else {
-                        return Some(Err(crate::exec::op::PlanInvariantError(
-                            "temp-store join left cursor missing after batch advance",
-                        )
-                        .into()));
-                    };
-                    match b.row(*idx) {
-                        Ok(r) => r,
-                        Err(e) => {
-                            return Some(Err(e.into()));
-                        }
-                    }
-                };
-                match self.probe(left_row) {
-                    Ok(it) => self.active = Some(it),
+        crate::batch_prefix_join_next!(
+            self,
+            batch: out,
+            advance_missing: "temp-store join left cursor missing after batch advance",
+            probing_missing: "temp-store join left cursor missing while probing",
+            active_missing: "temp-store join active probe missing after setup",
+            probe: |left_row| self.probe(left_row),
+            on_item: |found, out, left_owned, left_premises| {
+                let found_tuple = match found.try_into_tuple() {
+                    Ok(t) => t,
                     Err(e) => {
-                        return Some(Err(e));
+                        return Some(Err(e.into()));
                     }
-                }
-            }
-
-            let Some((b, idx)) = self.cur.as_ref() else {
-                return Some(Err(crate::exec::op::PlanInvariantError(
-                    "temp-store join left cursor missing while probing",
-                )
-                .into()));
-            };
-            let left_idx = *idx;
-            let left_owned = match b.row(left_idx) {
-                Ok(r) => r.to_vec(),
-                Err(e) => {
-                    return Some(Err(e.into()));
-                }
-            };
-            let left_premises = if self.want_premises {
-                b.row_premises(left_idx)
-            } else {
-                Vec::new()
-            };
-            let Some(active) = self.active.as_mut() else {
-                return Some(Err(crate::exec::op::PlanInvariantError(
-                    "temp-store join active probe missing after setup",
-                )
-                .into()));
-            };
-            let mut exhausted = false;
-            while out.len() < BATCH_ROWS {
-                match active.next() {
-                    None => {
-                        exhausted = true;
-                        break;
-                    }
-                    Some(found) => {
-                        let found_tuple = match found.try_into_tuple() {
-                            Ok(t) => t,
+                };
+                let mut keep = true;
+                if !self.inner.filters.is_empty() {
+                    for p in self.inner.filters.iter() {
+                        match crate::exec::expr::eval_pred(p, &found_tuple) {
+                            Ok(true) => {}
+                            Ok(false) => {
+                                keep = false;
+                                break;
+                            }
                             Err(e) => {
-                                return Some(Err(e.into()));
-                            }
-                        };
-                        let mut keep = true;
-                        if !self.inner.filters.is_empty() {
-                            for p in self.inner.filters.iter() {
-                                match crate::exec::expr::eval_pred(p, &found_tuple) {
-                                    Ok(true) => {}
-                                    Ok(false) => {
-                                        keep = false;
-                                        break;
-                                    }
-                                    Err(e) => {
-                                        return Some(Err(e));
-                                    }
-                                }
-                            }
-                        }
-                        if keep {
-                            let right_premise =
-                                if self.want_premises && self.capture_right_as_premise {
-                                    Some(found_tuple.clone())
-                                } else {
-                                    None
-                                };
-                            if let Err(e) = push_joined_row(
-                                &mut out,
-                                &left_owned,
-                                found_tuple.into_iter(),
-                                &self.eliminate_indices,
-                            ) {
                                 return Some(Err(e));
                             }
-                            push_join_premises(
-                                &mut out,
-                                left_premises.clone(),
-                                right_premise.as_ref(),
-                                self.want_premises,
-                            );
                         }
                     }
                 }
+                if keep {
+                    let right_premise =
+                        if self.want_premises && self.capture_right_as_premise {
+                            Some(found_tuple.clone())
+                        } else {
+                            None
+                        };
+                    if let Err(e) = push_joined_row(
+                        out,
+                        &left_owned,
+                        found_tuple.into_iter(),
+                        &self.eliminate_indices,
+                    ) {
+                        return Some(Err(e));
+                    }
+                    push_join_premises(
+                        out,
+                        left_premises.clone(),
+                        right_premise.as_ref(),
+                        self.want_premises,
+                    );
+                }
             }
-            if !exhausted {
-                return Some(Ok(out));
-            }
-            self.active = None;
-            if let Some((_, idx)) = self.cur.as_mut() {
-                *idx += 1;
-            }
-        }
+        )
     }
 }
