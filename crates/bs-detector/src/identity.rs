@@ -33,6 +33,123 @@ pub fn site_hash<T: ToTokens>(item: &T) -> String {
         .to_string()
 }
 
+/// One item's line range and identity hash: the lookup that binds a hit
+/// (a line) to the content a ruling swore over.
+pub struct ItemSpan {
+    pub start: usize,
+    pub end: usize,
+    pub hash: String,
+}
+
+/// Every item's span+hash in one file: top-level items, plus impl and
+/// trait members as finer entries so a hit inside a method binds to the
+/// method, not the whole impl. `enclosing` picks the SMALLEST range.
+pub fn item_index(ast: &syn::File) -> Vec<ItemSpan> {
+    use syn::spanned::Spanned;
+    fn push<T: ToTokens + Spanned>(out: &mut Vec<ItemSpan>, node: &T) {
+        let span = node.span();
+        out.push(ItemSpan {
+            start: span.start().line,
+            end: span.end().line,
+            hash: site_hash(node),
+        });
+    }
+    let mut out = Vec::new();
+    for item in &ast.items {
+        push(&mut out, item);
+        match item {
+            syn::Item::Impl(i) => {
+                for m in &i.items {
+                    push(&mut out, m);
+                }
+            }
+            syn::Item::Trait(t) => {
+                for m in &t.items {
+                    push(&mut out, m);
+                }
+            }
+            syn::Item::Mod(m) => {
+                if let Some((_, items)) = &m.content {
+                    for inner in items {
+                        push(&mut out, inner);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The hash of the smallest item enclosing `line`, if any.
+pub fn enclosing_hash(index: &[ItemSpan], line: usize) -> Option<&str> {
+    index
+        .iter()
+        .filter(|s| s.start <= line && line <= s.end)
+        .min_by_key(|s| s.end - s.start)
+        .map(|s| s.hash.as_str())
+}
+
+/// The identity hash of the item named `ident` in a file, if exactly one
+/// exists — the resolver for content-anchored citations. Searches
+/// top-level items and impl/trait members.
+pub fn named_item_hash(ast: &syn::File, ident: &str) -> Option<String> {
+    fn ident_of(item: &syn::Item) -> Option<String> {
+        match item {
+            syn::Item::Fn(f) => Some(f.sig.ident.to_string()),
+            syn::Item::Struct(s) => Some(s.ident.to_string()),
+            syn::Item::Enum(e) => Some(e.ident.to_string()),
+            syn::Item::Type(t) => Some(t.ident.to_string()),
+            syn::Item::Const(c) => Some(c.ident.to_string()),
+            syn::Item::Static(s) => Some(s.ident.to_string()),
+            syn::Item::Trait(t) => Some(t.ident.to_string()),
+            syn::Item::Mod(m) => Some(m.ident.to_string()),
+            _ => None,
+        }
+    }
+    let mut found: Vec<String> = Vec::new();
+    fn walk(items: &[syn::Item], ident: &str, found: &mut Vec<String>) {
+        for item in items {
+            if ident_of(item).as_deref() == Some(ident) {
+                found.push(site_hash(item));
+            }
+            match item {
+                syn::Item::Impl(i) => {
+                    for m in &i.items {
+                        if let syn::ImplItem::Fn(f) = m {
+                            if f.sig.ident == ident {
+                                found.push(site_hash(f));
+                            }
+                        }
+                    }
+                }
+                syn::Item::Trait(t) => {
+                    for m in &t.items {
+                        if let syn::TraitItem::Fn(f) = m {
+                            if f.sig.ident == ident {
+                                found.push(site_hash(f));
+                            }
+                        }
+                    }
+                }
+                syn::Item::Mod(m) => {
+                    if let Some((_, inner)) = &m.content {
+                        walk(inner, ident, found);
+                    }
+                }
+                _ => {}
+            }
+        }
+        // ident_of on Item::Impl returns None, so impl members are only
+        // reached through the explicit arm above.
+    }
+    walk(&ast.items, ident, &mut found);
+    match found.as_slice() {
+        [one] => Some(one.clone()),
+        _ => None, // absent or ambiguous — both unresolvable, both loud
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

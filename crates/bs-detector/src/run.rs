@@ -22,6 +22,7 @@ use crate::boundary::{Boundary, SourceFile};
 use crate::classify::{self, AliasTable};
 use crate::engines::{Hit, graph, meta, shape};
 use crate::grammar::{Grammar, Laws};
+use crate::identity;
 use crate::waiver::WaiverFile;
 
 pub struct Verdict {
@@ -80,7 +81,21 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
     let mut report = String::new();
     let mut failed: Vec<String> = vec![];
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
-    let mut raw_by_check: Vec<(String, Vec<Hit>)> = vec![];
+    let mut raw_by_check: Vec<(String, Vec<(Hit, Option<String>)>)> = vec![];
+
+    // The content-identity index: every item's span and hash, per file.
+    // Rulings bind to these hashes; lines are display-only.
+    let index_by_file: BTreeMap<&str, Vec<identity::ItemSpan>> = b
+        .files
+        .iter()
+        .map(|f| (f.rel_path.as_str(), identity::item_index(&f.ast)))
+        .collect();
+    let hash_of = |h: &Hit| -> Option<String> {
+        index_by_file
+            .get(h.file.as_str())
+            .and_then(|idx| identity::enclosing_hash(idx, h.line))
+            .map(str::to_string)
+    };
 
     let run_pass = |name: &str| only.is_none() || only == Some(name);
 
@@ -157,24 +172,31 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
         passes.push(("forbid_roots".into(), meta::forbid_roots(&b)));
     }
 
+    if run_pass("dead_citation") {
+        passes.push(("dead_citation".into(), meta::dead_citation(root, &waivers, &b, &laws)));
+    }
+
     for (check, raw) in passes {
         let law = laws.require(&check)?;
-        raw_by_check.push((check.clone(), raw.clone()));
+        let annotated: Vec<(Hit, Option<String>)> =
+            raw.iter().map(|h| (h.clone(), hash_of(h))).collect();
+        raw_by_check.push((check.clone(), annotated.clone()));
 
         let violations: Vec<&Hit> = if waivable(&grammar, &check) {
-            // One waiver covers exactly ONE hit. Two violations of the
-            // same construct sharing a line coordinate cannot ride one
-            // entry — the duplicate-site refusal in WaiverFile::load
-            // means the second occurrence stays red until FIXED.
+            // One waiver covers exactly ONE hit, matched by CONTENT:
+            // file + construct + the enclosing item's identity hash. The
+            // duplicate-site refusal in WaiverFile::load means a second
+            // occurrence in the same item stays red until FIXED.
             let entries = waivers.for_check(&check);
             let mut consumed = vec![false; entries.len()];
-            raw.iter()
-                .filter(|h| {
+            annotated
+                .iter()
+                .filter(|(h, hash)| {
                     let found = entries.iter().enumerate().find(|(i, w)| {
                         !consumed[*i]
                             && w.file == h.file
-                            && w.line == h.line
                             && w.construct == h.construct
+                            && hash.as_deref() == Some(w.site_hash.as_str())
                     });
                     match found {
                         Some((i, _)) => {
@@ -184,6 +206,7 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
                         None => true,
                     }
                 })
+                .map(|(h, _)| h)
                 .collect()
         } else {
             raw.iter().collect()

@@ -299,3 +299,8 @@ caught_by = "stated residual — no mechanical catch exists; recorded here so ab
 name = "r_macro_expansion"
 law = "RESIDUAL, NOT CAUGHT: macro-expanded code is outside the source walk; condemning macro kinds removes authored macros, expression/statement invocations (format!, vec!) still expand unseen"
 caught_by = "stated residual — no mechanical catch exists; recorded here so absence is loud"
+
+[[law]]
+name = "dead_citation"
+law = "a waiver whose factual anchor is missing or changed since grant — prose rots; anchors are re-verified every run; prose validity itself has no mechanical check and the attestation plus operator spot-audit carry it, stated here so the limit is loud"
+caught_by = "meta pass `dead_citation`: citation resolved against the tree and laws.toml, content hash compared"
