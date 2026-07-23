@@ -171,46 +171,35 @@ pub fn serde_from_json(j: &Json) -> JsonValue {
     }
 }
 
+fn datavalue_from_json_value(v: &JsonValue) -> DataValue {
+    match v {
+        JsonValue::Null => DataValue::Null,
+        JsonValue::Bool(b) => DataValue::Bool(*b),
+        JsonValue::Number(n) => match n.as_i64() {
+            Some(i) => DataValue::from(i),
+            None => match n.as_f64() {
+                // serde_json::Number is finite by construction; as_f64
+                // never yields NaN/Inf, so this arm cannot invent a
+                // non-finite Num from JSON wire.
+                Some(f) => DataValue::from(f),
+                None => DataValue::from(n.to_string()),
+            },
+        },
+        JsonValue::String(s) => DataValue::from(s.as_str()),
+        JsonValue::Array(arr) => DataValue::List(arr.iter().map(DataValue::from).collect()),
+        JsonValue::Object(d) => DataValue::Json(json_from_serde(&JsonValue::Object(d.clone()))),
+    }
+}
+
 impl From<JsonValue> for DataValue {
     fn from(v: JsonValue) -> Self {
-        match v {
-            JsonValue::Null => DataValue::Null,
-            JsonValue::Bool(b) => DataValue::Bool(b),
-            JsonValue::Number(n) => match n.as_i64() {
-                Some(i) => DataValue::from(i),
-                None => match n.as_f64() {
-                    // serde_json::Number is finite by construction; as_f64
-                    // never yields NaN/Inf, so this arm cannot invent a
-                    // non-finite Num from JSON wire.
-                    Some(f) => DataValue::from(f),
-                    None => DataValue::from(n.to_string()),
-                },
-            },
-            JsonValue::String(s) => DataValue::from(s),
-            JsonValue::Array(arr) => {
-                DataValue::List(arr.into_iter().map(DataValue::from).collect())
-            }
-            JsonValue::Object(d) => DataValue::Json(json_from_serde(&JsonValue::Object(d))),
-        }
+        datavalue_from_json_value(&v)
     }
 }
 
 impl From<&JsonValue> for DataValue {
     fn from(v: &JsonValue) -> Self {
-        match v {
-            JsonValue::Null => DataValue::Null,
-            JsonValue::Bool(b) => DataValue::Bool(*b),
-            JsonValue::Number(n) => match n.as_i64() {
-                Some(i) => DataValue::from(i),
-                None => match n.as_f64() {
-                    Some(f) => DataValue::from(f),
-                    None => DataValue::from(n.to_string()),
-                },
-            },
-            JsonValue::String(s) => DataValue::from(s.as_str()),
-            JsonValue::Array(arr) => DataValue::List(arr.iter().map(DataValue::from).collect()),
-            JsonValue::Object(d) => DataValue::Json(json_from_serde(&JsonValue::Object(d.clone()))),
-        }
+        datavalue_from_json_value(v)
     }
 }
 
