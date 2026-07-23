@@ -413,6 +413,31 @@ pub struct PredicateTypeError(#[label] pub SourceSpan, pub DataValue);
 #[diagnostic(code(eval::throw))]
 pub struct EvalRaisedError(#[label] pub SourceSpan, #[help] pub String);
 
+fn walk_expr_children(
+    expr: &Expr,
+    visit: &mut impl FnMut(&Expr) -> Result<()>,
+) -> Result<()> {
+    match expr {
+        Expr::Const { .. } | Expr::Binding { .. } => Ok(()),
+        Expr::Apply { args, .. } | Expr::Lazy { args, .. } => {
+            for arg in args.iter() {
+                visit(arg)?;
+            }
+            Ok(())
+        }
+        Expr::Cond { clauses, .. } => {
+            for (cond, val) in clauses {
+                visit(cond)?;
+                visit(val)?;
+            }
+            Ok(())
+        }
+        Expr::UnboundApply { op, span, .. } => {
+            bail!(NoImplementationError(*span, op.to_string()));
+        }
+    }
+}
+
 impl Expr {
     pub fn span(&self) -> SourceSpan {
         match self {
@@ -518,29 +543,12 @@ impl Expr {
         Ok(ret)
     }
     fn do_binding_indices(&self, coll: &mut BTreeSet<usize>) -> Result<()> {
-        match self {
-            Expr::Binding { tuple_pos, .. } => {
-                if let BindingPos::Resolved(idx) = tuple_pos {
-                    coll.insert(*idx);
-                }
-            }
-            Expr::Const { .. } => {}
-            Expr::Apply { args, .. } | Expr::Lazy { args, .. } => {
-                for arg in args.iter() {
-                    arg.do_binding_indices(coll)?;
-                }
-            }
-            Expr::Cond { clauses, .. } => {
-                for (cond, val) in clauses {
-                    cond.do_binding_indices(coll)?;
-                    val.do_binding_indices(coll)?;
-                }
-            }
-            Expr::UnboundApply { op, span, .. } => {
-                bail!(NoImplementationError(*span, op.to_string()));
+        if let Expr::Binding { tuple_pos, .. } = self {
+            if let BindingPos::Resolved(idx) = tuple_pos {
+                coll.insert(*idx);
             }
         }
-        Ok(())
+        walk_expr_children(self, &mut |e| e.do_binding_indices(coll))
     }
     /// Evaluate the expression to a constant value if possible.
     ///
@@ -656,27 +664,10 @@ impl Expr {
         Ok(ret)
     }
     pub fn collect_bindings(&self, coll: &mut BTreeSet<Symbol>) -> Result<()> {
-        match self {
-            Expr::Binding { var, .. } => {
-                coll.insert(var.clone());
-            }
-            Expr::Const { .. } => {}
-            Expr::Apply { args, .. } | Expr::Lazy { args, .. } => {
-                for arg in args.iter() {
-                    arg.collect_bindings(coll)?;
-                }
-            }
-            Expr::Cond { clauses, .. } => {
-                for (cond, val) in clauses {
-                    cond.collect_bindings(coll)?;
-                    val.collect_bindings(coll)?;
-                }
-            }
-            Expr::UnboundApply { op, span, .. } => {
-                bail!(NoImplementationError(*span, op.to_string()));
-            }
+        if let Expr::Binding { var, .. } = self {
+            coll.insert(var.clone());
         }
-        Ok(())
+        walk_expr_children(self, &mut |e| e.collect_bindings(coll))
     }
 
     pub fn extract_bound(&self, target: &Symbol) -> Result<ValueRange> {
@@ -768,27 +759,10 @@ impl Expr {
         Ok(ret)
     }
     fn do_get_variables(&self, coll: &mut BTreeSet<String>) -> Result<()> {
-        match self {
-            Expr::Binding { var, .. } => {
-                coll.insert(var.to_string());
-            }
-            Expr::Const { .. } => {}
-            Expr::Apply { args, .. } | Expr::Lazy { args, .. } => {
-                for arg in args.iter() {
-                    arg.do_get_variables(coll)?;
-                }
-            }
-            Expr::Cond { clauses, .. } => {
-                for (cond, act) in clauses.iter() {
-                    cond.do_get_variables(coll)?;
-                    act.do_get_variables(coll)?;
-                }
-            }
-            Expr::UnboundApply { op, span, .. } => {
-                bail!(NoImplementationError(*span, op.to_string()));
-            }
+        if let Expr::Binding { var, .. } = self {
+            coll.insert(var.to_string());
         }
-        Ok(())
+        walk_expr_children(self, &mut |e| e.do_get_variables(coll))
     }
     pub fn to_var_list(&self) -> Result<Vec<SmartString<LazyCompact>>> {
         #[derive(Error, Diagnostic, Debug)]
