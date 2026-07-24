@@ -452,20 +452,20 @@ fn the_real_grammar_and_laws_load_and_bind_to_this_file() {
         Err(e) => panic!("grammar.toml must be lawful: {e:#}"),
     };
     assert!(
-        g.bans.len() + g.bans_absolute.len() + g.bans_attribute.len() >= 40,
+        g.bans().len() + g.bans_absolute().len() + g.bans_attribute().len() >= 40,
         "every banned shape stays registered"
     );
-    assert_eq!(g.condemned.len(), 8, "item 1: exactly eight condemned kinds");
+    assert_eq!(g.condemned().len(), 8, "item 1: exactly eight condemned kinds");
     let laws = match bs_detector::grammar::Laws::load(&root.join("laws.toml")) {
         Ok(l) => l,
         Err(e) => panic!("laws.toml must be lawful: {e:#}"),
     };
-    let construct_bans = g.constructs.iter().flat_map(|c| c.bans.iter());
+    let construct_bans = g.constructs().iter().flat_map(|c| c.bans.iter());
     for name in g
-        .bans_absolute
+        .bans_absolute()
         .iter()
-        .chain(g.bans.iter())
-        .chain(g.bans_attribute.iter())
+        .chain(g.bans().iter())
+        .chain(g.bans_attribute().iter())
         .chain(construct_bans)
     {
         if laws.require(name).is_err() {

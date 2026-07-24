@@ -42,14 +42,14 @@ pub struct Verdict {
 /// gate's self-checks are never waivable; everything else is, one entry
 /// per hit, written only by the kyzo-waiver agent.
 fn waivable(grammar: &Grammar, check: &str) -> bool {
-    if grammar.bans_absolute.iter().any(|b| b == check) {
+    if grammar.bans_absolute().iter().any(|b| b == check) {
         return false;
     }
     // TRUTH item 1: condemned kinds are "red on sight" — the same absolute
     // standing as bans_absolute, expressed through the kind table instead
     // of the shape-ban list.
     if grammar
-        .condemned
+        .condemned()
         .iter()
         .any(|k| k.condemned_law_name() == Some(check))
     {
@@ -81,10 +81,10 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
     // Expression + attribute jurisdictions (item 5 a/b). Construct-scoped
     // bans run after classify so span containment can see construct shapes.
     let ban_names: Vec<&str> = grammar
-        .bans_absolute
+        .bans_absolute()
         .iter()
-        .chain(grammar.bans.iter())
-        .chain(grammar.bans_attribute.iter())
+        .chain(grammar.bans().iter())
+        .chain(grammar.bans_attribute().iter())
         .map(|s| s.as_str())
         .collect();
 
@@ -114,7 +114,7 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
     // own laws.toml name (red on sight, never absorbed by `unclassified`).
     // Seated items matching no construct report under `unclassified`.
     let condemned_names: Vec<&str> = grammar
-        .condemned
+        .condemned()
         .iter()
         .filter_map(|k| k.condemned_law_name())
         .collect();
@@ -122,7 +122,7 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
         || condemned_names.iter().any(|n| run_pass(n));
     let all_files: Vec<&SourceFile> = b.files.iter().collect();
     let aliases = if need_classify
-        || grammar.constructs.iter().any(|c| !c.bans.is_empty())
+        || grammar.constructs().iter().any(|c| !c.bans.is_empty())
     {
         Some(
             AliasTable::build(&all_files)
@@ -168,7 +168,7 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
     // site line sits inside a shape-matched construct that lists the ban.
     {
         let mut scoped_ban_names: BTreeSet<&str> = BTreeSet::new();
-        for c in &grammar.constructs {
+        for c in grammar.constructs() {
             for ban in &c.bans {
                 scoped_ban_names.insert(ban.as_str());
             }
@@ -224,13 +224,13 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
     if run_pass("sealed_public_door") {
         passes.push((
             "sealed_public_door",
-            graph::sealed_public_door(&all, &grammar.hosts),
+            graph::sealed_public_door(&all, grammar.hosts()),
         ));
     }
     if run_pass("config_once") {
         passes.push((
             "config_once",
-            graph::config_once(&all, &grammar.config_once),
+            graph::config_once(&all, grammar.config_once()),
         ));
     }
     if run_pass("coverage") {

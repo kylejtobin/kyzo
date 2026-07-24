@@ -139,7 +139,7 @@ fn push_scoped_fn_span<T: syn::spanned::Spanned>(
     whole: &T,
     out: &mut Vec<ScopedConstructSpan>,
 ) {
-    for c in &ctx.grammar.constructs {
+    for c in ctx.grammar.constructs() {
         if c.bans.is_empty() {
             continue;
         }
@@ -437,7 +437,7 @@ fn container_member_label(member: ContainerMember<'_>) -> (usize, String) {
 // ---------------------------------------------------------------------------
 
 fn construct_rule<'a>(grammar: &'a Grammar, name: &str) -> Option<StructuralRule> {
-    grammar.constructs.iter().find(|c| c.name == name).map(|c| c.rule)
+    grammar.constructs().iter().find(|c| c.name == name).map(|c| c.rule)
 }
 
 fn exactly_one_name<'a>(matches: impl Iterator<Item = &'a str>) -> Option<&'a str> {
@@ -641,7 +641,7 @@ fn container_matches<I>(
     match rule {
         StructuralRule::InteriorsClassify => items
             .iter()
-            .all(|it| !kind_of(it).is_some_and(|k| grammar.condemned.contains(&k))),
+            .all(|it| !kind_of(it).is_some_and(|k| grammar.condemned().contains(&k))),
         _rule_not_for_container => false,
     }
 }
@@ -1035,7 +1035,7 @@ mod fixture_tests {
     #[test]
     fn every_construct_pass_classifies_and_deny_is_refused_by_its_own_rule() {
         let grammar = real_grammar();
-        for c in &grammar.constructs {
+        for c in grammar.constructs() {
             let rel = if c.name == "declared-fn" {
                 "crates/bs-detector/fixtures/declared-fn.pass.rs"
             } else {
@@ -1090,7 +1090,7 @@ mod fixture_tests {
     #[test]
     fn every_condemned_kind_deny_fixture_is_red_under_its_own_law() {
         let grammar = real_grammar();
-        for kind in &grammar.condemned {
+        for kind in grammar.condemned() {
             let Some(law) = kind.condemned_law_name() else {
                 panic!("{} must have a condemnation law", kind.kebab());
             };
@@ -1306,7 +1306,7 @@ mod fixture_tests {
             ("crates/probe/src/lib.rs", "impl S { fn new() -> Result<Self, ()> { Ok(S) } }"),
         ];
         let fn_rules: Vec<StructuralRule> = grammar
-            .constructs
+            .constructs()
             .iter()
             .filter(|c| matches!(c.kind, crate::grammar::ConstructFamily::Fn))
             .map(|c| c.rule)
@@ -1346,7 +1346,7 @@ mod fixture_tests {
             "struct Unit;",
         ];
         let struct_rules: Vec<StructuralRule> = grammar
-            .constructs
+            .constructs()
             .iter()
             .filter(|c| matches!(c.kind, crate::grammar::ConstructFamily::Struct))
             .map(|c| c.rule)

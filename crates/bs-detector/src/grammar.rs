@@ -467,19 +467,22 @@ pub enum Disposition<'a> {
 }
 
 /// The loaded, validated grammar.
+///
+/// Fields are private (TRUTH item 9). [`Grammar::load`] is the sole
+/// admission door; engines read through accessors.
 pub struct Grammar {
     /// Banned shapes no waiver can cover (expression jurisdiction).
-    pub bans_absolute: Vec<String>,
+    bans_absolute: Vec<String>,
     /// Banned shapes a waiver may cover, one entry per hit (expression).
-    pub bans: Vec<String>,
+    bans: Vec<String>,
     /// Attribute-jurisdiction bans (item- and crate-level attributes).
-    pub bans_attribute: Vec<String>,
-    pub constructs: Vec<ConstructDef>,
-    pub condemned: BTreeSet<KindName>,
-    pub seated: BTreeMap<KindName, Vec<String>>,
-    pub fn_seats: Vec<FnSeat>,
-    pub hosts: Vec<HostDoor>,
-    pub config_once: Vec<ConfigOnceSeat>,
+    bans_attribute: Vec<String>,
+    constructs: Vec<ConstructDef>,
+    condemned: BTreeSet<KindName>,
+    seated: BTreeMap<KindName, Vec<String>>,
+    fn_seats: Vec<FnSeat>,
+    hosts: Vec<HostDoor>,
+    config_once: Vec<ConfigOnceSeat>,
 }
 
 impl Grammar {
@@ -807,6 +810,34 @@ impl Grammar {
             .iter()
             .find(|s| s.file == file && s.fn_path == fn_path)
     }
+
+    pub fn bans_absolute(&self) -> &[String] {
+        &self.bans_absolute
+    }
+
+    pub fn bans(&self) -> &[String] {
+        &self.bans
+    }
+
+    pub fn bans_attribute(&self) -> &[String] {
+        &self.bans_attribute
+    }
+
+    pub fn constructs(&self) -> &[ConstructDef] {
+        &self.constructs
+    }
+
+    pub fn condemned(&self) -> &BTreeSet<KindName> {
+        &self.condemned
+    }
+
+    pub fn hosts(&self) -> &[HostDoor] {
+        &self.hosts
+    }
+
+    pub fn config_once(&self) -> &[ConfigOnceSeat] {
+        &self.config_once
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -904,7 +935,7 @@ mod tests {
     #[test]
     fn the_real_grammar_loads() {
         let g = load_text(&real_grammar_text()).expect("the checked-in grammar must load");
-        assert_eq!(g.condemned.len(), 8, "exactly the eight condemned kinds");
+        assert_eq!(g.condemned().len(), 8, "exactly the eight condemned kinds");
     }
 
     #[test]
