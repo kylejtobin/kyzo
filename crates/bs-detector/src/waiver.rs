@@ -493,65 +493,67 @@ mod tests {
 
     type TestResult = Result<(), WaiverProofRefuse>;
 
-
-
-    fn load_str(s: &str) -> Result<WaiverFile, WaiverProofRefuse> {
-        let mut f = tempfile::NamedTempFile::new().map_err(|_| WaiverProofRefuse::Tempfile)?;
-        f.write_all(s.as_bytes())
-            .map_err(|_| WaiverProofRefuse::WriteFixture)?;
-        WaiverFile::load(f.path()).map_err(|_| WaiverProofRefuse::Load)
-    }
-
-    /// Load that must fail — Ok maps to `silent`, Err is success for the proof.
-    fn must_refuse(s: &str, silent: WaiverProofRefuse) -> TestResult {
-        match load_str(s) {
-            Ok(_) => Err(silent),
-            Err(WaiverProofRefuse::Load) => Ok(()),
-            Err(e) => Err(e),
-        }
-    }
-
     const HASH: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const ANCHOR: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
-    /// A valid filled attestation (canonical template slots).
-    fn valid_why() -> Result<String, WaiverProofRefuse> {
-        let t = AttestationTemplate::load_canonical().map_err(|_| WaiverProofRefuse::Template)?;
-        t.fill(&[
-            ("alt_one", "a typed Result refusal at this call site"),
-            (
-                "reason_one",
-                "the wire protocol type is u32 and Result would invent a domain error the protocol does not have",
-            ),
-            ("alt_two", "returning a sentinel zero"),
-            (
-                "reason_two",
-                "zero is a real column and would lie to the editor",
-            ),
-        ])
-        .map_err(|_| WaiverProofRefuse::Fill)
-    }
+    /// Receiver for waiver test helpers (tip 806/896).
+    struct WaiverProofs;
 
-    fn toml_escape(s: &str) -> String {
-        let mut out = String::from('"');
-        for c in s.chars() {
-            match c {
-                '\\' => out.push_str("\\\\"),
-                '"' => out.push_str("\\\""),
-                '\n' => out.push_str("\\n"),
-                '\r' => out.push_str("\\r"),
-                '\t' => out.push_str("\\t"),
-                c if c.is_control() => out.push_str(&format!("\\u{:04x}", c as u32)),
-                c => out.push(c),
+    impl WaiverProofs {
+        fn load_str(&self, s: &str) -> Result<WaiverFile, WaiverProofRefuse> {
+            let mut f = tempfile::NamedTempFile::new().map_err(|_| WaiverProofRefuse::Tempfile)?;
+            f.write_all(s.as_bytes())
+                .map_err(|_| WaiverProofRefuse::WriteFixture)?;
+            WaiverFile::load(f.path()).map_err(|_| WaiverProofRefuse::Load)
+        }
+
+        /// Load that must fail — Ok maps to `silent`, Err is success for the proof.
+        fn must_refuse(&self, s: &str, silent: WaiverProofRefuse) -> TestResult {
+            match self.load_str(s) {
+                Ok(_) => Err(silent),
+                Err(WaiverProofRefuse::Load) => Ok(()),
+                Err(e) => Err(e),
             }
         }
-        out.push('"');
-        out
-    }
 
-    fn waiver_toml(why: &str, extra: &str) -> String {
-        format!(
-            r#"
+        /// A valid filled attestation (canonical template slots).
+        fn valid_why(&self) -> Result<String, WaiverProofRefuse> {
+            let t = AttestationTemplate::load_canonical().map_err(|_| WaiverProofRefuse::Template)?;
+            t.fill(&[
+                ("alt_one", "a typed Result refusal at this call site"),
+                (
+                    "reason_one",
+                    "the wire protocol type is u32 and Result would invent a domain error the protocol does not have",
+                ),
+                ("alt_two", "returning a sentinel zero"),
+                (
+                    "reason_two",
+                    "zero is a real column and would lie to the editor",
+                ),
+            ])
+            .map_err(|_| WaiverProofRefuse::Fill)
+        }
+
+        fn toml_escape(&self, s: &str) -> String {
+            let mut out = String::from('"');
+            for c in s.chars() {
+                match c {
+                    '\\' => out.push_str("\\\\"),
+                    '"' => out.push_str("\\\""),
+                    '\n' => out.push_str("\\n"),
+                    '\r' => out.push_str("\\r"),
+                    '\t' => out.push_str("\\t"),
+                    c if c.is_control() => out.push_str(&format!("\\u{:04x}", c as u32)),
+                    c => out.push(c),
+                }
+            }
+            out.push('"');
+            out
+        }
+
+        fn waiver_toml(&self, why: &str, extra: &str) -> String {
+            format!(
+                r#"
 scope_waiver = []
 
 [[waiver]]
@@ -565,13 +567,16 @@ anchor_hash = "{ANCHOR}"
 why_not_sabotage = {why}
 {extra}
 "#,
-            why = toml_escape(why)
-        )
+                why = self.toml_escape(why)
+            )
+        }
     }
+
+    const W: WaiverProofs = WaiverProofs;
 
     #[test]
     fn a_real_waiver_loads_and_binds_to_its_check() -> TestResult {
-        let wf = load_str(&waiver_toml(&valid_why()?, ""))?;
+        let wf = W.load_str(&W.waiver_toml(&W.valid_why()?, ""))?;
         WaiverProofRefuse::ExpectCheckBind.require(wf.for_check("expect").len() == 1)?;
         WaiverProofRefuse::UnwrapCheckLeak.require(wf.for_check("unwrap").is_empty())?;
         WaiverProofRefuse::SiteHashMismatch.require(wf.waiver[0].site_hash == HASH)?;
@@ -582,11 +587,11 @@ why_not_sabotage = {why}
     #[test]
     fn item_8_proof_required_sentences_plus_hedge_refuses() -> TestResult {
         // TRUTH item 8 Proof: required sentences + one hedging sentence → refuse.
-        let mut hedged = valid_why()?;
+        let mut hedged = W.valid_why()?;
         hedged.push_str(" I believe this is mostly fine.");
         // Keep the load error text for naming proof (map_err would discard it).
         let mut f = tempfile::NamedTempFile::new().map_err(|_| WaiverProofRefuse::Tempfile)?;
-        f.write_all(waiver_toml(&hedged, "").as_bytes())
+        f.write_all(W.waiver_toml(&hedged, "").as_bytes())
             .map_err(|_| WaiverProofRefuse::WriteFixture)?;
         let e = WaiverFile::load(f.path());
         WaiverProofRefuse::HedgeSilent.require(e.is_err())?;
@@ -597,9 +602,9 @@ why_not_sabotage = {why}
     #[test]
     fn item_8_proof_missing_false_answer_refuses() -> TestResult {
         // TRUTH item 8 Proof: missing FALSE answer → refuse.
-        let why = valid_why()?.replacen("\n\nFALSE.", "\n\nTRUE.", 1);
+        let why = W.valid_why()?.replacen("\n\nFALSE.", "\n\nTRUE.", 1);
         WaiverProofRefuse::FixtureReplace.require(why.contains("\n\nTRUE."))?;
-        must_refuse(&waiver_toml(&why, ""), WaiverProofRefuse::TrueSilent)
+        W.must_refuse(&W.waiver_toml(&why, ""), WaiverProofRefuse::TrueSilent)
     }
 
     #[test]
@@ -624,13 +629,13 @@ why_not_sabotage = {why}
                 }
             }
         }
-        must_refuse(&waiver_toml(&raw, ""), WaiverProofRefuse::EmptySlotSilent)
+        W.must_refuse(&W.waiver_toml(&raw, ""), WaiverProofRefuse::EmptySlotSilent)
     }
 
     #[test]
     fn refuses_duplicate_content_site() -> TestResult {
-        let why = toml_escape(&valid_why()?);
-        must_refuse(
+        let why = W.toml_escape(&W.valid_why()?);
+        W.must_refuse(
             &format!(
                 r#"
 scope_waiver = []
@@ -662,8 +667,8 @@ why_not_sabotage = {why}
 
     #[test]
     fn refuses_malformed_site_hash_citation_and_missing_anchor() -> TestResult {
-        let why = valid_why()?;
-        must_refuse(
+        let why = W.valid_why()?;
+        W.must_refuse(
             &format!(
                 r#"
 scope_waiver = []
@@ -678,11 +683,11 @@ citation = "expect"
 anchor_hash = "{ANCHOR}"
 why_not_sabotage = {why}
 "#,
-                why = toml_escape(&why)
+                why = W.toml_escape(&why)
             ),
             WaiverProofRefuse::ShortHashSilent,
         )?;
-        must_refuse(
+        W.must_refuse(
             &format!(
                 r#"
 scope_waiver = []
@@ -697,11 +702,11 @@ citation = "crates/x/src/a.rs#"
 anchor_hash = "{ANCHOR}"
 why_not_sabotage = {why}
 "#,
-                why = toml_escape(&why)
+                why = W.toml_escape(&why)
             ),
             WaiverProofRefuse::MalformedCitationSilent,
         )?;
-        must_refuse(
+        W.must_refuse(
             &format!(
                 r#"
 scope_waiver = []
@@ -715,7 +720,7 @@ site_hash = "{HASH}"
 citation = "expect"
 why_not_sabotage = {why}
 "#,
-                why = toml_escape(&why)
+                why = W.toml_escape(&why)
             ),
             WaiverProofRefuse::MissingAnchorSilent,
         )
@@ -723,18 +728,18 @@ why_not_sabotage = {why}
 
     #[test]
     fn refuses_unknown_fields_and_empty_scope() -> TestResult {
-        let why = toml_escape(&valid_why()?);
-        must_refuse(
+        let why = W.toml_escape(&W.valid_why()?);
+        W.must_refuse(
             &format!(
                 "scope_waiver = []\n[[waiver]]\ncheck='x'\nfile='a'\nline=1\nconstruct='c'\nsite_hash='{HASH}'\ncitation='x'\nanchor_hash='{ANCHOR}'\nwhy_not_sabotage={why}\nbaseline=5\n"
             ),
             WaiverProofRefuse::UnknownFieldSilent,
         )?;
-        must_refuse(
+        W.must_refuse(
             "waiver = []\n[[scope_waiver]]\ncheck='x'\nscope=[]\nwhy_full_scope_breaks='long enough argument text here'\n",
             WaiverProofRefuse::EmptyScopeSilent,
         )?;
-        must_refuse("waiver = []\n", WaiverProofRefuse::UndeclaredLedgerSilent)
+        W.must_refuse("waiver = []\n", WaiverProofRefuse::UndeclaredLedgerSilent)
     }
 
     /// Scope prefixes without a trailing `/` silently overlap neighbors
@@ -754,7 +759,7 @@ why_not_sabotage = {why}
 
     #[test]
     fn empty_waiver_ledger_loads_when_both_keys_stated() -> TestResult {
-        let wf = match load_str("waiver = []\nscope_waiver = []\n") {
+        let wf = match W.load_str("waiver = []\nscope_waiver = []\n") {
             Ok(wf) => wf,
             Err(WaiverProofRefuse::Load) => return Err(WaiverProofRefuse::EmptyLedgerLoad),
             Err(e) => return Err(e),
@@ -766,8 +771,8 @@ why_not_sabotage = {why}
     #[test]
     fn freeform_pre_attestation_justification_refuses() -> TestResult {
         // No grandfathering: legacy freeform why_not_sabotage is not the template.
-        must_refuse(
-            &waiver_toml(
+        W.must_refuse(
+            &W.waiver_toml(
                 "LSP Position.character is u32 by wire protocol; a >4B-unit line is outside the protocol's representable range.",
                 "",
             ),
