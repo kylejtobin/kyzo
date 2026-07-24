@@ -25,6 +25,11 @@ pub fn dst_query_seeds() -> Option<String> {
     read("KYZO_DST_QUERY_SEEDS")
 }
 
+/// Optional `KYZO_CRASH_CHILD_DIR` for the process-abort crash child.
+pub fn crash_child_dir() -> Option<String> {
+    knob("KYZO_CRASH_CHILD_DIR")
+}
+
 /// Optional campaign u64 knob by variable name.
 pub fn knob(var: &str) -> Option<String> {
     read(var)

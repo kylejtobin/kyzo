@@ -1892,6 +1892,12 @@ mod composition_tests {
 #[path = "../../../kyzo-trials/src/live_door.rs"]
 mod live_door;
 
+/// Trials host-env seat path-wired so crash/DST under this crate wall can
+/// call [`knob`] without a second `std::env` read site (nondeterminism M5).
+#[cfg(test)]
+#[path = "../../../kyzo-trials/src/host_env.rs"]
+mod trials_host_env;
+
 /// Overlap-only group-commit proof (story #221 T2) — lives in kyzo-trials
 /// `crash.rs` and is path-wired here so the test observes SweepDoor batch
 /// membership under the same crate wall as the door (no second commit door).

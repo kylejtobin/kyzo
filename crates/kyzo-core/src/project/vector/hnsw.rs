@@ -4052,7 +4052,7 @@ mod tests {
 
         probe::reset();
         let mut state = seed;
-        let t0 = std::time::Instant::now();
+        let t0 = crate::session::host_clock::mono_nanos();
         for k in 0..n {
             let v = probe_vec(dim, &mut state)?;
             let r = vec![
@@ -4073,7 +4073,7 @@ mod tests {
             )?;
             assert!(hnsw_put(&mut tx, &m, &base, &idx, None, r.as_slice())?);
         }
-        let elapsed = t0.elapsed().as_secs_f64();
+        let elapsed = (crate::session::host_clock::mono_nanos().saturating_sub(t0) as f64) / 1e9;
         let snap = probe::snapshot();
         tx.commit().map_err(|e| miette!("{e}"))?;
         Ok((elapsed, snap))

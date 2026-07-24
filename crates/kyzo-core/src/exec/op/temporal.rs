@@ -1201,10 +1201,7 @@ mod tests {
     }
 
     fn tempfile_dir() -> Result<std::path::PathBuf> {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|e| miette!("clock: {e}"))?
-            .as_nanos();
+        let nanos = crate::session::host_clock::mono_nanos();
         let dir = std::env::temp_dir().join(format!(
             "kyzo-temporal-ra-test-{}-{}",
             std::process::id(),

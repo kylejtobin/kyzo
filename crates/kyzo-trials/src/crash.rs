@@ -672,7 +672,7 @@ mod fuse_crash_matrix {
         use crate::store::fjall::new_fjall_storage;
         use crate::store::{ReadTx, Slice, Storage, WriteTx};
 
-        if let Ok(dir) = std::env::var("KYZO_CRASH_CHILD_DIR") {
+        if let Some(dir) = super::trials_host_env::knob("KYZO_CRASH_CHILD_DIR") {
             let db = admit(new_fjall_storage(&dir), "child open store");
             let mut tx = admit(db.write_tx(), "child write_tx committed");
             admit(tx.put(b"committed", b"survives"), "child put committed");
