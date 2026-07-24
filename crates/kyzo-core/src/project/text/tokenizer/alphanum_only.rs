@@ -42,7 +42,7 @@ pub(crate) struct AlphaNumOnlyFilterStream<'a> {
 
 impl<'a> AlphaNumOnlyFilterStream<'a> {
     fn predicate(&self, token: &Token) -> bool {
-        token.text.chars().all(|c| c.is_ascii_alphanumeric())
+        token.text().chars().all(|c| c.is_ascii_alphanumeric())
     }
 }
 

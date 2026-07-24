@@ -274,10 +274,7 @@ impl TokenizerConfig {
             .iter()
             .map(|filter| filter.construct_token_filter())
             .collect::<Result<Vec<_>>>()?;
-        Ok(TextAnalyzer {
-            tokenizer,
-            token_filters,
-        })
+        Ok(TextAnalyzer::from_parts(tokenizer, token_filters))
     }
     pub(crate) fn construct_tokenizer(&self) -> Result<Box<dyn Tokenizer>> {
         Ok(match self.name() {

@@ -744,7 +744,7 @@ fn rederive_fts(
         let mut collector: BTreeSet<String> = BTreeSet::new();
         let mut token_stream = analyzer.token_stream(&text);
         while let Some(token) = token_stream.next() {
-            collector.insert(token.text.to_string());
+            collector.insert(token.text().to_string());
         }
         let src: Vec<DataValue> = row.as_slice()[..kl].to_vec();
         for term in collector {

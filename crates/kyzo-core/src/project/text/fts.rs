@@ -253,7 +253,7 @@ pub(crate) fn fts_put<T: WriteTx>(
     let mut count = 0i64;
     let mut token_stream = tokenizer.token_stream(&text);
     while let Some(token) = token_stream.next() {
-        let term = SmartString::<LazyCompact>::from(&token.text);
+        let term = SmartString::<LazyCompact>::from(token.text());
         let (fr, to, position) = collector.entry(term).or_default();
         fr.push(DataValue::from(
             i64::try_from(token.offset_from())
@@ -263,7 +263,7 @@ pub(crate) fn fts_put<T: WriteTx>(
             i64::try_from(token.offset_to()).map_err(|_| miette!("token offset_to overflow"))?,
         ));
         position.push(DataValue::from(
-            i64::try_from(token.position).map_err(|_| miette!("token position overflow"))?,
+            i64::try_from(token.position()).map_err(|_| miette!("token position overflow"))?,
         ));
         count += 1;
     }
@@ -315,7 +315,7 @@ pub(crate) fn fts_del<T: WriteTx>(
     let mut terms: FxHashSet<SmartString<LazyCompact>> = FxHashSet::default();
     let mut token_stream = tokenizer.token_stream(&text);
     while let Some(token) = token_stream.next() {
-        terms.insert(SmartString::<LazyCompact>::from(&token.text));
+        terms.insert(SmartString::<LazyCompact>::from(token.text()));
     }
     let tail = posting_src_tail(base_key_len, tuple);
     for term in terms {

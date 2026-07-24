@@ -10,6 +10,7 @@
 
 use rustc_hash::FxHashSet;
 use smartstring::{LazyCompact, SmartString};
+use kyzo_model::HostText;
 /// The tokenizer module contains all of the tools used to process
 /// text in `tantivy`.
 use std::borrow::{Borrow, BorrowMut};
@@ -32,11 +33,11 @@ pub(crate) struct Token {
     /// &text[token.offset_from()..token.offset_to()]
     offset_to: usize,
     /// Position, expressed in number of tokens.
-    pub(crate) position: usize,
+    position: usize,
     /// Actual text content of the token.
-    pub(crate) text: String,
+    text: HostText,
     /// Is the length expressed in term of number of original tokens.
-    pub(crate) position_length: usize,
+    position_length: usize,
 }
 
 impl Token {
@@ -46,7 +47,7 @@ impl Token {
             offset_from: 0,
             offset_to: 0,
             position: usize::MAX,
-            text: String::with_capacity(200),
+            text: HostText::new(String::with_capacity(200)),
             position_length: 1,
         }
     }
@@ -57,7 +58,7 @@ impl Token {
         offset_from: usize,
         offset_to: usize,
         position: usize,
-        text: String,
+        text: impl Into<HostText>,
         position_length: usize,
     ) -> Option<Self> {
         if offset_from > offset_to {
@@ -67,7 +68,7 @@ impl Token {
             offset_from,
             offset_to,
             position,
-            text,
+            text: text.into(),
             position_length,
         })
     }
@@ -89,6 +90,38 @@ impl Token {
     pub(crate) fn offset_to(&self) -> usize {
         self.offset_to
     }
+
+    pub(crate) fn position(&self) -> usize {
+        self.position
+    }
+
+    pub(crate) fn set_position(&mut self, position: usize) {
+        self.position = position;
+    }
+
+    pub(crate) fn position_length(&self) -> usize {
+        self.position_length
+    }
+
+    pub(crate) fn set_position_length(&mut self, position_length: usize) {
+        self.position_length = position_length;
+    }
+
+    pub(crate) fn text(&self) -> &str {
+        self.text.as_str()
+    }
+
+    pub(crate) fn text_mut(&mut self) -> &mut HostText {
+        &mut self.text
+    }
+
+    pub(crate) fn text_owned(&self) -> HostText {
+        self.text.clone()
+    }
+
+    pub(crate) fn set_text(&mut self, text: impl Into<HostText>) {
+        self.text = text.into();
+    }
 }
 
 impl<'de> serde::Deserialize<'de> for Token {
@@ -101,7 +134,7 @@ impl<'de> serde::Deserialize<'de> for Token {
             offset_from: usize,
             offset_to: usize,
             position: usize,
-            text: String,
+            text: HostText,
             position_length: usize,
         }
         let raw = Raw::deserialize(deserializer)?;
@@ -120,8 +153,8 @@ impl<'de> serde::Deserialize<'de> for Token {
 ///
 /// It simply wraps a `Tokenizer` and a list of `TokenFilter` that are applied sequentially.
 pub(crate) struct TextAnalyzer {
-    pub(crate) tokenizer: Box<dyn Tokenizer>,
-    pub(crate) token_filters: Vec<BoxTokenFilter>,
+    tokenizer: Box<dyn Tokenizer>,
+    token_filters: Vec<BoxTokenFilter>,
 }
 
 impl<T: Tokenizer> From<T> for TextAnalyzer {
@@ -146,6 +179,17 @@ impl TextAnalyzer {
     ) -> TextAnalyzer {
         TextAnalyzer {
             tokenizer: Box::new(tokenizer),
+            token_filters,
+        }
+    }
+
+    /// Assemble from an already-boxed tokenizer and filters.
+    pub(crate) fn from_parts(
+        tokenizer: Box<dyn Tokenizer>,
+        token_filters: Vec<BoxTokenFilter>,
+    ) -> TextAnalyzer {
+        TextAnalyzer {
+            tokenizer,
             token_filters,
         }
     }
@@ -187,7 +231,7 @@ impl TextAnalyzer {
         let mut token_steam = self.token_stream(text);
         let mut coll: Vec<SmartString<LazyCompact>> = vec![];
         while let Some(token) = token_steam.next() {
-            coll.push(SmartString::from(token.text.as_str()));
+            coll.push(SmartString::from(token.text()));
         }
 
         if n == 1 {
@@ -340,9 +384,9 @@ pub(crate) fn advance_char_indices_token<'a>(
     token: &mut Token,
     is_token_char: impl Fn(char) -> bool,
 ) -> bool {
-    token.text.clear();
+    token.text_mut().clear();
     // INVARIANT(token_position): tokenizer position is a modular counter; wrap is intentional.
-    token.position = (std::num::Wrapping(token.position) + std::num::Wrapping(1)).0;
+    token.set_position((std::num::Wrapping(token.position()) + std::num::Wrapping(1)).0);
     while let Some((offset_from, c)) = chars.next() {
         if is_token_char(c) {
             let offset_to = match chars
@@ -357,7 +401,7 @@ pub(crate) fn advance_char_indices_token<'a>(
             match token.set_offsets(offset_from, offset_to) {
                 token_ref => core::mem::drop(token_ref),
             }
-            token.text.push_str(&text[offset_from..offset_to]);
+            token.text_mut().push_str(&text[offset_from..offset_to]);
             return true;
         }
     }

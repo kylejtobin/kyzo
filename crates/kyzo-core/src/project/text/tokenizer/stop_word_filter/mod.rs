@@ -139,7 +139,7 @@ impl TokenFilter for StopWordFilter {
 
 impl<'a> StopWordFilterStream<'a> {
     fn predicate(&self, token: &Token) -> bool {
-        !self.words.contains(&token.text)
+        !self.words.contains(token.text())
     }
 }
 

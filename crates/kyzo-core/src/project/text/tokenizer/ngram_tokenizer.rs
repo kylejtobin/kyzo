@@ -9,6 +9,8 @@
  */
 
 use super::{Token, TokenStream, Tokenizer};
+
+use kyzo_model::TextRef;
 use crate::project::text::tokenizer::BoxTokenStream;
 
 /// Unlawful n-gram bounds — named refuse, never `assert!` / panic.
@@ -158,7 +160,7 @@ pub(crate) struct NgramTokenStream<'a> {
     /// true if the NgramTokenStream is in prefix mode.
     prefix_only: bool,
     /// input
-    text: &'a str,
+    text: TextRef<'a>,
     /// output
     token: Token,
 }
@@ -172,7 +174,7 @@ impl Tokenizer for NgramTokenizer {
                 self.max_gram,
             ),
             prefix_only: self.prefix_only,
-            text,
+            text: TextRef::new(text),
             token: Token::empty(),
         })
     }
@@ -184,12 +186,14 @@ impl<'a> TokenStream for NgramTokenStream<'a> {
             if self.prefix_only && offset_from > 0 {
                 return false;
             }
-            self.token.position = 0;
+            self.token.set_position(0);
             match self.token.set_offsets(offset_from, offset_to) {
                 token_ref => core::mem::drop(token_ref),
             }
-            self.token.text.clear();
-            self.token.text.push_str(&self.text[offset_from..offset_to]);
+            self.token.text_mut().clear();
+            self.token
+                .text_mut()
+                .push_str(&self.text.as_str()[offset_from..offset_to]);
             true
         } else {
             false

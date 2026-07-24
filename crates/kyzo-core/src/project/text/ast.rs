@@ -33,7 +33,7 @@ impl TokenizeFtsLiteral for FtsLiteral {
 
         let mut tokens = tokenizer.token_stream(self.value());
         while let Some(t) = tokens.next() {
-            if let Some(l) = FtsLiteral::new(SmartString::from(&t.text), false, self.booster()) {
+            if let Some(l) = FtsLiteral::new(SmartString::from(t.text()), false, self.booster()) {
                 coll.push(l);
             }
         }

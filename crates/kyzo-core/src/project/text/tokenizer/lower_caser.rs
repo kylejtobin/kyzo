@@ -10,6 +10,8 @@
 
 use std::mem;
 
+use kyzo_model::HostText;
+
 use super::{Token, TokenFilter, TokenStream};
 use crate::project::text::tokenizer::BoxTokenStream;
 
@@ -17,7 +19,7 @@ impl TokenFilter for LowerCaser {
     fn transform<'a>(&self, token_stream: BoxTokenStream<'a>) -> BoxTokenStream<'a> {
         BoxTokenStream::from(LowerCaserTokenStream {
             tail: token_stream,
-            buffer: String::with_capacity(100),
+            buffer: HostText::new(String::with_capacity(100)),
         })
     }
 }
@@ -27,7 +29,7 @@ impl TokenFilter for LowerCaser {
 pub(crate) struct LowerCaser;
 
 pub(crate) struct LowerCaserTokenStream<'a> {
-    buffer: String,
+    buffer: HostText,
     tail: BoxTokenStream<'a>,
 }
 
@@ -46,12 +48,12 @@ impl<'a> TokenStream for LowerCaserTokenStream<'a> {
         if !self.tail.advance() {
             return false;
         }
-        if self.token_mut().text.is_ascii() {
+        if self.token_mut().text().is_ascii() {
             // fast track for ascii.
-            self.token_mut().text.make_ascii_lowercase();
+            self.token_mut().text_mut().as_mut_string().make_ascii_lowercase();
         } else {
-            to_lowercase_unicode(&self.tail.token().text, &mut self.buffer);
-            mem::swap(&mut self.tail.token_mut().text, &mut self.buffer);
+            to_lowercase_unicode(self.tail.token().text(), self.buffer.as_mut_string());
+            mem::swap(self.tail.token_mut().text_mut(), &mut self.buffer);
         }
         true
     }

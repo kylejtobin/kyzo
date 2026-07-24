@@ -112,7 +112,7 @@ impl<'a> SplitCompoundWordsTokenStream<'a> {
     // can fully be split into consecutive matches against `self.dict`.
     fn split(&mut self) {
         let token = self.tail.token();
-        let mut text = token.text.as_str();
+        let mut text = token.text();
 
         self.cuts.clear();
         let mut pos = 0;
@@ -126,7 +126,7 @@ impl<'a> SplitCompoundWordsTokenStream<'a> {
             pos = match_.end();
         }
 
-        if pos == token.text.len() {
+        if pos == token.text().len() {
             // Fill `self.parts` in reverse order,
             // so that `self.parts.pop()` yields
             // the tokens in their original order.
@@ -144,9 +144,9 @@ impl<'a> SplitCompoundWordsTokenStream<'a> {
                 let Some(part) = Token::new(
                     part_from,
                     part_to,
-                    token.position,
+                    token.position(),
                     tail.to_owned(),
-                    token.position_length,
+                    token.position_length(),
                 ) else {
                     // Offsets should be lawful (parent + cut); if admit
                     // refuses, abandon the split and keep the parent token.
@@ -202,7 +202,7 @@ mod tests {
         let got = stream
             .next()
             .ok_or_else(|| miette!("expected token {want}"))?;
-        assert_eq!(got.text, want);
+        assert_eq!(got.text(), want);
         Ok(())
     }
 
@@ -217,12 +217,12 @@ mod tests {
             .filter(SplitCompoundWords::from_dictionary(["über", "fahrt"])?);
         let mut stream = tokenizer.token_stream(text);
         let first = stream.next().ok_or_else(|| miette!("expected über"))?;
-        assert_eq!(first.text, "über");
+        assert_eq!(first.text(), "über");
         assert_eq!(first.offset_from(), 0);
         assert_eq!(first.offset_to(), 5);
         assert_eq!(&text[first.offset_from()..first.offset_to()], "über");
         let second = stream.next().ok_or_else(|| miette!("expected fahrt"))?;
-        assert_eq!(second.text, "fahrt");
+        assert_eq!(second.text(), "fahrt");
         assert_eq!(second.offset_from(), 5);
         assert_eq!(second.offset_to(), 10);
         assert_eq!(&text[second.offset_from()..second.offset_to()], "fahrt");

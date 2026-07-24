@@ -30,7 +30,7 @@ impl PreTokenizedString {
         for token in &tokens {
             let from = token.offset_from();
             let to = token.offset_to();
-            if to > len || text.get(from..to) != Some(token.text.as_str()) {
+            if to > len || text.get(from..to) != Some(token.text()) {
                 return None;
             }
         }
@@ -38,7 +38,7 @@ impl PreTokenizedString {
     }
 
     pub(crate) fn text(&self) -> &str {
-        &self.text
+        self.text()
     }
 
     pub(crate) fn tokens(&self) -> &[Token] {
@@ -48,7 +48,7 @@ impl PreTokenizedString {
 
 impl Ord for PreTokenizedString {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.text.cmp(&other.text)
+        self.text().cmp(other.text())
     }
 }
 
@@ -69,7 +69,7 @@ impl<'de> serde::Deserialize<'de> for PreTokenizedString {
             tokens: Vec<Token>,
         }
         let raw = Raw::deserialize(deserializer)?;
-        PreTokenizedString::admit(raw.text, raw.tokens).ok_or_else(|| {
+        PreTokenizedString::admit(raw.text(), raw.tokens).ok_or_else(|| {
             serde::de::Error::custom(
                 "pre-tokenized text: token offsets or text incoherent with parent text",
             )

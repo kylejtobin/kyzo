@@ -11,6 +11,8 @@
 use std::borrow::Cow;
 use std::mem;
 
+use kyzo_model::HostText;
+
 use rust_stemmers::{self, Algorithm};
 
 use super::{Token, TokenFilter, TokenStream};
@@ -88,7 +90,7 @@ impl TokenFilter for Stemmer {
         BoxTokenStream::from(StemmerTokenStream {
             tail: token_stream,
             stemmer: inner_stemmer,
-            buffer: String::new(),
+            buffer: HostText::new(String::new()),
         })
     }
 }
@@ -96,7 +98,7 @@ impl TokenFilter for Stemmer {
 pub(crate) struct StemmerTokenStream<'a> {
     tail: BoxTokenStream<'a>,
     stemmer: rust_stemmers::Stemmer,
-    buffer: String,
+    buffer: HostText,
 }
 
 impl<'a> TokenStream for StemmerTokenStream<'a> {
@@ -105,13 +107,13 @@ impl<'a> TokenStream for StemmerTokenStream<'a> {
             return false;
         }
         let token = self.tail.token_mut();
-        let stemmed_str = self.stemmer.stem(&token.text);
+        let stemmed_str = self.stemmer.stem(token.text());
         match stemmed_str {
-            Cow::Owned(stemmed_str) => token.text = stemmed_str,
+            Cow::Owned(stemmed_str) => token.set_text(stemmed_str),
             Cow::Borrowed(stemmed_str) => {
                 self.buffer.clear();
                 self.buffer.push_str(stemmed_str);
-                mem::swap(&mut token.text, &mut self.buffer);
+                mem::swap(token.text_mut(), &mut self.buffer);
             }
         }
         true
@@ -135,7 +137,7 @@ mod tests {
         let an = TextAnalyzer::from(SimpleTokenizer).filter(Stemmer::new(lang));
         let mut stream = an.token_stream(word);
         let text = match stream.next() {
-            Some(t) => t.text.clone(),
+            Some(t) => t.text_owned(),
             None => {
                 assert!(false, "expected a token for {word:?}");
                 String::new()

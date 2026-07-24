@@ -184,11 +184,11 @@ pub(crate) mod tests {
     /// Assert a token's position, text, and byte offsets.
     pub(crate) fn assert_token(token: &Token, position: usize, text: &str, from: usize, to: usize) {
         assert_eq!(
-            token.position, position,
+            token.position(), position,
             "expected position {} but {:?}",
             position, token
         );
-        assert_eq!(token.text, text, "expected text {} but {:?}", text, token);
+        assert_eq!(token.text(), text, "expected text {} but {:?}", text, token);
         assert_eq!(
             token.offset_from(),
             from,

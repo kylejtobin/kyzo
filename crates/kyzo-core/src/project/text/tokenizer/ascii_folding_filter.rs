@@ -10,6 +10,8 @@
 
 use std::mem;
 
+use kyzo_model::HostText;
+
 use super::{BoxTokenStream, Token, TokenFilter, TokenStream};
 
 /// This class converts alphabetic, numeric, and symbolic Unicode characters
@@ -22,13 +24,13 @@ impl TokenFilter for AsciiFoldingFilter {
     fn transform<'a>(&self, token_stream: BoxTokenStream<'a>) -> BoxTokenStream<'a> {
         From::from(AsciiFoldingFilterTokenStream {
             tail: token_stream,
-            buffer: String::with_capacity(100),
+            buffer: HostText::new(String::with_capacity(100)),
         })
     }
 }
 
 pub(crate) struct AsciiFoldingFilterTokenStream<'a> {
-    buffer: String,
+    buffer: HostText,
     tail: BoxTokenStream<'a>,
 }
 
@@ -37,10 +39,10 @@ impl<'a> TokenStream for AsciiFoldingFilterTokenStream<'a> {
         if !self.tail.advance() {
             return false;
         }
-        if !self.token_mut().text.is_ascii() {
+        if !self.token_mut().text().is_ascii() {
             // ignore its already ascii
-            to_ascii(&self.tail.token().text, &mut self.buffer);
-            mem::swap(&mut self.tail.token_mut().text, &mut self.buffer);
+            to_ascii(self.tail.token().text(), self.buffer.as_mut_string());
+            mem::swap(self.tail.token_mut().text_mut(), &mut self.buffer);
         }
         true
     }
@@ -1576,7 +1578,7 @@ mod tests {
             .filter(AsciiFoldingFilter)
             .token_stream(text)
             .process(&mut |token| {
-                tokens.push(token.text.clone());
+                tokens.push(token.text_owned());
             });
         tokens
     }
@@ -1586,7 +1588,7 @@ mod tests {
             .filter(AsciiFoldingFilter)
             .token_stream(text);
         token_stream.advance();
-        token_stream.token().text.clone()
+        token_stream.token().text_owned()
     }
 
     #[test]

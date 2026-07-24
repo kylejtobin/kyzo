@@ -12,12 +12,14 @@ use std::str::CharIndices;
 
 use super::{BoxTokenStream, Token, TokenStream, Tokenizer};
 
+use kyzo_model::TextRef;
+
 /// Tokenize the text by splitting on whitespaces.
 #[derive(Clone)]
 pub(crate) struct WhitespaceTokenizer;
 
 pub(crate) struct WhitespaceTokenStream<'a> {
-    text: &'a str,
+    text: TextRef<'a>,
     chars: CharIndices<'a>,
     token: Token,
 }
@@ -25,7 +27,7 @@ pub(crate) struct WhitespaceTokenStream<'a> {
 impl Tokenizer for WhitespaceTokenizer {
     fn token_stream<'a>(&self, text: &'a str) -> BoxTokenStream<'a> {
         BoxTokenStream::from(WhitespaceTokenStream {
-            text,
+            text: TextRef::new(text),
             chars: text.char_indices(),
             token: Token::empty(),
         })
@@ -34,7 +36,7 @@ impl Tokenizer for WhitespaceTokenizer {
 
 impl<'a> TokenStream for WhitespaceTokenStream<'a> {
     fn advance(&mut self) -> bool {
-        super::advance_char_indices_token(self.text, &mut self.chars, &mut self.token, |c| {
+        super::advance_char_indices_token(self.text.as_str(), &mut self.chars, &mut self.token, |c| {
             !c.is_ascii_whitespace()
         })
     }

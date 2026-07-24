@@ -45,7 +45,7 @@ impl<'a> RemoveLongFilterStream<'a> {
     /// Keep tokens whose UTF-8 byte length is at most the limit ("longer than"
     /// is removed; exact-boundary length == limit is kept).
     fn predicate(&self, token: &Token) -> bool {
-        token.text.len() <= self.token_length_limit
+        token.text().len() <= self.token_length_limit
     }
 }
 

@@ -73,7 +73,7 @@ mod tests {
         let mut stream = tok.token_stream(text);
         let mut out = Vec::new();
         while let Some(t) = stream.next() {
-            out.push((t.text.clone(), t.offset_from(), t.offset_to()));
+            out.push((t.text_owned(), t.offset_from(), t.offset_to()));
         }
         out
     }
