@@ -417,12 +417,15 @@ impl ScopeManifestTable {
     }
 }
 
-fn scope_status_to_result(status: ScopeManifestStatus) -> Result<(), ReplicaRefuse> {
-    match status {
-        ScopeManifestStatus::Verified => Ok(()),
-        ScopeManifestStatus::Unknown => Err(ReplicaRefuse::ScopeUnknown),
-        ScopeManifestStatus::Revoked => Err(ReplicaRefuse::ScopeRevoked),
-        ScopeManifestStatus::Incompatible => Err(ReplicaRefuse::ScopeDenied),
+impl ScopeManifestStatus {
+    /// Map scope resolution to typed refuse (derivation).
+    pub(crate) fn to_refuse_result(self) -> Result<(), ReplicaRefuse> {
+        match self {
+            ScopeManifestStatus::Verified => Ok(()),
+            ScopeManifestStatus::Unknown => Err(ReplicaRefuse::ScopeUnknown),
+            ScopeManifestStatus::Revoked => Err(ReplicaRefuse::ScopeRevoked),
+            ScopeManifestStatus::Incompatible => Err(ReplicaRefuse::ScopeDenied),
+        }
     }
 }
 
@@ -529,19 +532,7 @@ impl AdmissionCertificate {
 
     /// Signing body digest recomputed from sealed fields (excludes signature).
     pub fn signing_body(&self) -> Digest {
-        signing_body_digest(AdmissionSigningBody {
-            protocol_version: &self.protocol_version,
-            origin_store: self.origin_store,
-            origin_epoch: self.origin_epoch,
-            origin_commit: self.origin_commit,
-            schema_cut: self.schema_cut.as_bytes(),
-            record_digest: self.record_digest.as_bytes(),
-            predecessor_history_digest: crate::data::fixed_bytes::Bytes32(self.predecessor_history_digest),
-            post_state_root: self.post_state_root.as_bytes(),
-            authorizing_key_id: &self.authorizing_key_id,
-            scope_manifest_digest: &self.scope_manifest_digest,
-            operation_key: self.operation_key.as_ref().map(|k| k.as_bytes()),
-        })
+        AdmissionSigningBody::from_certificate(self).digest()
     }
 }
 
@@ -602,17 +593,25 @@ impl AsRef<[u8]> for TenantId {
     }
 }
 
-/// Domain-separated SHA-256 digest over labeled seat bytes (copy_detector).
-fn domain_separated_digest(
+/// Domain-separated digest pipe — one labeled seat hasher (derivation).
+struct DigestSeatPipe<'a> {
     label: DigestDomain,
-    seats: &[crate::data::fixed_bytes::Bytes32],
-) -> crate::data::fixed_bytes::Bytes32 {
-    let mut h = Sha256::new();
-    label.absorb(&mut h);
-    for seat in seats {
-        h.update(seat);
+    seats: &'a [crate::data::fixed_bytes::Bytes32],
+}
+
+impl<'a> DigestSeatPipe<'a> {
+    fn bind(label: DigestDomain, seats: &'a [crate::data::fixed_bytes::Bytes32]) -> Self {
+        Self { label, seats }
     }
-    crate::data::fixed_bytes::Bytes32::from_sha256(h.finalize())
+
+    fn digest(&self) -> crate::data::fixed_bytes::Bytes32 {
+        let mut h = Sha256::new();
+        self.label.absorb(&mut h);
+        for seat in self.seats {
+            h.update(seat);
+        }
+        crate::data::fixed_bytes::Bytes32::from_sha256(h.finalize())
+    }
 }
 
 /// Namespaced federation record identity (#270 T2 / seat 70).
@@ -682,7 +681,7 @@ impl NamespacedRecordIdentity {
 
     /// Federation-stable digest of the four-tuple (not a custody key).
     pub fn digest(&self) -> Digest32 {
-        Digest32::admit(domain_separated_digest(
+        Digest32::admit(DigestSeatPipe::bind(
             DigestDomain::NamespacedRecordIdentity,
             &[
                 self.local_id.as_bytes(),
@@ -690,7 +689,7 @@ impl NamespacedRecordIdentity {
                 self.tenant.as_bytes(),
                 self.content.as_bytes(),
             ],
-        ))
+        ).digest())
     }
 
     /// Custody key under origin coordinates — delegates to [`ReplicaKey`]
@@ -904,42 +903,75 @@ struct AdmissionSigningBody<'a> {
     operation_key: Option<crate::data::fixed_bytes::Bytes32>,
 }
 
-fn signing_body_digest(body: AdmissionSigningBody<'_>) -> Digest {
-    let AdmissionSigningBody {
-        protocol_version,
-        origin_store,
-        origin_epoch,
-        origin_commit,
-        schema_cut,
-        record_digest,
-        predecessor_history_digest,
-        post_state_root,
-        authorizing_key_id,
-        scope_manifest_digest,
-        operation_key,
-    } = body;
-    let mut h = Sha256::new();
-    DigestDomain::AdmissionCertificateSign.absorb(&mut h);
-    h.update(protocol_version);
-    h.update(origin_store.as_bytes());
-    h.update(u64::to_be_bytes(origin_epoch.get()));
-    h.update(u64::to_be_bytes(origin_commit.get()));
-    h.update(schema_cut);
-    h.update(record_digest);
-    h.update(predecessor_history_digest);
-    h.update(post_state_root);
-    h.update(authorizing_key_id.as_bytes());
-    h.update(scope_manifest_digest.as_bytes());
-    // FenceEpoch binds StoreId — include it so genesis-discard is unrepresentable.
-    h.update(origin_epoch.store_id().as_bytes());
-    match operation_key {
-        Some(op) => {
-            h.update([1u8]);
-            h.update(op);
+impl<'a> AdmissionSigningBody<'a> {
+    fn from_certificate(certificate: &'a AdmissionCertificate) -> Self {
+        Self {
+            protocol_version: &certificate.protocol_version,
+            origin_store: certificate.origin_store,
+            origin_epoch: certificate.origin_epoch,
+            origin_commit: certificate.origin_commit,
+            schema_cut: certificate.schema_cut.as_bytes(),
+            record_digest: certificate.record_digest.as_bytes(),
+            predecessor_history_digest: crate::data::fixed_bytes::Bytes32(
+                certificate.predecessor_history_digest,
+            ),
+            post_state_root: certificate.post_state_root.as_bytes(),
+            authorizing_key_id: &certificate.authorizing_key_id,
+            scope_manifest_digest: &certificate.scope_manifest_digest,
+            operation_key: certificate.operation_key.as_ref().map(|k| k.as_bytes()),
         }
-        None => h.update([0u8]),
     }
-    Digest::admit(crate::data::fixed_bytes::Bytes32(h.finalize().into()))
+
+    fn from_parts(parts: &'a AdmissionCertificateParts) -> Self {
+        Self {
+            protocol_version: &parts.protocol_version,
+            origin_store: parts.origin_store,
+            origin_epoch: parts.origin_epoch,
+            origin_commit: parts.origin_commit,
+            schema_cut: parts.schema_cut.as_bytes(),
+            record_digest: parts.record_digest.as_bytes(),
+            predecessor_history_digest: crate::data::fixed_bytes::Bytes32(
+                parts.predecessor_history_digest,
+            ),
+            post_state_root: parts.post_state_root.as_bytes(),
+            authorizing_key_id: &parts.authorizing_key_id,
+            scope_manifest_digest: &parts.scope_manifest_digest,
+            operation_key: parts.operation_key.as_ref().map(|k| k.as_bytes()),
+        }
+    }
+
+    /// Recompute the signing-body digest (derivation).
+    fn digest(&self) -> Digest {
+        let mut h = Sha256::new();
+        DigestDomain::AdmissionCertificateSign.absorb(&mut h);
+        h.update(self.protocol_version);
+        h.update(self.origin_store.as_bytes());
+        h.update(u64::to_be_bytes(self.origin_epoch.get()));
+        h.update(u64::to_be_bytes(self.origin_commit.get()));
+        h.update(self.schema_cut);
+        h.update(self.record_digest);
+        h.update(self.predecessor_history_digest);
+        h.update(self.post_state_root);
+        h.update(self.authorizing_key_id.as_bytes());
+        h.update(self.scope_manifest_digest.as_bytes());
+        // FenceEpoch binds StoreId — include it so genesis-discard is unrepresentable.
+        h.update(self.origin_epoch.store_id().as_bytes());
+        match self.operation_key {
+            Some(op) => {
+                h.update([1u8]);
+                h.update(op);
+            }
+            None => h.update([0u8]),
+        }
+        Digest::admit(crate::data::fixed_bytes::Bytes32(h.finalize().into()))
+    }
+}
+
+impl AdmissionCertificateParts {
+    /// Signing body digest for these parts (derivation).
+    pub(crate) fn signing_body(&self) -> Digest {
+        AdmissionSigningBody::from_parts(self).digest()
+    }
 }
 
 /// Mint an AdmissionCertificate — callable only from the admission seam.
@@ -1064,20 +1096,7 @@ pub(crate) fn sign_admission_parts(
     if key.id() != parts.authorizing_key_id {
         return Err(ReplicaRefuse::AuthenticityFailed);
     }
-    let body = signing_body_digest(AdmissionSigningBody {
-        protocol_version: &parts.protocol_version,
-        origin_store: parts.origin_store,
-        origin_epoch: parts.origin_epoch,
-        origin_commit: parts.origin_commit,
-        schema_cut: parts.schema_cut.as_bytes(),
-        record_digest: parts.record_digest.as_bytes(),
-        predecessor_history_digest: crate::data::fixed_bytes::Bytes32(parts.predecessor_history_digest),
-        post_state_root: parts.post_state_root.as_bytes(),
-        authorizing_key_id: &parts.authorizing_key_id,
-        scope_manifest_digest: &parts.scope_manifest_digest,
-        operation_key: parts.operation_key.as_ref().map(|k| k.as_bytes()),
-    });
-    key.sign(&body)
+    key.sign(&parts.signing_body())
 }
 
 /// Verify a replica certificate and produce custody (§69/§70).
@@ -1101,6 +1120,9 @@ pub(crate) fn sign_admission_parts(
 /// Full crossing-contract validation (kind/schema/authority/context/evidence/
 /// status/capabilities) before lowering is [`validate_crossing_before_lower`] —
 /// this door alone does not authorize lowering.
+///
+/// STAGED PENDING OPERATOR: declared-fn seat candidate — prefer
+/// [`AdmissionCertificate::verify`].
 pub fn verify_replica(
     certificate: &AdmissionCertificate,
     local_store: StoreId,
@@ -1109,49 +1131,65 @@ pub fn verify_replica(
     scopes: &ScopeManifestTable,
     continuity: Option<&OriginContinuity>,
 ) -> Result<ReplicaCustody, ReplicaRefuse> {
-    // Scope resolution is a closed sum — never folded into RetentionDeclined.
-    scope_status_to_result(scopes.resolve(&certificate.scope_manifest_digest()))?;
+    certificate.verify(local_store, local_commit, authorizing_keys, scopes, continuity)
+}
 
-    if certificate.transcript().as_bytes().is_empty() {
-        return Err(ReplicaRefuse::AuthenticityFailed);
-    }
-    // Re-parse sealed bytes so corrupt transcripts refuse (not only empty).
-    CanonicalTranscript::parse(certificate.transcript().as_bytes())
-        .map_err(|_| ReplicaRefuse::AuthenticityFailed)?;
+impl AdmissionCertificate {
+    /// Verify this certificate and produce custody (§69/§70).
+    pub fn verify(
+        &self,
+        local_store: StoreId,
+        local_commit: CommitOrdinal,
+        authorizing_keys: &AuthorizingKeyTable,
+        scopes: &ScopeManifestTable,
+        continuity: Option<&OriginContinuity>,
+    ) -> Result<ReplicaCustody, ReplicaRefuse> {
+        // Scope resolution is a closed sum — never folded into RetentionDeclined.
+        scopes
+            .resolve(&self.scope_manifest_digest())
+            .to_refuse_result()?;
 
-    let authorizing_key = match authorizing_keys.lookup(&certificate.authorizing_key_id())? {
-        Some(k) => k,
-        None => return Err(ReplicaRefuse::AuthenticityFailed),
-    };
-    // INVARIANT(verifying_only_lookup): AuthorizingKeyTable::lookup mints
-    // verifying material only — can_sign is always false.
-    let body = certificate.signing_body();
-    if !authorizing_key.verify_signature(&body, certificate.signature()) {
-        return Err(ReplicaRefuse::AuthenticityFailed);
-    }
+        if self.transcript().as_bytes().is_empty() {
+            return Err(ReplicaRefuse::AuthenticityFailed);
+        }
+        // Re-parse sealed bytes so corrupt transcripts refuse (not only empty).
+        CanonicalTranscript::parse(self.transcript().as_bytes())
+            .map_err(|_| ReplicaRefuse::AuthenticityFailed)?;
 
-    let key = ReplicaKey::derive(
-        certificate.origin_store(),
-        certificate.origin_epoch(),
-        certificate.origin_commit(),
-        certificate.record_digest(),
-    );
-    match continuity {
-        Some(_evidence) => Ok(verify_replica_finish(
-            certificate,
-            ReplicaCustody::Queryable {
-                key,
-                local_store,
-                local_commit,
-            },
-        )),
-        None => Ok(verify_replica_finish(
-            certificate,
-            ReplicaCustody::PendingAnchor {
-                key,
-                certificate: Box::new(certificate.clone()),
-            },
-        )),
+        let authorizing_key = match authorizing_keys.lookup(&self.authorizing_key_id())? {
+            Some(k) => k,
+            None => return Err(ReplicaRefuse::AuthenticityFailed),
+        };
+        // INVARIANT(verifying_only_lookup): AuthorizingKeyTable::lookup mints
+        // verifying material only — can_sign is always false.
+        let body = self.signing_body();
+        if !authorizing_key.verify_signature(&body, self.signature()) {
+            return Err(ReplicaRefuse::AuthenticityFailed);
+        }
+
+        let key = ReplicaKey::derive(
+            self.origin_store(),
+            self.origin_epoch(),
+            self.origin_commit(),
+            self.record_digest(),
+        );
+        match continuity {
+            Some(_evidence) => Ok(verify_replica_finish(
+                self,
+                ReplicaCustody::Queryable {
+                    key,
+                    local_store,
+                    local_commit,
+                },
+            )),
+            None => Ok(verify_replica_finish(
+                self,
+                ReplicaCustody::PendingAnchor {
+                    key,
+                    certificate: Box::new(self.clone()),
+                },
+            )),
+        }
     }
 }
 
@@ -1801,7 +1839,7 @@ impl PromotionMeaning {
 
     /// Stable digest over all four seats (replay meter).
     pub fn digest(&self) -> Digest32 {
-        Digest32::admit(domain_separated_digest(
+        Digest32::admit(DigestSeatPipe::bind(
             DigestDomain::PromotionMeaning,
             &[
                 self.identity.digest().as_bytes(),
@@ -1809,7 +1847,7 @@ impl PromotionMeaning {
                 self.provenance.as_bytes(),
                 self.schema_cut.as_bytes(),
             ],
-        ))
+        ).digest())
     }
 
     /// Replay equality: every seat identical (where it runs may change).

@@ -150,6 +150,85 @@ impl KekUnwrapCap {
     pub(crate) fn kek(&self) -> &Kek {
         &self.kek
     }
+
+    /// Wrap a plaintext [`ShredSalt`] under the KEK for persistence.
+    pub fn wrap_shred_salt(
+        &self,
+        salt: &ShredSalt,
+        segment: SegmentCounter,
+        crypto_domain: CryptoDomain,
+    ) -> Result<WrappedShredSalt, CryptoRefuse> {
+        let aad = shred_salt_wrap_transcript(crypto_domain, segment)?;
+        let nonce = wrap_nonce(&aad);
+        let body = seal_arm_kek(
+            AeadArm::Siv,
+            self.kek(),
+            &nonce,
+            aad.as_bytes(),
+            salt.as_bytes().as_slice(),
+            crypto_domain,
+        )?;
+        Ok(WrappedShredSalt {
+            ciphertext: body,
+            segment,
+            crypto_domain,
+        })
+    }
+
+    /// Unwrap a persisted [`WrappedShredSalt`] to a memory-only [`ShredSalt`].
+    pub fn unwrap_shred_salt(
+        &self,
+        wrapped: &WrappedShredSalt,
+        ledger: &ShredLedger,
+    ) -> Result<ShredSalt, CryptoRefuse> {
+        if ledger.is_shredded(wrapped) {
+            return Err(CryptoRefuse::Shredded);
+        }
+        let aad = shred_salt_wrap_transcript(wrapped.crypto_domain, wrapped.segment)?;
+        let nonce = wrap_nonce(&aad);
+        let pt = match open_arm_kek(
+            AeadArm::Siv,
+            self.kek(),
+            &nonce,
+            aad.as_bytes(),
+            &wrapped.ciphertext,
+            wrapped.crypto_domain,
+        ) {
+            Ok(pt) => pt,
+            Err(CryptoRefuse::KeyCommitmentMismatch) => {
+                return Err(CryptoRefuse::KeyCommitmentMismatch);
+            }
+            Err(_) => {
+                return Err(CryptoRefuse::UnwrapFailed);
+            }
+        };
+        if pt.len() != 32 {
+            return Err(CryptoRefuse::UnwrapFailed);
+        }
+        let mut salt = [0u8; 32];
+        salt.copy_from_slice(&pt);
+        Ok(ShredSalt::admit(crate::data::fixed_bytes::Bytes32(salt)))
+    }
+
+    /// `DEK = derive(KEK, CryptoDomain, SegmentCounter, ShredSalt)`.
+    pub fn derive_dek(
+        &self,
+        crypto_domain: CryptoDomain,
+        segment: SegmentCounter,
+        salt: &ShredSalt,
+    ) -> Dek {
+        let mut h = Sha256::new();
+        DigestDomain::DekDerive.absorb(&mut h);
+        h.update(self.kek().as_bytes());
+        h.update(crypto_domain.store_id().as_bytes());
+        h.update(u64::to_be_bytes(crypto_domain.fence_epoch().get()));
+        h.update(u64::to_be_bytes(segment.get()));
+        h.update(salt.as_bytes());
+        let dig = h.finalize();
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&dig);
+        Dek::from_derived(crate::data::fixed_bytes::Bytes32(out), crypto_domain)
+    }
 }
 
 /// Key-encryption key — closed [`super::keys::Secret`] member. Never in packs.
@@ -669,90 +748,40 @@ fn open_arm_kek(
 
 /// Wrap a plaintext [`ShredSalt`] under the KEK for persistence.
 ///
-/// Plaintext salt must not escape this call except into [`derive_dek`].
-/// Uses AES-256-GCM-SIV under the KEK (misuse-resistant; deterministic nonce).
+/// STAGED PENDING OPERATOR: declared-fn seat candidate — prefer
+/// [`KekUnwrapCap::wrap_shred_salt`].
 pub fn wrap_shred_salt(
     cap: &KekUnwrapCap,
     salt: &ShredSalt,
     segment: SegmentCounter,
     crypto_domain: CryptoDomain,
 ) -> Result<WrappedShredSalt, CryptoRefuse> {
-    let aad = shred_salt_wrap_transcript(crypto_domain, segment)?;
-    let nonce = wrap_nonce(&aad);
-    // KeyCommitment posture on for all AEAD sites — wrap uses SIV + CMT-1 under KEK.
-    let body = seal_arm_kek(
-        AeadArm::Siv,
-        cap.kek(),
-        &nonce,
-        aad.as_bytes(),
-        salt.as_bytes().as_slice(),
-        crypto_domain,
-    )?;
-    Ok(WrappedShredSalt {
-        ciphertext: body,
-        segment,
-        crypto_domain,
-    })
+    cap.wrap_shred_salt(salt, segment, crypto_domain)
 }
 
 /// Unwrap a persisted [`WrappedShredSalt`] to a memory-only [`ShredSalt`].
 ///
-/// Consults [`ShredLedger`] first: a recorded tombstone → [`CryptoRefuse::Shredded`]
-/// even when an old pack still carries the wrapped ciphertext bytes.
+/// STAGED PENDING OPERATOR: declared-fn seat candidate — prefer
+/// [`KekUnwrapCap::unwrap_shred_salt`].
 pub fn unwrap_shred_salt(
     cap: &KekUnwrapCap,
     wrapped: &WrappedShredSalt,
     ledger: &ShredLedger,
 ) -> Result<ShredSalt, CryptoRefuse> {
-    if ledger.is_shredded(wrapped) {
-        return Err(CryptoRefuse::Shredded);
-    }
-    let aad = shred_salt_wrap_transcript(wrapped.crypto_domain, wrapped.segment)?;
-    let nonce = wrap_nonce(&aad);
-    let pt = match open_arm_kek(
-        AeadArm::Siv,
-        cap.kek(),
-        &nonce,
-        aad.as_bytes(),
-        &wrapped.ciphertext,
-        wrapped.crypto_domain,
-    ) {
-        Ok(pt) => pt,
-        Err(CryptoRefuse::KeyCommitmentMismatch) => {
-            return Err(CryptoRefuse::KeyCommitmentMismatch);
-        }
-        Err(_) => {
-            return Err(CryptoRefuse::UnwrapFailed);
-        }
-    };
-    if pt.len() != 32 {
-        return Err(CryptoRefuse::UnwrapFailed);
-    }
-    let mut salt = [0u8; 32];
-    salt.copy_from_slice(&pt);
-    Ok(ShredSalt::admit(crate::data::fixed_bytes::Bytes32(salt)))
+    cap.unwrap_shred_salt(wrapped, ledger)
 }
 
 /// `DEK = derive(KEK, CryptoDomain, SegmentCounter, ShredSalt)`.
 ///
-/// Unstructured random DEKs / single-global-DEK are Unconstructible.
+/// STAGED PENDING OPERATOR: declared-fn seat candidate — prefer
+/// [`KekUnwrapCap::derive_dek`].
 pub fn derive_dek(
     cap: &KekUnwrapCap,
     crypto_domain: CryptoDomain,
     segment: SegmentCounter,
     salt: &ShredSalt,
 ) -> Dek {
-    let mut h = Sha256::new();
-    DigestDomain::DekDerive.absorb(&mut h);
-    h.update(cap.kek().as_bytes());
-    h.update(crypto_domain.store_id().as_bytes());
-    h.update(u64::to_be_bytes(crypto_domain.fence_epoch().get()));
-    h.update(u64::to_be_bytes(segment.get()));
-    h.update(salt.as_bytes());
-    let dig = h.finalize();
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&dig);
-    Dek::from_derived(crate::data::fixed_bytes::Bytes32(out), crypto_domain)
+    cap.derive_dek(crypto_domain, segment, salt)
 }
 
 /// Compressed plaintext — the only input the encrypt door accepts.
@@ -766,6 +795,18 @@ impl CompressedBytes {
     /// Borrow compressed bytes.
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
+    }
+
+    /// Encrypt under a DEK + nonce + arm (consuming verb).
+    pub fn encrypt_under(
+        self,
+        dek: &Dek,
+        nonce: Nonce,
+        arm: AeadArm,
+        aad: &CanonicalTranscript,
+    ) -> Result<Ciphertext, CryptoRefuse> {
+        let body = seal_arm(arm, dek, &nonce, aad.as_bytes(), self.as_bytes(), dek.crypto_domain())?;
+        Ok(Ciphertext { arm, nonce, body })
     }
 }
 
@@ -792,6 +833,23 @@ impl Ciphertext {
     pub fn body(&self) -> &[u8] {
         &self.body
     }
+
+    /// Open AEAD ciphertext back to [`CompressedBytes`] (derivation).
+    pub fn decrypt_under(
+        &self,
+        dek: &Dek,
+        aad: &CanonicalTranscript,
+    ) -> Result<CompressedBytes, CryptoRefuse> {
+        let pt = open_arm(
+            self.arm,
+            dek,
+            &self.nonce,
+            aad.as_bytes(),
+            &self.body,
+            dek.crypto_domain(),
+        )?;
+        Ok(CompressedBytes(pt))
+    }
 }
 
 /// Compress plaintext with pure-Rust LZ4 (`lz4_flex`). Must precede AEAD (§67).
@@ -807,8 +865,8 @@ pub fn decompress(compressed: &CompressedBytes) -> Result<Vec<u8>, CryptoRefuse>
 
 /// Encrypt compressed bytes under a DEK + nonce + arm.
 ///
-/// Only accepts [`CompressedBytes`] — compression precedes AEAD by construction.
-/// [`AeadArm::Siv`] → AES-256-GCM-SIV; [`AeadArm::Gcm`] → ChaCha20-Poly1305.
+/// STAGED PENDING OPERATOR: declared-fn seat candidate — prefer
+/// [`CompressedBytes::encrypt_under`].
 pub fn encrypt(
     compressed: CompressedBytes,
     dek: &Dek,
@@ -816,32 +874,19 @@ pub fn encrypt(
     arm: AeadArm,
     aad: &CanonicalTranscript,
 ) -> Result<Ciphertext, CryptoRefuse> {
-    let body = seal_arm(
-        arm,
-        dek,
-        &nonce,
-        aad.as_bytes(),
-        compressed.as_bytes(),
-        dek.crypto_domain(),
-    )?;
-    Ok(Ciphertext { arm, nonce, body })
+    compressed.encrypt_under(dek, nonce, arm, aad)
 }
 
 /// Open AEAD ciphertext back to [`CompressedBytes`].
+///
+/// STAGED PENDING OPERATOR: declared-fn seat candidate — prefer
+/// [`Ciphertext::decrypt_under`].
 pub fn decrypt(
     ciphertext: &Ciphertext,
     dek: &Dek,
     aad: &CanonicalTranscript,
 ) -> Result<CompressedBytes, CryptoRefuse> {
-    let pt = open_arm(
-        ciphertext.arm,
-        dek,
-        &ciphertext.nonce,
-        aad.as_bytes(),
-        &ciphertext.body,
-        dek.crypto_domain(),
-    )?;
-    Ok(CompressedBytes(pt))
+    ciphertext.decrypt_under(dek, aad)
 }
 
 /// Compression-then-encryption pipeline — the only Store path (§67).
@@ -852,7 +897,7 @@ pub fn compress_then_encrypt(
     arm: AeadArm,
     aad: &CanonicalTranscript,
 ) -> Result<Ciphertext, CryptoRefuse> {
-    encrypt(compress(plaintext), dek, nonce, arm, aad)
+    compress(plaintext).encrypt_under(dek, nonce, arm, aad)
 }
 
 /// Shred receipt — reserved for the Store destroy door (seat 64).

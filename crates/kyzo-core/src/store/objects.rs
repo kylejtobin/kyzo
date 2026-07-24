@@ -146,7 +146,7 @@ impl ObjectRef {
         calling_store: StoreId,
         cut: CommitOrdinal,
     ) -> Result<ResolvedObject, ObjectRefuse> {
-        resolve(self.as_durable_slot(), calling_store, cut)
+        self.as_durable_slot().resolve(calling_store, cut)
     }
 
     /// Retention certificate covering as-of obligations through `cut`.
@@ -169,7 +169,13 @@ impl ObjectRef {
         retention: &RetentionCertificate,
         max_retaining_snapshot: CommitOrdinal,
     ) -> Result<(), ObjectRefuse> {
-        gc_durable(self, retention, max_retaining_snapshot)
+        if retention.store_id() != self.store_id() {
+            return Err(ObjectRefuse::ObjectRefForeignStore);
+        }
+        if retention.covers_through().get() < max_retaining_snapshot.get() {
+            return Err(ObjectRefuse::ObjectRetainRequired);
+        }
+        Ok(())
     }
 
     /// Reclaim a permanence candidate naming this identity.
@@ -183,7 +189,7 @@ impl ObjectRef {
         {
             return Err(ObjectRefuse::ReclaimMismatch);
         }
-        reclaim_candidate(candidate, certificate)
+        candidate.reclaim_under(certificate)
     }
 
     /// Put/get/delete/list through the closed [`ObjectStore`] driver only.
@@ -214,7 +220,7 @@ impl ObjectRef {
         if original.object_ref() != self {
             return Err(ObjectRefuse::ObjectRefForeignStore);
         }
-        let repair = PermanenceWitness::repair(original, bytes_hash, proposed, downgrade)?;
+        let repair = original.repair(bytes_hash, proposed, downgrade)?;
         Ok(repair)
     }
 
@@ -316,7 +322,7 @@ impl ObjectRef {
     /// Explicit Downgrade record (never silent class supersession).
     pub fn downgrade(self, from: ObjectDurabilityClass, to: ObjectDurabilityClass) -> Downgrade {
         let ObjectRef { .. } = self;
-        Downgrade { from, to }
+        Downgrade::bind(from, to)
     }
 }
 
@@ -358,6 +364,34 @@ pub enum ObjectSlot {
     Durable(ObjectRef),
 }
 
+impl ObjectSlot {
+    /// Resolve this slot against the current cut / Store scope (consuming verb).
+    pub fn resolve(
+        self,
+        calling_store: StoreId,
+        cut: CommitOrdinal,
+    ) -> Result<ResolvedObject, ObjectRefuse> {
+        match self {
+            ObjectSlot::Pending(token) => {
+                if token.store_id() != calling_store {
+                    return Err(ObjectRefuse::ObjectRefForeignStore);
+                }
+                if cut == CommitOrdinal::ZERO || cut != CommitOrdinal::ZERO {
+                    Ok(ResolvedObject::Pending(token))
+                } else {
+                    Err(ObjectRefuse::ObjectMissingForAsOf)
+                }
+            }
+            ObjectSlot::Durable(object_ref) => {
+                if object_ref.store_id() != calling_store {
+                    return Err(ObjectRefuse::ObjectRefForeignStore);
+                }
+                Ok(ResolvedObject::Durable(object_ref))
+            }
+        }
+    }
+}
+
 /// Physical first stage: volatile bytes not yet a PermanenceCandidate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VolatilePending {
@@ -375,7 +409,11 @@ impl VolatilePending {
         stage_commit: CommitOrdinal,
         ttl: StagingTtl,
     ) -> Result<VolatilePending, ObjectRefuse> {
-        let expires_at = add_ttl(stage_commit, ttl)?;
+        let expires_at = stage_commit
+            .get()
+            .checked_add(ttl.ordinals())
+            .map(CommitOrdinal::of_u64)
+            .ok_or(ObjectRefuse::StagingTtlOverflow)?;
         Ok(VolatilePending {
             token,
             content_hash,
@@ -439,6 +477,19 @@ impl PermanenceCandidate {
     /// Whether the current cut still permits confirm (strictly before expires_at).
     pub fn may_confirm(&self, cut: CommitOrdinal) -> bool {
         cut.get() < self.expires_at.get()
+    }
+
+    /// Reclaim this candidate under a matching certificate (consuming verb).
+    pub fn reclaim_under(
+        self,
+        certificate: &ReclaimCertificate,
+    ) -> Result<(), ObjectRefuse> {
+        if certificate.store_id() != self.token.store_id()
+            || certificate.object_id() != self.token.object_id()
+        {
+            return Err(ObjectRefuse::ReclaimMismatch);
+        }
+        Ok(())
     }
 }
 
@@ -610,39 +661,39 @@ impl PermanenceWitness {
     /// Incomparable proposal → [`ObjectRefuse::IncomparableClasses`] carrying
     /// both classes (seat 22) — never a panic.
     pub fn repair(
-        original: &PermanenceWitness,
+        &self,
         bytes_hash: ContentHash,
         proposed: ObjectDurabilityClass,
         downgrade: Option<Downgrade>,
     ) -> Result<Repair, ObjectRefuse> {
-        if bytes_hash != original.content_hash {
+        if bytes_hash != self.content_hash {
             return Err(ObjectRefuse::RepairBytesMismatch);
         }
         let class = match downgrade {
             Some(d) => {
-                if d.from != original.class || d.to != proposed {
+                if d.from() != self.class || d.to() != proposed {
                     return Err(ObjectRefuse::DowngradeMismatch);
                 }
-                d.to
+                d.to()
             }
             None => {
-                if proposed.incomparable(original.class) {
+                if proposed.incomparable(self.class) {
                     return Err(ObjectRefuse::IncomparableClasses {
-                        original: original.class,
+                        original: self.class,
                         proposed,
                     });
                 }
-                if !proposed.dominates(original.class) {
+                if !proposed.dominates(self.class) {
                     return Err(ObjectRefuse::NonDominatingRepair);
                 }
                 proposed
             }
         };
         Ok(Repair {
-            object_ref: original.object_ref,
-            content_hash: original.content_hash,
+            object_ref: self.object_ref,
+            content_hash: self.content_hash,
             class,
-            prior_class: original.class,
+            prior_class: self.class,
             downgrade,
         })
     }
@@ -671,10 +722,25 @@ impl PermanenceWitness {
 /// Auditable append-only class supersession (never silent).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Downgrade {
+    from: ObjectDurabilityClass,
+    to: ObjectDurabilityClass,
+}
+
+impl Downgrade {
+    /// Bind explicit from/to classes — never silent supersession.
+    pub fn bind(from: ObjectDurabilityClass, to: ObjectDurabilityClass) -> Self {
+        Self { from, to }
+    }
+
     /// Class being superseded.
-    pub from: ObjectDurabilityClass,
+    pub fn from(self) -> ObjectDurabilityClass {
+        self.from
+    }
+
     /// Explicit lower/incomparable successor class.
-    pub to: ObjectDurabilityClass,
+    pub fn to(self) -> ObjectDurabilityClass {
+        self.to
+    }
 }
 
 /// Repair outcome under PermanenceWitness law.
@@ -785,29 +851,15 @@ impl RetentionCertificate {
 }
 
 /// Resolve a logical slot against the current cut / Store scope.
+///
+/// STAGED PENDING OPERATOR: declared-fn seat candidate — external call sites
+/// should migrate to [`ObjectSlot::resolve`].
 pub fn resolve(
     slot: ObjectSlot,
     calling_store: StoreId,
     cut: CommitOrdinal,
 ) -> Result<ResolvedObject, ObjectRefuse> {
-    match slot {
-        ObjectSlot::Pending(token) => {
-            if token.store_id() != calling_store {
-                return Err(ObjectRefuse::ObjectRefForeignStore);
-            }
-            if cut == CommitOrdinal::ZERO || cut != CommitOrdinal::ZERO {
-                Ok(ResolvedObject::Pending(token))
-            } else {
-                Err(ObjectRefuse::ObjectMissingForAsOf)
-            }
-        }
-        ObjectSlot::Durable(object_ref) => {
-            if object_ref.store_id() != calling_store {
-                return Err(ObjectRefuse::ObjectRefForeignStore);
-            }
-            Ok(ResolvedObject::Durable(object_ref))
-        }
-    }
+    slot.resolve(calling_store, cut)
 }
 
 /// Resolve outcome (Pending licenses ref+expiry; Durable licenses class).
@@ -820,31 +872,26 @@ pub enum ResolvedObject {
 }
 
 /// Store-owned GC for Durable bytes under a covering retention certificate.
+///
+/// STAGED PENDING OPERATOR: declared-fn seat candidate — prefer
+/// [`ObjectRef::gc_under`].
 pub fn gc_durable(
     object_ref: ObjectRef,
     retention: &RetentionCertificate,
     max_retaining_snapshot: CommitOrdinal,
 ) -> Result<(), ObjectRefuse> {
-    if retention.store_id() != object_ref.store_id() {
-        return Err(ObjectRefuse::ObjectRefForeignStore);
-    }
-    if retention.covers_through().get() < max_retaining_snapshot.get() {
-        return Err(ObjectRefuse::ObjectRetainRequired);
-    }
-    Ok(())
+    object_ref.gc_under(retention, max_retaining_snapshot)
 }
 
 /// Reclaim a PermanenceCandidate (lawful any time) or VolatilePending.
+///
+/// STAGED PENDING OPERATOR: declared-fn seat candidate — prefer
+/// [`PermanenceCandidate::reclaim_under`].
 pub fn reclaim_candidate(
     candidate: PermanenceCandidate,
     certificate: &ReclaimCertificate,
 ) -> Result<(), ObjectRefuse> {
-    if certificate.store_id() != candidate.token.store_id()
-        || certificate.object_id() != candidate.token.object_id()
-    {
-        return Err(ObjectRefuse::ReclaimMismatch);
-    }
-    Ok(())
+    candidate.reclaim_under(certificate)
 }
 
 /// Closed object-store driver trait — put/get/delete/list only.
@@ -853,20 +900,17 @@ pub fn reclaim_candidate(
 /// Orphan put without a prior committed ObjectSlot/Record naming is
 /// Unconstructible at the Store door (federation cannot invent refs).
 pub trait ObjectStore {
-    /// Driver I/O / capacity refuse.
-    type Error;
-
     /// Put bytes already named by a committed ObjectSlot / Record.
-    fn put(&mut self, object_id: &ObjectId, bytes: &[u8]) -> Result<(), Self::Error>;
+    fn put(&mut self, object_id: &ObjectId, bytes: &[u8]) -> Result<(), ObjectRefuse>;
 
     /// Get bytes by object id.
-    fn get(&self, object_id: &ObjectId) -> Result<Option<Vec<u8>>, Self::Error>;
+    fn get(&self, object_id: &ObjectId) -> Result<Option<Vec<u8>>, ObjectRefuse>;
 
     /// Delete bytes by object id (GC / reclaim only through Store doors).
-    fn delete(&mut self, object_id: &ObjectId) -> Result<(), Self::Error>;
+    fn delete(&mut self, object_id: &ObjectId) -> Result<(), ObjectRefuse>;
 
     /// List object ids under this backend namespace.
-    fn list(&self) -> Result<Vec<ObjectId>, Self::Error>;
+    fn list(&self) -> Result<Vec<ObjectId>, ObjectRefuse>;
 }
 
 /// Typed refusals on the object seam.
@@ -930,15 +974,6 @@ pub enum ObjectRefuse {
     #[diagnostic(code(store::objects::store_deleted))]
     StoreDeleted,
 }
-
-fn add_ttl(stage: CommitOrdinal, ttl: StagingTtl) -> Result<CommitOrdinal, ObjectRefuse> {
-    stage
-        .get()
-        .checked_add(ttl.ordinals())
-        .map(CommitOrdinal::of_u64)
-        .ok_or(ObjectRefuse::StagingTtlOverflow)
-}
-
 #[cfg(test)]
 mod durability_dominance_tests {
     use super::*;
@@ -988,7 +1023,7 @@ mod durability_dominance_tests {
             more_copies,
             CommitOrdinal::ZERO,
         );
-        match PermanenceWitness::repair(&witness, hash, more_domains, None) {
+        match witness.repair(hash, more_domains, None) {
             Err(ObjectRefuse::IncomparableClasses { original, proposed }) => {
                 assert_eq!(original, more_copies);
                 assert_eq!(proposed, more_domains);

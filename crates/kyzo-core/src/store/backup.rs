@@ -450,16 +450,30 @@ pub enum LeaveIsFreeKind {
 /// incarnation history is Unconstructible as leave-is-free.
 #[derive(Debug, Clone)]
 pub struct LeaveIsFreeParts {
-    /// Pack shape.
-    pub kind: LeaveIsFreeKind,
-    /// FormatVersion stamped into the pack.
-    pub format_version: FormatVersion,
-    /// Wrapped shred salts for every retained encrypted segment (§64/§65).
-    pub wrapped_shred_salts: Vec<WrappedShredSalt>,
-    /// IncarnationId history required for restore verification (§62/§65).
-    pub incarnation_history: Vec<IncarnationId>,
-    /// Opaque retained object / WAL / seal payload bytes (adapter currency).
-    pub payload: Vec<u8>,
+    kind: LeaveIsFreeKind,
+    format_version: FormatVersion,
+    wrapped_shred_salts: Vec<WrappedShredSalt>,
+    incarnation_history: Vec<IncarnationId>,
+    payload: Vec<u8>,
+}
+
+impl LeaveIsFreeParts {
+    /// Bind leave-is-free pack inputs (admission door).
+    pub fn bind(
+        kind: LeaveIsFreeKind,
+        format_version: FormatVersion,
+        wrapped_shred_salts: Vec<WrappedShredSalt>,
+        incarnation_history: Vec<IncarnationId>,
+        payload: Vec<u8>,
+    ) -> Self {
+        Self {
+            kind,
+            format_version,
+            wrapped_shred_salts,
+            incarnation_history,
+            payload,
+        }
+    }
 }
 
 /// Sealed leave-is-free pack. WriteAuthority / KEK / plaintext ShredSalt /
@@ -1037,25 +1051,25 @@ mod tests {
         let mint = IncarnationMintCap::issue(store, OpenOrdinal::ZERO);
         let incarnation = mint.mint(Entropy::admit(crate::data::fixed_bytes::Bytes32([0x77; 32])))?;
 
-        let missing_salt = LeaveIsFreePack::build(LeaveIsFreeParts {
-            kind: LeaveIsFreeKind::SealAndSuffix,
-            format_version: FormatVersion::CURRENT,
-            wrapped_shred_salts: vec![],
-            incarnation_history: vec![incarnation],
-            payload: vec![1, 2, 3],
-        });
+        let missing_salt = LeaveIsFreePack::build(LeaveIsFreeParts::bind(
+            LeaveIsFreeKind::SealAndSuffix,
+            FormatVersion::CURRENT,
+            vec![],
+            vec![incarnation],
+            vec![1, 2, 3],
+        ));
         assert!(matches!(
             missing_salt,
             Err(PackRefuse::MissingWrappedShredSalt)
         ));
 
-        let pack = LeaveIsFreePack::build(LeaveIsFreeParts {
-            kind: LeaveIsFreeKind::FullWal,
-            format_version: FormatVersion::CURRENT,
-            wrapped_shred_salts: vec![wrapped.clone()],
-            incarnation_history: vec![incarnation],
-            payload: vec![1, 2, 3],
-        })?;
+        let pack = LeaveIsFreePack::build(LeaveIsFreeParts::bind(
+            LeaveIsFreeKind::FullWal,
+            FormatVersion::CURRENT,
+            vec![wrapped.clone()],
+            vec![incarnation],
+            vec![1, 2, 3],
+        ))?;
         assert!(!pack.wrapped_shred_salts().is_empty());
         let empty_ledger = ShredLedger::new();
         let mut registry = OriginRootRegistry::new();
@@ -1129,13 +1143,13 @@ mod import_verify {
         )?;
         let mint = IncarnationMintCap::issue(store, OpenOrdinal::ZERO);
         let incarnation = mint.mint(Entropy::admit(crate::data::fixed_bytes::Bytes32([0x83; 32])))?;
-        let pack = LeaveIsFreePack::build(LeaveIsFreeParts {
-            kind: LeaveIsFreeKind::SealAndSuffix,
-            format_version: FormatVersion::CURRENT,
-            wrapped_shred_salts: vec![wrapped.clone()],
-            incarnation_history: vec![incarnation],
-            payload: b"leave-is-free-payload".to_vec(),
-        })?;
+        let pack = LeaveIsFreePack::build(LeaveIsFreeParts::bind(
+            LeaveIsFreeKind::SealAndSuffix,
+            FormatVersion::CURRENT,
+            vec![wrapped.clone()],
+            vec![incarnation],
+            b"leave-is-free-payload".to_vec(),
+        ))?;
         Ok((pack, wrapped))
     }
 
