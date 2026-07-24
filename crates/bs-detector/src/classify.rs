@@ -1307,20 +1307,103 @@ mod fixture_tests {
         );
     }
 
+    fn hit_constructs_for(hits: &[Hit], name: &str) -> Vec<String> {
+        hits.iter()
+            .filter(|h| h.construct().contains(name))
+            .map(|h| h.construct().to_string())
+            .collect()
+    }
+
+    /// Adversary 1: the drain shape is REAL — an impl-associated
+    /// receiverless `-> Self` fn matches admission-door. If this ever goes
+    /// false, the nested-bleed story is fiction and the suite must stop.
     #[test]
-    fn tip_650_nested_fn_in_method_body_does_not_false_green_as_admission_door() {
-        // Soft drain: nested Item::Fn inherited in_container=true from the
-        // enclosing impl method and matched admission-door. Nested items are
-        // not impl members — they must go red as unseated.
+    fn anti_fraud_impl_associated_self_fn_still_matches_admission_door_rule() {
         let grammar = real_grammar();
-        let src = "impl S { fn method(&self) { fn helper() -> Self { S } } }";
-        let rel = "crates/probe/src/lib.rs";
+        let src = "impl S { fn helper() -> Self { S } }";
         let ast = syn::parse_file(src).expect("parses");
-        let f = SourceFile::admit(rel.to_string(), src.to_string(), ast);
-        let hits = classify_file(&grammar, &f, &crate::alias::AliasTable::build(&[&f]).expect("aliases"));
+        let first = ast.items.first().expect("item");
         assert!(
-            hits.iter().any(|h| h.construct().contains("unclassified-fn:helper")),
-            "nested helper returning Self must not false-green as admission-door: {hits:?}"
+            probe_matches(
+                &grammar,
+                "crates/probe/src/lib.rs",
+                StructuralRule::AdmissionDoorBans,
+                first
+            ),
+            "ATTACK LOCK FAILED: impl-associated fn helper() -> Self must match admission-door — without this the nested-bleed adversary is undefined"
+        );
+        let hits = classify_src(src);
+        let helper = hit_constructs_for(&hits, "helper");
+        assert!(
+            helper.is_empty(),
+            "impl-associated helper() -> Self must be silent-green as admission-door, not red: {helper:?} full={hits:?}"
+        );
+    }
+
+    /// Adversary 2: nested Item::Fn inside a method body must NOT inherit
+    /// the impl seat. The soft drain was: empty hits (false green). This
+    /// test detonates if helper is missing from hits OR is anything other
+    /// than unclassified-fn:helper.
+    #[test]
+    fn anti_fraud_nested_self_fn_inside_method_body_must_be_unclassified() {
+        let src = "impl S { fn method(&self) { fn helper() -> Self { S } } }";
+        let hits = classify_src(src);
+        let helper = hit_constructs_for(&hits, "helper");
+        assert_eq!(
+            helper,
+            vec!["unclassified-fn:helper".to_string()],
+            "NESTED BLEED STILL OPEN or over-fixed: want exactly unclassified-fn:helper, got {helper:?} full={hits:?}"
+        );
+        // Method itself is derivation — must not be swept into the helper's guilt.
+        assert!(
+            !hits.iter().any(|h| h.construct().contains("method")),
+            "method(&self) must remain a seated derivation, not red: {hits:?}"
+        );
+    }
+
+    /// Adversary 3: Result<Self,_> nest — same bleed costume, different return.
+    #[test]
+    fn anti_fraud_nested_result_self_fn_inside_method_must_be_unclassified() {
+        let src = "impl S { fn method(&self) { fn helper() -> Result<Self, ()> { Ok(S) } } }";
+        let hits = classify_src(src);
+        let helper = hit_constructs_for(&hits, "helper");
+        assert_eq!(
+            helper,
+            vec!["unclassified-fn:helper".to_string()],
+            "Result<Self> nested helper must be unclassified-fn:helper, got {helper:?} full={hits:?}"
+        );
+    }
+
+    /// Adversary 4: trait default body nest — second container bleed surface.
+    #[test]
+    fn anti_fraud_nested_self_fn_inside_trait_default_must_be_unclassified() {
+        let src = "trait T { fn method(&self) { fn helper() -> Self { todo!() } } }";
+        let hits = classify_src(src);
+        let helper = hit_constructs_for(&hits, "helper");
+        assert_eq!(
+            helper,
+            vec!["unclassified-fn:helper".to_string()],
+            "trait-default nested helper must be unclassified-fn:helper, got {helper:?} full={hits:?}"
+        );
+    }
+
+    /// Adversary 5: free nested fn inside a free fn — never had in_container;
+    /// must still be unclassified (no silent pass via a new costume).
+    #[test]
+    fn anti_fraud_nested_fn_inside_free_fn_must_be_unclassified() {
+        let src = "fn outer() { fn helper() {} }";
+        let hits = classify_src(src);
+        let helper = hit_constructs_for(&hits, "helper");
+        assert_eq!(
+            helper,
+            vec!["unclassified-fn:helper".to_string()],
+            "free nested helper must be unclassified-fn:helper, got {helper:?} full={hits:?}"
+        );
+        let outer = hit_constructs_for(&hits, "outer");
+        assert_eq!(
+            outer,
+            vec!["unclassified-fn:outer".to_string()],
+            "free outer must also be unclassified (no seat): {outer:?}"
         );
     }
 
