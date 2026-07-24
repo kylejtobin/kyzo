@@ -19,47 +19,55 @@ pub mod campaign;
 pub mod pure_rust;
 pub mod unsafe_check;
 
-/// Live pure-Rust tree scan → hits (empty = clean).
-pub fn pure_rust_hits(repo_root: &Path) -> Vec<Hit> {
-    match pure_rust::PureRustGate::check_at(repo_root) {
-        Ok(_) => vec![],
-        Err(pure_rust::PureRustError::BannedCratesFound(hits)) => hits
-            .into_iter()
-            .map(|line| {
-                Hit::admit(
-                    "Cargo.toml".to_string(),
-                    1,
-                    format!("pure_rust_banned:{line}"),
-                )
-            })
-            .collect(),
-        Err(e) => vec![Hit::admit(
-            "Cargo.toml".to_string(),
-            1,
-            format!("pure_rust_refuse:{e}"),
-        )],
-    }
-}
+/// Behavior-surface authority — tip 806/914: no free helpers.
+pub struct BehaviorLaw;
 
-/// Live unsafe-law scan → hits (empty = clean).
-pub fn unsafe_check_hits(repo_root: &Path) -> Vec<Hit> {
-    match unsafe_check::UnsafeCheckGate::check_at(repo_root) {
-        Ok(_) => vec![],
-        Err(unsafe_check::UnsafeCheckError::MissingForbid { root }) => {
-            vec![Hit::admit(root, 1, "unsafe_missing_forbid".to_string())]
+/// The one production door for live behavior hit lifts.
+pub const BEHAVIOR: BehaviorLaw = BehaviorLaw;
+
+impl BehaviorLaw {
+    /// Live pure-Rust tree scan → hits (empty = clean).
+    pub fn pure_rust_hits(&self, repo_root: &Path) -> Vec<Hit> {
+        match pure_rust::PureRustGate::check_at(repo_root) {
+            Ok(_) => vec![],
+            Err(pure_rust::PureRustError::BannedCratesFound(hits)) => hits
+                .into_iter()
+                .map(|line| {
+                    Hit::admit(
+                        "Cargo.toml".to_string(),
+                        1,
+                        format!("pure_rust_banned:{line}"),
+                    )
+                })
+                .collect(),
+            Err(e) => vec![Hit::admit(
+                "Cargo.toml".to_string(),
+                1,
+                format!("pure_rust_refuse:{e}"),
+            )],
         }
-        Err(unsafe_check::UnsafeCheckError::AllowFound { offenders }) => offenders
-            .into_iter()
-            .map(|f| Hit::admit(f, 1, "unsafe_allow_found".to_string()))
-            .collect(),
-        Err(unsafe_check::UnsafeCheckError::LyingDoc { offenders }) => offenders
-            .into_iter()
-            .map(|f| Hit::admit(f, 1, "unsafe_lying_doc".to_string()))
-            .collect(),
-        Err(e) => vec![Hit::admit(
-            "Cargo.toml".to_string(),
-            1,
-            format!("unsafe_refuse:{e}"),
-        )],
+    }
+
+    /// Live unsafe-law scan → hits (empty = clean).
+    pub fn unsafe_check_hits(&self, repo_root: &Path) -> Vec<Hit> {
+        match unsafe_check::UnsafeCheckGate::check_at(repo_root) {
+            Ok(_) => vec![],
+            Err(unsafe_check::UnsafeCheckError::MissingForbid { root }) => {
+                vec![Hit::admit(root, 1, "unsafe_missing_forbid".to_string())]
+            }
+            Err(unsafe_check::UnsafeCheckError::AllowFound { offenders }) => offenders
+                .into_iter()
+                .map(|f| Hit::admit(f, 1, "unsafe_allow_found".to_string()))
+                .collect(),
+            Err(unsafe_check::UnsafeCheckError::LyingDoc { offenders }) => offenders
+                .into_iter()
+                .map(|f| Hit::admit(f, 1, "unsafe_lying_doc".to_string()))
+                .collect(),
+            Err(e) => vec![Hit::admit(
+                "Cargo.toml".to_string(),
+                1,
+                format!("unsafe_refuse:{e}"),
+            )],
+        }
     }
 }

@@ -219,7 +219,7 @@ io = false
 [[seats.fns]]
 file = "crates/bs-detector/src/engines/behavior/pure_rust.rs"
 fn_path = "check_at"
-site_hash = "41ffc6d3a2607c80f00b491fc7bab3e3c545ccf63eab972823f03edb9d5d9024"
+site_hash = "59656506e729d76fceb8fd8ebc282669ceaf5afea687f04122d4b7320602efe5"
 io = false
 
 [[seats.fns]]

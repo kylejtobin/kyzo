@@ -92,7 +92,11 @@ impl fmt::Display for PureRustError {
 impl std::error::Error for PureRustError {}
 
 /// Live pure-Rust dependency-tree gate (story #322).
+/// Live pure-Rust gate.
 pub struct PureRustGate;
+
+/// The one production door for pure-Rust helpers (tip 806/914).
+pub const PURE_RUST: PureRustGate = PureRustGate;
 
 impl PureRustGate {
     /// Check entry door — declared-fn seat (tip 815): static live-check with
@@ -106,8 +110,9 @@ impl PureRustGate {
         // "Updating index / Downloading ..." noise that would false-match the
         // banned-crate scan below. The warm is best-effort — the scan below is
         // the gate — so its outcome is carried into the report, never dropped.
-        let warm_note = match run_cargo(repo_root, &["fetch", "--locked"])
-            .or_else(|_| run_cargo(repo_root, &["fetch"]))
+        let warm_note = match PURE_RUST
+            .run_cargo(repo_root, &["fetch", "--locked"])
+            .or_else(|_| PURE_RUST.run_cargo(repo_root, &["fetch"]))
         {
             Ok(fetch_warm) if fetch_warm.status.success() => String::new(),
             Ok(fetch_warm) => format!(
@@ -122,7 +127,8 @@ impl PureRustGate {
         // Story #322: the set of package trees scanned is derived from `cargo
         // metadata`'s real workspace-member list, not a hand-maintained package
         // list — see `discover_roots`.
-        let meta_output = run_cargo(repo_root, &["metadata", "--format-version=1", "--no-deps"])
+        let meta_output = PURE_RUST
+            .run_cargo(repo_root, &["metadata", "--format-version=1", "--no-deps"])
             .map_err(PureRustError::Spawn)?;
         let meta_combined = format!(
             "{}{}",
@@ -143,7 +149,7 @@ impl PureRustGate {
             }
         })?;
 
-        let roots = discover_roots(&metadata);
+        let roots = PURE_RUST.discover_roots(&metadata);
 
         // Each discovered root gets its dependency tree scanned via `cargo
         // tree`, exactly as the ported script did: `cargo tree` resolves a
@@ -159,20 +165,21 @@ impl PureRustGate {
         let mut trees = String::new();
         let mut checked = Vec::new();
         for pkg in &roots {
-            let output = run_cargo(
-                repo_root,
-                &[
-                    "tree",
-                    "-p",
-                    pkg,
-                    "-e",
-                    "normal,build",
-                    "--target=all",
-                    "--prefix",
-                    "none",
-                ],
-            )
-            .map_err(PureRustError::Spawn)?;
+            let output = PURE_RUST
+                .run_cargo(
+                    repo_root,
+                    &[
+                        "tree",
+                        "-p",
+                        pkg,
+                        "-e",
+                        "normal,build",
+                        "--target=all",
+                        "--prefix",
+                        "none",
+                    ],
+                )
+                .map_err(PureRustError::Spawn)?;
             let combined = format!(
                 "{}{}",
                 String::from_utf8_lossy(&output.stdout),
@@ -212,57 +219,57 @@ impl PureRustGate {
             checked.iter().map(|c| format!(" {c}")).collect::<String>()
         ))
     }
-}
 
-fn run_cargo(repo_root: &Path, args: &[&str]) -> std::io::Result<std::process::Output> {
-    Command::new("cargo")
-        .args(args)
-        .current_dir(repo_root)
-        .output()
-}
+    fn run_cargo(&self, repo_root: &Path, args: &[&str]) -> std::io::Result<std::process::Output> {
+        Command::new("cargo")
+            .args(args)
+            .current_dir(repo_root)
+            .output()
+    }
 
-/// Story #322: replaces the hard-coded `ENGINE_PACKAGES` list entirely — no
-/// crate name is named anywhere in this discovery. A workspace member is a
-/// purity-gated root when `cargo metadata` shows it is:
-///
-/// 1. a real, current workspace member (not a dependency merely pulled in);
-/// 2. not marked `publish = false` — the root `Cargo.toml`'s own convention
-///    for internal dev tooling that never ships (`xtask`,
-///    `kyzo-crashfs`, `kyzo-arrow-interop` all carry that marker precisely
-///    because none of them is part of the shipped engine tree); and
-/// 3. not vendored third-party source patched into the workspace under
-///    `vendor/` (already scanned as an ordinary dependency wherever a
-///    shipped root actually pulls it in, e.g. `fjall` beneath `kyzo`).
-///
-/// Because this reads real, current package data instead of a maintained
-/// name list, a new shipped product crate is a covered root the moment it
-/// lands in the workspace, with no xtask edit required to keep it covered
-/// — closing the "a new crate silently escapes" defect (Condemned).
-fn discover_roots(metadata: &CargoMetadata) -> Vec<String> {
-    let workspace_members: HashSet<&str> = metadata
-        .workspace_members()
-        .iter()
-        .map(crate::boundary::Label::as_str)
-        .collect();
-    let workspace_root = Path::new(metadata.workspace_root());
+    /// Story #322: replaces the hard-coded `ENGINE_PACKAGES` list entirely — no
+    /// crate name is named anywhere in this discovery. A workspace member is a
+    /// purity-gated root when `cargo metadata` shows it is:
+    ///
+    /// 1. a real, current workspace member (not a dependency merely pulled in);
+    /// 2. not marked `publish = false` — the root `Cargo.toml`'s own convention
+    ///    for internal dev tooling that never ships (`xtask`,
+    ///    `kyzo-crashfs`, `kyzo-arrow-interop` all carry that marker precisely
+    ///    because none of them is part of the shipped engine tree); and
+    /// 3. not vendored third-party source patched into the workspace under
+    ///    `vendor/` (already scanned as an ordinary dependency wherever a
+    ///    shipped root actually pulls it in, e.g. `fjall` beneath `kyzo`).
+    ///
+    /// Because this reads real, current package data instead of a maintained
+    /// name list, a new shipped product crate is a covered root the moment it
+    /// lands in the workspace, with no xtask edit required to keep it covered
+    /// — closing the "a new crate silently escapes" defect (Condemned).
+    fn discover_roots(&self, metadata: &CargoMetadata) -> Vec<String> {
+        let workspace_members: HashSet<&str> = metadata
+            .workspace_members()
+            .iter()
+            .map(crate::boundary::Label::as_str)
+            .collect();
+        let workspace_root = Path::new(metadata.workspace_root());
 
-    let mut roots: Vec<String> = metadata
-        .packages()
-        .iter()
-        .filter(|p| workspace_members.contains(p.id()))
-        .filter(|p| !matches!(p.publish(), Some(registries) if registries.is_empty()))
-        .filter(|p| {
-            match Path::new(p.manifest_path()).strip_prefix(workspace_root) {
-                Ok(rel) => !rel.starts_with("vendor"),
-                // Outside workspace root — keep as a root candidate.
-                Err(_outside_workspace) => KEEP_MANIFEST_OUTSIDE_WORKSPACE,
-            }
-        })
-        .map(|p| p.name().to_string())
-        .collect();
-    roots.sort_unstable();
-    roots.dedup();
-    roots
+        let mut roots: Vec<String> = metadata
+            .packages()
+            .iter()
+            .filter(|p| workspace_members.contains(p.id()))
+            .filter(|p| !matches!(p.publish(), Some(registries) if registries.is_empty()))
+            .filter(|p| {
+                match Path::new(p.manifest_path()).strip_prefix(workspace_root) {
+                    Ok(rel) => !rel.starts_with("vendor"),
+                    // Outside workspace root — keep as a root candidate.
+                    Err(_outside_workspace) => KEEP_MANIFEST_OUTSIDE_WORKSPACE,
+                }
+            })
+            .map(|p| p.name().to_string())
+            .collect();
+        roots.sort_unstable();
+        roots.dedup();
+        roots
+    }
 }
 
 const KEEP_MANIFEST_OUTSIDE_WORKSPACE: bool = true;

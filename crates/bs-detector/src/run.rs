@@ -360,13 +360,13 @@ impl RunLaw {
         if run_pass("pure_rust") {
             passes.push((
                 "pure_rust".to_string(),
-                behavior::pure_rust_hits(root),
+                behavior::BEHAVIOR.pure_rust_hits(root),
             ));
         }
         if run_pass("unsafe_check") {
             passes.push((
                 "unsafe_check".to_string(),
-                behavior::unsafe_check_hits(root),
+                behavior::BEHAVIOR.unsafe_check_hits(root),
             ));
         }
         // Campaign artifact meta (build_script_sandbox seated as campaign).
