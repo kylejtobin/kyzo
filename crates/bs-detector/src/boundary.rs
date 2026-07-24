@@ -507,7 +507,7 @@ impl Boundary {
             if path.extension().map(|x| x == "rs") != Some(true) {
                 continue;
             }
-            let rel = rel_path(root, path)?;
+            let rel = BOUNDARY.rel_path(root, path)?;
             existing.push(rel.clone());
             let text = std::fs::read_to_string(path)
                 .with_context(|| format!("reading {rel}"))?;
@@ -540,18 +540,26 @@ impl Boundary {
     }
 }
 
-fn rel_path(root: &Path, path: &Path) -> Result<RelPath> {
-    let rel = path
-        .strip_prefix(root)
-        .with_context(|| format!("{} is outside the repo root", path.display()))?;
-    Ok(RelPath::admit(rel.to_string_lossy().replace('\\', "/")))
-}
+/// Boundary path/line authority — tip 806/914: no free helpers.
+pub struct BoundaryLaw;
 
-/// The one line-number authority: every finding's line comes from the
-/// span's start, matching what an editor shows.
-pub fn span_line(span: &proc_macro2::Span) -> usize {
-    let LineColumn { line, .. } = span.start();
-    line
+/// The one production door for boundary path/line helpers.
+pub const BOUNDARY: BoundaryLaw = BoundaryLaw;
+
+impl BoundaryLaw {
+    fn rel_path(&self, root: &Path, path: &Path) -> Result<RelPath> {
+        let rel = path
+            .strip_prefix(root)
+            .with_context(|| format!("{} is outside the repo root", path.display()))?;
+        Ok(RelPath::admit(rel.to_string_lossy().replace('\\', "/")))
+    }
+
+    /// The one line-number authority: every finding's line comes from the
+    /// span's start, matching what an editor shows.
+    pub fn span_line(&self, span: &proc_macro2::Span) -> usize {
+        let LineColumn { line, .. } = span.start();
+        line
+    }
 }
 
 /// Typed test refusal — file-level for `total_refusal` workspace-enum index (tip 777).

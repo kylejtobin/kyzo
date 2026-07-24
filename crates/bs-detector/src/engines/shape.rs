@@ -23,7 +23,7 @@
 use quote::ToTokens;
 use syn::visit::{self, Visit};
 
-use crate::boundary::{Label, RelPath, SourceFile, span_line};
+use crate::boundary::{Label, RelPath, SourceFile, BOUNDARY};
 use crate::engines::Hit;
 
 /// Matcher family label. Does **not** gate scanning (tip 650/659: no strip).
@@ -163,7 +163,7 @@ impl NameSites<'_> {
             HIT_PUSH.push(
                 &mut self.hits,
                 self.rel,
-                span_line(span),
+                BOUNDARY.span_line(span),
                 self.construct.as_str(),
             );
         }
@@ -206,20 +206,20 @@ impl FileHitVisitor<'_> {
 impl<'ast> Visit<'ast> for FileHitVisitor<'_> {
     fn visit_expr_cast(&mut self, node: &'ast syn::ExprCast) {
         if matches!(self.kind, FileHitKind::AsCast) {
-            self.hit(span_line(&node.as_token.span), "as_cast");
+            self.hit(BOUNDARY.span_line(&node.as_token.span), "as_cast");
         }
         visit::visit_expr_cast(self, node);
     }
     fn visit_expr_unsafe(&mut self, node: &'ast syn::ExprUnsafe) {
         if matches!(self.kind, FileHitKind::UnsafeToken) {
-            self.hit(span_line(&node.unsafe_token.span), "unsafe_token");
+            self.hit(BOUNDARY.span_line(&node.unsafe_token.span), "unsafe_token");
         }
         visit::visit_expr_unsafe(self, node);
     }
     fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
         if matches!(self.kind, FileHitKind::UnsafeToken) {
             if let Some(u) = &node.sig.unsafety {
-                self.hit(span_line(&u.span), "unsafe_token");
+                self.hit(BOUNDARY.span_line(&u.span), "unsafe_token");
             }
         }
         visit::visit_item_fn(self, node);
@@ -229,13 +229,13 @@ impl<'ast> Visit<'ast> for FileHitVisitor<'_> {
             FileHitKind::DefaultImpl => {
                 if let Some((_, path, _)) = &node.trait_ {
                     if path.segments.last().is_some_and(|s| s.ident == "Default") {
-                        self.hit(span_line(&node.impl_token.span), "default_impl");
+                        self.hit(BOUNDARY.span_line(&node.impl_token.span), "default_impl");
                     }
                 }
             }
             FileHitKind::UnsafeToken => {
                 if let Some(u) = &node.unsafety {
-                    self.hit(span_line(&u.span), "unsafe_token");
+                    self.hit(BOUNDARY.span_line(&u.span), "unsafe_token");
                 }
             }
             FileHitKind::AsCast => {}
@@ -245,7 +245,7 @@ impl<'ast> Visit<'ast> for FileHitVisitor<'_> {
     fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
         if matches!(self.kind, FileHitKind::UnsafeToken) {
             if let Some(u) = &node.sig.unsafety {
-                self.hit(span_line(&u.span), "unsafe_token");
+                self.hit(BOUNDARY.span_line(&u.span), "unsafe_token");
             }
         }
         visit::visit_impl_item_fn(self, node);
@@ -253,7 +253,7 @@ impl<'ast> Visit<'ast> for FileHitVisitor<'_> {
     fn visit_item_trait(&mut self, node: &'ast syn::ItemTrait) {
         if matches!(self.kind, FileHitKind::UnsafeToken) {
             if let Some(u) = &node.unsafety {
-                self.hit(span_line(&u.span), "unsafe_token");
+                self.hit(BOUNDARY.span_line(&u.span), "unsafe_token");
             }
         }
         visit::visit_item_trait(self, node);
@@ -371,7 +371,7 @@ impl SourceFile {
                 if node.path().is_ident("cfg")
                     && node.to_token_stream().to_string().contains("debug_assertions")
                 {
-                    HIT_PUSH.push(&mut self.hits, self.rel, span_line(&node.pound_token.spans[0]), "debug_assert");
+                    HIT_PUSH.push(&mut self.hits, self.rel, BOUNDARY.span_line(&node.pound_token.spans[0]), "debug_assert");
                 }
                 visit::visit_attribute(self, node);
             }
@@ -398,7 +398,7 @@ impl SourceFile {
                 let discards = matches!(&node.pat, syn::Pat::Wild(_))
                     || matches!(&node.pat, syn::Pat::Ident(pi) if pi.ident.to_string().starts_with('_'));
                 if discards && node.init.is_some() {
-                    HIT_PUSH.push(&mut self.hits, self.rel, span_line(&node.let_token.span), "let_underscore");
+                    HIT_PUSH.push(&mut self.hits, self.rel, BOUNDARY.span_line(&node.let_token.span), "let_underscore");
                 }
                 visit::visit_local(self, node);
             }
@@ -434,7 +434,7 @@ impl SourceFile {
                 // `.ok()` may be returning the Option, not discarding it.
                 if let syn::Stmt::Expr(syn::Expr::MethodCall(mc), Some(_)) = node {
                     if (mc.method == "ok" || mc.method == "err") && mc.args.is_empty() {
-                        HIT_PUSH.push(&mut self.hits, self.rel, span_line(&mc.method.span()), "ok_drop");
+                        HIT_PUSH.push(&mut self.hits, self.rel, BOUNDARY.span_line(&mc.method.span()), "ok_drop");
                     }
                 }
                 visit::visit_stmt(self, node);
@@ -446,7 +446,7 @@ impl SourceFile {
                     HIT_PUSH.push(
                         &mut self.hits,
                         self.rel,
-                        span_line(&node.paren_token.span.open()),
+                        BOUNDARY.span_line(&node.paren_token.span.open()),
                         "ok_drop",
                     );
                 }
@@ -548,7 +548,7 @@ impl SourceFile {
                 if (node.method == "with_capacity" || node.method == "reserve")
                     && self.args_capped(&node.args)
                 {
-                    HIT_PUSH.push(&mut self.hits, self.rel, span_line(&node.method.span()), "capacity_min_cap");
+                    HIT_PUSH.push(&mut self.hits, self.rel, BOUNDARY.span_line(&node.method.span()), "capacity_min_cap");
                 }
                 visit::visit_expr_method_call(self, node);
             }
@@ -559,7 +559,7 @@ impl SourceFile {
                     .to_string()
                     .ends_with("with_capacity");
                 if is_with_capacity && self.args_capped(&node.args) {
-                    HIT_PUSH.push(&mut self.hits, self.rel, span_line(&syn::spanned::Spanned::span(&node.func)), "capacity_min_cap");
+                    HIT_PUSH.push(&mut self.hits, self.rel, BOUNDARY.span_line(&syn::spanned::Spanned::span(&node.func)), "capacity_min_cap");
                 }
                 visit::visit_expr_call(self, node);
             }
@@ -610,7 +610,7 @@ impl ArmSiteKind {
         match self {
             ArmSiteKind::Catchall => {
                 if let syn::Pat::Wild(w) = &arm.pat {
-                    Some((span_line(&w.underscore_token.span), "catchall_arm"))
+                    Some((BOUNDARY.span_line(&w.underscore_token.span), "catchall_arm"))
                 } else {
                     None
                 }
@@ -619,7 +619,7 @@ impl ArmSiteKind {
                 if !arm.pat.to_token_stream().to_string().starts_with("Err") {
                     return None;
                 }
-                let line = span_line(&arm.fat_arrow_token.spans[0]);
+                let line = BOUNDARY.span_line(&arm.fat_arrow_token.spans[0]);
                 if let syn::Expr::Return(r) = &*arm.body {
                     if r.expr.is_none() {
                         return Some((line, "test_err_early_return"));
@@ -639,7 +639,7 @@ impl ArmSiteKind {
                 if !(pat.starts_with("Err") || pat == "None") {
                     return None;
                 }
-                let line = span_line(&arm.fat_arrow_token.spans[0]);
+                let line = BOUNDARY.span_line(&arm.fat_arrow_token.spans[0]);
                 let body = &arm.body;
                 let s = body.to_token_stream().to_string();
                 let t = s.trim();
@@ -696,7 +696,7 @@ impl ConstructionDoorPick {
         // "fallible = validated" carve; a genuinely validating door swears
         // one waiver naming its proof.
         if name == "from_raw" || name.ends_with("_unchecked") || name == "from_bytes" {
-            return Some(span_line(&sig.ident.span()));
+            return Some(BOUNDARY.span_line(&sig.ident.span()));
         }
         None
     }
@@ -752,7 +752,7 @@ impl SourceFile {
                     HIT_PUSH.push(
                         &mut self.hits,
                         self.rel,
-                        span_line(&node.pound_token.spans[0]),
+                        BOUNDARY.span_line(&node.pound_token.spans[0]),
                         "default_derive",
                     );
                 }
@@ -840,7 +840,7 @@ impl SourceFile {
             fn visit_expr_if(&mut self, node: &'ast syn::ExprIf) {
                 let cond = node.cond.to_token_stream().to_string();
                 if cond.contains(". is_err ()") && self.block_is_bare_return_or_empty(&node.then_branch) {
-                    HIT_PUSH.push(&mut self.hits, self.rel, span_line(&node.if_token.span), "test_err_early_return");
+                    HIT_PUSH.push(&mut self.hits, self.rel, BOUNDARY.span_line(&node.if_token.span), "test_err_early_return");
                 }
                 visit::visit_expr_if(self, node);
             }
@@ -851,7 +851,7 @@ impl SourceFile {
                         if let Some((_, diverge)) = &init.diverge {
                             if let syn::Expr::Block(b) = &**diverge {
                                 if self.block_is_bare_return_or_empty(&b.block) {
-                                    HIT_PUSH.push(&mut self.hits, self.rel, span_line(&node.let_token.span), "test_err_early_return");
+                                    HIT_PUSH.push(&mut self.hits, self.rel, BOUNDARY.span_line(&node.let_token.span), "test_err_early_return");
                                 }
                             }
                         }
@@ -966,7 +966,7 @@ impl SourceFile {
                     HIT_PUSH.push(
                         &mut self.hits,
                         self.rel,
-                        span_line(&node.eq_token.span),
+                        BOUNDARY.span_line(&node.eq_token.span),
                         self.kind.construct(),
                     );
                 }
@@ -977,7 +977,7 @@ impl SourceFile {
                     HIT_PUSH.push(
                         &mut self.hits,
                         self.rel,
-                        span_line(&node.op.span()),
+                        BOUNDARY.span_line(&node.op.span()),
                         self.kind.construct(),
                     );
                 }
@@ -1015,7 +1015,7 @@ impl SourceFile {
                 HIT_PUSH.push(
                     &mut self.hits,
                     self.rel,
-                    span_line(&node.await_token.span),
+                    BOUNDARY.span_line(&node.await_token.span),
                     "await",
                 );
                 visit::visit_expr_await(self, node);
@@ -1045,7 +1045,7 @@ impl SourceFile {
                 let smuggled = node.path().is_ident("cfg_attr")
                     && node.to_token_stream().to_string().contains(self.name.as_str());
                 if direct || smuggled {
-                    HIT_PUSH.push(&mut self.hits, self.rel, span_line(&node.pound_token.spans[0]), self.construct.as_str());
+                    HIT_PUSH.push(&mut self.hits, self.rel, BOUNDARY.span_line(&node.pound_token.spans[0]), self.construct.as_str());
                 }
                 visit::visit_attribute(self, node);
             }
@@ -1088,7 +1088,7 @@ impl NakedArraySigPick {
             || text.contains("[u8 ; 12]")
             || text.contains("[u8 ; 64]");
         if naked {
-            return Some(span_line(&sig.ident.span()));
+            return Some(BOUNDARY.span_line(&sig.ident.span()));
         }
         None
     }
@@ -1120,7 +1120,7 @@ impl SourceFile {
                         || args.contains("other")
                         || args.contains("untagged")
                     {
-                        HIT_PUSH.push(&mut self.hits, self.rel, span_line(&node.pound_token.spans[0]), "serde_default_skip");
+                        HIT_PUSH.push(&mut self.hits, self.rel, BOUNDARY.span_line(&node.pound_token.spans[0]), "serde_default_skip");
                     }
                 }
                 visit::visit_attribute(self, node);
@@ -1175,7 +1175,7 @@ impl SourceFile {
                         HIT_PUSH.push(
                             self.hits,
                             self.rel,
-                            span_line(&seg.ident.span()),
+                            BOUNDARY.span_line(&seg.ident.span()),
                             "nondeterminism",
                         );
                     }
@@ -1191,7 +1191,7 @@ impl SourceFile {
                         HIT_PUSH.push(
                             self.hits,
                             self.rel,
-                            span_line(&seg.ident.span()),
+                            BOUNDARY.span_line(&seg.ident.span()),
                             "nondeterminism",
                         );
                     }
@@ -1308,7 +1308,7 @@ impl SourceFile {
                 if let Some(ident) = &node.ident {
                     let name = ident.to_string();
                     if TRIGGER_FIELDS.contains(&name.as_str()) && CondemnedBoundaryPick.is_string_collection(&node.ty) {
-                        HIT_PUSH.push(&mut self.hits, self.rel, span_line(&ident.span()), "stored_source_trigger_field");
+                        HIT_PUSH.push(&mut self.hits, self.rel, BOUNDARY.span_line(&ident.span()), "stored_source_trigger_field");
                     }
                 }
                 visit::visit_field(self, node);
@@ -1323,7 +1323,7 @@ impl SourceFile {
                         .is_some_and(|seg| seg.ident == "format");
                     if is_format && CondemnedBoundaryPick.format_is_if_splice(mac) {
                         if let Some(seg) = mac.mac.path.segments.last() {
-                            HIT_PUSH.push(&mut self.hits, self.rel, span_line(&seg.ident.span()), "extractor_display_splice");
+                            HIT_PUSH.push(&mut self.hits, self.rel, BOUNDARY.span_line(&seg.ident.span()), "extractor_display_splice");
                         }
                     }
                 }
@@ -1333,7 +1333,7 @@ impl SourceFile {
                             if EXTRACTOR_NAMES.contains(&seg.ident.to_string().as_str())
                                 && CondemnedBoundaryPick.is_to_string_call(&a.right)
                             {
-                                HIT_PUSH.push(&mut self.hits, self.rel, span_line(&seg.ident.span()), "extractor_to_string_capture");
+                                HIT_PUSH.push(&mut self.hits, self.rel, BOUNDARY.span_line(&seg.ident.span()), "extractor_to_string_capture");
                             }
                         }
                     }
@@ -1344,7 +1344,7 @@ impl SourceFile {
                             if EXTRACTOR_NAMES.contains(&ident.to_string().as_str())
                                 && CondemnedBoundaryPick.is_to_string_call(&field.expr)
                             {
-                                HIT_PUSH.push(&mut self.hits, self.rel, span_line(&ident.span()), "extractor_to_string_capture");
+                                HIT_PUSH.push(&mut self.hits, self.rel, BOUNDARY.span_line(&ident.span()), "extractor_to_string_capture");
                             }
                         }
                     }
@@ -1383,7 +1383,7 @@ impl SourceFile {
                         }))
                     );
                 if is_byte_tag {
-                    HIT_PUSH.push(&mut self.hits, self.rel, span_line(&node.method.span()), "hand_layout");
+                    HIT_PUSH.push(&mut self.hits, self.rel, BOUNDARY.span_line(&node.method.span()), "hand_layout");
                 }
                 visit::visit_expr_method_call(self, node);
             }

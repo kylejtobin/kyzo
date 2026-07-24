@@ -28,7 +28,7 @@ use quote::ToTokens;
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 
-use crate::boundary::{Label, RelPath, SourceFile, span_line};
+use crate::boundary::{Label, RelPath, SourceFile, BOUNDARY};
 use crate::engines::Hit;
 use crate::grammar::{ConfigOnceSeat, HostDoor};
 
@@ -65,7 +65,7 @@ pub fn derive_bypass(files: &[&SourceFile]) -> Vec<Hit> {
                 .entry(Label::admit(ident.to_string()))
                 .or_insert(TypeFacts {
                     file: rel,
-                    line: span_line(&ident.span()),
+                    line: BOUNDARY.span_line(&ident.span()),
                     fallible_ctor: false,
                     bad_derives: vec![],
                 })
@@ -109,7 +109,7 @@ pub fn derive_bypass(files: &[&SourceFile]) -> Vec<Hit> {
                                         .entry(Label::admit(ty.clone()))
                                         .or_insert(TypeFacts {
                                             file: self.rel.clone(),
-                                            line: span_line(&m.sig.ident.span()),
+                                            line: BOUNDARY.span_line(&m.sig.ident.span()),
                                             fallible_ctor: false,
                                             bad_derives: vec![],
                                         })
@@ -205,7 +205,7 @@ pub fn copy_detector(files: &[&SourceFile]) -> Vec<Hit> {
                     self.units,
                     self.rel,
                     &node.sig.ident.to_string(),
-                    span_line(&node.sig.ident.span()),
+                    BOUNDARY.span_line(&node.sig.ident.span()),
                     &node.block,
                 );
                 visit::visit_item_fn(self, node);
@@ -215,7 +215,7 @@ pub fn copy_detector(files: &[&SourceFile]) -> Vec<Hit> {
                     self.units,
                     self.rel,
                     &node.sig.ident.to_string(),
-                    span_line(&node.sig.ident.span()),
+                    BOUNDARY.span_line(&node.sig.ident.span()),
                     &node.block,
                 );
                 visit::visit_impl_item_fn(self, node);
@@ -501,7 +501,7 @@ pub fn total_refusal(files: &[&SourceFile]) -> Vec<Hit> {
                     if let Some(reason) = reason {
                         self.hits.push(Hit::admit(
                             self.rel.clone(),
-                            span_line(&node.span()),
+                            BOUNDARY.span_line(&node.span()),
                             format!("result-error:{reason}"),
                         ));
                     }
@@ -585,7 +585,7 @@ pub fn sealed_public_door(files: &[&SourceFile], hosts: &[HostDoor]) -> Vec<Hit>
                 if allowed.contains(root.as_str()) {
                     continue;
                 }
-                hits.push(Hit::admit(f.rel_path().to_string(), span_line(&span), format!("import-outside-door:{root}")));
+                hits.push(Hit::admit(f.rel_path().to_string(), BOUNDARY.span_line(&span), format!("import-outside-door:{root}")));
             }
         }
     }
@@ -680,7 +680,7 @@ fn collect_env_sites(file: &SourceFile) -> Vec<EnvSite> {
             if let syn::Expr::Path(p) = &*node.func {
                 if is_env_or_args_path(&p.path) && !self.fn_stack.is_empty() {
                     self.sites.push(EnvSite {
-                        line: span_line(&p.path.span()),
+                        line: BOUNDARY.span_line(&p.path.span()),
                         fn_path: self.current_fn_path(),
                     });
                 }

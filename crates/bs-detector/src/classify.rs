@@ -191,7 +191,7 @@ impl<'a> Ctx<'a> {
     }
 
     fn line_of<T: ?Sized + syn::spanned::Spanned>(&self, node: &T) -> usize {
-        crate::boundary::span_line(&node.span())
+        crate::boundary::BOUNDARY.span_line(&node.span())
     }
 
     fn nested(&self) -> Ctx<'a> {
@@ -293,7 +293,7 @@ impl<'a> Ctx<'a> {
             }
             let span = whole.span();
             out.push(ScopedConstructSpan::admit(
-                crate::boundary::span_line(&span),
+                crate::boundary::BOUNDARY.span_line(&span),
                 span.end().line,
                 c.bans().to_vec(),
             ));
@@ -808,35 +808,35 @@ enum ContainerMember<'a> {
 impl ContainerMember<'_> {
     fn condemned_line(self) -> usize {
         match self {
-            ContainerMember::Impl(syn::ImplItem::Macro(m)) => crate::boundary::span_line(&m.span()),
-            ContainerMember::Impl(item) => crate::boundary::span_line(&item.span()),
-            ContainerMember::Trait(syn::TraitItem::Macro(m)) => crate::boundary::span_line(&m.span()),
-            ContainerMember::Trait(item) => crate::boundary::span_line(&item.span()),
+            ContainerMember::Impl(syn::ImplItem::Macro(m)) => crate::boundary::BOUNDARY.span_line(&m.span()),
+            ContainerMember::Impl(item) => crate::boundary::BOUNDARY.span_line(&item.span()),
+            ContainerMember::Trait(syn::TraitItem::Macro(m)) => crate::boundary::BOUNDARY.span_line(&m.span()),
+            ContainerMember::Trait(item) => crate::boundary::BOUNDARY.span_line(&item.span()),
         }
     }
 
     fn label(self) -> (usize, String) {
         match self {
             ContainerMember::Impl(syn::ImplItem::Const(c)) => {
-                (crate::boundary::span_line(&c.span()), c.ident.to_string())
+                (crate::boundary::BOUNDARY.span_line(&c.span()), c.ident.to_string())
             }
             ContainerMember::Impl(syn::ImplItem::Fn(f)) => {
-                (crate::boundary::span_line(&f.span()), f.sig.ident.to_string())
+                (crate::boundary::BOUNDARY.span_line(&f.span()), f.sig.ident.to_string())
             }
             ContainerMember::Impl(syn::ImplItem::Type(t)) => {
-                (crate::boundary::span_line(&t.span()), t.ident.to_string())
+                (crate::boundary::BOUNDARY.span_line(&t.span()), t.ident.to_string())
             }
-            ContainerMember::Impl(item) => (crate::boundary::span_line(&item.span()), "?".to_string()),
+            ContainerMember::Impl(item) => (crate::boundary::BOUNDARY.span_line(&item.span()), "?".to_string()),
             ContainerMember::Trait(syn::TraitItem::Const(c)) => {
-                (crate::boundary::span_line(&c.span()), c.ident.to_string())
+                (crate::boundary::BOUNDARY.span_line(&c.span()), c.ident.to_string())
             }
             ContainerMember::Trait(syn::TraitItem::Fn(f)) => {
-                (crate::boundary::span_line(&f.span()), f.sig.ident.to_string())
+                (crate::boundary::BOUNDARY.span_line(&f.span()), f.sig.ident.to_string())
             }
             ContainerMember::Trait(syn::TraitItem::Type(t)) => {
-                (crate::boundary::span_line(&t.span()), t.ident.to_string())
+                (crate::boundary::BOUNDARY.span_line(&t.span()), t.ident.to_string())
             }
-            ContainerMember::Trait(item) => (crate::boundary::span_line(&item.span()), "?".to_string()),
+            ContainerMember::Trait(item) => (crate::boundary::BOUNDARY.span_line(&item.span()), "?".to_string()),
         }
     }
 }
