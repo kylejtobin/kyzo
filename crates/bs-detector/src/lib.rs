@@ -20,6 +20,7 @@ pub mod classify;
 pub mod cli;
 pub mod engines;
 pub mod grammar;
+pub mod host_env;
 pub mod identity;
 pub mod run;
 pub mod waiver;

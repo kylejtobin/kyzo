@@ -482,7 +482,26 @@ impl BuildScriptSandboxGate {
     /// resolved in this workspace's own `Cargo.lock`, so it carries none of the
     /// "registry crate's own unresolved dev-deps" failure mode that sank the
     /// per-package unit.
-    fn run_sandboxed_build(&self, 
+    /// Shared output→Result door for sandboxed vs plain cargo builds (tip 1002
+    /// copy_detector: one authority for the match arms, two thin command builders).
+    fn interpret_build_output(
+        &self,
+        output: std::io::Result<std::process::Output>,
+        spawn_fail: &str,
+    ) -> Result<Label, BuildRunRefuse> {
+        match output {
+            Ok(o) if o.status.success() => Ok(Label::admit(self.combined_output(&o))),
+            Ok(o) => Err(BuildRunRefuse::Failed {
+                output: Label::admit(self.combined_output(&o)),
+            }),
+            Err(e) => Err(BuildRunRefuse::Failed {
+                output: Label::admit(format!("{spawn_fail}: {e}")),
+            }),
+        }
+    }
+
+    fn run_sandboxed_build(
+        &self,
         repo_root: &Path,
         owned_target: &Path,
         sandbox: NetSandbox,
@@ -492,16 +511,7 @@ impl BuildScriptSandboxGate {
             .args(["cargo", "build", "--workspace", "--all-targets"])
             .current_dir(repo_root);
         self.scoped_env(&mut cmd, owned_target);
-        let output = cmd.output();
-        match output {
-            Ok(o) if o.status.success() => Ok(Label::admit(self.combined_output(&o))),
-            Ok(o) => Err(BuildRunRefuse::Failed {
-                output: Label::admit(self.combined_output(&o)),
-            }),
-            Err(e) => Err(BuildRunRefuse::Failed {
-                output: Label::admit(format!("failed to spawn sandboxed build: {e}")),
-            }),
-        }
+        self.interpret_build_output(cmd.output(), "failed to spawn sandboxed build")
     }
 
     fn run_plain_build(
@@ -513,16 +523,7 @@ impl BuildScriptSandboxGate {
         cmd.args(["build", "--workspace", "--all-targets"])
             .current_dir(repo_root);
         self.scoped_env(&mut cmd, owned_target);
-        let output = cmd.output();
-        match output {
-            Ok(o) if o.status.success() => Ok(Label::admit(self.combined_output(&o))),
-            Ok(o) => Err(BuildRunRefuse::Failed {
-                output: Label::admit(self.combined_output(&o)),
-            }),
-            Err(e) => Err(BuildRunRefuse::Failed {
-                output: Label::admit(format!("failed to spawn control build: {e}")),
-            }),
-        }
+        self.interpret_build_output(cmd.output(), "failed to spawn control build")
     }
 
 

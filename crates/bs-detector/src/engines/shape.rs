@@ -1188,10 +1188,16 @@ impl SourceFile {
             }
             fn visit_expr_path(&mut self, node: &'ast syn::ExprPath) {
                 let s = self.segs(&node.path);
-                // Runtime std::env / ::env / env::var — not the env! macro (macros
-                // are visited via visit_macro, which we do not flag here).
-                if s.iter().any(|x| x == "env") {
-                    if let Some(seg) = node.path.segments.iter().find(|sg| sg.ident == "env") {
+                // Ambient process environment (`env::var` / `vars` / `*_os`) is
+                // nondeterminism. argv (`env::args` / `args_os`) is host input —
+                // the config-once door (same role as `--now-unix`), not a clock.
+                // The env! macro is visited via visit_macro; we do not flag it.
+                let is_env_var_api = s.iter().any(|x| x == "env")
+                    && s.last().is_some_and(|last| {
+                        matches!(last.as_str(), "var" | "var_os" | "vars" | "vars_os")
+                    });
+                if is_env_var_api {
+                    if let Some(seg) = node.path.segments.last() {
                         HIT_PUSH.push(
                             self.hits,
                             self.rel,

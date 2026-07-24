@@ -62,7 +62,8 @@ impl CliLaw {
     }
 
     fn try_run(&self) -> Result<ExitCode> {
-        let cli = Cli::parse();
+        // argv enters only through HOST_ENV.args (config-once seat).
+        let cli = Cli::parse_from(crate::host_env::HOST_ENV.args());
         let root = cli
             .root
             .canonicalize()

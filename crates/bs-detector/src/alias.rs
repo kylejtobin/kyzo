@@ -25,6 +25,30 @@ use crate::boundary::{Label, RelPath, SourceFile};
 /// `(file, simple name)` key for alias edges — no `String` terminals.
 type AliasKey = (RelPath, Label);
 
+/// One authority for banned string-terminal paths (item 4) — tip 1002 copy_detector burn.
+struct StringTerminalLaw;
+
+const STRING_TERMINAL: StringTerminalLaw = StringTerminalLaw;
+
+impl StringTerminalLaw {
+    /// Banned string terminals: `String`, `str`, `std::string::String`, `alloc::string::String`.
+    fn path_is(&self, path: &syn::Path) -> bool {
+        let segs: Vec<String> = path
+            .segments
+            .iter()
+            .map(|s| s.ident.to_string())
+            .collect();
+        let s: Vec<&str> = segs.iter().map(|x| x.as_str()).collect();
+        matches!(
+            s.as_slice(),
+            ["String"]
+                | ["str"]
+                | ["std", "string", "String"]
+                | ["alloc", "string", "String"]
+        )
+    }
+}
+
 /// Validated alias table: constructible only via [`AliasTable::build`]
 /// (or [`AliasTable::empty`]), which has already refused every cycle.
 #[derive(Debug)]
@@ -80,7 +104,7 @@ impl AliasTable {
                 self.trait_bounds_carry(&t.bounds, |inner| self.type_carries_string(file, inner))
             }
             syn::Type::Path(tp) => {
-                if self.path_is_string_terminal(&tp.path) {
+                if STRING_TERMINAL.path_is(&tp.path) {
                     return true;
                 }
                 if self.path_generic_args_carry(&tp.path, |inner| self.type_carries_string(file, inner))
@@ -167,24 +191,6 @@ impl AliasTable {
             }
         }
         false
-    }
-
-    /// Banned string terminals per item 4: `String`, `str`,
-    /// `std::string::String`, `alloc::string::String`.
-    fn path_is_string_terminal(&self, path: &syn::Path) -> bool {
-        let segs: Vec<String> = path
-            .segments
-            .iter()
-            .map(|s| s.ident.to_string())
-            .collect();
-        let s: Vec<&str> = segs.iter().map(|x| x.as_str()).collect();
-        matches!(
-            s.as_slice(),
-            ["String"]
-                | ["str"]
-                | ["std", "string", "String"]
-                | ["alloc", "string", "String"]
-        )
     }
 }
 
@@ -352,7 +358,7 @@ impl RawEdges {
             syn::Type::TraitObject(t) => self.bounds_carry_rec(file, &t.bounds, stack),
             syn::Type::ImplTrait(t) => self.bounds_carry_rec(file, &t.bounds, stack),
             syn::Type::Path(tp) => {
-                if self.path_is_string_terminal(&tp.path) {
+                if STRING_TERMINAL.path_is(&tp.path) {
                     return Ok(true);
                 }
                 if self.path_args_carry_rec(file, &tp.path, stack)? {
@@ -368,22 +374,6 @@ impl RawEdges {
             }
             _not_walked_further => Ok(false),
         }
-    }
-
-    fn path_is_string_terminal(&self, path: &syn::Path) -> bool {
-        let segs: Vec<String> = path
-            .segments
-            .iter()
-            .map(|s| s.ident.to_string())
-            .collect();
-        let s: Vec<&str> = segs.iter().map(|x| x.as_str()).collect();
-        matches!(
-            s.as_slice(),
-            ["String"]
-                | ["str"]
-                | ["std", "string", "String"]
-                | ["alloc", "string", "String"]
-        )
     }
 
     fn path_args_carry_rec(

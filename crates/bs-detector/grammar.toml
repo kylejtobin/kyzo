@@ -304,7 +304,7 @@ fn_path = "UNDECLARED_CONFIG_CONSTRUCTOR"
 
 [[seats.config_once]]
 path = "crates/bs-detector/"
-fn_path = "UNDECLARED_CONFIG_CONSTRUCTOR"
+fn_path = "host_env::args"
 
 [[seats.config_once]]
 path = "crates/xtask/"
