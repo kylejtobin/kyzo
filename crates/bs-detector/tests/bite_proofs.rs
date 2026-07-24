@@ -12,7 +12,7 @@
 //! the gate goes red. Helper fns return `Option` so the only panics in this
 //! file live inside `#[test]` scope.
 
-use bs_detector::boundary::{Boundary, SourceFile, UnparsedFile};
+use bs_detector::boundary::{Boundary, RelPath, SourceFile, UnparsedFile};
 use bs_detector::engines::{Hit, graph, meta, shape};
 
 fn parsed(rel: &str, src: &str) -> Option<SourceFile> {
@@ -399,7 +399,7 @@ fn bite_agreement_registry() {
 
 #[test]
 fn bite_coverage() {
-    let b = Boundary::admit(vec![], vec![], vec!["crates/x/src/lib.rs".to_string()]);
+    let b = Boundary::admit(vec![], vec![], vec![RelPath::admit("crates/x/src/lib.rs")]);
     assert_eq!(meta::coverage(&b).len(), 1, "an unvisited existing file is a hole");
 }
 
@@ -407,11 +407,8 @@ fn bite_coverage() {
 fn bite_unparsed() {
     let b = Boundary::admit(
         vec![],
-        vec![UnparsedFile {
-            rel_path: "crates/x/src/broken.rs".to_string(),
-            error: "expected `{`".to_string(),
-        }],
-        vec!["crates/x/src/broken.rs".to_string()],
+        vec![UnparsedFile::admit("crates/x/src/broken.rs", "expected `{`")],
+        vec![RelPath::admit("crates/x/src/broken.rs")],
     );
     assert_eq!(meta::unparsed(&b).len(), 1, "an unparseable file is reported, never skipped");
 }
@@ -422,7 +419,7 @@ fn bite_forbid_roots() {
         Some(f) => f,
         None => panic!("fixture parses"),
     };
-    let b = Boundary::admit(vec![f], vec![], vec!["crates/x/src/lib.rs".to_string()]);
+    let b = Boundary::admit(vec![f], vec![], vec![RelPath::admit("crates/x/src/lib.rs")]);
     assert_eq!(meta::forbid_roots(&b).len(), 1);
 }
 

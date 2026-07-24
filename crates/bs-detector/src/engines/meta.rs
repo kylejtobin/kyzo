@@ -31,7 +31,7 @@ pub fn coverage(b: &Boundary) -> Vec<Hit> {
 pub fn unparsed(b: &Boundary) -> Vec<Hit> {
     b.unparsed()
         .iter()
-        .map(|u| Hit::admit(u.rel_path.clone(), 0, format!("unparseable: {}", u.error)))
+        .map(|u| Hit::admit(u.rel_path().clone(), 0, format!("unparseable: {}", u.error())))
         .collect()
 }
 
@@ -217,7 +217,7 @@ why_not_sabotage = {why}
                 syn::parse_file("pub fn f() {}\n").expect("parses"),
             )],
             vec![],
-            vec!["crates/x/src/lib.rs".to_string()],
+            vec![crate::boundary::RelPath::admit("crates/x/src/lib.rs")],
         );
         assert_eq!(forbid_roots(&b).len(), 1);
     }

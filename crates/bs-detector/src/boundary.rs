@@ -230,9 +230,30 @@ impl SourceFile {
 /// A file inside the boundary that refused to parse. Not silently skipped:
 /// an unparseable file is invisible to every syn-based check, which is
 /// exactly how a hidden violation would ride in — so the run reports it.
+///
+/// Fields are private (TRUTH item 9). Sole admission is [`UnparsedFile::admit`].
+/// Path is [`RelPath`]; parse error text is [`Label`] — no `String` terminals.
 pub struct UnparsedFile {
-    pub rel_path: String,
-    pub error: String,
+    rel_path: RelPath,
+    error: Label,
+}
+
+impl UnparsedFile {
+    /// Sole admission constructor.
+    pub fn admit(rel_path: impl Into<RelPath>, error: impl Into<Label>) -> Self {
+        Self {
+            rel_path: rel_path.into(),
+            error: error.into(),
+        }
+    }
+
+    pub fn rel_path(&self) -> &RelPath {
+        &self.rel_path
+    }
+
+    pub fn error(&self) -> &str {
+        self.error.as_str()
+    }
 }
 
 /// The whole boundary, walked once: every `.rs` file under `crates/`
@@ -246,7 +267,7 @@ pub struct Boundary {
     unparsed: Vec<UnparsedFile>,
     /// Every `.rs` path that exists in the boundary right now, whether or
     /// not it parsed — the denominator of the coverage proof.
-    existing: Vec<String>,
+    existing: Vec<RelPath>,
 }
 
 /// The proof a run saw the whole boundary: files that exist vs files the
@@ -257,12 +278,12 @@ pub struct Boundary {
 pub struct CoverageProof {
     existing: usize,
     visited: usize,
-    missing: Vec<String>,
+    missing: Vec<RelPath>,
 }
 
 impl CoverageProof {
     /// Sole admission constructor.
-    pub fn admit(existing: usize, visited: usize, missing: Vec<String>) -> Self {
+    pub fn admit(existing: usize, visited: usize, missing: Vec<RelPath>) -> Self {
         Self {
             existing,
             visited,
@@ -278,7 +299,7 @@ impl CoverageProof {
         self.visited
     }
 
-    pub fn missing(&self) -> &[String] {
+    pub fn missing(&self) -> &[RelPath] {
         &self.missing
     }
 }
@@ -288,7 +309,7 @@ impl Boundary {
     pub fn admit(
         files: Vec<SourceFile>,
         unparsed: Vec<UnparsedFile>,
-        existing: Vec<String>,
+        existing: Vec<RelPath>,
     ) -> Self {
         Self {
             files,
@@ -305,7 +326,7 @@ impl Boundary {
         &self.unparsed
     }
 
-    pub fn existing(&self) -> &[String] {
+    pub fn existing(&self) -> &[RelPath] {
         &self.existing
     }
 
@@ -336,10 +357,7 @@ impl Boundary {
                 .with_context(|| format!("reading {rel}"))?;
             match syn::parse_file(&text) {
                 Ok(ast) => files.push(SourceFile::admit(rel, text, ast)),
-                Err(e) => unparsed.push(UnparsedFile {
-                    rel_path: rel,
-                    error: e.to_string(),
-                }),
+                Err(e) => unparsed.push(UnparsedFile::admit(rel, e.to_string())),
             }
         }
         Ok(Boundary::admit(files, unparsed, existing))
@@ -356,7 +374,7 @@ impl Boundary {
             .chain(self.unparsed.iter().map(|u| u.rel_path.as_str()))
             .collect();
         visited.sort_unstable();
-        let missing: Vec<String> = self
+        let missing: Vec<RelPath> = self
             .existing
             .iter()
             .filter(|e| visited.binary_search(&e.as_str()).is_err())
@@ -366,11 +384,11 @@ impl Boundary {
     }
 }
 
-fn rel_path(root: &Path, path: &Path) -> Result<String> {
+fn rel_path(root: &Path, path: &Path) -> Result<RelPath> {
     let rel = path
         .strip_prefix(root)
         .with_context(|| format!("{} is outside the repo root", path.display()))?;
-    Ok(rel.to_string_lossy().replace('\\', "/"))
+    Ok(RelPath::admit(rel.to_string_lossy().replace('\\', "/")))
 }
 
 /// The one line-number authority: every finding's line comes from the
@@ -408,7 +426,7 @@ mod tests {
         // existing==visited still looked balanced (AGENT_TESTING_LAW §7).
         assert_eq!(
             proof.missing(),
-            &[] as &[String],
+            &[] as &[RelPath],
             "costume: path in missing while counts look balanced"
         );
     }
