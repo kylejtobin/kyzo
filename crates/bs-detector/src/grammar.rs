@@ -277,6 +277,10 @@ pub enum StructuralRule {
     /// file, fn path, and site hash; drift red; async only where the
     /// seat says `io = true`.
     DeclaredFnSeat,
+    /// test-entry: receiverless free fn whose attribute span carries
+    /// `#[test]` or `#[tokio::test]` — the test-framework requires a free
+    /// fn (tip 1064). No seat mint; attribute alone recognizes.
+    TestEntryAttr,
 }
 
 impl StructuralRule {
@@ -299,7 +303,8 @@ impl StructuralRule {
             | StructuralRule::TransitionBans
             | StructuralRule::ConsumingVerbBans
             | StructuralRule::AdmissionDoorBans
-            | StructuralRule::DeclaredFnSeat => ConstructFamily::Fn,
+            | StructuralRule::DeclaredFnSeat
+            | StructuralRule::TestEntryAttr => ConstructFamily::Fn,
         }
     }
 
@@ -330,6 +335,7 @@ impl StructuralRule {
             | StructuralRule::AdmissionDoorBans
             | StructuralRule::CompositionRootBody
             | StructuralRule::DeclaredFnSeat
+            | StructuralRule::TestEntryAttr
             | StructuralRule::TupleSinglePrivateField
             | StructuralRule::NamedAllPrivateNoStringTerminal
             | StructuralRule::UnitStruct
@@ -349,7 +355,7 @@ impl StructuralRule {
     pub fn disjoint_with(self, other: Self) -> Result<(), DisjointRefuse> {
         use StructuralRule::{
             AdmissionDoorBans, CompositionRootBody, ConsumingVerbBans, DeclaredFnSeat,
-            DerivationBans, NamedAllPrivateNoStringTerminal, TransitionBans,
+            DerivationBans, NamedAllPrivateNoStringTerminal, TestEntryAttr, TransitionBans,
             TupleSinglePrivateField, UnitStruct,
         };
         if self == other {
@@ -366,8 +372,8 @@ impl StructuralRule {
             | (UnitStruct, NamedAllPrivateNoStringTerminal) => Ok(()),
 
             // Fn partition (item 2): receiver form + return shape + the
-            // composition-root / declared-fn seat discriminators. Every
-            // non-identical pair of skeleton rules has a proof case here.
+            // composition-root / declared-fn / test-entry discriminators.
+            // Every non-identical pair of skeleton rules has a proof case.
             (CompositionRootBody, DerivationBans)
             | (DerivationBans, CompositionRootBody)
             | (CompositionRootBody, TransitionBans)
@@ -378,6 +384,8 @@ impl StructuralRule {
             | (AdmissionDoorBans, CompositionRootBody)
             | (CompositionRootBody, DeclaredFnSeat)
             | (DeclaredFnSeat, CompositionRootBody)
+            | (CompositionRootBody, TestEntryAttr)
+            | (TestEntryAttr, CompositionRootBody)
             | (DerivationBans, TransitionBans)
             | (TransitionBans, DerivationBans)
             | (DerivationBans, ConsumingVerbBans)
@@ -386,18 +394,28 @@ impl StructuralRule {
             | (AdmissionDoorBans, DerivationBans)
             | (DerivationBans, DeclaredFnSeat)
             | (DeclaredFnSeat, DerivationBans)
+            | (DerivationBans, TestEntryAttr)
+            | (TestEntryAttr, DerivationBans)
             | (TransitionBans, ConsumingVerbBans)
             | (ConsumingVerbBans, TransitionBans)
             | (TransitionBans, AdmissionDoorBans)
             | (AdmissionDoorBans, TransitionBans)
             | (TransitionBans, DeclaredFnSeat)
             | (DeclaredFnSeat, TransitionBans)
+            | (TransitionBans, TestEntryAttr)
+            | (TestEntryAttr, TransitionBans)
             | (ConsumingVerbBans, AdmissionDoorBans)
             | (AdmissionDoorBans, ConsumingVerbBans)
             | (ConsumingVerbBans, DeclaredFnSeat)
             | (DeclaredFnSeat, ConsumingVerbBans)
+            | (ConsumingVerbBans, TestEntryAttr)
+            | (TestEntryAttr, ConsumingVerbBans)
             | (AdmissionDoorBans, DeclaredFnSeat)
-            | (DeclaredFnSeat, AdmissionDoorBans) => Ok(()),
+            | (DeclaredFnSeat, AdmissionDoorBans)
+            | (AdmissionDoorBans, TestEntryAttr)
+            | (TestEntryAttr, AdmissionDoorBans)
+            | (DeclaredFnSeat, TestEntryAttr)
+            | (TestEntryAttr, DeclaredFnSeat) => Ok(()),
 
             // Cross-family pairs are not competed at one item; callers
             // skip unequal ConstructFamily. Same-family singles (one enum

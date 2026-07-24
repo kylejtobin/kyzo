@@ -719,6 +719,46 @@ fn bite_unclassified_fn() -> BiteOutcome {
     Ok(())
 }
 
+/// Tip 1064: test-entry seats #[test]/#[tokio::test] free fns; a bare
+/// receiverless free fn (declared-fn.deny.rs) still reds unclassified-fn —
+/// the skeleton must never become a soft any-free-fn umbrella.
+#[test]
+fn bite_test_entry() -> BiteOutcome {
+    let pass = P.fixture_src("test-entry.pass.rs").map_err(|_| BiteProofRefuse::Fixture)?;
+    let pass_hits = P
+        .classify_fixture("crates/probe/src/lib.rs", &pass)
+        .map_err(|_| BiteProofRefuse::Classify)?;
+    P.require_eq(
+        P.unclassified_prefix_hits(&pass_hits, "fn"),
+        Vec::<&str>::new(),
+        BiteProofRefuse::Construct,
+    )?;
+    // Anti-umbrella: plain free fn without test attr still reds.
+    let deny = P.fixture_src("declared-fn.deny.rs").map_err(|_| BiteProofRefuse::Fixture)?;
+    let deny_hits = P
+        .classify_fixture(
+            "crates/bs-detector/fixtures/declared-fn.deny.rs",
+            &deny,
+        )
+        .map_err(|_| BiteProofRefuse::Classify)?;
+    P.require_eq(
+        P.unclassified_prefix_hits(&deny_hits, "fn"),
+        vec!["unclassified-fn:proof_fn"],
+        BiteProofRefuse::Construct,
+    )?;
+    // Attribute gate: test-entry.deny.rs is a bare fn — stays unclassified.
+    let bare = P.fixture_src("test-entry.deny.rs").map_err(|_| BiteProofRefuse::Fixture)?;
+    let bare_hits = P
+        .classify_fixture("crates/probe/src/lib.rs", &bare)
+        .map_err(|_| BiteProofRefuse::Classify)?;
+    P.require_eq(
+        P.unclassified_prefix_hits(&bare_hits, "fn"),
+        vec!["unclassified-fn:t"],
+        BiteProofRefuse::Construct,
+    )?;
+    Ok(())
+}
+
 #[test]
 fn bite_unclassified_impl() -> BiteOutcome {
     let deny = P.fixture_src("impl-container.deny.rs").map_err(|_| BiteProofRefuse::Fixture)?;

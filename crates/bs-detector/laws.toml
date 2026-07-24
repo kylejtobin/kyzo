@@ -281,9 +281,14 @@ law = "TRUTH default-deny + tip 650: an unseated enum item is guilty by default 
 caught_by = "classify.rs construct prefix unclassified-enum:; run.rs partitions to this check; waivable() refuses unclassified-*; tip 689 fixtures sum-type.deny.rs + sum-type.pass.rs"
 
 [[law]]
+name = "test-entry"
+law = "tip 1064: a receiverless free fn whose attribute span carries #[test] or #[tokio::test] is a lawful skeleton — the test framework REQUIRES a free fn (test-case analog of composition-root), not unclassified-fn; no seat mint; attribute alone recognizes"
+caught_by = "classify.rs StructuralRule::TestEntryAttr; grammar.toml construct test-entry; fixtures test-entry.pass.rs + test-entry.deny.rs; bite_test_entry anti-umbrella"
+
+[[law]]
 name = "unclassified-fn"
 law = "TRUTH default-deny + tip 650: an unseated free fn is guilty by default — hard-counted under unclassified-fn, never waivable, no soft umbrella"
-caught_by = "classify.rs construct prefix unclassified-fn:; run.rs partitions to this check; waivable() refuses unclassified-*; tip 689 fixtures declared-fn.deny.rs + declared-fn.pass.rs"
+caught_by = "classify.rs construct prefix unclassified-fn:; run.rs partitions to this check; waivable() refuses unclassified-*; tip 689 fixtures declared-fn.deny.rs + declared-fn.pass.rs; tip 1064 test-entry does NOT umbrella — bare free fn still reds"
 
 [[law]]
 name = "unclassified-impl"

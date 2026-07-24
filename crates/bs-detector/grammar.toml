@@ -96,7 +96,7 @@ condemned = [
 [kinds.seated]
 const = ["constant"]
 enum = ["sum-type"]
-fn = ["composition-root", "derivation", "transition", "consuming-verb", "admission-door", "declared-fn"]
+fn = ["composition-root", "derivation", "transition", "consuming-verb", "admission-door", "declared-fn", "test-entry"]
 impl = ["impl-container"]
 mod = ["module"]
 static = ["constant"]
@@ -205,6 +205,15 @@ bans = ["await"]
 name = "declared-fn"
 kind = "fn"
 rule = "declared-fn-seat"
+bans = []
+
+# Tip 1064: test-framework free fn — #[test] / #[tokio::test] attribute
+# alone seats it. No [[seats.fns]] mint; a receiverless fn without the
+# attribute stays unclassified-fn (anti-umbrella).
+[[construct]]
+name = "test-entry"
+kind = "fn"
+rule = "test-entry-attr"
 bans = []
 
 # Proof seats for `declared-fn` (item 1's fixture law + item 2's Proof:

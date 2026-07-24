@@ -637,7 +637,7 @@ impl<'a> Ctx<'a> {
         match item {
             syn::Item::Struct(s) => self.struct_matches(rule, s),
             syn::Item::Enum(e) => self.enum_matches(rule, e),
-            syn::Item::Fn(f) => self.fn_matches(rule, &f.sig, Some(&f.block), f),
+            syn::Item::Fn(f) => self.fn_matches(rule, &f.sig, Some(&f.block), f, &f.attrs),
             syn::Item::Type(t) => self.alias_matches(rule, &t.ty),
             syn::Item::Use(u) => rule.matches_import(u),
             syn::Item::Const(_) => rule.matches_non_static_const(),
@@ -651,7 +651,7 @@ impl<'a> Ctx<'a> {
 
     fn rule_matches_impl_item(&self, rule: StructuralRule, item: &syn::ImplItem) -> bool {
         if let syn::ImplItem::Fn(f) = item {
-            return self.fn_matches(rule, &f.sig, Some(&f.block), f);
+            return self.fn_matches(rule, &f.sig, Some(&f.block), f, &f.attrs);
         }
         if let syn::ImplItem::Type(t) = item {
             return self.alias_matches(rule, &t.ty);
@@ -664,7 +664,7 @@ impl<'a> Ctx<'a> {
 
     fn rule_matches_trait_item(&self, rule: StructuralRule, item: &syn::TraitItem) -> bool {
         match item {
-            syn::TraitItem::Fn(f) => self.fn_matches(rule, &f.sig, f.default.as_ref(), f),
+            syn::TraitItem::Fn(f) => self.fn_matches(rule, &f.sig, f.default.as_ref(), f, &f.attrs),
             syn::TraitItem::Type(t) => match &t.default {
                 Some((_, ty)) => self.alias_matches(rule, ty),
                 None => matches!(rule, StructuralRule::AliasNoBannedTerminal),
@@ -728,6 +728,20 @@ impl<'a> Ctx<'a> {
             && self.return_resolves_to_self(&sig.output, true)
     }
 
+    /// Tip 1064: `#[test]` or `#[tokio::test]` on the attribute span.
+    fn has_test_entry_attr(attrs: &[syn::Attribute]) -> bool {
+        attrs.iter().any(|a| {
+            if a.path().is_ident("test") {
+                return true;
+            }
+            let mut segs = a.path().segments.iter();
+            match (segs.next(), segs.next(), segs.next()) {
+                (Some(a), Some(b), None) => a.ident == "tokio" && b.ident == "test",
+                _not_tokio_test => false,
+            }
+        })
+    }
+
     fn declared_fn_matches(
         &self,
         sig: &syn::Signature,
@@ -760,11 +774,14 @@ impl<'a> Ctx<'a> {
         sig: &syn::Signature,
         block: Option<&syn::Block>,
         whole: &dyn ToTokens,
+        attrs: &[syn::Attribute],
     ) -> bool {
         let receiver = SigView(sig).receiver_form();
+        let test_entry = Self::has_test_entry_attr(attrs);
         match rule {
             StructuralRule::CompositionRootBody => {
-                self.is_composition_root_shape(sig)
+                !test_entry
+                    && self.is_composition_root_shape(sig)
                     && sig.asyncness.is_none()
                     && block.is_some_and(|b| BlockBody(b).composition_root_ok())
             }
@@ -785,7 +802,15 @@ impl<'a> Ctx<'a> {
                 self.is_admission_door_shape(sig) && sig.asyncness.is_none()
             }
             StructuralRule::DeclaredFnSeat => {
-                receiver == Receiver::None && self.declared_fn_matches(sig, block, whole)
+                !test_entry
+                    && receiver == Receiver::None
+                    && self.declared_fn_matches(sig, block, whole)
+            }
+            // Tip 1064: free fn + test attr alone. Async allowed (tokio::test).
+            // Never an impl/trait method — those stay unclassified-impl-fn /
+            // unclassified-trait-fn even if somehow attributed.
+            StructuralRule::TestEntryAttr => {
+                !self.in_container && receiver == Receiver::None && test_entry
             }
             _rule_not_for_fn => false,
         }
@@ -1298,7 +1323,9 @@ mod fixture_tests {
                         in_container: true,
                     };
                     match imp.items.first() {
-                        Some(syn::ImplItem::Fn(f)) => ctx.fn_matches(rule, &f.sig, Some(&f.block), f),
+                        Some(syn::ImplItem::Fn(f)) => {
+                            ctx.fn_matches(rule, &f.sig, Some(&f.block), f, &f.attrs)
+                        }
                         Some(syn::ImplItem::Const(_))
                         | Some(syn::ImplItem::Type(_))
                         | Some(syn::ImplItem::Macro(_))
@@ -1898,6 +1925,9 @@ mod fixture_tests {
             ("crates/probe/src/lib.rs", "impl S { fn set(&mut self, v: u64) { self.x = v; } }"),
             ("crates/probe/src/lib.rs", "impl S { fn into_x(self) -> u64 { self.x } }"),
             ("crates/probe/src/lib.rs", "impl S { fn new() -> Result<Self, ()> { Ok(S) } }"),
+            // Tip 1064: test-entry is exactly one skeleton; never an umbrella.
+            ("crates/probe/src/lib.rs", "#[test]\nfn t() {}"),
+            ("crates/probe/src/lib.rs", "#[tokio::test]\nasync fn t() {}"),
         ];
         let fn_rules: Vec<StructuralRule> = grammar
             .constructs()
