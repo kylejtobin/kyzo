@@ -435,9 +435,18 @@ impl seal::Sealed for AggrGroupCount {}
 
 impl NormalAggrObj for AggrGroupCount {
     fn set(&mut self, value: &DataValue) -> Result<()> {
-        let key = value.clone();
-        let next = self.accum.get(&key).copied().unwrap_or(0).saturating_add(1);
-        self.accum.insert(key, next);
+        match self.accum.entry(value.clone()) {
+            std::collections::btree_map::Entry::Vacant(slot) => {
+                slot.insert(1);
+            }
+            std::collections::btree_map::Entry::Occupied(mut slot) => {
+                let next = slot
+                    .get()
+                    .checked_add(1)
+                    .ok_or_else(|| miette!("'group_count' multiplicity overflowed i64"))?;
+                *slot.get_mut() = next;
+            }
+        }
         Ok(())
     }
 
