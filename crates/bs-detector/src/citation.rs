@@ -103,6 +103,89 @@ impl ToTokens for FoundItem {
     }
 }
 
+/// AST walk that binds a citation name to the first matching item.
+struct NamedItemFinder {
+    name: Label,
+    found: Option<FoundItem>,
+}
+
+impl<'ast> Visit<'ast> for NamedItemFinder {
+    fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
+        if self.found.is_none() && node.sig.ident == self.name.as_str() {
+            self.found = Some(FoundItem(node.to_token_stream()));
+        }
+        syn::visit::visit_item_fn(self, node);
+    }
+    fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
+        if self.found.is_none() && node.sig.ident == self.name.as_str() {
+            self.found = Some(FoundItem(node.to_token_stream()));
+        }
+        syn::visit::visit_impl_item_fn(self, node);
+    }
+    fn visit_item_struct(&mut self, node: &'ast syn::ItemStruct) {
+        if self.found.is_none() && node.ident == self.name.as_str() {
+            self.found = Some(FoundItem(node.to_token_stream()));
+        }
+        syn::visit::visit_item_struct(self, node);
+    }
+    fn visit_item_enum(&mut self, node: &'ast syn::ItemEnum) {
+        if self.found.is_none() && node.ident == self.name.as_str() {
+            self.found = Some(FoundItem(node.to_token_stream()));
+        }
+        syn::visit::visit_item_enum(self, node);
+    }
+    // Tip 686: citing const/type/static/trait was blind (resolve None →
+    // dead or, worse, a wrong earlier match). Exact name, first hit.
+    fn visit_item_const(&mut self, node: &'ast syn::ItemConst) {
+        if self.found.is_none() && node.ident == self.name.as_str() {
+            self.found = Some(FoundItem(node.to_token_stream()));
+        }
+        syn::visit::visit_item_const(self, node);
+    }
+    fn visit_item_static(&mut self, node: &'ast syn::ItemStatic) {
+        if self.found.is_none() && node.ident == self.name.as_str() {
+            self.found = Some(FoundItem(node.to_token_stream()));
+        }
+        syn::visit::visit_item_static(self, node);
+    }
+    fn visit_item_type(&mut self, node: &'ast syn::ItemType) {
+        if self.found.is_none() && node.ident == self.name.as_str() {
+            self.found = Some(FoundItem(node.to_token_stream()));
+        }
+        syn::visit::visit_item_type(self, node);
+    }
+    fn visit_item_trait(&mut self, node: &'ast syn::ItemTrait) {
+        if self.found.is_none() && node.ident == self.name.as_str() {
+            self.found = Some(FoundItem(node.to_token_stream()));
+        }
+        syn::visit::visit_item_trait(self, node);
+    }
+}
+
+/// AST walk that binds `Type::method` citations.
+struct ImplMethodFinder {
+    ty: Label,
+    method: Label,
+    in_match: bool,
+    found: Option<FoundItem>,
+}
+
+impl<'ast> Visit<'ast> for ImplMethodFinder {
+    fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {
+        let self_ty = CITATION.type_path_tail(&node.self_ty);
+        let prev = self.in_match;
+        self.in_match = self_ty.as_deref() == Some(self.ty.as_str());
+        syn::visit::visit_item_impl(self, node);
+        self.in_match = prev;
+    }
+    fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
+        if self.in_match && self.found.is_none() && node.sig.ident == self.method.as_str() {
+            self.found = Some(FoundItem(node.to_token_stream()));
+        }
+        syn::visit::visit_impl_item_fn(self, node);
+    }
+}
+
 /// Citation-anchor resolution authority — tip 806/914: no free helpers.
 pub struct CitationLaw;
 
@@ -184,63 +267,7 @@ impl CitationLaw {
     }
 
     fn find_named_item(&self, ast: &syn::File, name: &str) -> Option<FoundItem> {
-        struct V {
-            name: Label,
-            found: Option<FoundItem>,
-        }
-        impl<'ast> Visit<'ast> for V {
-            fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
-                if self.found.is_none() && node.sig.ident == self.name.as_str() {
-                    self.found = Some(FoundItem(node.to_token_stream()));
-                }
-                syn::visit::visit_item_fn(self, node);
-            }
-            fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
-                if self.found.is_none() && node.sig.ident == self.name.as_str() {
-                    self.found = Some(FoundItem(node.to_token_stream()));
-                }
-                syn::visit::visit_impl_item_fn(self, node);
-            }
-            fn visit_item_struct(&mut self, node: &'ast syn::ItemStruct) {
-                if self.found.is_none() && node.ident == self.name.as_str() {
-                    self.found = Some(FoundItem(node.to_token_stream()));
-                }
-                syn::visit::visit_item_struct(self, node);
-            }
-            fn visit_item_enum(&mut self, node: &'ast syn::ItemEnum) {
-                if self.found.is_none() && node.ident == self.name.as_str() {
-                    self.found = Some(FoundItem(node.to_token_stream()));
-                }
-                syn::visit::visit_item_enum(self, node);
-            }
-            // Tip 686: citing const/type/static/trait was blind (resolve None →
-            // dead or, worse, a wrong earlier match). Exact name, first hit.
-            fn visit_item_const(&mut self, node: &'ast syn::ItemConst) {
-                if self.found.is_none() && node.ident == self.name.as_str() {
-                    self.found = Some(FoundItem(node.to_token_stream()));
-                }
-                syn::visit::visit_item_const(self, node);
-            }
-            fn visit_item_static(&mut self, node: &'ast syn::ItemStatic) {
-                if self.found.is_none() && node.ident == self.name.as_str() {
-                    self.found = Some(FoundItem(node.to_token_stream()));
-                }
-                syn::visit::visit_item_static(self, node);
-            }
-            fn visit_item_type(&mut self, node: &'ast syn::ItemType) {
-                if self.found.is_none() && node.ident == self.name.as_str() {
-                    self.found = Some(FoundItem(node.to_token_stream()));
-                }
-                syn::visit::visit_item_type(self, node);
-            }
-            fn visit_item_trait(&mut self, node: &'ast syn::ItemTrait) {
-                if self.found.is_none() && node.ident == self.name.as_str() {
-                    self.found = Some(FoundItem(node.to_token_stream()));
-                }
-                syn::visit::visit_item_trait(self, node);
-            }
-        }
-        let mut v = V {
+        let mut v = NamedItemFinder {
             name: name.into(),
             found: None,
         };
@@ -249,28 +276,7 @@ impl CitationLaw {
     }
 
     fn find_impl_method(&self, ast: &syn::File, ty: &str, method: &str) -> Option<FoundItem> {
-        struct V {
-            ty: Label,
-            method: Label,
-            in_match: bool,
-            found: Option<FoundItem>,
-        }
-        impl<'ast> Visit<'ast> for V {
-            fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {
-                let self_ty = CITATION.type_path_tail(&node.self_ty);
-                let prev = self.in_match;
-                self.in_match = self_ty.as_deref() == Some(self.ty.as_str());
-                syn::visit::visit_item_impl(self, node);
-                self.in_match = prev;
-            }
-            fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
-                if self.in_match && self.found.is_none() && node.sig.ident == self.method.as_str() {
-                    self.found = Some(FoundItem(node.to_token_stream()));
-                }
-                syn::visit::visit_impl_item_fn(self, node);
-            }
-        }
-        let mut v = V {
+        let mut v = ImplMethodFinder {
             ty: ty.into(),
             method: method.into(),
             in_match: false,
@@ -305,18 +311,22 @@ impl CitationLaw {
         let start_pat = format!("{n}. **");
         let lines: Vec<&str> = text.lines().collect();
         let start = lines.iter().position(|l| l.starts_with(&start_pat))?;
-        let mut end = lines.len();
-        for (i, l) in lines.iter().enumerate().skip(start + 1) {
-            // Next numbered seat: `^\d+\. \*\*`
-            let trimmed = l.trim_start();
-            if let Some(dot) = trimmed.find(". **") {
+        let end = lines
+            .iter()
+            .enumerate()
+            .skip(start + 1)
+            .find_map(|(i, l)| {
+                // Next numbered seat: `^\d+\. \*\*`
+                let trimmed = l.trim_start();
+                let dot = trimmed.find(". **")?;
                 let num = &trimmed[..dot];
                 if !num.is_empty() && num.chars().all(|c| c.is_ascii_digit()) {
-                    end = i;
-                    break;
+                    Some(i)
+                } else {
+                    None
                 }
-            }
-        }
+            })
+            .unwrap_or(lines.len());
         Some(lines[start..end].join("\n"))
     }
 }
