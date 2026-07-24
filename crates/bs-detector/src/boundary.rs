@@ -412,4 +412,32 @@ mod tests {
             "costume: path in missing while counts look balanced"
         );
     }
+
+    /// Tip 686 / tip 659 ban-list: `target/` is the ONLY walk exclusion.
+    /// Fixtures were once filtered out (silent undercount of deny specimens).
+    #[test]
+    fn anti_fraud_fixtures_dir_is_walked_not_skipped() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("crates/bs-detector/fixtures")).expect("mkdir");
+        std::fs::create_dir_all(root.join("crates/bs-detector/src")).expect("mkdir src");
+        std::fs::write(
+            root.join("crates/bs-detector/src/lib.rs"),
+            "pub fn ok() {}\n",
+        )
+        .expect("write lib");
+        std::fs::write(
+            root.join("crates/bs-detector/fixtures/specimen.rs"),
+            "fn hidden_violation() {}\n",
+        )
+        .expect("write fixture");
+        let b = Boundary::walk(root).expect("walk");
+        let paths: Vec<&str> = b.files().iter().map(|f| f.rel_path()).collect();
+        assert_eq!(
+            paths.contains(&"crates/bs-detector/fixtures/specimen.rs"),
+            true,
+            "costume: fixtures/ skipped from boundary walk — paths={paths:?}"
+        );
+        assert_eq!(b.existing().len(), 2, "lib + fixture both exist");
+    }
 }

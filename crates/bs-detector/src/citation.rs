@@ -199,6 +199,32 @@ fn find_named_item(ast: &syn::File, name: &str) -> Option<FoundItem> {
             }
             syn::visit::visit_item_enum(self, node);
         }
+        // Tip 686: citing const/type/static/trait was blind (resolve None →
+        // dead or, worse, a wrong earlier match). Exact name, first hit.
+        fn visit_item_const(&mut self, node: &'ast syn::ItemConst) {
+            if self.found.is_none() && node.ident == self.name {
+                self.found = Some(FoundItem(node.to_token_stream()));
+            }
+            syn::visit::visit_item_const(self, node);
+        }
+        fn visit_item_static(&mut self, node: &'ast syn::ItemStatic) {
+            if self.found.is_none() && node.ident == self.name {
+                self.found = Some(FoundItem(node.to_token_stream()));
+            }
+            syn::visit::visit_item_static(self, node);
+        }
+        fn visit_item_type(&mut self, node: &'ast syn::ItemType) {
+            if self.found.is_none() && node.ident == self.name {
+                self.found = Some(FoundItem(node.to_token_stream()));
+            }
+            syn::visit::visit_item_type(self, node);
+        }
+        fn visit_item_trait(&mut self, node: &'ast syn::ItemTrait) {
+            if self.found.is_none() && node.ident == self.name {
+                self.found = Some(FoundItem(node.to_token_stream()));
+            }
+            syn::visit::visit_item_trait(self, node);
+        }
     }
     let mut v = V { name, found: None };
     v.visit_file(ast);
@@ -240,6 +266,10 @@ fn find_impl_method(ast: &syn::File, ty: &str, method: &str) -> Option<FoundItem
 fn type_path_tail(ty: &syn::Type) -> Option<String> {
     match ty {
         syn::Type::Path(p) => p.path.segments.last().map(|s| s.ident.to_string()),
+        // Tip 686: `impl &Foo` / `impl (Foo)` were citation-blind for Type::method.
+        syn::Type::Reference(r) => type_path_tail(&r.elem),
+        syn::Type::Paren(p) => type_path_tail(&p.elem),
+        syn::Type::Group(g) => type_path_tail(&g.elem),
         _ => None,
     }
 }
@@ -407,5 +437,66 @@ caught_by = "x"
         write_temp_rs(root, file, "fn target() { let b = 1; b }\n");
         let h2 = resolve_hash(root, &laws, &c).expect("h2");
         assert_ne!(h1, h2, "item-path citation must use identity_tokens");
+    }
+
+    /// Tip 686: const citations were resolve-None blind.
+    #[test]
+    fn anti_fraud_file_item_const_citation_resolves() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let laws_path = root.join("laws.toml");
+        std::fs::write(
+            &laws_path,
+            r#"[[law]]
+name = "x"
+law = "x"
+caught_by = "x"
+"#,
+        )
+        .expect("laws");
+        let laws = Laws::load(&laws_path).expect("load");
+        let file = "crates/x/src/lib.rs";
+        write_temp_rs(root, file, "const TARGET: u8 = 1;\n");
+        let c = Citation::parse(&format!("{file}#TARGET")).expect("parse");
+        let h = resolve_hash(root, &laws, &c);
+        assert_eq!(
+            h.as_ref().map(|s| s.len()),
+            Some(64),
+            "costume: const citation resolves None (blind): {h:?}"
+        );
+        write_temp_rs(root, file, "const TARGET: u8 = 2;\n");
+        let h2 = resolve_hash(root, &laws, &c).expect("h2");
+        assert_ne!(h.unwrap(), h2, "const body edit must change anchor hash");
+    }
+
+    /// Tip 686: `impl &Type { fn m }` was type_path_tail-blind.
+    #[test]
+    fn anti_fraud_impl_ref_self_ty_method_citation_resolves() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let laws_path = root.join("laws.toml");
+        std::fs::write(
+            &laws_path,
+            r#"[[law]]
+name = "x"
+law = "x"
+caught_by = "x"
+"#,
+        )
+        .expect("laws");
+        let laws = Laws::load(&laws_path).expect("load");
+        let file = "crates/x/src/lib.rs";
+        write_temp_rs(
+            root,
+            file,
+            "struct Foo;\nimpl &Foo { fn method(&self) { let a = 1; let _ = a; } }\n",
+        );
+        let c = Citation::parse(&format!("{file}#Foo::method")).expect("parse");
+        let h = resolve_hash(root, &laws, &c);
+        assert_eq!(
+            h.as_ref().map(|s| s.len()),
+            Some(64),
+            "costume: impl &Foo method citation resolves None: {h:?}"
+        );
     }
 }

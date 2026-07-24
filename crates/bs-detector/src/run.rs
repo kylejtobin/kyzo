@@ -121,6 +121,23 @@ fn hard_unclassified_check(construct: &str) -> Result<String> {
     Ok(prefix.to_string())
 }
 
+/// Tip 686 / 689: one check name → one meter. A second insert would
+/// overwrite and make TOTAL lower than the FAIL lines (double-count
+/// fraud / silent undercount). Refuse — never soft-merge.
+fn record_check_count(
+    counts: &mut BTreeMap<String, usize>,
+    check: String,
+    n: usize,
+) -> Result<()> {
+    if counts.contains_key(&check) {
+        anyhow::bail!(
+            "check `{check}` emitted twice in one run — refuse double-count / counts overwrite"
+        );
+    }
+    counts.insert(check, n);
+    Ok(())
+}
+
 pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
     let bite_src = std::fs::read_to_string(root.join("crates/bs-detector/tests/bite_proofs.rs"))
         .with_context(|| "reading bite_proofs.rs — a gate without bite proofs may not run")?;
@@ -346,7 +363,7 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
         if !violations.is_empty() {
             failed.push(check.clone());
         }
-        counts.insert(check, violations.len());
+        record_check_count(&mut counts, check.clone(), violations.len())?;
         for h in &violations {
             report.push_str(&format!(
                 "FAIL {}:{} — {} — {}\n",
@@ -363,7 +380,7 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
         laws.require("stale_waivers")?;
         if !stale.is_empty() {
             failed.push("stale_waivers".to_string());
-            counts.insert("stale_waivers".to_string(), stale.len());
+            record_check_count(&mut counts, "stale_waivers".to_string(), stale.len())?;
             for h in &stale {
                 report.push_str(&format!(
                     "FAIL {}:{} — {}\n",
@@ -377,7 +394,7 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
         laws.require("dead_citation")?;
         if !dead.is_empty() {
             failed.push("dead_citation".to_string());
-            counts.insert("dead_citation".to_string(), dead.len());
+            record_check_count(&mut counts, "dead_citation".to_string(), dead.len())?;
             for h in &dead {
                 report.push_str(&format!(
                     "FAIL {}:{} — {}\n",
@@ -514,5 +531,22 @@ mod tests {
         );
         assert!(hard_unclassified_check("extern_crate").is_err());
         assert!(hard_unclassified_check("unknown-syn-item-kind").is_err());
+    }
+
+    /// Tip 686: overwrite of counts[check] hid FAIL lines (TOTAL < truth).
+    #[test]
+    fn anti_fraud_duplicate_check_count_refuses() {
+        let mut counts = BTreeMap::new();
+        record_check_count(&mut counts, "await".into(), 3).expect("first");
+        let err = record_check_count(&mut counts, "await".into(), 1).expect_err("second");
+        assert_eq!(
+            format!("{err}"),
+            "check `await` emitted twice in one run — refuse double-count / counts overwrite"
+        );
+        assert_eq!(
+            counts.get("await").copied(),
+            Some(3),
+            "costume: second insert overwrote 3→1 and TOTAL undercounted"
+        );
     }
 }

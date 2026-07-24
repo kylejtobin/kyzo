@@ -65,27 +65,28 @@ impl AliasTable {
             syn::Type::Group(g) => self.type_carries_string(file, &g.elem),
             syn::Type::Array(a) => self.type_carries_string(file, &a.elem),
             syn::Type::Slice(s) => self.type_carries_string(file, &s.elem),
+            syn::Type::Ptr(p) => self.type_carries_string(file, &p.elem),
             syn::Type::Tuple(t) => t.elems.iter().any(|e| self.type_carries_string(file, e)),
+            syn::Type::BareFn(f) => bare_fn_carries(f, |inner| self.type_carries_string(file, inner)),
+            syn::Type::TraitObject(t) => {
+                trait_bounds_carry(&t.bounds, |inner| self.type_carries_string(file, inner))
+            }
+            syn::Type::ImplTrait(t) => {
+                trait_bounds_carry(&t.bounds, |inner| self.type_carries_string(file, inner))
+            }
             syn::Type::Path(tp) => {
                 if path_is_string_terminal(&tp.path) {
                     return true;
                 }
-                if let Some(seg) = tp.path.segments.last() {
-                    if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
-                        for a in &args.args {
-                            if let syn::GenericArgument::Type(inner) = a {
-                                if self.type_carries_string(file, inner) {
-                                    return true;
-                                }
-                            }
-                        }
-                    }
-                    // Only bare idents resolve through the alias table.
-                    if tp.path.segments.len() == 1 {
+                if path_generic_args_carry(&tp.path, |inner| self.type_carries_string(file, inner))
+                {
+                    return true;
+                }
+                // Only bare idents resolve through the alias table.
+                if tp.path.segments.len() == 1 {
+                    if let Some(seg) = tp.path.segments.last() {
                         let name = seg.ident.to_string();
-                        return self
-                            .string_names
-                            .contains(&(file.to_string(), name));
+                        return self.string_names.contains(&(file.to_string(), name));
                     }
                 }
                 false
@@ -133,6 +134,7 @@ impl RawEdges {
             syn::Type::Group(g) => self.type_carries_string_rec(file, &g.elem, stack),
             syn::Type::Array(a) => self.type_carries_string_rec(file, &a.elem, stack),
             syn::Type::Slice(s) => self.type_carries_string_rec(file, &s.elem, stack),
+            syn::Type::Ptr(p) => self.type_carries_string_rec(file, &p.elem, stack),
             syn::Type::Tuple(t) => {
                 for e in &t.elems {
                     if self.type_carries_string_rec(file, e, stack)? {
@@ -141,21 +143,28 @@ impl RawEdges {
                 }
                 Ok(false)
             }
+            syn::Type::BareFn(f) => {
+                for inp in &f.inputs {
+                    if self.type_carries_string_rec(file, &inp.ty, stack)? {
+                        return Ok(true);
+                    }
+                }
+                match &f.output {
+                    syn::ReturnType::Type(_, ty) => self.type_carries_string_rec(file, ty, stack),
+                    syn::ReturnType::Default => Ok(false),
+                }
+            }
+            syn::Type::TraitObject(t) => self.bounds_carry_rec(file, &t.bounds, stack),
+            syn::Type::ImplTrait(t) => self.bounds_carry_rec(file, &t.bounds, stack),
             syn::Type::Path(tp) => {
                 if path_is_string_terminal(&tp.path) {
                     return Ok(true);
                 }
-                if let Some(seg) = tp.path.segments.last() {
-                    if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
-                        for a in &args.args {
-                            if let syn::GenericArgument::Type(inner) = a {
-                                if self.type_carries_string_rec(file, inner, stack)? {
-                                    return Ok(true);
-                                }
-                            }
-                        }
-                    }
-                    if tp.path.segments.len() == 1 {
+                if self.path_args_carry_rec(file, &tp.path, stack)? {
+                    return Ok(true);
+                }
+                if tp.path.segments.len() == 1 {
+                    if let Some(seg) = tp.path.segments.last() {
                         let name = seg.ident.to_string();
                         return self.resolve_name_is_string(file, &name, stack);
                     }
@@ -165,6 +174,127 @@ impl RawEdges {
             _not_walked_further => Ok(false),
         }
     }
+
+    fn path_args_carry_rec(
+        &self,
+        file: &str,
+        path: &syn::Path,
+        stack: &mut BTreeSet<String>,
+    ) -> Result<bool> {
+        for seg in &path.segments {
+            match &seg.arguments {
+                syn::PathArguments::None => {}
+                syn::PathArguments::AngleBracketed(args) => {
+                    for a in &args.args {
+                        match a {
+                            syn::GenericArgument::Type(inner)
+                            | syn::GenericArgument::AssocType(syn::AssocType {
+                                ty: inner, ..
+                            }) => {
+                                if self.type_carries_string_rec(file, inner, stack)? {
+                                    return Ok(true);
+                                }
+                            }
+                            syn::GenericArgument::Lifetime(_)
+                            | syn::GenericArgument::Const(_)
+                            | syn::GenericArgument::AssocConst(_)
+                            | syn::GenericArgument::Constraint(_)
+                            | _ => {}
+                        }
+                    }
+                }
+                syn::PathArguments::Parenthesized(p) => {
+                    for t in &p.inputs {
+                        if self.type_carries_string_rec(file, t, stack)? {
+                            return Ok(true);
+                        }
+                    }
+                    if let syn::ReturnType::Type(_, ty) = &p.output {
+                        if self.type_carries_string_rec(file, ty, stack)? {
+                            return Ok(true);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(false)
+    }
+
+    fn bounds_carry_rec(
+        &self,
+        file: &str,
+        bounds: &syn::punctuated::Punctuated<syn::TypeParamBound, syn::token::Plus>,
+        stack: &mut BTreeSet<String>,
+    ) -> Result<bool> {
+        for b in bounds {
+            if let syn::TypeParamBound::Trait(tb) = b {
+                if self.path_args_carry_rec(file, &tb.path, stack)? {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
+}
+
+fn bare_fn_carries(f: &syn::TypeBareFn, mut carry: impl FnMut(&syn::Type) -> bool) -> bool {
+    f.inputs.iter().any(|inp| carry(&inp.ty))
+        || match &f.output {
+            syn::ReturnType::Type(_, ty) => carry(ty),
+            syn::ReturnType::Default => false,
+        }
+}
+
+fn trait_bounds_carry(
+    bounds: &syn::punctuated::Punctuated<syn::TypeParamBound, syn::token::Plus>,
+    mut carry: impl FnMut(&syn::Type) -> bool,
+) -> bool {
+    for b in bounds {
+        if let syn::TypeParamBound::Trait(tb) = b {
+            if path_generic_args_carry(&tb.path, &mut carry) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn path_generic_args_carry(path: &syn::Path, mut carry: impl FnMut(&syn::Type) -> bool) -> bool {
+    for seg in &path.segments {
+        match &seg.arguments {
+            syn::PathArguments::None => {}
+            syn::PathArguments::AngleBracketed(args) => {
+                for a in &args.args {
+                    match a {
+                        syn::GenericArgument::Type(inner)
+                        | syn::GenericArgument::AssocType(syn::AssocType { ty: inner, .. }) => {
+                            if carry(inner) {
+                                return true;
+                            }
+                        }
+                        syn::GenericArgument::Lifetime(_)
+                        | syn::GenericArgument::Const(_)
+                        | syn::GenericArgument::AssocConst(_)
+                        | syn::GenericArgument::Constraint(_)
+                        | _ => {}
+                    }
+                }
+            }
+            // Tip 686: `Fn() -> String` / `FnOnce(String)` parenthesized args
+            // were AngleBracketed-only blind — dyn Fn silent-greened.
+            syn::PathArguments::Parenthesized(p) => {
+                if p.inputs.iter().any(|t| carry(t)) {
+                    return true;
+                }
+                if let syn::ReturnType::Type(_, ty) = &p.output {
+                    if carry(ty) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
 }
 
 /// Banned string terminals per item 4: `String`, `str`,
@@ -334,6 +464,91 @@ mod tests {
         let e = AliasTable::build(&[&f]);
         assert!(e.is_err(), "cycle must refuse");
         let msg = format!("{:?}", e.err());
-        assert!(msg.contains("cycle"), "refusal names the cycle: {msg}");
+        assert_eq!(
+            msg.contains("cycle"),
+            true,
+            "refusal names the cycle: {msg}"
+        );
+    }
+
+    /// Soft drain: Ptr/`fn`/dyn/impl wrappers around String were `_ => false`
+    /// — sealed-struct false-green. Exact terminal through the wrapper.
+    #[test]
+    fn anti_fraud_ptr_to_string_carries() {
+        let t = AliasTable::empty();
+        let ty: syn::Type = syn::parse_str("*const String").expect("type");
+        assert_eq!(
+            t.type_carries_string("crates/probe/src/lib.rs", &ty),
+            true,
+            "costume: *const String silent-greens as non-string"
+        );
+    }
+
+    #[test]
+    fn anti_fraud_bare_fn_returning_string_carries() {
+        let t = AliasTable::empty();
+        let ty: syn::Type = syn::parse_str("fn() -> String").expect("type");
+        assert_eq!(
+            t.type_carries_string("crates/probe/src/lib.rs", &ty),
+            true,
+            "costume: fn() -> String silent-greens as non-string"
+        );
+    }
+
+    #[test]
+    fn anti_fraud_dyn_asref_str_carries() {
+        let t = AliasTable::empty();
+        let ty: syn::Type = syn::parse_str("dyn AsRef<str>").expect("type");
+        assert_eq!(
+            t.type_carries_string("crates/probe/src/lib.rs", &ty),
+            true,
+            "costume: dyn AsRef<str> silent-greens as non-string"
+        );
+    }
+
+    #[test]
+    fn anti_fraud_impl_asref_str_carries() {
+        let t = AliasTable::empty();
+        let ty: syn::Type = syn::parse_str("impl AsRef<str>").expect("type");
+        assert_eq!(
+            t.type_carries_string("crates/probe/src/lib.rs", &ty),
+            true,
+            "costume: impl AsRef<str> silent-greens as non-string"
+        );
+    }
+
+    /// Tip 686: Parenthesized `Fn() -> String` was AngleBracketed-only blind.
+    #[test]
+    fn anti_fraud_dyn_fn_returning_string_carries() {
+        let t = AliasTable::empty();
+        let ty: syn::Type = syn::parse_str("dyn Fn() -> String").expect("type");
+        assert_eq!(
+            t.type_carries_string("crates/probe/src/lib.rs", &ty),
+            true,
+            "costume: dyn Fn() -> String silent-greens as non-string"
+        );
+    }
+
+    /// Tip 686: AssocType generic arg `Item = String` was Type-only blind.
+    #[test]
+    fn anti_fraud_assoc_type_item_string_carries() {
+        let t = AliasTable::empty();
+        let ty: syn::Type = syn::parse_str("dyn IntoIterator<Item = String>").expect("type");
+        assert_eq!(
+            t.type_carries_string("crates/probe/src/lib.rs", &ty),
+            true,
+            "costume: dyn IntoIterator<Item = String> silent-greens as non-string"
+        );
+    }
+
+    #[test]
+    fn anti_fraud_clean_dyn_fn_u8_does_not_carry() {
+        let t = AliasTable::empty();
+        let ty: syn::Type = syn::parse_str("dyn Fn() -> u8").expect("type");
+        assert_eq!(
+            t.type_carries_string("crates/probe/src/lib.rs", &ty),
+            false,
+            "clean Fn() -> u8 must stay non-string"
+        );
     }
 }

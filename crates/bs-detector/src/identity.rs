@@ -176,8 +176,9 @@ mod tests {
         let a = identity_tokens(&item("fn f() { let alpha = 1; alpha }"));
         let b = identity_tokens(&item("fn f() { let beta = 1; beta }"));
         assert_ne!(a, b, "identity_tokens must keep identifier spelling");
-        assert!(
-            a.contains("alpha") && b.contains("beta"),
+        assert_eq!(
+            (a.contains("alpha"), b.contains("beta")),
+            (true, true),
             "byte-verbatim identifiers required: a={a:?} b={b:?}"
         );
     }
