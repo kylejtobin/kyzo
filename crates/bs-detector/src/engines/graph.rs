@@ -752,49 +752,91 @@ pub fn config_once(files: &[&SourceFile], seats: &[ConfigOnceSeat]) -> Vec<Hit> 
     hits
 }
 
+/// Typed test refusal — file-level so `total_refusal` indexes it as a workspace
+/// enum (tip 777). Nested inside `mod tests` was `not-workspace-enum`.
+#[cfg(test)]
+#[derive(Debug)]
+enum GraphProofRefuse {
+    Parse,
+    DeriveBypassHitCount,
+    CopyDetectorHitCount,
+    CopyDetectorConstruct,
+    AgreementHitCount,
+    AgreementConstruct,
+    TotalRefusalString,
+    TotalRefusalAnyhow,
+    TotalRefusalBox,
+    TotalRefusalNotWorkspaceEnum,
+    TotalRefusalExactCount,
+    SealedDoorStdOutside,
+    SealedDoorAllowedPass,
+    SealedDoorCrateInternal,
+    ConfigOnceDeclaredPass,
+    ConfigOnceTwoSitesRed,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn parse(rel: &str, src: &str) -> SourceFile {
-        SourceFile::admit(rel.to_string(), src.to_string(), syn::parse_file(src).expect("fixture parses"))
+    type TestResult = Result<(), GraphProofRefuse>;
+
+    fn require(cond: bool, refuse: GraphProofRefuse) -> TestResult {
+        if cond {
+            Ok(())
+        } else {
+            Err(refuse)
+        }
+    }
+
+    fn require_eq<T: PartialEq>(got: T, want: T, refuse: GraphProofRefuse) -> TestResult {
+        require(got == want, refuse)
+    }
+
+    fn parse(rel: &str, src: &str) -> Result<SourceFile, GraphProofRefuse> {
+        let ast = syn::parse_file(src).map_err(|_| GraphProofRefuse::Parse)?;
+        Ok(SourceFile::admit(rel.to_string(), src.to_string(), ast))
     }
 
     #[test]
-    fn derive_bypass_detonates_on_the_historical_shape() {
+    fn derive_bypass_detonates_on_the_historical_shape() -> TestResult {
         let f = parse(
             "crates/x/src/a.rs",
             "#[derive(Default)] struct Interval(u8);\n impl Interval { fn new(x: u8) -> Result<Interval, ()> { if x > 0 { Ok(Interval(x)) } else { Err(()) } } }",
-        );
+        )?;
         let hits = derive_bypass(&[&f]);
-        assert_eq!(hits.len(), 1, "fallible ctor + Default derive = second door");
+        require_eq(hits.len(), 1, GraphProofRefuse::DeriveBypassHitCount)
     }
 
     #[test]
-    fn copy_detector_detonates_on_a_renamed_copy() {
+    fn copy_detector_detonates_on_a_renamed_copy() -> TestResult {
         let body = "{ let mut acc = 0; for i in 0..100 { if i % 2 == 0 { acc += i * 3 + 7; } else { acc -= i / 2 + 11; } while acc > 500 { acc /= 2; } match acc { 0 => acc = 1, 1 => acc = 2, other => acc = other - 1, } } acc }";
-        let a = parse("crates/x/src/a.rs", &format!("fn alpha() -> i64 {body}"));
-        let b = parse("crates/y/src/b.rs", &format!("fn beta() -> i64 {body}"));
+        let a = parse("crates/x/src/a.rs", &format!("fn alpha() -> i64 {body}"))?;
+        let b = parse("crates/y/src/b.rs", &format!("fn beta() -> i64 {body}"))?;
         let hits = copy_detector(&[&a, &b]);
-        assert_eq!(hits.len(), 1, "a renamed byte-copy must be caught");
-        assert_eq!(
-            hits[0].construct(), "crates/x/src/a.rs::alpha ~ crates/y/src/b.rs::beta",
-            "construct is the stable pair a waiver binds to"
-        );
+        require_eq(hits.len(), 1, GraphProofRefuse::CopyDetectorHitCount)?;
+        require_eq(
+            hits[0].construct(),
+            "crates/x/src/a.rs::alpha ~ crates/y/src/b.rs::beta",
+            GraphProofRefuse::CopyDetectorConstruct,
+        )
     }
 
     #[test]
-    fn agreement_registry_detonates_on_drift() {
-        let f = parse("crates/x/src/a.rs", "fn law_alive() {}");
+    fn agreement_registry_detonates_on_drift() -> TestResult {
+        let f = parse("crates/x/src/a.rs", "fn law_alive() {}")?;
         let reg = "[[agreement]]\ntest_fn = \"law_alive\"\n[[agreement]]\ntest_fn = \"law_deleted\"\n";
         let hits = agreement_registry(&[&f], reg);
-        assert_eq!(hits.len(), 1);
-        assert!(hits[0].construct().contains("law_deleted"));
+        require_eq(hits.len(), 1, GraphProofRefuse::AgreementHitCount)?;
+        require(
+            hits[0].construct().contains("law_deleted"),
+            GraphProofRefuse::AgreementConstruct,
+        )
     }
 
     #[test]
-    fn total_refusal_reds_string_anyhow_and_box_dyn() {
-        let enums = parse("crates/x/src/e.rs", "enum E { A }");
+    fn total_refusal_reds_string_anyhow_and_box_dyn() -> TestResult {
+        let enums = parse("crates/x/src/e.rs", "enum E { A }")?;
         let bad = parse(
             "crates/x/src/a.rs",
             "fn a() -> Result<(), String> { Ok(()) }\n\
@@ -802,75 +844,71 @@ mod tests {
              fn c() -> Result<(), Box<dyn std::error::Error>> { Ok(()) }\n\
              fn d() -> Result<(), u8> { Ok(()) }\n\
              fn e() -> Result<(), E> { Ok(()) }",
-        );
+        )?;
         let hits = total_refusal(&[&enums, &bad]);
-        assert!(
+        require(
             hits.iter().any(|h| h.construct().contains("String")),
-            "String error must red: {hits:?}"
-        );
-        assert!(
+            GraphProofRefuse::TotalRefusalString,
+        )?;
+        require(
             hits.iter().any(|h| h.construct().contains("anyhow")),
-            "anyhow must red: {hits:?}"
-        );
-        assert!(
+            GraphProofRefuse::TotalRefusalAnyhow,
+        )?;
+        require(
             hits.iter().any(|h| h.construct().contains("Box")),
-            "Box<dyn Error> must red: {hits:?}"
-        );
-        assert!(
+            GraphProofRefuse::TotalRefusalBox,
+        )?;
+        require(
             hits.iter().any(|h| h.construct().contains("not-workspace-enum")),
-            "u8 must red: {hits:?}"
-        );
-        assert_eq!(
-            hits.len(),
-            4,
-            "exactly String/anyhow/Box/u8 must red; workspace enum E must pass: {hits:?}"
-        );
+            GraphProofRefuse::TotalRefusalNotWorkspaceEnum,
+        )?;
+        require_eq(hits.len(), 4, GraphProofRefuse::TotalRefusalExactCount)
     }
 
     #[test]
-    fn sealed_public_door_reds_import_outside_allowlist() {
+    fn sealed_public_door_reds_import_outside_allowlist() -> TestResult {
         let f = parse(
             "crates/kyzo-bin/src/main.rs",
             "use std::process::ExitCode;\nuse crate::engine::Engine;\nuse kyzo_core::Db;\n",
-        );
+        )?;
         let hosts = vec![HostDoor::admit(
             "crates/kyzo-bin/",
             vec![crate::boundary::Label::admit("kyzo_core")],
         )];
         let hits = sealed_public_door(&[&f], &hosts);
-        assert!(
+        require(
             hits.iter().any(|h| h.construct().contains("import-outside-door:std")),
-            "std outside allowlist must red: {hits:?}"
-        );
-        assert!(
+            GraphProofRefuse::SealedDoorStdOutside,
+        )?;
+        require(
             !hits.iter().any(|h| h.construct().contains("kyzo_core")),
-            "allowed import must pass: {hits:?}"
-        );
-        assert!(
+            GraphProofRefuse::SealedDoorAllowedPass,
+        )?;
+        require(
             !hits.iter().any(|h| h.construct().contains("crate")),
-            "crate:: imports are internal: {hits:?}"
-        );
+            GraphProofRefuse::SealedDoorCrateInternal,
+        )
     }
 
     #[test]
-    fn config_once_demands_exactly_one_site_in_declared_ctor() {
+    fn config_once_demands_exactly_one_site_in_declared_ctor() -> TestResult {
         let good = parse(
             "crates/xtask/src/host_env.rs",
             "fn read(name: &str) -> Option<String> { std::env::var(name).ok() }",
-        );
+        )?;
         let seats = vec![ConfigOnceSeat::admit("crates/xtask/", "host_env::read")];
         let hits = config_once(&[&good], &seats);
-        assert!(hits.is_empty(), "one site in declared ctor must pass: {hits:?}");
+        require(hits.is_empty(), GraphProofRefuse::ConfigOnceDeclaredPass)?;
 
         let two = parse(
             "crates/xtask/src/host_env.rs",
             "fn read(name: &str) -> Option<String> { std::env::var(name).ok() }\n\
              fn other() { let _ = std::env::var(\"X\"); }",
-        );
+        )?;
         let hits = config_once(&[&two], &seats);
-        assert!(
+        require(
             hits.iter().any(|h| h.construct().contains("config-once-count:2")),
-            "two sites must red: {hits:?}"
-        );
+            GraphProofRefuse::ConfigOnceTwoSitesRed,
+        )
     }
 }
