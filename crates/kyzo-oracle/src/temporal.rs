@@ -172,21 +172,37 @@ pub fn resolve_events(events: &[&Event], at: AsOf) -> Option<Tuple> {
     instants.sort_unstable();
     instants.dedup();
     for instant in instants.into_iter().rev() {
-        let governing = events
-            .iter()
-            .filter(|e| e.valid() == instant && e.sys() <= at.sys)
-            .max_by_key(|e| e.sys());
-        match governing {
-            Some(Event::Assert { key, payload, .. }) => {
-                let mut tuple = key.clone();
-                tuple.extend(payload.iter().cloned());
-                return Some(tuple);
-            }
-            Some(Event::Retract { .. }) => return None,
-            Some(Event::Erase { .. }) | None => {}
+        if let Some(tuple) = governing_tuple_at_instant(events, instant, at) {
+            return Some(tuple);
+        }
+        if governing_retracts_at_instant(events, instant, at) {
+            return None;
         }
     }
     None
+}
+
+fn governing_tuple_at_instant(events: &[&Event], instant: i64, at: AsOf) -> Option<Tuple> {
+    let governing = events
+        .iter()
+        .filter(|e| e.valid() == instant && e.sys() <= at.sys)
+        .max_by_key(|e| e.sys())?;
+    match governing {
+        Event::Assert { key, payload, .. } => {
+            let mut tuple = key.clone();
+            tuple.extend(payload.iter().cloned());
+            Some(tuple)
+        }
+        Event::Retract { .. } | Event::Erase { .. } => None,
+    }
+}
+
+fn governing_retracts_at_instant(events: &[&Event], instant: i64, at: AsOf) -> bool {
+    events
+        .iter()
+        .filter(|e| e.valid() == instant && e.sys() <= at.sys)
+        .max_by_key(|e| e.sys())
+        .is_some_and(|e| matches!(e, Event::Retract { .. }))
 }
 
 pub fn resolve(history: &[Event], key: &Tuple, at: AsOf) -> Option<Tuple> {

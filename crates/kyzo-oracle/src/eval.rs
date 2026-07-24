@@ -943,6 +943,38 @@ struct MeetState {
     acc: BTreeMap<Tuple, Vec<MeetAccum>>,
 }
 
+fn meet_update_slots(
+    ops: &[Box<dyn MeetOp>],
+    stored: &mut [MeetAccum],
+    incoming: &[MeetAccum],
+) -> Result<bool, Rejection> {
+    let mut changed = false;
+    for (slot, op) in ops.iter().enumerate() {
+        let slot_changed = op
+            .update(&mut stored[slot], &incoming[slot])
+            .map_err(aggr_err)?;
+        changed |= slot_changed;
+    }
+    Ok(changed)
+}
+
+fn meet_materialize_row(
+    arity: usize,
+    key_positions: &[usize],
+    val_positions: &[usize],
+    key: &Tuple,
+    vals: &[MeetAccum],
+) -> Tuple {
+    let mut row = Tuple::from_vec(vec![DataValue::Null; arity]);
+    for (slot, i) in key_positions.iter().enumerate() {
+        row[*i] = key[slot].clone();
+    }
+    for (slot, i) in val_positions.iter().enumerate() {
+        row[*i] = vals[slot].to_value();
+    }
+    row
+}
+
 impl MeetState {
     fn new(signature: &[HeadAggr]) -> Result<Self, Rejection> {
         let key_positions = signature
@@ -989,13 +1021,9 @@ impl MeetState {
                 Ok(true)
             }
             Entry::Occupied(mut e) => {
-                let stored = e.get_mut();
-                let mut changed = false;
-                for (slot, op) in self.ops.iter().enumerate() {
-                    changed |= op
-                        .update(&mut stored[slot], &incoming[slot])
-                        .map_err(aggr_err)?;
-                }
+                let mut stored = std::mem::take(e.get_mut());
+                let changed = meet_update_slots(&self.ops, &mut stored, &incoming)?;
+                e.insert(stored);
                 Ok(changed)
             }
         }
@@ -1005,14 +1033,13 @@ impl MeetState {
         self.acc
             .iter()
             .map(|(key, vals)| {
-                let mut row = Tuple::from_vec(vec![DataValue::Null; self.arity]);
-                for (slot, i) in self.key_positions.iter().enumerate() {
-                    row[*i] = key[slot].clone();
-                }
-                for (slot, i) in self.val_positions.iter().enumerate() {
-                    row[*i] = vals[slot].to_value();
-                }
-                row
+                meet_materialize_row(
+                    self.arity,
+                    &self.key_positions,
+                    &self.val_positions,
+                    key,
+                    vals,
+                )
             })
             .collect()
     }

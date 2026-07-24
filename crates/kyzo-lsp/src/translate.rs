@@ -17,6 +17,34 @@
 
 use lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range};
 
+fn char_utf16_width(ch: char) -> u32 {
+    match ch.len_utf16() {
+        1 => 1,
+        2 => 2,
+    }
+}
+
+fn utf16_units_in(text: &str) -> u32 {
+    text.chars().fold(0u32, |acc, ch| match acc.checked_add(char_utf16_width(ch)) {
+        Some(n) => n,
+        None => acc,
+    })
+}
+
+fn byte_offset_for_utf16_column(line_text: &str, character: u32) -> usize {
+    let mut units = 0u32;
+    for (byte_idx, ch) in line_text.char_indices() {
+        if units >= character {
+            return byte_idx;
+        }
+        units = match units.checked_add(char_utf16_width(ch)) {
+            Some(n) => n,
+            None => return line_text.len(),
+        };
+    }
+    line_text.len()
+}
+
 /// Byte offset → LSP [`Position`]. LSP positions are UTF-16 code units
 /// (`PositionEncodingKind::UTF16`, the default every client must support),
 /// not bytes and not Unicode scalar values — a span past the first
@@ -57,18 +85,7 @@ impl LineIndex {
         let line_start = self.line_starts[line];
         // Count UTF-16 units in u32 — LSP positions are u32; stop at the last
         // representable column instead of Err→MAX costume.
-        let mut character = 0u32;
-        for ch in text[line_start..byte_offset].chars() {
-            let width = match ch.len_utf16() {
-                1 => 1u32,
-                2 => 2u32,
-                _ => 1u32, // Unicode scalar UTF-16 width is only 1 or 2
-            };
-            match character.checked_add(width) {
-                Some(c) => character = c,
-                None => break,
-            }
-        }
+        let character = utf16_units_in(&text[line_start..byte_offset]);
         let line_u32 = match u32::try_from(line) {
             Ok(n) => n,
             Err(_) => {
@@ -100,22 +117,7 @@ impl LineIndex {
             },
         };
         let line_text = &text[line_start..line_end.min(text.len())];
-        let mut units = 0u32;
-        for (byte_idx, ch) in line_text.char_indices() {
-            if units >= position.character {
-                return line_start + byte_idx;
-            }
-            let width = match ch.len_utf16() {
-                1 => 1u32,
-                2 => 2u32,
-                _ => 1u32,
-            };
-            units = match units.checked_add(width) {
-                Some(n) => n,
-                None => return line_start + line_text.len(),
-            };
-        }
-        line_start + line_text.len()
+        line_start + byte_offset_for_utf16_column(line_text, position.character)
     }
 }
 
