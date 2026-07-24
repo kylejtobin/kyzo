@@ -160,7 +160,9 @@ fn classify_item(ctx: &Ctx, item: &syn::Item, hits: &mut Vec<Hit>) {
         None => hits.push(hit(ctx.rel, line_of(item), "kind-table-mutated-post-load")),
         Some(Disposition::Condemned(law)) => hits.push(hit(ctx.rel, line_of(item), law)),
         Some(Disposition::Seated(seats)) => {
-            if !seat_matches_item(ctx, item, seats) {
+            // Item 3: classification emits the unique construct name, or red.
+            // `.any()` soft-drain deleted — zero or two matches are both red.
+            if seat_matches_item(ctx, item, seats).is_none() {
                 hits.push(hit(
                     ctx.rel,
                     line_of(item),
@@ -249,7 +251,7 @@ fn classify_container_member(ctx: &Ctx, member: ContainerMember<'_>, hits: &mut 
                 ContainerMember::Impl(item) => seat_matches_impl_item(ctx, item, seats),
                 ContainerMember::Trait(item) => seat_matches_trait_item(ctx, item, seats),
             };
-            if !seated {
+            if seated.is_none() {
                 let (line, label) = container_member_label(member);
                 hits.push(hit(
                     ctx.rel,
@@ -304,36 +306,48 @@ fn construct_rule<'a>(grammar: &'a Grammar, name: &str) -> Option<StructuralRule
     grammar.constructs.iter().find(|c| c.name == name).map(|c| c.rule)
 }
 
-fn exactly_one(matches: impl Iterator<Item = bool>) -> bool {
-    let mut seen = false;
-    for m in matches {
-        if m {
-            if seen {
-                return false;
-            }
-            seen = true;
+fn exactly_one_name<'a>(matches: impl Iterator<Item = &'a str>) -> Option<&'a str> {
+    let mut found: Option<&'a str> = None;
+    for name in matches {
+        if found.is_some() {
+            return None;
         }
+        found = Some(name);
     }
-    seen
+    found
 }
 
-fn seat_matches_item(ctx: &Ctx, item: &syn::Item, seats: &[String]) -> bool {
+fn seat_matches_item<'a>(ctx: &Ctx<'a>, item: &syn::Item, seats: &'a [String]) -> Option<&'a str> {
     // filter_map: an unknown seat name is skipped (load proved seats resolve;
     // a post-load ghost cannot green via `None => false` costume).
-    exactly_one(seats.iter().filter_map(|name| {
-        construct_rule(ctx.grammar, name).map(|rule| rule_matches_item(ctx, rule, item))
+    exactly_one_name(seats.iter().filter_map(|name| {
+        construct_rule(ctx.grammar, name)
+            .filter(|rule| rule_matches_item(ctx, *rule, item))
+            .map(|_| name.as_str())
     }))
 }
 
-fn seat_matches_impl_item(ctx: &Ctx, item: &syn::ImplItem, seats: &[String]) -> bool {
-    exactly_one(seats.iter().filter_map(|name| {
-        construct_rule(ctx.grammar, name).map(|rule| rule_matches_impl_item(ctx, rule, item))
+fn seat_matches_impl_item<'a>(
+    ctx: &Ctx<'a>,
+    item: &syn::ImplItem,
+    seats: &'a [String],
+) -> Option<&'a str> {
+    exactly_one_name(seats.iter().filter_map(|name| {
+        construct_rule(ctx.grammar, name)
+            .filter(|rule| rule_matches_impl_item(ctx, *rule, item))
+            .map(|_| name.as_str())
     }))
 }
 
-fn seat_matches_trait_item(ctx: &Ctx, item: &syn::TraitItem, seats: &[String]) -> bool {
-    exactly_one(seats.iter().filter_map(|name| {
-        construct_rule(ctx.grammar, name).map(|rule| rule_matches_trait_item(ctx, rule, item))
+fn seat_matches_trait_item<'a>(
+    ctx: &Ctx<'a>,
+    item: &syn::TraitItem,
+    seats: &'a [String],
+) -> Option<&'a str> {
+    exactly_one_name(seats.iter().filter_map(|name| {
+        construct_rule(ctx.grammar, name)
+            .filter(|rule| rule_matches_trait_item(ctx, *rule, item))
+            .map(|_| name.as_str())
     }))
 }
 
@@ -1242,5 +1256,72 @@ mod fixture_tests {
                 "exactly one skeleton must match `{src}` at {rel}, got {n}"
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // item 3 proofs — disjoint construct rules
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn item_3_proof_multi_field_tuple_and_pub_field_are_red() {
+        // Build text: multi-field tuple or any pub field → red.
+        assert_unclassified("struct Multi(u64, u64);");
+        assert_unclassified("struct Open(pub u64);");
+        assert_unclassified("struct Open { pub a: u64 }");
+    }
+
+    #[test]
+    fn item_3_anti_fraud_struct_matches_at_most_one_construct() {
+        let grammar = real_grammar();
+        let cases = [
+            "struct Newtype(u64);",
+            "struct Sealed { a: u64 }",
+            "struct Unit;",
+        ];
+        let struct_rules: Vec<StructuralRule> = grammar
+            .constructs
+            .iter()
+            .filter(|c| matches!(c.kind, crate::grammar::ConstructFamily::Struct))
+            .map(|c| c.rule)
+            .collect();
+        for src in cases {
+            let ast = syn::parse_file(src).expect("parses");
+            let first = ast.items.first().expect("item");
+            let n = struct_rules
+                .iter()
+                .filter(|r| probe_matches(&grammar, "crates/probe/src/lib.rs", **r, first))
+                .count();
+            assert_eq!(
+                n, 1,
+                "exactly one struct construct must match `{src}`, got {n}"
+            );
+        }
+    }
+
+    #[test]
+    fn item_3_classification_emits_unique_construct_name() {
+        // Seat match returns the unique name (not a bool from `.any()`).
+        let grammar = real_grammar();
+        let src = "struct Newtype(u64);";
+        let ast = syn::parse_file(src).expect("parses");
+        let item = ast.items.first().expect("item");
+        let ctx = Ctx {
+            rel: "crates/probe/src/lib.rs",
+            grammar: &grammar,
+            self_ty: None,
+            in_container: false,
+        };
+        let seats = match grammar.disposition(KindName::Struct) {
+            Some(crate::grammar::Disposition::Seated(s)) => s,
+            Some(crate::grammar::Disposition::Condemned(_)) => {
+                panic!("struct must be seated, not condemned")
+            }
+            None => panic!("struct must be seated"),
+        };
+        assert_eq!(
+            seat_matches_item(&ctx, item, seats),
+            Some("newtype-scalar"),
+            "classification must emit the unique construct name"
+        );
     }
 }

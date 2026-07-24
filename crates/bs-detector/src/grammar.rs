@@ -287,6 +287,69 @@ impl StructuralRule {
     pub fn deny_exempt(self) -> bool {
         matches!(self, StructuralRule::UnitStruct)
     }
+
+    /// Prove this rule is parse-fact-disjoint from `other` (item 3).
+    /// Same-kind pairs only: a pair without a proof case is a load Err —
+    /// two constructs that can both match one item is the soft drain.
+    /// Identical rules are never disjoint.
+    pub fn disjoint_with(self, other: Self) -> Result<(), &'static str> {
+        use StructuralRule::*;
+        if self == other {
+            return Err("identical rules share every parse fact — not disjoint");
+        }
+        match (self, other) {
+            // Struct partition: tuple / named / unit are mutually exclusive
+            // field shapes (item 3).
+            (TupleSinglePrivateField, NamedAllPrivateNoStringTerminal)
+            | (NamedAllPrivateNoStringTerminal, TupleSinglePrivateField)
+            | (TupleSinglePrivateField, UnitStruct)
+            | (UnitStruct, TupleSinglePrivateField)
+            | (NamedAllPrivateNoStringTerminal, UnitStruct)
+            | (UnitStruct, NamedAllPrivateNoStringTerminal) => Ok(()),
+
+            // Fn partition (item 2): receiver form + return shape + the
+            // composition-root / declared-fn seat discriminators. Every
+            // non-identical pair of skeleton rules has a proof case here.
+            (CompositionRootBody, DerivationBans)
+            | (DerivationBans, CompositionRootBody)
+            | (CompositionRootBody, TransitionBans)
+            | (TransitionBans, CompositionRootBody)
+            | (CompositionRootBody, ConsumingVerbBans)
+            | (ConsumingVerbBans, CompositionRootBody)
+            | (CompositionRootBody, AdmissionDoorBans)
+            | (AdmissionDoorBans, CompositionRootBody)
+            | (CompositionRootBody, DeclaredFnSeat)
+            | (DeclaredFnSeat, CompositionRootBody)
+            | (DerivationBans, TransitionBans)
+            | (TransitionBans, DerivationBans)
+            | (DerivationBans, ConsumingVerbBans)
+            | (ConsumingVerbBans, DerivationBans)
+            | (DerivationBans, AdmissionDoorBans)
+            | (AdmissionDoorBans, DerivationBans)
+            | (DerivationBans, DeclaredFnSeat)
+            | (DeclaredFnSeat, DerivationBans)
+            | (TransitionBans, ConsumingVerbBans)
+            | (ConsumingVerbBans, TransitionBans)
+            | (TransitionBans, AdmissionDoorBans)
+            | (AdmissionDoorBans, TransitionBans)
+            | (TransitionBans, DeclaredFnSeat)
+            | (DeclaredFnSeat, TransitionBans)
+            | (ConsumingVerbBans, AdmissionDoorBans)
+            | (AdmissionDoorBans, ConsumingVerbBans)
+            | (ConsumingVerbBans, DeclaredFnSeat)
+            | (DeclaredFnSeat, ConsumingVerbBans)
+            | (AdmissionDoorBans, DeclaredFnSeat)
+            | (DeclaredFnSeat, AdmissionDoorBans) => Ok(()),
+
+            // Cross-family pairs are not competed at one item; callers
+            // skip unequal ConstructFamily. Same-family singles (one enum
+            // rule, one alias rule, …) never reach a pair. Anything else
+            // same-family without a case above is an unproven overlap.
+            _unproven_same_kind_pair => Err(
+                "no disjointness proof for this same-kind rule pair — grow the match or refuse the grammar",
+            ),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -428,6 +491,25 @@ impl Grammar {
                     c.rule,
                     c.kind
                 );
+            }
+        }
+
+        // Item 3: every same-kind construct pair is proven disjoint from
+        // parse facts. A pair without a proof case → load Err (two
+        // named-all-private struct rules is the executed specimen).
+        for (i, a) in parsed.construct.iter().enumerate() {
+            for b in parsed.construct.iter().skip(i + 1) {
+                if a.kind != b.kind {
+                    continue;
+                }
+                if let Err(why) = a.rule.disjoint_with(b.rule) {
+                    bail!(
+                        "constructs `{}` and `{}` (kind {:?}) are not proven disjoint: {why}",
+                        a.name,
+                        b.name,
+                        a.kind
+                    );
+                }
             }
         }
 
@@ -742,6 +824,45 @@ mod tests {
         assert!(e.is_err(), "seated+condemned must refuse");
         let msg = format!("{:?}", e.err());
         assert!(msg.contains("both seated and condemned"), "refusal names the law: {msg}");
+    }
+
+    #[test]
+    fn item_3_proof_two_named_all_private_struct_rules_is_a_load_error() {
+        // Item 3 Proof: Grammar declaring two named-all-private struct rules
+        // → load Err (identical parse facts — not disjoint).
+        let text = real_grammar_text()
+            .replace(
+                "struct = [\"newtype-scalar\", \"sealed-struct\", \"unit-marker\"]\n",
+                "struct = [\"newtype-scalar\", \"sealed-struct\", \"unit-marker\", \"sealed-struct-twin\"]\n",
+            )
+            .replace(
+                "name = \"sealed-struct\"\nkind = \"struct\"\nrule = \"named-all-private-no-string-terminal\"\n",
+                "name = \"sealed-struct\"\nkind = \"struct\"\nrule = \"named-all-private-no-string-terminal\"\n\n[[construct]]\nname = \"sealed-struct-twin\"\nkind = \"struct\"\nrule = \"named-all-private-no-string-terminal\"\n",
+            );
+        let dir = tempfile::tempdir().expect("tempdir");
+        for entry in std::fs::read_dir(crate_dir().join("fixtures")).expect("fixtures dir") {
+            let entry = entry.expect("entry");
+            std::fs::copy(entry.path(), dir.path().join(entry.file_name())).expect("copy");
+        }
+        std::fs::copy(
+            crate_dir().join("fixtures/sealed-struct.pass.rs"),
+            dir.path().join("sealed-struct-twin.pass.rs"),
+        )
+        .expect("twin pass");
+        std::fs::copy(
+            crate_dir().join("fixtures/sealed-struct.deny.rs"),
+            dir.path().join("sealed-struct-twin.deny.rs"),
+        )
+        .expect("twin deny");
+        let mut f = tempfile::NamedTempFile::new().expect("tempfile");
+        f.write_all(text.as_bytes()).expect("write");
+        let err = Grammar::load(f.path(), &real_bite_src(), dir.path());
+        assert!(err.is_err(), "two named-all-private rules must refuse");
+        let msg = format!("{:?}", err.err());
+        assert!(
+            msg.contains("not proven disjoint") || msg.contains("identical rules"),
+            "refusal names the disjoint law: {msg}"
+        );
     }
 
     #[test]
