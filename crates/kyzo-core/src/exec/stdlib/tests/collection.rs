@@ -10,7 +10,6 @@
 //! Re-homed domain tables from data/tests/functions.rs.
 use crate::exec::stdlib::collection::*;
 use crate::exec::stdlib::temporal_format::*;
-use kyzo_model::data_value_any;
 use kyzo_model::schema::{ColType, NullableColType};
 use kyzo_model::str2vld;
 use kyzo_model::value::{DataValue, ValidityTs};
@@ -407,7 +406,7 @@ fn coerce_vld(s: &str) -> Result<(i64, bool), String> {
         .map_err(|e| e.to_string())?;
     match v {
         DataValue::Validity(vld) => Ok((vld.timestamp().raw(), vld.is_assert())),
-        other @ (data_value_any!()) => Err(format!("expected Validity, got {other:?}")),
+        other @ (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => Err(format!("expected Validity, got {other:?}")),
     }
 }
 

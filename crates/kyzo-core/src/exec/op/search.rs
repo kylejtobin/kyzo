@@ -86,7 +86,6 @@ use crate::exec::plan::search::SearchConfig;
 use crate::project::current::Segments;
 use crate::store::ReadTx;
 use kyzo_model::SourceSpan;
-use kyzo_model::data_value_any;
 use kyzo_model::value::{DataValue, SearchHits, Tag, Tuple};
 use miette::{Diagnostic, Result, bail};
 use std::collections::BTreeMap;
@@ -176,7 +175,7 @@ impl SearchRA {
                 SearchConfig::Hnsw(c) => {
                     let v = match &q {
                         DataValue::Vector(v) => v,
-                        other @ (data_value_any!()) => {
+                        other @ (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => {
                             bail!(SearchQueryTypeError {
                                 expected: Tag::Vector,
                                 got: other.tag(),
@@ -189,7 +188,7 @@ impl SearchRA {
                 SearchConfig::Fts(c) => {
                     let text = match &q {
                         DataValue::Str(t) => t.as_str(),
-                        other @ (data_value_any!()) => {
+                        other @ (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => {
                             bail!(SearchQueryTypeError {
                                 expected: Tag::Str,
                                 got: other.tag(),

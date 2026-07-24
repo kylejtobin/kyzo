@@ -31,7 +31,6 @@ use crate::exec::fold::aggr::{MeetAccum, MeetAggrObj, NormalAggr, NormalAggrObj}
 use crate::exec::fold::sketch::count_min::CountMinSketch;
 use crate::exec::fold::sketch::hll::HyperLogLog;
 use crate::exec::fold::sketch::tdigest::{DEFAULT_COMPRESSION, TDigest};
-use kyzo_model::data_value_any;
 use kyzo_model::value::DataValue;
 
 // ── HyperLogLog: approximate distinct count (normal) ─────────────────────
@@ -97,11 +96,12 @@ impl NormalAggrObj for AggrHllSketch {
 fn as_hll(v: &DataValue) -> Result<HyperLogLog> {
     match v {
         DataValue::Bytes(b) => HyperLogLog::decode(b),
-        other @ (data_value_any!()) => bail!("hll_union expects sketch bytes, got {other:?}"),
+        other @ (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => bail!("hll_union expects sketch bytes, got {other:?}"),
     }
 }
 
 /// `hll_union` as a meet: fold sketch `Bytes` by register-wise maximum.
+#[derive(Copy, Clone)]
 pub(crate) struct MeetAggrHllUnion;
 
 impl crate::exec::fold::aggr::seal::Sealed for MeetAggrHllUnion {}
@@ -110,7 +110,7 @@ impl MeetAggrObj for MeetAggrHllUnion {
     fn init_val(&self) -> MeetAccum {
         MeetAccum::Value(HyperLogLog::default_precision().to_value())
     }
-    fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
+    fn update(&mut self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
         match left {
             MeetAccum::Empty => {
                 if matches!(right, MeetAccum::Empty) {
@@ -196,7 +196,7 @@ impl NormalAggrObj for AggrCountMin {
                 self.cms.merge(&other)?;
                 Ok(())
             }
-            other @ (data_value_any!()) => {
+            other @ (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => {
                 self.cms.add(other, 1);
                 Ok(())
             }
@@ -236,13 +236,12 @@ impl NormalAggrObj for AggrTDigest {
             match v {
                 // Shard fold: stored digest Bytes decode + merge.
                 DataValue::Bytes(b) => digests.push(TDigest::decode(b)?),
-                other @ (data_value_any!()) => raw.push(other.clone()),
+                other @ (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => raw.push(other.clone()),
             }
         }
-        let mut acc = TDigest::from_values(&raw, DEFAULT_COMPRESSION)?;
-        for d in digests {
-            acc = acc.merge(&d)?;
-        }
+        let acc = digests
+            .into_iter()
+            .try_fold(TDigest::from_values(&raw, DEFAULT_COMPRESSION)?, |acc, d| acc.merge(&d))?;
         Ok(acc.to_value())
     }
 }

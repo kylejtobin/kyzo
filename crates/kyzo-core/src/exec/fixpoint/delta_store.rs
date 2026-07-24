@@ -440,17 +440,9 @@ impl NormalLevel {
         self.seal_appended(flags)
     }
     fn find(&self, key_bytes: &[u8]) -> Option<usize> {
-        let mut lo = 0usize;
-        let mut hi = self.len();
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            match self.row_at(mid).as_bytes().cmp(key_bytes) {
-                Ordering::Less => lo = mid + 1,
-                Ordering::Greater => hi = mid,
-                Ordering::Equal => return Some(mid),
-            }
-        }
-        None
+        let idx = (0..self.len())
+            .partition_point(|i| self.row_at(i).as_bytes() < key_bytes);
+        (idx < self.len() && self.row_at(idx).as_bytes() == key_bytes).then_some(idx)
     }
     /// The row range whose leading columns equal the PROJECTION of `row`
     /// through `cols` — the probe is encoded once, up front; a stored row
@@ -467,28 +459,9 @@ impl NormalLevel {
                 None => Ordering::Less,
             }
         };
-        let mut lo = 0usize;
-        let mut hi = self.len();
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            if cmp(mid) == Ordering::Less {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
-        let start = lo;
-        let mut hi = self.len();
-        let mut lo = start;
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            if cmp(mid) != Ordering::Greater {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
-        (start, lo.max(start))
+        let start = (0..self.len()).partition_point(|i| cmp(i) == Ordering::Less);
+        let end = (start..self.len()).partition_point(|i| cmp(i) != Ordering::Greater);
+        (start, end.max(start))
     }
 
     fn bounds(
@@ -499,33 +472,16 @@ impl NormalLevel {
     ) -> (usize, usize) {
         let lower = lower.as_bytes();
         let upper = upper.as_bytes();
-        let mut lo = 0usize;
-        let mut hi = self.len();
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            if self.row_at(mid).as_bytes() < lower {
-                lo = mid + 1;
+        let start = (0..self.len()).partition_point(|i| self.row_at(i).as_bytes() < lower);
+        let below_upper = |i: usize| {
+            if upper_inclusive {
+                self.row_at(i).as_bytes() <= upper
             } else {
-                hi = mid;
+                self.row_at(i).as_bytes() < upper
             }
-        }
-        let start = lo;
-        let mut hi = self.len();
-        let mut lo = start;
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            let below = if upper_inclusive {
-                self.row_at(mid).as_bytes() <= upper
-            } else {
-                self.row_at(mid).as_bytes() < upper
-            };
-            if below {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
-        (start, lo.max(start))
+        };
+        let end = (start..self.len()).partition_point(|i| below_upper(i));
+        (start, end.max(start))
     }
 }
 
@@ -590,10 +546,15 @@ impl MeetSpec {
             None => Ok(true),
             Some((_, target)) => {
                 let mut probe = target.clone();
-                let mut changed = false;
-                for (i, (_aggr, op)) in self.meets.iter().enumerate() {
-                    changed |= op.update(&mut probe[i], &incoming_vals[i])?;
-                }
+                let changed = self
+                    .meets
+                    .iter()
+                    .enumerate()
+                    .try_fold(false, |changed, (i, (_aggr, op))| {
+                        let mut op = *op;
+                        op.update(&mut probe[i], &incoming_vals[i])
+                            .map(|step| changed | step)
+                    })?;
                 Ok(changed)
             }
         }
@@ -760,6 +721,7 @@ impl EpochStore {
                             let mut probe = target.clone();
                             let mut changed = false;
                             for (i, (_aggr, op)) in spec.meets.iter().enumerate() {
+                                let mut op = *op;
                                 changed |= op.update(&mut probe[i], &incoming[i])?;
                             }
                             changed.then_some(probe)
@@ -1804,6 +1766,7 @@ impl MeetAggrStore {
             Some(vals) => {
                 let mut changed = false;
                 for (i, (_aggr, op)) in self.meets.iter().enumerate() {
+                    let mut op = *op;
                     let incoming =
                         MeetAccum::from_derived(tuple[self.layout.val_positions[i].get()].clone());
                     changed |= op.update(&mut vals[i], &incoming)?;
@@ -1818,6 +1781,7 @@ impl MeetAggrStore {
                 let mut vals: Vec<MeetAccum> =
                     self.meets.iter().map(|(_, op)| op.init_val()).collect();
                 for (i, (_aggr, op)) in self.meets.iter().enumerate() {
+                    let mut op = *op;
                     let incoming =
                         MeetAccum::from_derived(tuple[self.layout.val_positions[i].get()].clone());
                     op.update(&mut vals[i], &incoming)?;

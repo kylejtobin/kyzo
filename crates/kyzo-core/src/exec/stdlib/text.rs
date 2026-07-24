@@ -13,7 +13,6 @@ use itertools::Itertools;
 use miette::{Result, bail, ensure, miette};
 use unicode_normalization::UnicodeNormalization;
 
-use kyzo_model::data_value_any;
 use kyzo_model::value::json_convert::to_json;
 use kyzo_model::value::{DataValue, Json, RegexFlags, RegexSource};
 
@@ -37,7 +36,7 @@ fn affix_op(
     match (&args[0], &args[1]) {
         (DataValue::Str(l), DataValue::Str(r)) => Ok(DataValue::from(on_str(l, r))),
         (DataValue::Bytes(l), DataValue::Bytes(r)) => Ok(DataValue::from(on_bytes(l, r))),
-        (data_value_any!(), data_value_any!()) => bail!("'{op}' requires strings or bytes"),
+        (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_), DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => bail!("'{op}' requires strings or bytes"),
     }
 }
 
@@ -71,7 +70,7 @@ pub(crate) fn op_from_substrings(args: &[DataValue]) -> Result<DataValue> {
                 }
             }
         }
-        data_value_any!() => bail!("'from_substring' requires a list of strings"),
+        DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("'from_substring' requires a list of strings"),
     }
     Ok(DataValue::from(ret))
 }
@@ -79,7 +78,7 @@ pub(crate) fn op_from_substrings(args: &[DataValue]) -> Result<DataValue> {
 pub(crate) fn op_lowercase(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {
         DataValue::Str(s) => Ok(DataValue::from(s.to_lowercase())),
-        data_value_any!() => bail!("'lowercase' requires strings"),
+        DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("'lowercase' requires strings"),
     }
 }
 
@@ -90,7 +89,7 @@ pub(crate) fn op_regex(args: &[DataValue]) -> Result<DataValue> {
             RegexSource::validated(RegexFlags::NONE, s.clone())
                 .map_err(|err| miette!("The string cannot be interpreted as regex: {err:?}"))?,
         ),
-        data_value_any!() => bail!("'regex' requires strings"),
+        DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("'regex' requires strings"),
     })
 }
 
@@ -101,7 +100,7 @@ pub(crate) fn op_regex_extract(args: &[DataValue]) -> Result<DataValue> {
             let found = compiled.find_iter(s).map(DataValue::from).collect_vec();
             Ok(DataValue::List(found))
         }
-        (data_value_any!(), data_value_any!()) => bail!("'regex_extract' requires strings"),
+        (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_), DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => bail!("'regex_extract' requires strings"),
     }
 }
 
@@ -117,7 +116,7 @@ pub(crate) fn op_regex_extract_first(args: &[DataValue]) -> Result<DataValue> {
         },
             })
         }
-        (data_value_any!(), data_value_any!()) => bail!("'regex_extract_first' requires strings"),
+        (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_), DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => bail!("'regex_extract_first' requires strings"),
     }
 }
 
@@ -126,7 +125,7 @@ pub(crate) fn op_regex_matches(args: &[DataValue]) -> Result<DataValue> {
         (DataValue::Str(s), DataValue::Regex(r)) => {
             Ok(DataValue::from(compile_regex_value(r)?.is_match(s)))
         }
-        (data_value_any!(), data_value_any!()) => bail!("'regex_matches' requires strings"),
+        (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_), DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => bail!("'regex_matches' requires strings"),
     }
 }
 
@@ -155,7 +154,7 @@ fn op_regex_replace_with(
         (DataValue::Str(s), DataValue::Regex(r), DataValue::Str(rp)) => Ok(DataValue::Str(
             replace(&compile_regex_value(r)?, s, rp).into_owned(),
         )),
-        (data_value_any!(), data_value_any!(), data_value_any!()) => {
+        (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_), DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_), DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => {
             bail!("'{op_name}' requires strings")
         }
     }
@@ -208,35 +207,35 @@ pub(crate) fn op_starts_with(args: &[DataValue]) -> Result<DataValue> {
 pub(crate) fn op_str_includes(args: &[DataValue]) -> Result<DataValue> {
     match (&args[0], &args[1]) {
         (DataValue::Str(l), DataValue::Str(r)) => Ok(DataValue::from(l.find(r.as_str()).is_some())),
-        (data_value_any!(), data_value_any!()) => bail!("'str_includes' requires strings"),
+        (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_), DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => bail!("'str_includes' requires strings"),
     }
 }
 
 pub(crate) fn op_t2s(args: &[DataValue]) -> Result<DataValue> {
     Ok(match &args[0] {
         DataValue::Str(s) => DataValue::Str(fast2s::convert(s)),
-        d @ (data_value_any!()) => d.clone(),
+        d @ (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => d.clone(),
     })
 }
 
 pub(crate) fn op_trim(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {
         DataValue::Str(s) => Ok(DataValue::from(s.trim())),
-        data_value_any!() => bail!("'trim' requires strings"),
+        DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("'trim' requires strings"),
     }
 }
 
 pub(crate) fn op_trim_end(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {
         DataValue::Str(s) => Ok(DataValue::from(s.trim_end())),
-        data_value_any!() => bail!("'trim_end' requires strings"),
+        DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("'trim_end' requires strings"),
     }
 }
 
 pub(crate) fn op_trim_start(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {
         DataValue::Str(s) => Ok(DataValue::from(s.trim_start())),
-        v @ (data_value_any!()) => bail!("'trim_start' requires strings, got {}", v),
+        v @ (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => bail!("'trim_start' requires strings, got {}", v),
     }
 }
 
@@ -249,14 +248,14 @@ pub(crate) fn op_unicode_normalize(args: &[DataValue]) -> Result<DataValue> {
             "nfkd" => s.nfkd().collect(),
             u => bail!("unknown normalization {} for 'unicode_normalize'", u),
         })),
-        (data_value_any!(), data_value_any!()) => bail!("'unicode_normalize' requires strings"),
+        (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_), DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => bail!("'unicode_normalize' requires strings"),
     }
 }
 
 pub(crate) fn op_uppercase(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {
         DataValue::Str(s) => Ok(DataValue::from(s.to_uppercase())),
-        data_value_any!() => bail!("'uppercase' requires strings"),
+        DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("'uppercase' requires strings"),
     }
 }
 
@@ -281,7 +280,7 @@ pub(crate) fn val2str(arg: &DataValue) -> String {
                 to_json(arg).to_string()
             }
         },
-        data_value_any!() => {
+        DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => {
             let jv = to_json(arg);
             jv.to_string()
         }

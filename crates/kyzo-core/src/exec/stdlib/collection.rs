@@ -14,7 +14,6 @@ use itertools::Itertools;
 use miette::{IntoDiagnostic, Result, bail, ensure, miette};
 use serde_json::{Value, json};
 
-use kyzo_model::data_value_any;
 use kyzo_model::value::DataValue;
 use kyzo_model::{json_from_serde, serde_from_json};
 use serde_json::Value as JsonValue;
@@ -35,7 +34,7 @@ pub(crate) fn op_append(args: &[DataValue]) -> Result<DataValue> {
             l.push(args[1].clone());
             Ok(DataValue::List(l))
         }
-        data_value_any!() => bail!("'append' requires first argument to be a list"),
+        DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("'append' requires first argument to be a list"),
     }
 }
 
@@ -110,7 +109,7 @@ pub(crate) fn op_concat(args: &[DataValue]) -> Result<DataValue> {
             }
             Ok(DataValue::Json(json_from_serde(&ret)))
         }
-        data_value_any!() => bail!("'concat' requires strings, lists, or JSON objects"),
+        DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("'concat' requires strings, lists, or JSON objects"),
     }
 }
 
@@ -118,7 +117,7 @@ pub(crate) fn op_difference(args: &[DataValue]) -> Result<DataValue> {
     let mut start: BTreeSet<_> = match &args[0] {
         DataValue::List(l) => l.iter().cloned().collect(),
         DataValue::Set(s) => s.iter().cloned().collect(),
-        data_value_any!() => bail!("'difference' requires lists"),
+        DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("'difference' requires lists"),
     };
     for arg in &args[1..] {
         match arg {
@@ -132,7 +131,7 @@ pub(crate) fn op_difference(args: &[DataValue]) -> Result<DataValue> {
                     start.remove(el);
                 }
             }
-            data_value_any!() => bail!("'difference' requires lists"),
+            DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("'difference' requires lists"),
         }
     }
     Ok(DataValue::List(start.into_iter().collect()))
@@ -141,7 +140,7 @@ pub(crate) fn op_difference(args: &[DataValue]) -> Result<DataValue> {
 pub(crate) fn op_dump_json(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {
         DataValue::Json(j) => Ok(DataValue::Str(serde_from_json(j).to_string())),
-        data_value_any!() => bail!("dump_json requires a json argument"),
+        DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("dump_json requires a json argument"),
     }
 }
 
@@ -179,7 +178,7 @@ pub(crate) fn op_intersection(args: &[DataValue]) -> Result<DataValue> {
     let mut start: BTreeSet<_> = match &args[0] {
         DataValue::List(l) => l.iter().cloned().collect(),
         DataValue::Set(s) => s.iter().cloned().collect(),
-        data_value_any!() => bail!("'intersection' requires lists"),
+        DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("'intersection' requires lists"),
     };
     for arg in &args[1..] {
         match arg {
@@ -188,7 +187,7 @@ pub(crate) fn op_intersection(args: &[DataValue]) -> Result<DataValue> {
                 start = start.intersection(&other).cloned().collect();
             }
             DataValue::Set(s) => start = start.intersection(s).cloned().collect(),
-            data_value_any!() => bail!("'intersection' requires lists"),
+            DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("'intersection' requires lists"),
         }
     }
     Ok(DataValue::List(start.into_iter().collect()))
@@ -270,7 +269,7 @@ pub(crate) fn op_json_object(args: &[DataValue]) -> Result<DataValue> {
 pub(crate) fn op_json_to_scalar(args: &[DataValue]) -> Result<DataValue> {
     Ok(match &args[0] {
         DataValue::Json(j) => json2val(serde_from_json(j)),
-        d @ (data_value_any!()) => d.clone(),
+        d @ (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => d.clone(),
     })
 }
 
@@ -300,7 +299,7 @@ pub(crate) fn op_length(args: &[DataValue]) -> Result<DataValue> {
         }
         DataValue::Bytes(b) => i64::try_from(b.len()).map_err(|_| miette!("'length' overflow"))?,
         DataValue::Vector(v) => i64::try_from(v.len()).map_err(|_| miette!("'length' overflow"))?,
-        data_value_any!() => bail!("'length' requires lists"),
+        DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("'length' requires lists"),
     }))
 }
 
@@ -337,7 +336,7 @@ pub(crate) fn op_prepend(args: &[DataValue]) -> Result<DataValue> {
             l.extend(pl.iter().cloned());
             Ok(DataValue::List(l))
         }
-        data_value_any!() => bail!("'prepend' requires first argument to be a list"),
+        DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("'prepend' requires first argument to be a list"),
     }
 }
 
@@ -430,7 +429,7 @@ pub(crate) fn op_union(args: &[DataValue]) -> Result<DataValue> {
                     ret.insert(el.clone());
                 }
             }
-            data_value_any!() => bail!("'union' requires lists"),
+            DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("'union' requires lists"),
         }
     }
     Ok(DataValue::List(ret.into_iter().collect()))
@@ -583,11 +582,11 @@ fn get_impl(args: &[DataValue]) -> Result<DataValue> {
                         .clone()
                 }
                 DataValue::List(l) => get_json_path_immutable(&json, l)?.clone(),
-                data_value_any!() => bail!("second argument to 'get' mut be a string or integer"),
+                DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("second argument to 'get' mut be a string or integer"),
             };
             let res = json2val(res);
             Ok(res)
         }
-        data_value_any!() => bail!("first argument to 'get' mut be a list or json"),
+        DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("first argument to 'get' mut be a list or json"),
     }
 }

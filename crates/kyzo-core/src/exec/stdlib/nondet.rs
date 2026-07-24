@@ -15,7 +15,6 @@ use miette::{Result, bail, ensure, miette};
 use rand::prelude::*;
 use uuid::v1::Timestamp;
 
-use kyzo_model::data_value_any;
 use kyzo_model::value::DataValue;
 
 use crate::exec::stdlib::convert::vec_element_type;
@@ -36,7 +35,7 @@ pub(crate) fn op_rand_bernoulli(args: &[DataValue]) -> Result<DataValue> {
             );
             f
         }
-        data_value_any!() => bail!("'rand_bernoulli' requires number between 0. and 1."),
+        DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("'rand_bernoulli' requires number between 0. and 1."),
     };
     Ok(DataValue::from(rand::rng().random_bool(prob)))
 }
@@ -65,7 +64,7 @@ pub(crate) fn op_rand_choose(args: &[DataValue]) -> Result<DataValue> {
         },
             },
         ),
-        data_value_any!() => bail!("'rand_choice' requires lists"),
+        DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("'rand_choice' requires lists"),
     }
 }
 

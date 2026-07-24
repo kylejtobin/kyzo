@@ -9,7 +9,6 @@
 
 //! Re-homed domain tables from data/tests/functions.rs.
 use crate::exec::stdlib::convert::*;
-use kyzo_model::data_value_any;
 use kyzo_model::value::{DataValue, Vector};
 use miette::{Result, miette};
 use serde_json::json;
@@ -133,7 +132,7 @@ fn test_vec_rejects_trailing_bytes() -> Result<()> {
     let ok = STANDARD.encode([0u8, 0, 128, 63]);
     match op_vec(&[DataValue::Str(ok)])? {
         DataValue::Vector(v) => assert_eq!(v.len(), 1),
-        other @ (data_value_any!()) => {
+        other @ (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => {
             return Err(miette!("expected vector, got {other:?}"));
         }
     }
@@ -143,7 +142,7 @@ fn test_vec_rejects_trailing_bytes() -> Result<()> {
     let ok64 = STANDARD.encode([0u8; 8]);
     match op_vec(&[DataValue::Str(ok64), DataValue::Str("F64".into())])? {
         DataValue::Vector(v) => assert_eq!(v.len(), 1),
-        other @ (data_value_any!()) => {
+        other @ (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => {
             return Err(miette!("expected vector, got {other:?}"));
         }
     }

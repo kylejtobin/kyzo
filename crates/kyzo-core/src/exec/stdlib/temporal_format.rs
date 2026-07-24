@@ -12,7 +12,6 @@
 use jiff::tz::{Offset, TimeZone};
 use miette::{Result, miette};
 
-use kyzo_model::data_value_any;
 use kyzo_model::value::DataValue;
 
 use crate::exec::stdlib::convert::{f64_trunc_to_i64, i128_approx_f64};
@@ -21,7 +20,7 @@ use crate::exec::stdlib::errors::TimestampFormatRefused;
 pub(crate) fn op_format_timestamp(args: &[DataValue]) -> Result<DataValue> {
     let millis = match &args[0] {
         DataValue::Validity(vld) => vld.ts_micros() / 1000,
-        v @ (data_value_any!()) => {
+        v @ (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => {
             let f = v
                 .get_float()
                 .ok_or_else(|| miette!("'format_timestamp' expects a number"))?;

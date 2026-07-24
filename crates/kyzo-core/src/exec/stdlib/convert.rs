@@ -14,7 +14,6 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use miette::{Result, bail, miette};
 
-use kyzo_model::data_value_any;
 use kyzo_model::value::{DataValue, Json, Num, NumericOrd, Validity, ValidityTs};
 
 use crate::exec::stdlib::errors::vec_value;
@@ -167,7 +166,7 @@ pub(crate) fn op_decode_base64(args: &[DataValue]) -> Result<DataValue> {
                 .map_err(|_| miette!("Data is not properly encoded"))?;
             Ok(DataValue::Bytes(b))
         }
-        data_value_any!() => bail!("'decode_base64' requires strings"),
+        DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("'decode_base64' requires strings"),
     }
 }
 
@@ -177,7 +176,7 @@ pub(crate) fn op_encode_base64(args: &[DataValue]) -> Result<DataValue> {
             let s = STANDARD.encode(b);
             Ok(DataValue::from(s))
         }
-        data_value_any!() => bail!("'encode_base64' requires bytes"),
+        DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("'encode_base64' requires bytes"),
     }
 }
 
@@ -222,7 +221,7 @@ pub(crate) fn op_to_float(args: &[DataValue]) -> Result<DataValue> {
                 .map_err(|_| miette!("The string cannot be interpreted as float"))?
                 .into(),
         },
-        v @ (data_value_any!()) => bail!("'to_float' does not recognize {:?}", v),
+        v @ (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => bail!("'to_float' does not recognize {:?}", v),
     })
 }
 
@@ -241,7 +240,7 @@ pub(crate) fn op_to_int(args: &[DataValue]) -> Result<DataValue> {
                 .into()
         }
         DataValue::Validity(vld) => DataValue::Num(Num::int(vld.ts_micros())),
-        v @ (data_value_any!()) => bail!("'to_int' does not recognize {:?}", v),
+        v @ (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => bail!("'to_int' does not recognize {:?}", v),
     })
 }
 
@@ -282,7 +281,7 @@ pub(crate) fn op_to_uuid(args: &[DataValue]) -> Result<DataValue> {
             let id = uuid::Uuid::try_parse(s.as_str()).map_err(|_| miette!("invalid UUID"))?;
             Ok(DataValue::uuid(id))
         }
-        data_value_any!() => bail!("'to_uuid' requires a string"),
+        DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("'to_uuid' requires a string"),
     }
 }
 
@@ -305,7 +304,7 @@ pub(crate) fn op_uuid_timestamp(args: &[DataValue]) -> Result<DataValue> {
                 s.into()
             }
         },
-        data_value_any!() => bail!("not an UUID"),
+        DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("not an UUID"),
     })
 }
 
@@ -403,7 +402,7 @@ pub(crate) fn op_vec(args: &[DataValue]) -> Result<DataValue> {
             };
             Ok(DataValue::Vector(vec_value(components)?))
         }
-        data_value_any!() => bail!("'vec' requires a list or a vector"),
+        DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("'vec' requires a list or a vector"),
     }
 }
 
@@ -417,6 +416,6 @@ pub(crate) fn vec_element_type(arg: Option<&DataValue>, op: &str) -> Result<VecE
             unrecognized => bail!("'{op}' does not recognize type {unrecognized}"),
         },
         None => Ok(VecElementType::F32),
-        Some(data_value_any!()) => bail!("'{op}' requires a string as second argument"),
+        Some(DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => bail!("'{op}' requires a string as second argument"),
     }
 }

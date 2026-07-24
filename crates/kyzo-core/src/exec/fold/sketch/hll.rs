@@ -238,14 +238,12 @@ impl<const M: usize> HyperLogLog<M> {
         let m = super::usize_to_f64(self.num_registers());
         let alpha = alpha(self.num_registers());
 
-        let mut sum = 0.0f64;
-        let mut zeros = 0usize;
-        for &r in self.registers.iter() {
-            sum += 2.0f64.powi(-i32::from(r));
-            if r == 0 {
-                zeros += 1;
-            }
-        }
+        let (sum, zeros) = self.registers.iter().fold((0.0f64, 0usize), |(sum, zeros), &r| {
+            (
+                sum + 2.0f64.powi(-i32::from(r)),
+                zeros + usize::from(r == 0),
+            )
+        });
 
         let raw = alpha * m * m / sum;
         // Small-range correction: when many registers are still empty the

@@ -40,7 +40,6 @@ use thiserror::Error;
 
 use crate::exec::expr::batch::{BatchRowU32Overflow, ColumnBatch, ErrorMin, Selection};
 use crate::exec::stdlib::resolve_op;
-use kyzo_model::data_value_any;
 use kyzo_model::data_value_to_vld_spec;
 use kyzo_model::program::WriteValidity;
 use kyzo_model::program::expr::{
@@ -168,7 +167,7 @@ pub(crate) fn eval_expr(expr: &Expr, bindings: impl AsRef<[DataValue]>) -> Resul
 pub(crate) fn eval_pred(expr: &Expr, bindings: impl AsRef<[DataValue]>) -> Result<bool> {
     match eval_expr(expr, bindings)? {
         DataValue::Bool(b) => Ok(b),
-        v @ (data_value_any!()) => bail!(PredicateTypeError(expr.span(), v)),
+        v @ (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => bail!(PredicateTypeError(expr.span(), v)),
     }
 }
 

@@ -11,7 +11,6 @@
 
 use miette::{Result, bail, miette};
 
-use kyzo_model::data_value_any;
 use kyzo_model::value::{DataValue, NumRepr, NumericOrd};
 
 use crate::exec::stdlib::errors::StdlibRefuse;
@@ -19,7 +18,7 @@ use crate::exec::stdlib::errors::StdlibRefuse;
 pub(crate) fn op_assert(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {
         DataValue::Bool(true) => Ok(DataValue::from(true)),
-        data_value_any!() => bail!("assertion failed: {:?}", args),
+        DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("assertion failed: {:?}", args),
     }
 }
 
@@ -62,7 +61,7 @@ pub(crate) fn op_is_finite(args: &[DataValue]) -> Result<DataValue> {
             NumRepr::Int(_) => true,
             NumRepr::Float(f) => f.is_finite(),
         },
-        data_value_any!() => false,
+        DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => false,
     }))
 }
 

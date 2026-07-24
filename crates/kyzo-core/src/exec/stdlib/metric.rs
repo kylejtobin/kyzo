@@ -11,7 +11,6 @@
 
 use miette::{Result, bail};
 
-use kyzo_model::data_value_any;
 use kyzo_model::value::DataValue;
 
 use crate::exec::stdlib::errors::{DomainError, no_nan, no_nan_vec};
@@ -33,7 +32,7 @@ pub(crate) fn op_cos_dist(args: &[DataValue]) -> Result<DataValue> {
             let dot: f64 = sa.iter().zip(sb.iter()).map(|(x, y)| *x * *y).sum();
             no_nan("cos_dist", 1. - dot / (a_norm * b_norm).sqrt())
         }
-        (data_value_any!(), data_value_any!()) => bail!("'cos_dist' requires two vectors"),
+        (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_), DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => bail!("'cos_dist' requires two vectors"),
     }
 }
 
@@ -50,7 +49,7 @@ fn vec_pair_dist(
             let (sa, sb) = (a.to_f64s(), b.to_f64s());
             Ok(DataValue::from(reduce(&sa, &sb)))
         }
-        (data_value_any!(), data_value_any!()) => bail!("'{op}' requires two vectors"),
+        (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_), DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => bail!("'{op}' requires two vectors"),
     }
 }
 
@@ -80,6 +79,6 @@ pub(crate) fn op_l2_normalize(args: &[DataValue]) -> Result<DataValue> {
             }
             no_nan_vec("l2_normalize", s.iter().map(|x| x / norm).collect())
         }
-        data_value_any!() => bail!("'l2_normalize' requires a vector"),
+        DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("'l2_normalize' requires a vector"),
     }
 }

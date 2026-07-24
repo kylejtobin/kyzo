@@ -9,7 +9,6 @@
 
 //! Re-homed domain tables from data/tests/functions.rs.
 use crate::exec::stdlib::temporal_format::*;
-use kyzo_model::data_value_any;
 use kyzo_model::schema::{ColType, NullableColType};
 use kyzo_model::str2vld;
 use kyzo_model::value::{DataValue, ValidityTs};
@@ -34,7 +33,7 @@ fn test_pre_epoch_timestamps() -> Result<()> {
     )?;
     match coerced {
         DataValue::Validity(vld) => assert!(vld.timestamp().raw() < 0),
-        v @ (data_value_any!()) => {
+        v @ (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => {
             return Err(miette!("expected a validity, got {v:?}"));
         }
     }

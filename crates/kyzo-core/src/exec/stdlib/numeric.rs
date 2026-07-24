@@ -13,7 +13,6 @@ use std::ops::{Div, Rem};
 use itertools::Itertools;
 use miette::{Result, bail, ensure, miette};
 
-use kyzo_model::data_value_any;
 use kyzo_model::value::{DataValue, Num, NumRepr, NumericOrd};
 
 use crate::exec::stdlib::errors::{
@@ -27,7 +26,7 @@ fn unary_f64_op(op: &'static str, args: &[DataValue], f: impl Fn(f64) -> f64) ->
         DataValue::Vector(v) => Ok(DataValue::Vector(vec_value(
             v.to_f64s().iter().map(|x| f(*x)).collect(),
         )?)),
-        data_value_any!() => bail!("'{op}' requires numbers"),
+        DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("'{op}' requires numbers"),
     }
 }
 
@@ -53,7 +52,7 @@ fn unary_f64_domain(
             }
             no_nan_vec(op, v.to_f64s().iter().map(|x| f(*x)).collect())
         }
-        data_value_any!() => bail!("'{op}' requires numbers"),
+        DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("'{op}' requires numbers"),
     }
 }
 
@@ -75,7 +74,7 @@ fn bit_bytes_binop(
             }
             Ok(DataValue::Bytes(ret))
         }
-        (data_value_any!(), data_value_any!()) => bail!("'{op}' requires bytes"),
+        (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_), DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => bail!("'{op}' requires bytes"),
     }
 }
 
@@ -95,7 +94,7 @@ fn unary_num_vec(
         DataValue::Vector(v) => {
             DataValue::Vector(vec_value(v.to_f64s().iter().map(|x| on_vec(*x)).collect())?)
         }
-        data_value_any!() => bail!("'{op}' requires numbers"),
+        DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("'{op}' requires numbers"),
     })
 }
 
@@ -110,7 +109,7 @@ fn unary_int_id_float(
             NumRepr::Int(i) => DataValue::Num(Num::int(i)),
             NumRepr::Float(f) => DataValue::Num(Num::float(on_float(f))),
         },
-        data_value_any!() => bail!("'{op}' requires numbers"),
+        DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("'{op}' requires numbers"),
     })
 }
 
@@ -171,7 +170,7 @@ where
                 NumRepr::Float(f) => f_accum = on_float(f_accum, f),
             },
             DataValue::Vector(_) => return vecs(args),
-            data_value_any!() => bail!("{require_msg}"),
+            DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("{require_msg}"),
         }
     }
     // Float still at the op's identity ⇒ pure-int fold; otherwise fold the
@@ -213,11 +212,11 @@ pub(crate) fn op_atan(args: &[DataValue]) -> Result<DataValue> {
 pub(crate) fn op_atan2(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(n) => n.to_f64(),
-        data_value_any!() => bail!("'atan2' requires numbers"),
+        DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("'atan2' requires numbers"),
     };
     let b = match &args[1] {
         DataValue::Num(n) => n.to_f64(),
-        data_value_any!() => bail!("'atan2' requires numbers"),
+        DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("'atan2' requires numbers"),
     };
 
     Ok(DataValue::Num(Num::float(a.atan2(b))))
@@ -241,7 +240,7 @@ pub(crate) fn op_bit_not(args: &[DataValue]) -> Result<DataValue> {
             }
             Ok(DataValue::Bytes(ret))
         }
-        data_value_any!() => bail!("'bit_not' requires bytes"),
+        DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("'bit_not' requires bytes"),
     }
 }
 
@@ -301,7 +300,7 @@ pub(crate) fn op_div(args: &[DataValue]) -> Result<DataValue> {
                 .ok_or_else(|| miette!("can only divide numbers by vectors"))?;
             DataValue::Vector(vec_value(b.to_f64s().iter().map(|x| a / x).collect())?)
         }
-        (data_value_any!(), data_value_any!()) => bail!("division requires numbers"),
+        (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_), DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => bail!("division requires numbers"),
     })
 }
 
@@ -345,7 +344,7 @@ fn fold_minmax(
                 let chosen = if prefer_b(a, *b) { *b } else { a };
                 Ok(Some(DataValue::Num(chosen)))
             }
-            (None, data_value_any!()) | (Some(data_value_any!()), data_value_any!()) => {
+            (None, DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) | (Some(DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)), DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => {
                 bail!("'{op}' can only be applied to numbers")
             }
         })?;
@@ -415,7 +414,7 @@ pub(crate) fn op_mod(args: &[DataValue]) -> Result<DataValue> {
                 DataValue::Num(Num::float(a.rem(b)))
             }
         },
-        (data_value_any!(), data_value_any!()) => bail!("'mod' requires numbers"),
+        (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_), DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => bail!("'mod' requires numbers"),
     })
 }
 
@@ -464,7 +463,7 @@ pub(crate) fn op_pack_bits(args: &[DataValue]) -> Result<DataValue> {
                         }
                     }
                 }
-                data_value_any!() => bail!("'pack_bits' requires list of booleans"),
+                DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("'pack_bits' requires list of booleans"),
             }
         }
         Ok(DataValue::Bytes(res))
@@ -488,11 +487,11 @@ pub(crate) fn op_pow(args: &[DataValue]) -> Result<DataValue> {
             }
             return no_nan_vec("pow", v.to_f64s().iter().map(|x| x.powf(b)).collect());
         }
-        data_value_any!() => bail!("'pow' requires numbers"),
+        DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("'pow' requires numbers"),
     };
     let b = match &args[1] {
         DataValue::Num(n) => n.to_f64(),
-        data_value_any!() => bail!("'pow' requires numbers"),
+        DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("'pow' requires numbers"),
     };
     if pow_out_of_domain(a, b) {
         bail!(DomainError::new("pow"));
@@ -520,7 +519,7 @@ pub(crate) fn op_signum(args: &[DataValue]) -> Result<DataValue> {
                 }
             }
         },
-        data_value_any!() => bail!("'signum' requires numbers"),
+        DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("'signum' requires numbers"),
     })
 }
 
@@ -575,7 +574,7 @@ pub(crate) fn op_sub(args: &[DataValue]) -> Result<DataValue> {
                 .ok_or_else(|| miette!("can only subtract vectors from numbers"))?;
             DataValue::Vector(vec_value(b.to_f64s().iter().map(|x| a - x).collect())?)
         }
-        (data_value_any!(), data_value_any!()) => bail!("subtraction requires numbers"),
+        (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_), DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => bail!("subtraction requires numbers"),
     })
 }
 
@@ -656,7 +655,7 @@ fn fold_vecs(
                 b.to_f64s().iter().map(|x| combine(f, *x)).collect(),
             )?))
         }
-        (data_value_any!(), data_value_any!()) => bail!("{scalar_requires}"),
+        (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_), DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => bail!("{scalar_requires}"),
     }
 }
 

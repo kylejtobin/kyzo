@@ -34,7 +34,6 @@ use miette::{Result, bail, ensure, miette};
 
 use crate::exec::stdlib::convert::i128_approx_f64;
 
-use kyzo_model::data_value_any;
 use kyzo_model::program::aggregate::Aggregation;
 use kyzo_model::value::{DataValue, Num, NumRepr};
 
@@ -81,7 +80,7 @@ impl MeetAccum {
 /// A semilattice fold, safe inside recursion.
 pub(crate) trait MeetAggrObj: Send + Sync + seal::Sealed {
     fn init_val(&self) -> MeetAccum;
-    fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool>;
+    fn update(&mut self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool>;
 }
 
 /// Sealed exhaustively-matched normal aggregation: the dispatch surface.
@@ -191,6 +190,7 @@ impl NormalAggr {
 }
 
 /// Sealed exhaustively-matched meet aggregation: the dispatch surface.
+#[derive(Copy, Clone)]
 pub(crate) enum MeetAggr {
     And(MeetAggrAnd),
     Or(MeetAggrOr),
@@ -224,7 +224,7 @@ impl MeetAggr {
         }
     }
 
-    pub(crate) fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
+    pub(crate) fn update(&mut self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
         match self {
             MeetAggr::And(a) => a.update(left, right),
             MeetAggr::Or(a) => a.update(left, right),
@@ -320,7 +320,7 @@ impl NormalAggrObj for AggrAnd {
     fn set(&mut self, value: &DataValue) -> Result<()> {
         match value {
             DataValue::Bool(v) => self.accum &= *v,
-            v @ (data_value_any!()) => bail!("cannot compute 'and' for {:?}", v),
+            v @ (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => bail!("cannot compute 'and' for {:?}", v),
         }
         Ok(())
     }
@@ -331,6 +331,7 @@ impl NormalAggrObj for AggrAnd {
 }
 
 /// Conjunction as a meet: the two-point lattice `true > false` under `&`.
+#[derive(Copy, Clone)]
 pub(crate) struct MeetAggrAnd;
 
 impl seal::Sealed for MeetAggrAnd {}
@@ -340,7 +341,7 @@ impl MeetAggrObj for MeetAggrAnd {
         MeetAccum::Value(DataValue::from(true))
     }
 
-    fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
+    fn update(&mut self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
         update_bool_meet(left, right, |l, r| l & r, "and")
     }
 }
@@ -363,7 +364,7 @@ impl NormalAggrObj for AggrOr {
     fn set(&mut self, value: &DataValue) -> Result<()> {
         match value {
             DataValue::Bool(v) => self.accum |= *v,
-            v @ (data_value_any!()) => bail!("cannot compute 'or' for {:?}", v),
+            v @ (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => bail!("cannot compute 'or' for {:?}", v),
         }
         Ok(())
     }
@@ -374,6 +375,7 @@ impl NormalAggrObj for AggrOr {
 }
 
 /// Disjunction as a meet: the two-point lattice `false < true` under `|`.
+#[derive(Copy, Clone)]
 pub(crate) struct MeetAggrOr;
 
 impl seal::Sealed for MeetAggrOr {}
@@ -383,7 +385,7 @@ impl MeetAggrObj for MeetAggrOr {
         MeetAccum::Value(DataValue::from(false))
     }
 
-    fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
+    fn update(&mut self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
         update_bool_meet(left, right, |l, r| l | r, "or")
     }
 }
@@ -433,8 +435,9 @@ impl seal::Sealed for AggrGroupCount {}
 
 impl NormalAggrObj for AggrGroupCount {
     fn set(&mut self, value: &DataValue) -> Result<()> {
-        let entry = self.accum.entry(value.clone()).or_insert(0);
-        *entry += 1;
+        let key = value.clone();
+        let next = self.accum.get(&key).copied().unwrap_or(0).saturating_add(1);
+        self.accum.insert(key, next);
         Ok(())
     }
 
@@ -500,7 +503,7 @@ impl NormalAggrObj for AggrUnion {
     fn set(&mut self, value: &DataValue) -> Result<()> {
         match value {
             DataValue::List(v) => self.accum.extend(v.iter().cloned()),
-            v @ (data_value_any!()) => bail!("cannot compute 'union' for value {:?}", v),
+            v @ (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => bail!("cannot compute 'union' for value {:?}", v),
         }
         Ok(())
     }
@@ -511,6 +514,7 @@ impl NormalAggrObj for AggrUnion {
 }
 
 /// Set union as a meet: the lattice of sets under `∪`, identity `∅`.
+#[derive(Copy, Clone)]
 pub(crate) struct MeetAggrUnion;
 
 impl seal::Sealed for MeetAggrUnion {}
@@ -520,7 +524,7 @@ impl MeetAggrObj for MeetAggrUnion {
         MeetAccum::Value(DataValue::Set(BTreeSet::new()))
     }
 
-    fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
+    fn update(&mut self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
         match left {
             MeetAccum::Empty => {
                 if matches!(right, MeetAccum::Empty) {
@@ -587,7 +591,7 @@ impl NormalAggrObj for AggrIntersection {
                     self.accum = Some(v.iter().cloned().collect())
                 }
             }
-            v @ (data_value_any!()) => bail!("cannot compute 'intersection' for value {:?}", v),
+            v @ (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => bail!("cannot compute 'intersection' for value {:?}", v),
         }
         Ok(())
     }
@@ -601,6 +605,7 @@ impl NormalAggrObj for AggrIntersection {
 }
 
 /// Set intersection as a meet. Identity is [`MeetAccum::Empty`].
+#[derive(Copy, Clone)]
 pub(crate) struct MeetAggrIntersection;
 
 impl seal::Sealed for MeetAggrIntersection {}
@@ -610,7 +615,7 @@ impl MeetAggrObj for MeetAggrIntersection {
         MeetAccum::Empty
     }
 
-    fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
+    fn update(&mut self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
         match left {
             MeetAccum::Empty => {
                 if matches!(right, MeetAccum::Empty) {
@@ -763,7 +768,7 @@ fn absorb_moment(
             *count += 1;
             Ok(())
         }
-        v @ (data_value_any!()) => bail!("cannot compute '{op}': encountered value {:?}", v),
+        v @ (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => bail!("cannot compute '{op}': encountered value {:?}", v),
     }
 }
 
@@ -785,7 +790,7 @@ fn set_numeric_extremum(
         Some(prev) => {
             let (found_n, new) = match (&*prev, value) {
                 (DataValue::Num(l), DataValue::Num(r)) => (*l, *r),
-                (data_value_any!(), data_value_any!()) => {
+                (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_), DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => {
                     bail!("'{op}' applied to non-numerical values")
                 }
             };
@@ -842,7 +847,7 @@ fn update_numeric_extremum(
         MeetAccum::Value(left_v) => {
             let (l, r) = match (&*left_v, right_v) {
                 (DataValue::Num(l), DataValue::Num(r)) => (*l, *r),
-                (data_value_any!(), data_value_any!()) => {
+                (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_), DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => {
                     bail!("'{op}' applied to non-numerical values")
                 }
             };
@@ -882,7 +887,7 @@ fn set_by_cost(
             }
             Ok(())
         }
-        v @ (data_value_any!()) => bail!("cannot compute '{op}' on {:?}", v),
+        v @ (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => bail!("cannot compute '{op}' on {:?}", v),
     }
 }
 
@@ -910,7 +915,7 @@ fn set_bitwise(
             }
             Ok(())
         }
-        v @ (data_value_any!()) => bail!("cannot apply '{op}' to {:?}", v),
+        v @ (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => bail!("cannot apply '{op}' to {:?}", v),
     }
 }
 
@@ -1051,7 +1056,7 @@ impl NormalAggrObj for AggrMean {
                 self.sum += n.to_f64();
                 self.count += 1;
             }
-            v @ (data_value_any!()) => bail!("cannot compute 'mean': encountered value {:?}", v),
+            v @ (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => bail!("cannot compute 'mean': encountered value {:?}", v),
         }
         Ok(())
     }
@@ -1125,7 +1130,7 @@ impl NormalAggrObj for AggrSum {
     fn set(&mut self, value: &DataValue) -> Result<()> {
         match value {
             DataValue::Num(n) => self.sum = self.sum.fold(n, i128::checked_add, |a, b| a + b),
-            v @ (data_value_any!()) => bail!("cannot compute 'sum': encountered value {:?}", v),
+            v @ (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => bail!("cannot compute 'sum': encountered value {:?}", v),
         }
         Ok(())
     }
@@ -1155,7 +1160,7 @@ impl NormalAggrObj for AggrProduct {
     fn set(&mut self, value: &DataValue) -> Result<()> {
         match value {
             DataValue::Num(n) => self.prod = self.prod.fold(n, i128::checked_mul, |a, b| a * b),
-            v @ (data_value_any!()) => {
+            v @ (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => {
                 bail!("cannot compute 'product': encountered value {:?}", v)
             }
         }
@@ -1196,6 +1201,7 @@ impl NormalAggrObj for AggrMin {
 }
 
 /// Least numeric value as a meet; Null is never a candidate.
+#[derive(Copy, Clone)]
 pub(crate) struct MeetAggrMin;
 
 impl seal::Sealed for MeetAggrMin {}
@@ -1205,7 +1211,7 @@ impl MeetAggrObj for MeetAggrMin {
         MeetAccum::Empty
     }
 
-    fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
+    fn update(&mut self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
         update_numeric_extremum(left, right, |r, l| r < l, "min")
     }
 }
@@ -1238,6 +1244,7 @@ impl NormalAggrObj for AggrMax {
 }
 
 /// Greatest numeric value as a meet; Null is never a candidate.
+#[derive(Copy, Clone)]
 pub(crate) struct MeetAggrMax;
 
 impl seal::Sealed for MeetAggrMax {}
@@ -1247,7 +1254,7 @@ impl MeetAggrObj for MeetAggrMax {
         MeetAccum::Empty
     }
 
-    fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
+    fn update(&mut self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
         update_numeric_extremum(left, right, |r, l| r > l, "max")
     }
 }
@@ -1367,7 +1374,7 @@ impl NormalAggrObj for AggrMinCost {
                 }
                 Ok(())
             }
-            v @ (data_value_any!()) => bail!("cannot compute 'min_cost' on {:?}", v),
+            v @ (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => bail!("cannot compute 'min_cost' on {:?}", v),
         }
     }
 
@@ -1386,6 +1393,7 @@ impl NormalAggrObj for AggrMinCost {
 }
 
 /// Least-cost pair as a meet; ties keep the incumbent.
+#[derive(Copy, Clone)]
 pub(crate) struct MeetAggrMinCost;
 
 impl seal::Sealed for MeetAggrMinCost {}
@@ -1395,7 +1403,7 @@ impl MeetAggrObj for MeetAggrMinCost {
         MeetAccum::Empty
     }
 
-    fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
+    fn update(&mut self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
         if matches!(right, MeetAccum::Empty) {
             return Ok(false);
         }
@@ -1466,7 +1474,7 @@ impl NormalAggrObj for AggrShortest {
                 }
                 Ok(())
             }
-            v @ (data_value_any!()) => bail!("cannot compute 'shortest' on {:?}", v),
+            v @ (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => bail!("cannot compute 'shortest' on {:?}", v),
         }
     }
 
@@ -1479,6 +1487,7 @@ impl NormalAggrObj for AggrShortest {
 }
 
 /// Shortest list as a meet, with [`MeetAccum::Empty`] as the identity.
+#[derive(Copy, Clone)]
 pub(crate) struct MeetAggrShortest;
 
 impl seal::Sealed for MeetAggrShortest {}
@@ -1488,7 +1497,7 @@ impl MeetAggrObj for MeetAggrShortest {
         MeetAccum::Empty
     }
 
-    fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
+    fn update(&mut self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
         if matches!(right, MeetAccum::Empty) {
             return Ok(false);
         }
@@ -1542,6 +1551,7 @@ impl NormalAggrObj for AggrChoice {
 
 /// First-seen as a meet: idempotent and associative, deliberately not
 /// commutative.
+#[derive(Copy, Clone)]
 pub(crate) struct MeetAggrChoice;
 
 impl seal::Sealed for MeetAggrChoice {}
@@ -1551,7 +1561,7 @@ impl MeetAggrObj for MeetAggrChoice {
         MeetAccum::Empty
     }
 
-    fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
+    fn update(&mut self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
         if matches!(right, MeetAccum::Empty) {
             return Ok(false);
         }
@@ -1589,6 +1599,7 @@ impl NormalAggrObj for AggrBitAnd {
 }
 
 /// Bytewise AND as a meet; the empty byte string is the identity seed.
+#[derive(Copy, Clone)]
 pub(crate) struct MeetAggrBitAnd;
 
 impl seal::Sealed for MeetAggrBitAnd {}
@@ -1598,7 +1609,7 @@ impl MeetAggrObj for MeetAggrBitAnd {
         MeetAccum::Value(DataValue::Bytes(Vec::new()))
     }
 
-    fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
+    fn update(&mut self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
         update_bitwise(left, right, |l, r| l & r, "bit_and")
     }
 }
@@ -1628,6 +1639,7 @@ impl NormalAggrObj for AggrBitOr {
 }
 
 /// Bytewise OR as a meet; the empty byte string is the identity seed.
+#[derive(Copy, Clone)]
 pub(crate) struct MeetAggrBitOr;
 
 impl seal::Sealed for MeetAggrBitOr {}
@@ -1637,7 +1649,7 @@ impl MeetAggrObj for MeetAggrBitOr {
         MeetAccum::Value(DataValue::Bytes(Vec::new()))
     }
 
-    fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
+    fn update(&mut self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
         update_bitwise(left, right, |l, r| l | r, "bit_or")
     }
 }
@@ -1689,8 +1701,8 @@ mod tests {
     }
 
     /// One fold with the changed-flag contract pinned in both directions.
-    fn update_checked(
-        op: &dyn MeetAggrObj,
+    fn update_checked<M: MeetAggrObj>(
+        mut op: M,
         acc: &mut MeetAccum,
         x: &MeetAccum,
         canon: fn(&MeetAccum) -> MeetAccum,
@@ -1707,8 +1719,8 @@ mod tests {
         Ok(changed)
     }
 
-    fn alg_meet(
-        op: &dyn MeetAggrObj,
+    fn alg_meet<M: MeetAggrObj>(
+        mut op: M,
         a: &MeetAccum,
         b: &MeetAccum,
         canon: fn(&MeetAccum) -> MeetAccum,
@@ -1732,8 +1744,8 @@ mod tests {
         }
     }
 
-    fn assert_semilattice_laws(
-        op: &dyn MeetAggrObj,
+    fn assert_semilattice_laws<M: MeetAggrObj>(
+        mut op: M,
         samples: [&MeetAccum; 3],
         canon: fn(&MeetAccum) -> MeetAccum,
         commutative: bool,
@@ -1816,14 +1828,12 @@ mod tests {
                     v(DataValue::from(y)),
                     v(DataValue::from(z)),
                 );
-                lattice_ok(assert_semilattice_laws(
-                    &MeetAggrAnd,
+                lattice_ok(assert_semilattice_laws(MeetAggrAnd,
                     [&x, &y, &z],
                     ident,
                     true,
                 ))?;
-                lattice_ok(assert_semilattice_laws(
-                    &MeetAggrOr,
+                lattice_ok(assert_semilattice_laws(MeetAggrOr,
                     [&x, &y, &z],
                     ident,
                     true,
@@ -1838,14 +1848,12 @@ mod tests {
         TestRunner::default()
             .run(&(arb_num(), arb_num(), arb_num()), |(x, y, z)| {
                 let (x, y, z) = (v(x), v(y), v(z));
-                lattice_ok(assert_semilattice_laws(
-                    &MeetAggrMin,
+                lattice_ok(assert_semilattice_laws(MeetAggrMin,
                     [&x, &y, &z],
                     ident,
                     true,
                 ))?;
-                lattice_ok(assert_semilattice_laws(
-                    &MeetAggrMax,
+                lattice_ok(assert_semilattice_laws(MeetAggrMax,
                     [&x, &y, &z],
                     ident,
                     true,
@@ -1860,8 +1868,7 @@ mod tests {
         TestRunner::default()
             .run(&(arb_value(), arb_value(), arb_value()), |(x, y, z)| {
                 let (x, y, z) = (v(x), v(y), v(z));
-                lattice_ok(assert_semilattice_laws(
-                    &MeetAggrChoice,
+                lattice_ok(assert_semilattice_laws(MeetAggrChoice,
                     [&x, &y, &z],
                     ident,
                     false,
@@ -1876,14 +1883,12 @@ mod tests {
         TestRunner::default()
             .run(&arb_bytes_triple(), |(x, y, z)| {
                 let (x, y, z) = (v(x), v(y), v(z));
-                lattice_ok(assert_semilattice_laws(
-                    &MeetAggrBitAnd,
+                lattice_ok(assert_semilattice_laws(MeetAggrBitAnd,
                     [&x, &y, &z],
                     ident,
                     true,
                 ))?;
-                lattice_ok(assert_semilattice_laws(
-                    &MeetAggrBitOr,
+                lattice_ok(assert_semilattice_laws(MeetAggrBitOr,
                     [&x, &y, &z],
                     ident,
                     true,
@@ -1900,14 +1905,12 @@ mod tests {
                 &(arb_small_list(), arb_small_list(), arb_small_list()),
                 |(x, y, z)| {
                     let (x, y, z) = (v(x), v(y), v(z));
-                    lattice_ok(assert_semilattice_laws(
-                        &MeetAggrUnion,
+                    lattice_ok(assert_semilattice_laws(MeetAggrUnion,
                         [&x, &y, &z],
                         as_set,
                         true,
                     ))?;
-                    lattice_ok(assert_semilattice_laws(
-                        &MeetAggrIntersection,
+                    lattice_ok(assert_semilattice_laws(MeetAggrIntersection,
                         [&x, &y, &z],
                         as_set,
                         true,
@@ -1925,8 +1928,7 @@ mod tests {
                 &(arb_small_list(), arb_small_list(), arb_small_list()),
                 |(x, y, z)| {
                     let (x, y, z) = (v(x), v(y), v(z));
-                    lattice_ok(assert_semilattice_laws(
-                        &MeetAggrShortest,
+                    lattice_ok(assert_semilattice_laws(MeetAggrShortest,
                         [&x, &y, &z],
                         ident,
                         false,
@@ -1944,8 +1946,7 @@ mod tests {
                 &(arb_costed_pair(), arb_costed_pair(), arb_costed_pair()),
                 |(x, y, z)| {
                     let (x, y, z) = (v(x), v(y), v(z));
-                    lattice_ok(assert_semilattice_laws(
-                        &MeetAggrMinCost,
+                    lattice_ok(assert_semilattice_laws(MeetAggrMinCost,
                         [&x, &y, &z],
                         ident,
                         false,
@@ -2196,7 +2197,7 @@ mod tests {
                     "product demotion lost an operand: got {f:e}, expected {expected:e}"
                 );
             }
-            other @ (data_value_any!()) => {
+            other @ (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => {
                 return Err(miette!("expected float after i128 overflow, got {other:?}"));
             }
         }

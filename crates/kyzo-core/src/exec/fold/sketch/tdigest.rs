@@ -44,7 +44,6 @@
 
 use miette::{Result, bail, ensure};
 
-use kyzo_model::data_value_any;
 use kyzo_model::value::{DataValue, Num};
 
 /// The compression parameter δ. Larger is more accurate and larger; 100 is
@@ -98,7 +97,7 @@ impl TDigest {
         for v in values {
             match v {
                 DataValue::Num(n) => nums.push(n.to_f64()),
-                other @ (data_value_any!()) => {
+                other @ (DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_)) => {
                     bail!("t-digest requires numeric values, got {other:?}")
                 }
             }
@@ -176,24 +175,26 @@ impl TDigest {
         }
         let target = q * self.count;
 
-        // Anchor points in (rank, value) space: min at rank 0, each centroid
-        // at the rank of its center, max at rank `count`. Ranks strictly
-        // increasing; values non-decreasing — so interpolation is monotone.
-        // Walk until the bracketing pair around `target` is found.
-        let mut prev_rank = 0.0f64;
-        let mut prev_val = min;
-        let mut cum = 0.0f64;
-        for c in &self.centroids {
-            let center = cum + c.weight / 2.0;
-            if target <= center {
-                return Some(interpolate(target, prev_rank, prev_val, center, c.mean));
-            }
-            prev_rank = center;
-            prev_val = c.mean;
-            cum += c.weight;
-        }
-        // Between the last centroid center and the max anchor.
-        Some(interpolate(target, prev_rank, prev_val, self.count, max))
+        let (prev_rank, prev_val, _, hit) = self.centroids.iter().fold(
+            (0.0f64, min, 0.0f64, None::<f64>),
+            |(prev_rank, prev_val, cum, hit), c| {
+                if hit.is_some() {
+                    return (prev_rank, prev_val, cum, hit);
+                }
+                let center = cum + c.weight / 2.0;
+                if target <= center {
+                    (
+                        center,
+                        c.mean,
+                        cum + c.weight,
+                        Some(interpolate(target, prev_rank, prev_val, center, c.mean)),
+                    )
+                } else {
+                    (center, c.mean, cum + c.weight, None)
+                }
+            },
+        );
+        hit.or_else(|| Some(interpolate(target, prev_rank, prev_val, self.count, max)))
     }
 
     /// Merge shard digests under the canonical policy: pool all centroids as
