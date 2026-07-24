@@ -877,6 +877,83 @@ fn m_nested_place_assign(f: &SourceFile) -> Vec<Hit> {
     v.hits
 }
 
+/// Any assignment / compound-assign (construct-scoped on derivation).
+fn m_assignment(f: &SourceFile) -> Vec<Hit> {
+    use syn::spanned::Spanned;
+    fn is_compound_assign(op: &syn::BinOp) -> bool {
+        matches!(
+            op,
+            syn::BinOp::AddAssign(_)
+                | syn::BinOp::SubAssign(_)
+                | syn::BinOp::MulAssign(_)
+                | syn::BinOp::DivAssign(_)
+                | syn::BinOp::RemAssign(_)
+                | syn::BinOp::BitXorAssign(_)
+                | syn::BinOp::BitAndAssign(_)
+                | syn::BinOp::BitOrAssign(_)
+                | syn::BinOp::ShlAssign(_)
+                | syn::BinOp::ShrAssign(_)
+        )
+    }
+    struct V<'a> {
+        rel: &'a str,
+        hits: Vec<Hit>,
+    }
+    impl<'ast, 'a> Visit<'ast> for V<'a> {
+        fn visit_expr_assign(&mut self, node: &'ast syn::ExprAssign) {
+            push(
+                &mut self.hits,
+                self.rel,
+                span_line(&node.eq_token.span),
+                "assignment",
+            );
+            visit::visit_expr_assign(self, node);
+        }
+        fn visit_expr_binary(&mut self, node: &'ast syn::ExprBinary) {
+            if is_compound_assign(&node.op) {
+                push(
+                    &mut self.hits,
+                    self.rel,
+                    span_line(&node.op.span()),
+                    "assignment",
+                );
+            }
+            visit::visit_expr_binary(self, node);
+        }
+    }
+    let mut v = V {
+        rel: &f.rel_path,
+        hits: vec![],
+    };
+    v.visit_file(&f.ast);
+    v.hits
+}
+
+/// `.await` expression sites (construct-scoped on fn skeletons).
+fn m_await(f: &SourceFile) -> Vec<Hit> {
+    struct V<'a> {
+        rel: &'a str,
+        hits: Vec<Hit>,
+    }
+    impl<'ast, 'a> Visit<'ast> for V<'a> {
+        fn visit_expr_await(&mut self, node: &'ast syn::ExprAwait) {
+            push(
+                &mut self.hits,
+                self.rel,
+                span_line(&node.await_token.span),
+                "await",
+            );
+            visit::visit_expr_await(self, node);
+        }
+    }
+    let mut v = V {
+        rel: &f.rel_path,
+        hits: vec![],
+    };
+    v.visit_file(&f.ast);
+    v.hits
+}
+
 /// AST attribute scan: a bare `#[name]`/`#[name = …]` or a
 /// `#[cfg_attr(…, name…)]` smuggle both count — placement and line
 /// formatting cannot hide an attribute from a parsed walk.
@@ -1339,6 +1416,8 @@ pub const MATCHERS: &[Matcher] = &[
     Matcher { name: "should_panic", class: ScanClass::Everything, run: m_should_panic },
     Matcher { name: "path", class: ScanClass::Everything, run: m_path },
     Matcher { name: "nested_place_assign", class: ScanClass::Everything, run: m_nested_place_assign },
+    Matcher { name: "assignment", class: ScanClass::Everything, run: m_assignment },
+    Matcher { name: "await", class: ScanClass::Everything, run: m_await },
     Matcher { name: "err_costume", class: ScanClass::Everything, run: m_err_costume },
     Matcher { name: "process_exit", class: ScanClass::Everything, run: m_process_exit },
     Matcher { name: "sleep_sync", class: ScanClass::Everything, run: m_sleep_sync },

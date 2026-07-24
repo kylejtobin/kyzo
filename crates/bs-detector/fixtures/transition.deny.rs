@@ -1,5 +1,5 @@
 impl S {
-    fn nest(&mut self) {
-        self.a.b = 1;
+    async fn nest(&mut self) {
+        self.x = 1;
     }
 }

@@ -170,23 +170,25 @@ rule = "composition-root-body"
 name = "derivation"
 kind = "fn"
 rule = "derivation-bans"
+bans = ["assignment", "await"]
 
 [[construct]]
 name = "transition"
 kind = "fn"
 rule = "transition-bans"
-bans = ["nested_place_assign"]
+bans = ["nested_place_assign", "await"]
 
 [[construct]]
 name = "consuming-verb"
 kind = "fn"
 rule = "consuming-verb-bans"
-bans = ["nested_place_assign"]
+bans = ["nested_place_assign", "await"]
 
 [[construct]]
 name = "admission-door"
 kind = "fn"
 rule = "admission-door-bans"
+bans = ["await"]
 
 [[construct]]
 name = "declared-fn"

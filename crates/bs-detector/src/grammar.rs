@@ -233,7 +233,8 @@ pub enum StructuralRule {
     ImportNoGlob,
     /// constant: `static mut` is red, absolute.
     ConstantNoStaticMut,
-    /// module: a `#[path = ...]` attribute is red (file-identity spoof).
+    /// module: any `mod` item seats here. `#[path = …]` is banned under
+    /// bans_attribute `path` (item 5) — one jurisdiction, not this rule.
     ModuleNoPathAttr,
     /// containers: interior items classify individually; condemned
     /// interior kinds (macro, verbatim) red inside the container.
@@ -285,7 +286,39 @@ impl StructuralRule {
     /// preamble exempts them from in-cell refusal and therefore from a
     /// deny fixture. Everything else must be able to refuse.
     pub fn deny_exempt(self) -> bool {
-        matches!(self, StructuralRule::UnitStruct)
+        // UnitStruct: zero interior. ModuleNoPathAttr: #[path] moved to
+        // bans_attribute `path` (item 5) — the module seat itself has no
+        // remaining in-cell refusal.
+        matches!(
+            self,
+            StructuralRule::UnitStruct | StructuralRule::ModuleNoPathAttr
+        )
+    }
+
+    /// Body-ban names this rule still enforces inside `classify.rs`.
+    /// Construct-scoped bans in `construct.bans` must be disjoint from
+    /// this list — otherwise one ban has two authorities (item 5 tip 511).
+    pub fn body_bans_enforced_in_classify(self) -> &'static [&'static str] {
+        match self {
+            // Derivation still refuses `unsafe` in-cell (deny fixture).
+            // assignment / await / nested_place_assign live only in
+            // construct.bans + run.rs span containment.
+            StructuralRule::DerivationBans => &["unsafe"],
+            StructuralRule::TransitionBans
+            | StructuralRule::ConsumingVerbBans
+            | StructuralRule::AdmissionDoorBans
+            | StructuralRule::CompositionRootBody
+            | StructuralRule::DeclaredFnSeat
+            | StructuralRule::TupleSinglePrivateField
+            | StructuralRule::NamedAllPrivateNoStringTerminal
+            | StructuralRule::UnitStruct
+            | StructuralRule::NoStringVariantFields
+            | StructuralRule::AliasNoBannedTerminal
+            | StructuralRule::ImportNoGlob
+            | StructuralRule::ConstantNoStaticMut
+            | StructuralRule::ModuleNoPathAttr
+            | StructuralRule::InteriorsClassify => &[],
+        }
     }
 
     /// Prove this rule is parse-fact-disjoint from `other` (item 3).
@@ -541,6 +574,20 @@ impl Grammar {
                     c.rule,
                     c.kind
                 );
+            }
+            // Item 5 tip 511: a construct.bans name also BodyBan-enforced in
+            // classify is dual authority for one ban — refuse.
+            for ban in &c.bans {
+                if c.rule
+                    .body_bans_enforced_in_classify()
+                    .iter()
+                    .any(|b| *b == ban.as_str())
+                {
+                    bail!(
+                        "ban `{ban}` on construct `{}` is also BodyBan-enforced in classify — dual authority, refuse",
+                        c.name
+                    );
+                }
             }
         }
 
@@ -940,7 +987,11 @@ mod tests {
     #[test]
     fn item_5_proof_nested_place_assign_in_no_list_is_a_load_error() {
         // TRUTH item 5 Proof: nested_place_assign in no jurisdiction → load Err.
-        let text = real_grammar_text().replace("bans = [\"nested_place_assign\"]\n", "");
+        let text = real_grammar_text()
+            .replace(
+                "bans = [\"nested_place_assign\", \"await\"]\n",
+                "bans = [\"await\"]\n",
+            );
         let e = load_text(&text);
         assert!(e.is_err(), "ambient nested_place_assign must refuse to load");
         let msg = format!("{:?}", e.err());
@@ -963,6 +1014,49 @@ mod tests {
             msg.contains("both") || msg.contains("unwrap"),
             "refusal names the dual seat: {msg}"
         );
+    }
+
+    #[test]
+    fn item_5_proof_cross_mechanism_dual_is_refused() {
+        // Tip 511: construct.bans ∩ classify BodyBan for the same name → refuse.
+        // Live Transition/ConsumingVerb/Admission enforce nothing in classify
+        // for await/nested_place (empty). Derivation still enforces `unsafe`
+        // in classify — listing it on construct.bans is the dual specimen.
+        assert!(
+            StructuralRule::TransitionBans
+                .body_bans_enforced_in_classify()
+                .is_empty()
+        );
+        assert!(
+            StructuralRule::ConsumingVerbBans
+                .body_bans_enforced_in_classify()
+                .is_empty()
+        );
+        assert!(
+            StructuralRule::AdmissionDoorBans
+                .body_bans_enforced_in_classify()
+                .is_empty()
+        );
+        assert_eq!(
+            StructuralRule::DerivationBans.body_bans_enforced_in_classify(),
+            &["unsafe"]
+        );
+        // Direct refuse path used by Grammar::load:
+        let refuse = |rule: StructuralRule, ban: &str| {
+            rule.body_bans_enforced_in_classify()
+                .iter()
+                .any(|b| *b == ban)
+        };
+        assert!(
+            refuse(StructuralRule::DerivationBans, "unsafe"),
+            "unsafe BodyBan ∩ construct.bans must be detectable"
+        );
+        assert!(
+            !refuse(StructuralRule::TransitionBans, "nested_place_assign"),
+            "nested_place must not remain BodyBan-enforced"
+        );
+        assert!(!refuse(StructuralRule::DerivationBans, "assignment"));
+        assert!(!refuse(StructuralRule::DerivationBans, "await"));
     }
 
     #[test]

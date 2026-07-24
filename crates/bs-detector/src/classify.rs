@@ -619,13 +619,10 @@ fn constant_matches_static(rule: StructuralRule, node: &syn::ItemStatic) -> bool
     }
 }
 
-fn mod_has_path_attr(attrs: &[syn::Attribute]) -> bool {
-    attrs.iter().any(|a| a.path().is_ident("path"))
-}
-
-fn module_matches(rule: StructuralRule, node: &syn::ItemMod) -> bool {
+fn module_matches(rule: StructuralRule, _node: &syn::ItemMod) -> bool {
     match rule {
-        StructuralRule::ModuleNoPathAttr => !mod_has_path_attr(&node.attrs),
+        // Item 5: path attribute is bans_attribute only; every mod seats.
+        StructuralRule::ModuleNoPathAttr => true,
         _rule_not_for_module => false,
     }
 }
@@ -692,8 +689,6 @@ enum BodyBan {
     ControlFlow,
     Await,
     Unsafe,
-    Assignment,
-    NestedPlaceAssign,
 }
 
 fn body_contains(block: &syn::Block, ban: BodyBan) -> bool {
@@ -744,28 +739,6 @@ fn body_contains(block: &syn::Block, ban: BodyBan) -> bool {
             }
             visit::visit_expr_unsafe(self, node);
         }
-        fn visit_expr_assign(&mut self, node: &'ast syn::ExprAssign) {
-            match self.ban {
-                BodyBan::Assignment => self.found = true,
-                BodyBan::NestedPlaceAssign if is_nested_place_assign(&node.left) => {
-                    self.found = true;
-                }
-                _not_this_ban => {}
-            }
-            visit::visit_expr_assign(self, node);
-        }
-        fn visit_expr_binary(&mut self, node: &'ast syn::ExprBinary) {
-            if is_compound_assign(&node.op) {
-                match self.ban {
-                    BodyBan::Assignment => self.found = true,
-                    BodyBan::NestedPlaceAssign if is_nested_place_assign(&node.left) => {
-                        self.found = true;
-                    }
-                    _not_this_ban => {}
-                }
-            }
-            visit::visit_expr_binary(self, node);
-        }
     }
     let mut v = V {
         ban,
@@ -783,47 +756,6 @@ fn contains_await(block: &syn::Block) -> bool {
 }
 fn contains_unsafe(block: &syn::Block) -> bool {
     body_contains(block, BodyBan::Unsafe)
-}
-fn contains_assignment(block: &syn::Block) -> bool {
-    body_contains(block, BodyBan::Assignment)
-}
-fn contains_nested_place_assign(block: &syn::Block) -> bool {
-    body_contains(block, BodyBan::NestedPlaceAssign)
-}
-
-fn is_compound_assign(op: &syn::BinOp) -> bool {
-    matches!(
-        op,
-        syn::BinOp::AddAssign(_)
-            | syn::BinOp::SubAssign(_)
-            | syn::BinOp::MulAssign(_)
-            | syn::BinOp::DivAssign(_)
-            | syn::BinOp::RemAssign(_)
-            | syn::BinOp::BitXorAssign(_)
-            | syn::BinOp::BitAndAssign(_)
-            | syn::BinOp::BitOrAssign(_)
-            | syn::BinOp::ShlAssign(_)
-            | syn::BinOp::ShrAssign(_)
-    )
-}
-
-/// Depth of a `self.field...` place chain: `self` alone is depth 0,
-/// `self.field` is depth 1. Anything that is not a pure self-field chain
-/// (indexing, deref, a non-`self` base) has no depth and is conservatively
-/// treated as a violation — "deeper than self.field" by not even matching
-/// the shallow shape at all.
-fn self_place_depth(expr: &syn::Expr) -> Option<usize> {
-    match expr {
-        syn::Expr::Path(p) if p.path.is_ident("self") => Some(0),
-        syn::Expr::Field(f) => self_place_depth(&f.base).map(|d| d + 1),
-        _not_a_self_place => None,
-    }
-}
-
-fn is_nested_place_assign(lhs: &syn::Expr) -> bool {
-    // Depth > 1, or not a pure self-field place at all — conservative.
-    // `is_none_or` avoids a `None => true` costume arm.
-    self_place_depth(lhs).is_none_or(|depth| depth > 1)
 }
 
 /// A call expression, optionally wrapped in `?` / parens / group — the only
@@ -988,29 +920,29 @@ fn fn_matches(
                 && block.is_some_and(composition_root_body_ok)
         }
         StructuralRule::DerivationBans => {
+            // assignment + await fire via construct.bans + run.rs span
+            // containment (item 5). unsafe remains in-cell BodyBan so the
+            // derivation deny fixture has a structural refuse.
             receiver == Receiver::RefSelf
                 && sig.asyncness.is_none()
-                && ok_or_bodyless(block, |b| {
-                    !contains_assignment(b) && !contains_await(b) && !contains_unsafe(b)
-                })
+                && ok_or_bodyless(block, |b| !contains_unsafe(b))
         }
         StructuralRule::TransitionBans => {
-            receiver == Receiver::RefMutSelf
-                && sig.asyncness.is_none()
-                && ok_or_bodyless(block, |b| !contains_nested_place_assign(b) && !contains_await(b))
+            // nested_place_assign + await → construct.bans only (item 5).
+            receiver == Receiver::RefMutSelf && sig.asyncness.is_none()
         }
         StructuralRule::ConsumingVerbBans => {
             // self-by-value returning Self is a builder chain — red: it
             // matches NO skeleton (this arm demands return ≠ Self).
+            // nested_place_assign + await → construct.bans only (item 5).
             receiver == Receiver::ByValueSelf
                 && sig.asyncness.is_none()
                 && !return_resolves_to_self(&sig.output, ctx.self_ty, false)
-                && ok_or_bodyless(block, |b| !contains_nested_place_assign(b) && !contains_await(b))
         }
         StructuralRule::AdmissionDoorBans => {
-            is_admission_door_shape(sig, ctx)
-                && sig.asyncness.is_none()
-                && ok_or_bodyless(block, |b| !contains_await(b))
+            // await → construct.bans only (item 5). asyncness still refuses
+            // the seat (async is not an await-expression site).
+            is_admission_door_shape(sig, ctx) && sig.asyncness.is_none()
         }
         StructuralRule::DeclaredFnSeat => {
             receiver == Receiver::None && declared_fn_matches(sig, block, whole, ctx)
@@ -1222,7 +1154,17 @@ mod fixture_tests {
 
     #[test]
     fn item_1_proof_path_attr_mod_is_denied() {
-        assert_hit_count("#[path = \"x.rs\"] mod m;", 1);
+        // Item 5: #[path] is bans_attribute only — module still seats;
+        // the attribute matcher is the one door.
+        let m = crate::engines::shape::matcher_by_name("path").expect("path matcher");
+        let f = SourceFile {
+            rel_path: "crates/probe/src/lib.rs".to_string(),
+            text: "#[path = \"x.rs\"]\nmod m;".to_string(),
+            ast: syn::parse_file("#[path = \"x.rs\"]\nmod m;").expect("parses"),
+        };
+        let hits = crate::engines::shape::run_matcher(m, &f);
+        assert_eq!(hits.len(), 1, "path attr must hit under bans_attribute: {hits:?}");
+        assert_eq!(classify_src("#[path = \"x.rs\"] mod m;").len(), 0, "module seats; path is not unclassified");
     }
 
     #[test]
@@ -1274,12 +1216,12 @@ mod fixture_tests {
 
     #[test]
     fn item_2_proofs_red_shapes_are_unclassified() {
-        // One table, one body — the prior per-shape test fns were near-copies.
+        // Shapes that match NO skeleton remain unclassified. Await /
+        // nested_place_assign inside an otherwise-matching skeleton are
+        // construct.bans (item 5) — they classify, then run.rs hits.
         let cases = [
             "impl S { fn f(self: Box<Self>) {} }",
-            "impl S { fn get(&self) -> u64 { self.x.await } }",
             "impl S { fn with_x(mut self) -> Self { self.x = 1; self } }",
-            "impl S { fn into_x(mut self) -> u64 { self.a.b = 1; self.x } }",
             "fn smuggled() {}",
             "async fn bare_async() {}",
         ];
@@ -1303,6 +1245,40 @@ mod fixture_tests {
             hits.iter().any(|h| h.construct.contains("unclassified")),
             "declared fn hash drift must be red: {hits:?}"
         );
+    }
+
+    #[test]
+    fn item_5_scoped_bans_classify_then_matcher_hits() {
+        // Await / nested_place inside a matching skeleton: classify clean,
+        // construct-scoped matcher still detonates (one jurisdiction).
+        let grammar = real_grammar();
+        let await_src = "impl S { fn get(&self) -> u64 { async { 1u64 }.await } }";
+        let nest_src = "impl S { fn into_x(mut self) -> u64 { self.a.b = 1; self.x } }";
+        for (src, rule) in [
+            (await_src, StructuralRule::DerivationBans),
+            (nest_src, StructuralRule::ConsumingVerbBans),
+        ] {
+            let ast = syn::parse_file(src).expect("parses");
+            let first = ast.items.first().expect("item");
+            assert!(
+                probe_matches(&grammar, "crates/probe/src/lib.rs", rule, first),
+                "scoped-ban body must still seat: {src}"
+            );
+        }
+        let m_await = crate::engines::shape::matcher_by_name("await").expect("await");
+        let m_nest = crate::engines::shape::matcher_by_name("nested_place_assign").expect("nest");
+        let f_await = SourceFile {
+            rel_path: "crates/probe/src/lib.rs".to_string(),
+            text: await_src.to_string(),
+            ast: syn::parse_file(await_src).expect("parses"),
+        };
+        let f_nest = SourceFile {
+            rel_path: "crates/probe/src/lib.rs".to_string(),
+            text: nest_src.to_string(),
+            ast: syn::parse_file(nest_src).expect("parses"),
+        };
+        assert_eq!(crate::engines::shape::run_matcher(m_await, &f_await).len(), 1);
+        assert_eq!(crate::engines::shape::run_matcher(m_nest, &f_nest).len(), 1);
     }
 
     #[test]

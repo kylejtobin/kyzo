@@ -1,5 +1,7 @@
 impl S {
     fn bump(&self) {
-        self.x = 1;
+        unsafe {
+            *(self as *const Self as *mut u8) = 0;
+        }
     }
 }

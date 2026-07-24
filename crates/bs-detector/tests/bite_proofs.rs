@@ -305,6 +305,22 @@ fn bite_nested_place_assign() {
     );
 }
 
+#[test]
+fn bite_assignment() {
+    assert_eq!(
+        detonates("assignment", "impl S { fn bump(&self) { self.x = 1; } }"),
+        Some(1)
+    );
+}
+
+#[test]
+fn bite_await() {
+    assert_eq!(
+        detonates("await", "async fn f() { let _ = async { 1u8 }.await; }"),
+        Some(1)
+    );
+}
+
 // --- process and scheduling dishonesty ------------------------------------------------
 
 #[test]
