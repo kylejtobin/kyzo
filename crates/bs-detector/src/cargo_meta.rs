@@ -108,19 +108,31 @@ impl MetaTarget {
     }
 }
 
-fn take_string(map: &mut Map<String, Value>, key: &str) -> Result<String, String> {
-    match map.remove(key) {
-        Some(Value::String(s)) => Ok(s),
-        Some(other) => Err(format!("{key} must be a string, got {other}")),
-        None => Err(format!("missing field `{key}`")),
-    }
-}
+/// Cargo-metadata decode authority — tip 806/914: no free helpers.
+pub struct CargoMetaLaw;
 
-fn take_string_or_empty(map: &mut Map<String, Value>, key: &str) -> Result<String, String> {
-    match map.remove(key) {
-        None | Some(Value::Null) => Ok(String::new()),
-        Some(Value::String(s)) => Ok(s),
-        Some(other) => Err(format!("{key} must be a string, got {other}")),
+/// The one production door for cargo-metadata field lifts.
+pub const CARGO_META: CargoMetaLaw = CargoMetaLaw;
+
+impl CargoMetaLaw {
+    fn take_string(&self, map: &mut Map<String, Value>, key: &str) -> Result<String, String> {
+        match map.remove(key) {
+            Some(Value::String(s)) => Ok(s),
+            Some(other) => Err(format!("{key} must be a string, got {other}")),
+            None => Err(format!("missing field `{key}`")),
+        }
+    }
+
+    fn take_string_or_empty(
+        &self,
+        map: &mut Map<String, Value>,
+        key: &str,
+    ) -> Result<String, String> {
+        match map.remove(key) {
+            None | Some(Value::Null) => Ok(String::new()),
+            Some(Value::String(s)) => Ok(s),
+            Some(other) => Err(format!("{key} must be a string, got {other}")),
+        }
     }
 }
 
@@ -135,10 +147,12 @@ impl<'de> Deserialize<'de> for CargoMetadata {
             Some(v) => Vec::<Label>::deserialize(v).map_err(D::Error::custom)?,
             None => return Err(D::Error::missing_field("workspace_members")),
         };
-        let workspace_root =
-            take_string(&mut map, "workspace_root").map_err(D::Error::custom)?;
-        let target_directory =
-            take_string_or_empty(&mut map, "target_directory").map_err(D::Error::custom)?;
+        let workspace_root = CARGO_META
+            .take_string(&mut map, "workspace_root")
+            .map_err(D::Error::custom)?;
+        let target_directory = CARGO_META
+            .take_string_or_empty(&mut map, "target_directory")
+            .map_err(D::Error::custom)?;
         Ok(Self {
             packages,
             workspace_members,
@@ -151,10 +165,18 @@ impl<'de> Deserialize<'de> for CargoMetadata {
 impl<'de> Deserialize<'de> for MetaPackage {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let mut map = Map::<String, Value>::deserialize(deserializer)?;
-        let id = take_string(&mut map, "id").map_err(D::Error::custom)?;
-        let name = take_string(&mut map, "name").map_err(D::Error::custom)?;
-        let manifest_path = take_string(&mut map, "manifest_path").map_err(D::Error::custom)?;
-        let version = take_string_or_empty(&mut map, "version").map_err(D::Error::custom)?;
+        let id = CARGO_META
+            .take_string(&mut map, "id")
+            .map_err(D::Error::custom)?;
+        let name = CARGO_META
+            .take_string(&mut map, "name")
+            .map_err(D::Error::custom)?;
+        let manifest_path = CARGO_META
+            .take_string(&mut map, "manifest_path")
+            .map_err(D::Error::custom)?;
+        let version = CARGO_META
+            .take_string_or_empty(&mut map, "version")
+            .map_err(D::Error::custom)?;
         let publish = match map.remove("publish") {
             None | Some(Value::Null) => None,
             Some(v) => Some(Vec::<Label>::deserialize(v).map_err(D::Error::custom)?),
