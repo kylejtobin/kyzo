@@ -67,7 +67,7 @@ fn try_main() -> Result<ExitCode> {
         .with_context(|| format!("resolving root {}", cli.root.display()))?;
 
     let only = cli.only.as_ref().map(|l| l.as_str());
-    let v = bs_detector::run::run(&root, only)?;
+    let v = bs_detector::run::RUN.run(&root, only)?;
 
     println!("{}", v.header());
     print!("{}", v.report());
