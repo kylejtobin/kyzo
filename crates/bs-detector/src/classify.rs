@@ -20,9 +20,10 @@
 //!
 //! Recursion scope: every top-level item, every inline `mod { .. }` item,
 //! every impl/trait interior item, and every item declaration reachable
-//! through statement and expression nesting (fn bodies, blocks, if/match
-//! arms, loops, closures). Tip 641/650: no soft residual that hides an
-//! unseated item inside an expression body.
+//! through statement, expression, and type-position nesting (fn bodies,
+//! blocks, if/match arms, loops, closures, array lens, const generics,
+//! enum discriminants, signatures). Tip 641/650/686: no soft residual that
+//! hides an unseated item inside an expression or type body.
 
 use quote::ToTokens;
 use syn::visit::{self, Visit};
@@ -311,12 +312,57 @@ fn recurse_into_item(ctx: &Ctx, item: &syn::Item, hits: &mut Vec<Hit>) {
                 }
             }
         }
-        syn::Item::Fn(f) => classify_block_items(ctx, &f.block, hits),
+        syn::Item::Fn(f) => {
+            // Tip 686: signature type-position const exprs (arg/return/generics)
+            // are nests; block walk alone silent-greened them.
+            classify_signature_items(ctx, &f.sig, hits);
+            classify_block_items(ctx, &f.block, hits);
+        }
         // Tip 650: const/static RHS blocks are legal item nests in Rust.
         // Treating them as non-containers silent-greened nested unseated items.
-        syn::Item::Const(c) => classify_expr_items(ctx, &c.expr, hits),
-        syn::Item::Static(s) => classify_expr_items(ctx, &s.expr, hits),
+        // Tip 686: the type annotation is a separate nest surface.
+        syn::Item::Const(c) => {
+            classify_type_items(ctx, &c.ty, hits);
+            classify_expr_items(ctx, &c.expr, hits);
+        }
+        syn::Item::Static(s) => {
+            classify_type_items(ctx, &s.ty, hits);
+            classify_expr_items(ctx, &s.expr, hits);
+        }
+        // Tip 686: enum discriminant exprs + variant field types hold nests.
+        syn::Item::Enum(e) => {
+            classify_generics_items(ctx, &e.generics, hits);
+            for v in &e.variants {
+                for f in &v.fields {
+                    classify_type_items(ctx, &f.ty, hits);
+                }
+                if let Some((_, expr)) = &v.discriminant {
+                    classify_expr_items(ctx, expr, hits);
+                }
+            }
+        }
+        syn::Item::Struct(s) => {
+            classify_generics_items(ctx, &s.generics, hits);
+            for f in &s.fields {
+                classify_type_items(ctx, &f.ty, hits);
+            }
+        }
+        syn::Item::Union(u) => {
+            classify_generics_items(ctx, &u.generics, hits);
+            for f in &u.fields.named {
+                classify_type_items(ctx, &f.ty, hits);
+            }
+        }
+        syn::Item::Type(t) => {
+            classify_generics_items(ctx, &t.generics, hits);
+            classify_type_items(ctx, &t.ty, hits);
+        }
         syn::Item::Impl(i) => {
+            classify_generics_items(ctx, &i.generics, hits);
+            if let Some((_, trait_path, _)) = &i.trait_ {
+                classify_path_items(ctx, trait_path, hits);
+            }
+            classify_type_items(ctx, &i.self_ty, hits);
             let inner = Ctx {
                 rel: ctx.rel,
                 grammar: ctx.grammar,
@@ -329,6 +375,7 @@ fn recurse_into_item(ctx: &Ctx, item: &syn::Item, hits: &mut Vec<Hit>) {
             }
         }
         syn::Item::Trait(t) => {
+            classify_generics_items(ctx, &t.generics, hits);
             let inner = Ctx {
                 rel: ctx.rel,
                 grammar: ctx.grammar,
@@ -398,6 +445,43 @@ fn classify_expr_items(ctx: &Ctx, expr: &syn::Expr, hits: &mut Vec<Hit>) {
     v.visit_expr(expr);
 }
 
+/// Tip 686: type-position const exprs (array lens, const generics) nest items.
+fn classify_type_items(ctx: &Ctx, ty: &syn::Type, hits: &mut Vec<Hit>) {
+    let nested_ctx = nested_item_ctx(ctx);
+    let mut v = NestedItemVisit {
+        ctx: &nested_ctx,
+        hits,
+    };
+    v.visit_type(ty);
+}
+
+fn classify_path_items(ctx: &Ctx, path: &syn::Path, hits: &mut Vec<Hit>) {
+    let nested_ctx = nested_item_ctx(ctx);
+    let mut v = NestedItemVisit {
+        ctx: &nested_ctx,
+        hits,
+    };
+    v.visit_path(path);
+}
+
+fn classify_generics_items(ctx: &Ctx, generics: &syn::Generics, hits: &mut Vec<Hit>) {
+    let nested_ctx = nested_item_ctx(ctx);
+    let mut v = NestedItemVisit {
+        ctx: &nested_ctx,
+        hits,
+    };
+    v.visit_generics(generics);
+}
+
+fn classify_signature_items(ctx: &Ctx, sig: &syn::Signature, hits: &mut Vec<Hit>) {
+    let nested_ctx = nested_item_ctx(ctx);
+    let mut v = NestedItemVisit {
+        ctx: &nested_ctx,
+        hits,
+    };
+    v.visit_signature(sig);
+}
+
 #[derive(Clone, Copy)]
 enum ContainerMember<'a> {
     Impl(&'a syn::ImplItem),
@@ -443,9 +527,11 @@ fn classify_container_member(ctx: &Ctx, member: ContainerMember<'_>, hits: &mut 
     }
     match member {
         ContainerMember::Impl(syn::ImplItem::Fn(f)) => {
+            classify_signature_items(ctx, &f.sig, hits);
             classify_block_items(ctx, &f.block, hits);
         }
         ContainerMember::Trait(syn::TraitItem::Fn(f)) => {
+            classify_signature_items(ctx, &f.sig, hits);
             if let Some(block) = &f.default {
                 classify_block_items(ctx, block, hits);
             }
@@ -453,15 +539,28 @@ fn classify_container_member(ctx: &Ctx, member: ContainerMember<'_>, hits: &mut 
         // Tip 650: associated-const RHS nests — same soft drain as Item::Const
         // when only Fn bodies were walked.
         ContainerMember::Impl(syn::ImplItem::Const(c)) => {
+            classify_type_items(ctx, &c.ty, hits);
             classify_expr_items(ctx, &c.expr, hits);
         }
         ContainerMember::Trait(syn::TraitItem::Const(c)) => {
+            classify_type_items(ctx, &c.ty, hits);
             if let Some((_, expr)) = &c.default {
                 classify_expr_items(ctx, expr, hits);
             }
         }
-        ContainerMember::Impl(_not_fn_or_const) => {}
-        ContainerMember::Trait(_not_fn_or_const) => {}
+        // Tip 686: associated-type RHS is a type-position nest surface.
+        ContainerMember::Impl(syn::ImplItem::Type(t)) => {
+            classify_generics_items(ctx, &t.generics, hits);
+            classify_type_items(ctx, &t.ty, hits);
+        }
+        ContainerMember::Trait(syn::TraitItem::Type(t)) => {
+            classify_generics_items(ctx, &t.generics, hits);
+            if let Some((_, ty)) = &t.default {
+                classify_type_items(ctx, ty, hits);
+            }
+        }
+        ContainerMember::Impl(_not_fn_const_or_type) => {}
+        ContainerMember::Trait(_not_fn_const_or_type) => {}
     }
 }
 
@@ -1757,6 +1856,99 @@ mod fixture_tests {
         assert_expression_nest_exact(
             "trait T { const X: i32 = { fn nested_hide() {} 1 }; }",
             "trait-const-rhs",
+        );
+    }
+
+    /// Tip 686: enum discriminant expr nest — recurse_into_item treated
+    /// Item::Enum as `_not_a_container` (walk blind soft drain).
+    #[test]
+    fn anti_fraud_enum_discriminant_nested_fn_must_be_exact_unclassified() {
+        assert_expression_nest_exact(
+            "enum E { V = { fn nested_hide() {} 1 } }",
+            "enum-discriminant",
+        );
+    }
+
+    /// Tip 686: type-position array-len nest on a type alias.
+    #[test]
+    fn anti_fraud_type_alias_array_len_nested_fn_must_be_exact_unclassified() {
+        assert_expression_nest_exact(
+            "type T = [u8; { fn nested_hide() {} 1 }];",
+            "type-alias-array-len",
+        );
+    }
+
+    /// Tip 686: type-position array-len nest on a struct field.
+    #[test]
+    fn anti_fraud_struct_field_array_len_nested_fn_must_be_exact_unclassified() {
+        assert_expression_nest_exact(
+            "struct S { f: [u8; { fn nested_hide() {} 1 }] }",
+            "struct-field-array-len",
+        );
+    }
+
+    /// Tip 686: type-position array-len nest on an enum variant field.
+    #[test]
+    fn anti_fraud_enum_field_array_len_nested_fn_must_be_exact_unclassified() {
+        assert_expression_nest_exact(
+            "enum E { V([u8; { fn nested_hide() {} 1 }]) }",
+            "enum-field-array-len",
+        );
+    }
+
+    /// Tip 686: type-position array-len nest on a free-fn return type
+    /// (block walk alone does not visit the signature).
+    #[test]
+    fn anti_fraud_fn_return_array_len_nested_fn_must_be_exact_unclassified() {
+        assert_expression_nest_exact(
+            "fn f() -> [u8; { fn nested_hide() {} 1 }] { loop {} }",
+            "fn-return-array-len",
+        );
+    }
+
+    /// Tip 686: type-position array-len nest on a free-fn arg type.
+    #[test]
+    fn anti_fraud_fn_arg_array_len_nested_fn_must_be_exact_unclassified() {
+        assert_expression_nest_exact(
+            "fn f(_x: [u8; { fn nested_hide() {} 1 }]) {}",
+            "fn-arg-array-len",
+        );
+    }
+
+    /// Tip 686: type-position array-len nest on impl associated type.
+    #[test]
+    fn anti_fraud_impl_type_array_len_nested_fn_must_be_exact_unclassified() {
+        assert_expression_nest_exact(
+            "struct S; impl S { type T = [u8; { fn nested_hide() {} 1 }]; }",
+            "impl-type-array-len",
+        );
+    }
+
+    /// Tip 686: type-position array-len nest on trait associated type default.
+    #[test]
+    fn anti_fraud_trait_type_array_len_nested_fn_must_be_exact_unclassified() {
+        assert_expression_nest_exact(
+            "trait Tr { type T = [u8; { fn nested_hide() {} 1 }]; }",
+            "trait-type-array-len",
+        );
+    }
+
+    /// Tip 686: type-position array-len nest on impl self_ty.
+    #[test]
+    fn anti_fraud_impl_self_ty_array_len_nested_fn_must_be_exact_unclassified() {
+        assert_expression_nest_exact(
+            "struct S<const N: usize>; impl S<{ { fn nested_hide() {} 1 } }> {}",
+            "impl-self-ty-const-generic",
+        );
+    }
+
+    /// Tip 686: type-position array-len nest on const item's type annotation
+    /// (RHS expr walk alone does not visit the type).
+    #[test]
+    fn anti_fraud_const_ty_array_len_nested_fn_must_be_exact_unclassified() {
+        assert_expression_nest_exact(
+            "const X: [u8; { fn nested_hide() {} 1 }] = [0; 1];",
+            "const-ty-array-len",
         );
     }
 
