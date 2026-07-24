@@ -45,18 +45,6 @@ struct TypeFacts {
     bad_derives: Vec<Label>,
 }
 
-impl TypeFacts {
-    fn with_fallible_ctor(self) -> Self {
-        Self {
-            file: self.file,
-            line: self.line,
-            fallible_ctor: true,
-            bad_derives: self.bad_derives,
-        }
-    }
-}
-
-
 // ---------------------------------------------------------------------------
 // copy_detector
 // ---------------------------------------------------------------------------
