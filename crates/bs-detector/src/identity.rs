@@ -62,7 +62,7 @@ pub fn hit_site_hash(files: &[SourceFile], h: &Hit) -> Option<String> {
 /// Content binding for a waiver against a hit. Lines are display-only:
 /// matching is check/file/construct/`site_hash`, never `w.line == h.line()`.
 pub fn waiver_matches_hit(w: &Waiver, h: &Hit, files: &[SourceFile]) -> bool {
-    w.file == h.file()
+    w.file.as_str() == h.file().as_str()
         && w.construct == h.construct()
         && hit_site_hash(files, h).as_deref() == Some(w.site_hash.as_str())
 }

@@ -14,11 +14,180 @@
 //! #20). [`CoverageProof`] records files-existing vs files-visited; any
 //! gap is a red verdict.
 
+use std::fmt;
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use proc_macro2::LineColumn;
 use walkdir::WalkDir;
+
+/// Repo-relative UTF-8 path bytes. No `String`/`str` field — path text is
+/// recovered only through [`RelPath::as_str`].
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct RelPath {
+    bytes: Vec<u8>,
+}
+
+impl RelPath {
+    /// Admit a UTF-8 repo-relative path. The only constructor.
+    pub fn admit(path: impl AsRef<str>) -> Self {
+        Self {
+            bytes: path.as_ref().as_bytes().to_vec(),
+        }
+    }
+
+    /// UTF-8 view of admitted bytes. Corrupt bytes yield U+FFFD — never panic.
+    pub(crate) fn utf8_view(bytes: &[u8]) -> &str {
+        match std::str::from_utf8(bytes) {
+            Ok(s) => s,
+            Err(_not_utf8) => "\u{FFFD}",
+        }
+    }
+
+    /// UTF-8 view of the admitted path.
+    ///
+    /// `RelPath::admit` only accepts UTF-8 text, so the `Err` arm is
+    /// unreachable under that door. Sentinel on corruption — never expect.
+    pub fn as_str(&self) -> &str {
+        Self::utf8_view(&self.bytes)
+    }
+
+    pub fn starts_with(&self, prefix: &str) -> bool {
+        self.as_str().starts_with(prefix)
+    }
+
+    pub fn ends_with(&self, suffix: &str) -> bool {
+        self.as_str().ends_with(suffix)
+    }
+
+    pub fn contains(&self, needle: &str) -> bool {
+        self.as_str().contains(needle)
+    }
+}
+
+impl fmt::Display for RelPath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl From<&str> for RelPath {
+    fn from(path: &str) -> Self {
+        Self::admit(path)
+    }
+}
+
+impl From<String> for RelPath {
+    fn from(path: String) -> Self {
+        Self::admit(path)
+    }
+}
+
+impl PartialEq<str> for RelPath {
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
+}
+
+impl PartialEq<&str> for RelPath {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+impl PartialEq<String> for RelPath {
+    fn eq(&self, other: &String) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl PartialEq<RelPath> for str {
+    fn eq(&self, other: &RelPath) -> bool {
+        self == other.as_str()
+    }
+}
+
+impl PartialEq<RelPath> for String {
+    fn eq(&self, other: &RelPath) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+/// UTF-8 label bytes (construct names, ban names, fn paths).
+/// No `String`/`str` field — text recovered only through [`Label::as_str`].
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct Label {
+    bytes: Vec<u8>,
+}
+
+impl Label {
+    /// Admit a UTF-8 label. The only constructor.
+    pub fn admit(text: impl AsRef<str>) -> Self {
+        Self {
+            bytes: text.as_ref().as_bytes().to_vec(),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        RelPath::utf8_view(&self.bytes)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+
+    pub fn contains(&self, needle: &str) -> bool {
+        self.as_str().contains(needle)
+    }
+}
+
+impl fmt::Display for Label {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl From<&str> for Label {
+    fn from(text: &str) -> Self {
+        Self::admit(text)
+    }
+}
+
+impl From<String> for Label {
+    fn from(text: String) -> Self {
+        Self::admit(text)
+    }
+}
+
+impl PartialEq<str> for Label {
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
+}
+
+impl PartialEq<&str> for Label {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+impl PartialEq<String> for Label {
+    fn eq(&self, other: &String) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl PartialEq<Label> for str {
+    fn eq(&self, other: &Label) -> bool {
+        self == other.as_str()
+    }
+}
+
+impl PartialEq<Label> for String {
+    fn eq(&self, other: &Label) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
 
 /// One parsed source file inside the boundary. The AST is parsed once here
 /// and shared by every engine — a second parse authority would let two
@@ -233,6 +402,12 @@ mod tests {
         let proof = b.coverage_proof();
         assert_eq!(proof.existing(), 3);
         assert_eq!(proof.visited(), 3);
-        assert!(proof.missing().is_empty(), "no silent hole");
+        // Exact empty slice — soft is_empty hid a coverage_hole path while
+        // existing==visited still looked balanced (AGENT_TESTING_LAW §7).
+        assert_eq!(
+            proof.missing(),
+            &[] as &[String],
+            "costume: path in missing while counts look balanced"
+        );
     }
 }

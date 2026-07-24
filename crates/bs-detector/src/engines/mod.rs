@@ -14,6 +14,8 @@
 //! - [`behavior`]: the lie only exists when executed.
 //! - [`meta`]: the lie is in the detector itself.
 
+use crate::boundary::{Label, RelPath};
+
 pub mod graph;
 pub mod meta;
 pub mod shape;
@@ -21,17 +23,18 @@ pub mod shape;
 /// One detector hit, before waiver filtering: where and what.
 ///
 /// Fields are private (TRUTH item 9). Sole admission is [`Hit::admit`].
+/// No `String`/`str` terminals — file is [`RelPath`], construct is [`Label`].
 #[derive(Clone, Debug)]
 pub struct Hit {
-    file: String,
+    file: RelPath,
     line: usize,
     /// The construct name as waivers must swear to it.
-    construct: String,
+    construct: Label,
 }
 
 impl Hit {
     /// Sole admission constructor.
-    pub fn admit(file: impl Into<String>, line: usize, construct: impl Into<String>) -> Self {
+    pub fn admit(file: impl Into<RelPath>, line: usize, construct: impl Into<Label>) -> Self {
         Self {
             file: file.into(),
             line,
@@ -39,7 +42,7 @@ impl Hit {
         }
     }
 
-    pub fn file(&self) -> &str {
+    pub fn file(&self) -> &RelPath {
         &self.file
     }
 
@@ -48,6 +51,6 @@ impl Hit {
     }
 
     pub fn construct(&self) -> &str {
-        &self.construct
+        self.construct.as_str()
     }
 }
