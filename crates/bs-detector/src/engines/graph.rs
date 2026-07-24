@@ -131,11 +131,7 @@ pub fn derive_bypass(files: &[&SourceFile]) -> Vec<Hit> {
     types
         .into_iter()
         .filter(|(_, t)| t.fallible_ctor && !t.bad_derives.is_empty())
-        .map(|(name, t)| Hit {
-            file: t.file,
-            line: t.line,
-            construct: format!("{name}+derive({})", t.bad_derives.join("+")),
-        })
+        .map(|(name, t)| Hit::admit(t.file, t.line, format!("{name}+derive({})", t.bad_derives.join("+"))))
         .collect()
 }
 
@@ -268,15 +264,11 @@ pub fn copy_detector(files: &[&SourceFile]) -> Vec<Hit> {
         }
         // The construct is the bare pair — stable across edits, so a
         // approved waiver binds to the twins, not to a drifting score.
-        hits.push(Hit {
-            file: a.file.clone(),
-            line: a.line,
-            construct: format!("{} ~ {}", a.label, b.label),
-        });
+        hits.push(Hit::admit(a.file.clone(), a.line, format!("{} ~ {}", a.label, b.label)));
     }
     hits.sort_by(|x, y| {
-        (x.file.as_str(), x.line, x.construct.as_str())
-            .cmp(&(y.file.as_str(), y.line, y.construct.as_str()))
+        (x.file(), x.line(), x.construct())
+            .cmp(&(y.file(), y.line(), y.construct()))
     });
     hits
 }
@@ -338,11 +330,7 @@ pub fn agreement_registry(files: &[&SourceFile], registry_text: &str) -> Vec<Hit
     let parsed: toml::Value = match toml::from_str(registry_text) {
         Ok(v) => v,
         Err(e) => {
-            return vec![Hit {
-                file: "crates/xtask/agreements.toml".to_string(),
-                line: 0,
-                construct: format!("unparseable-registry: {e}"),
-            }];
+            return vec![Hit::admit("crates/xtask/agreements.toml".to_string(), 0, format!("unparseable-registry: {e}"))];
         }
     };
     let mut declared: Vec<(String, usize)> = vec![];
@@ -382,10 +370,12 @@ pub fn agreement_registry(files: &[&SourceFile], registry_text: &str) -> Vec<Hit
     declared
         .into_iter()
         .filter(|(name, _)| !defined.contains(name))
-        .map(|(name, line)| Hit {
-            file: "crates/xtask/agreements.toml".to_string(),
-            line,
-            construct: format!("declared-but-missing:{name}"),
+        .map(|(name, line)| {
+            Hit::admit(
+                "crates/xtask/agreements.toml".to_string(),
+                line,
+                format!("declared-but-missing:{name}"),
+            )
         })
         .collect()
 }
@@ -505,11 +495,11 @@ pub fn total_refusal(files: &[&SourceFile]) -> Vec<Hit> {
                         None
                     };
                     if let Some(reason) = reason {
-                        self.hits.push(Hit {
-                            file: self.rel.to_string(),
-                            line: span_line(&node.span()),
-                            construct: format!("result-error:{reason}"),
-                        });
+                        self.hits.push(Hit::admit(
+                            self.rel.to_string(),
+                            span_line(&node.span()),
+                            format!("result-error:{reason}"),
+                        ));
                     }
                 }
                 visit::visit_type(self, node);
@@ -591,11 +581,7 @@ pub fn sealed_public_door(files: &[&SourceFile], hosts: &[HostDoor]) -> Vec<Hit>
                 if allowed.contains(root.as_str()) {
                     continue;
                 }
-                hits.push(Hit {
-                    file: f.rel_path().to_string(),
-                    line: span_line(&span),
-                    construct: format!("import-outside-door:{root}"),
-                });
+                hits.push(Hit::admit(f.rel_path().to_string(), span_line(&span), format!("import-outside-door:{root}")));
             }
         }
     }
@@ -726,39 +712,39 @@ pub fn config_once(files: &[&SourceFile], seats: &[ConfigOnceSeat]) -> Vec<Hit> 
             }
         }
         if sites.len() != 1 {
-            hits.push(Hit {
-                file: seat.path.trim_end_matches('/').to_string(),
-                line: 0,
-                construct: format!(
+            hits.push(Hit::admit(
+                seat.path.trim_end_matches('/').to_string(),
+                0,
+                format!(
                     "config-once-count:{} (want 1 in `{}`)",
                     sites.len(),
                     seat.fn_path
                 ),
-            });
+            ));
             for (file, s) in &sites {
                 if s.fn_path != seat.fn_path {
-                    hits.push(Hit {
-                        file: (*file).to_string(),
-                        line: s.line,
-                        construct: format!(
+                    hits.push(Hit::admit(
+                        (*file).to_string(),
+                        s.line,
+                        format!(
                             "config-once-outside-ctor:{} (want `{}`)",
                             s.fn_path, seat.fn_path
                         ),
-                    });
+                    ));
                 }
             }
             continue;
         }
         let (file, s) = &sites[0];
         if s.fn_path != seat.fn_path {
-            hits.push(Hit {
-                file: (*file).to_string(),
-                line: s.line,
-                construct: format!(
+            hits.push(Hit::admit(
+                (*file).to_string(),
+                s.line,
+                format!(
                     "config-once-outside-ctor:{} (want `{}`)",
                     s.fn_path, seat.fn_path
                 ),
-            });
+            ));
         }
     }
     hits
@@ -790,7 +776,7 @@ mod tests {
         let hits = copy_detector(&[&a, &b]);
         assert_eq!(hits.len(), 1, "a renamed byte-copy must be caught");
         assert_eq!(
-            hits[0].construct, "crates/x/src/a.rs::alpha ~ crates/y/src/b.rs::beta",
+            hits[0].construct(), "crates/x/src/a.rs::alpha ~ crates/y/src/b.rs::beta",
             "construct is the stable pair a waiver binds to"
         );
     }
@@ -801,7 +787,7 @@ mod tests {
         let reg = "[[agreement]]\ntest_fn = \"law_alive\"\n[[agreement]]\ntest_fn = \"law_deleted\"\n";
         let hits = agreement_registry(&[&f], reg);
         assert_eq!(hits.len(), 1);
-        assert!(hits[0].construct.contains("law_deleted"));
+        assert!(hits[0].construct().contains("law_deleted"));
     }
 
     #[test]
@@ -817,19 +803,19 @@ mod tests {
         );
         let hits = total_refusal(&[&enums, &bad]);
         assert!(
-            hits.iter().any(|h| h.construct.contains("String")),
+            hits.iter().any(|h| h.construct().contains("String")),
             "String error must red: {hits:?}"
         );
         assert!(
-            hits.iter().any(|h| h.construct.contains("anyhow")),
+            hits.iter().any(|h| h.construct().contains("anyhow")),
             "anyhow must red: {hits:?}"
         );
         assert!(
-            hits.iter().any(|h| h.construct.contains("Box")),
+            hits.iter().any(|h| h.construct().contains("Box")),
             "Box<dyn Error> must red: {hits:?}"
         );
         assert!(
-            hits.iter().any(|h| h.construct.contains("not-workspace-enum")),
+            hits.iter().any(|h| h.construct().contains("not-workspace-enum")),
             "u8 must red: {hits:?}"
         );
         assert_eq!(
@@ -851,15 +837,15 @@ mod tests {
         }];
         let hits = sealed_public_door(&[&f], &hosts);
         assert!(
-            hits.iter().any(|h| h.construct.contains("import-outside-door:std")),
+            hits.iter().any(|h| h.construct().contains("import-outside-door:std")),
             "std outside allowlist must red: {hits:?}"
         );
         assert!(
-            !hits.iter().any(|h| h.construct.contains("kyzo_core")),
+            !hits.iter().any(|h| h.construct().contains("kyzo_core")),
             "allowed import must pass: {hits:?}"
         );
         assert!(
-            !hits.iter().any(|h| h.construct.contains("crate")),
+            !hits.iter().any(|h| h.construct().contains("crate")),
             "crate:: imports are internal: {hits:?}"
         );
     }
@@ -884,7 +870,7 @@ mod tests {
         );
         let hits = config_once(&[&two], &seats);
         assert!(
-            hits.iter().any(|h| h.construct.contains("config-once-count:2")),
+            hits.iter().any(|h| h.construct().contains("config-once-count:2")),
             "two sites must red: {hits:?}"
         );
     }

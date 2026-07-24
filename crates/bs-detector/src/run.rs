@@ -57,7 +57,12 @@ fn waivable(grammar: &Grammar, check: &str) -> bool {
     }
     !matches!(
         check,
-        "agreement_registry" | "coverage" | "unparsed" | "stale_waivers" | "dead_citation"
+        "agreement_registry"
+            | "coverage"
+            | "unparsed"
+            | "stale_waivers"
+            | "dead_citation"
+            | "unclassified"
     )
 }
 
@@ -144,7 +149,7 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
             condemned_names.iter().map(|n| (*n, Vec::new())).collect();
         let mut unclassified_hits: Vec<Hit> = Vec::new();
         for h in all {
-            if let Some(bucket) = condemned_hits.get_mut(h.construct.as_str()) {
+            if let Some(bucket) = condemned_hits.get_mut(h.construct()) {
                 bucket.push(h);
             } else {
                 unclassified_hits.push(h);
@@ -193,8 +198,8 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
                     for h in raw {
                         let inside = spans.iter().any(|s| {
                             s.bans.iter().any(|b| b == name)
-                                && h.line >= s.start_line
-                                && h.line <= s.end_line
+                                && h.line() >= s.start_line
+                                && h.line() <= s.end_line
                         });
                         if inside {
                             hits.push(h);
@@ -280,7 +285,13 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
         }
         counts.insert(check.to_string(), violations.len());
         for h in &violations {
-            report.push_str(&format!("FAIL {}:{} — {} — {}\n", h.file, h.line, h.construct, law));
+            report.push_str(&format!(
+                "FAIL {}:{} — {} — {}\n",
+                h.file(),
+                h.line(),
+                h.construct(),
+                law
+            ));
         }
     }
 
@@ -291,7 +302,12 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
             failed.push("stale_waivers".to_string());
             counts.insert("stale_waivers".to_string(), stale.len());
             for h in &stale {
-                report.push_str(&format!("FAIL {}:{} — {}\n", h.file, h.line, h.construct));
+                report.push_str(&format!(
+                    "FAIL {}:{} — {}\n",
+                    h.file(),
+                    h.line(),
+                    h.construct()
+                ));
             }
         }
         let dead = citation::dead_citations(root, &laws, &waivers);
@@ -300,7 +316,12 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
             failed.push("dead_citation".to_string());
             counts.insert("dead_citation".to_string(), dead.len());
             for h in &dead {
-                report.push_str(&format!("FAIL {}:{} — {}\n", h.file, h.line, h.construct));
+                report.push_str(&format!(
+                    "FAIL {}:{} — {}\n",
+                    h.file(),
+                    h.line(),
+                    h.construct()
+                ));
             }
         }
     }

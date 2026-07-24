@@ -189,11 +189,7 @@ struct Ctx<'a> {
 }
 
 fn hit(rel: &str, line: usize, construct: impl Into<String>) -> Hit {
-    Hit {
-        file: rel.to_string(),
-        line,
-        construct: construct.into(),
-    }
+    Hit::admit(rel.to_string(), line, construct)
 }
 
 fn line_of<T: ?Sized + syn::spanned::Spanned>(node: &T) -> usize {
@@ -1123,7 +1119,7 @@ mod fixture_tests {
             );
             let hits = classify_file(&grammar, &f, &crate::alias::AliasTable::build(&[&f]).expect("aliases"));
             assert!(
-                hits.iter().any(|h| h.construct == law),
+                hits.iter().any(|h| h.construct() == law),
                 "{} deny fixture must hit under `{law}`: {hits:?}",
                 kind.kebab()
             );
@@ -1172,7 +1168,7 @@ mod fixture_tests {
     fn item_1_proof_impl_macro_is_denied() {
         let hits = classify_src("struct T; impl T { some_macro!{} }");
         assert!(
-            hits.iter().any(|h| h.construct == "impl_item_macro"),
+            hits.iter().any(|h| h.construct() == "impl_item_macro"),
             "impl-interior macro must hit under its law: {hits:?}"
         );
     }
@@ -1201,7 +1197,7 @@ mod fixture_tests {
     fn assert_unclassified(src: &str) {
         let hits = classify_src(src);
         assert!(
-            hits.iter().any(|h| h.construct.contains("unclassified")),
+            hits.iter().any(|h| h.construct().contains("unclassified")),
             "expected unclassified for `{src}`: {hits:?}"
         );
     }
@@ -1230,7 +1226,7 @@ mod fixture_tests {
         let f = SourceFile::admit("crates/bs-detector/fixtures/declared-fn.deny.rs".to_string(), src.clone(), syn::parse_file(&src).expect("parses"));
         let hits = classify_file(&grammar, &f, &crate::alias::AliasTable::build(&[&f]).expect("aliases"));
         assert!(
-            hits.iter().any(|h| h.construct.contains("unclassified")),
+            hits.iter().any(|h| h.construct().contains("unclassified")),
             "declared fn hash drift must be red: {hits:?}"
         );
     }

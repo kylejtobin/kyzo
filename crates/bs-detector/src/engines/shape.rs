@@ -59,7 +59,7 @@ pub fn run_matcher(m: &Matcher, file: &SourceFile) -> Vec<Hit> {
     let mut hits = (m.run)(file);
     if m.class == ScanClass::ProductionOnly {
         let test_lines = test_scope_lines(file);
-        hits.retain(|h| !test_lines.contains(&h.line));
+        hits.retain(|h| !test_lines.contains(&h.line()));
     }
     hits
 }
@@ -219,11 +219,7 @@ impl NameSites<'_> {
 }
 
 fn push(hits: &mut Vec<Hit>, rel: &str, line: usize, construct: &str) {
-    hits.push(Hit {
-        file: rel.to_string(),
-        line,
-        construct: construct.to_string(),
-    });
+    hits.push(Hit::admit(rel.to_string(), line, construct.to_string()));
 }
 
 /// Which shape a shared file walk is collecting. One `Visit` impl — not three
@@ -357,11 +353,7 @@ fn allow_attrs(file: &SourceFile, needles: &[&str], construct: &str) -> Vec<Hit>
         let t = raw.trim_start();
         let is_attr = t.starts_with("#[allow(") || t.starts_with("#![allow(");
         if is_attr && needles.iter().any(|n| t.contains(n)) {
-            hits.push(Hit {
-                file: file.rel_path().to_string(),
-                line: idx + 1,
-                construct: construct.to_string(),
-            });
+            hits.push(Hit::admit(file.rel_path().to_string(), idx + 1, construct.to_string()));
         }
     }
     hits
@@ -1542,7 +1534,7 @@ mod tests {
             "#[cfg(test)] mod tests { fn f() { let _t = std::time::Instant::now(); } }"
         )
         .iter()
-        .all(|h| h.construct != "nondeterminism"));
+        .all(|h| h.construct() != "nondeterminism"));
         // statement-level (the hnsw probe shape)
         assert!(run(
             "nondeterminism",

@@ -115,7 +115,7 @@ fn bite_err_costume() {
         None => panic!("matcher registered and fixture parses"),
     };
     assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].construct, "err_to_zero_costume");
+    assert_eq!(hits[0].construct(), "err_to_zero_costume");
 }
 
 #[test]
@@ -392,7 +392,7 @@ fn bite_agreement_registry() {
     let reg = "[[agreement]]\ntest_fn = \"law_alive\"\n[[agreement]]\ntest_fn = \"law_deleted\"\n";
     let hits = graph::agreement_registry(&[&f], reg);
     assert_eq!(hits.len(), 1);
-    assert!(hits[0].construct.contains("law_deleted"));
+    assert!(hits[0].construct().contains("law_deleted"));
 }
 
 // --- meta: the detector policing itself ------------------------------------------------------

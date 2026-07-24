@@ -19,10 +19,35 @@ pub mod meta;
 pub mod shape;
 
 /// One detector hit, before waiver filtering: where and what.
+///
+/// Fields are private (TRUTH item 9). Sole admission is [`Hit::admit`].
 #[derive(Clone, Debug)]
 pub struct Hit {
-    pub file: String,
-    pub line: usize,
+    file: String,
+    line: usize,
     /// The construct name as waivers must swear to it.
-    pub construct: String,
+    construct: String,
+}
+
+impl Hit {
+    /// Sole admission constructor.
+    pub fn admit(file: impl Into<String>, line: usize, construct: impl Into<String>) -> Self {
+        Self {
+            file: file.into(),
+            line,
+            construct: construct.into(),
+        }
+    }
+
+    pub fn file(&self) -> &str {
+        &self.file
+    }
+
+    pub fn line(&self) -> usize {
+        self.line
+    }
+
+    pub fn construct(&self) -> &str {
+        &self.construct
+    }
 }

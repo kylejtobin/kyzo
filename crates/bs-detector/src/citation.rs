@@ -139,11 +139,7 @@ pub fn dead_citations(root: &Path, laws: &Laws, waivers: &WaiverFile) -> Vec<Hit
         if citation_live(root, laws, w) {
             continue;
         }
-        hits.push(Hit {
-            file: w.file.clone(),
-            line: w.line,
-            construct: format!("dead_citation:{}", w.citation),
-        });
+        hits.push(Hit::admit(w.file.clone(), w.line, format!("dead_citation:{}", w.citation)));
     }
     hits
 }

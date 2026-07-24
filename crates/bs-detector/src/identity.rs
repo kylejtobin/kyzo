@@ -55,15 +55,15 @@ pub fn enclosing_item_site_hash(ast: &syn::File, line: usize) -> Option<String> 
 
 /// Look up the content hash for a detector hit via its file + display line.
 pub fn hit_site_hash(files: &[SourceFile], h: &Hit) -> Option<String> {
-    let f = files.iter().find(|f| f.rel_path() == h.file)?;
-    enclosing_item_site_hash(f.ast(), h.line)
+    let f = files.iter().find(|f| f.rel_path() == h.file())?;
+    enclosing_item_site_hash(f.ast(), h.line())
 }
 
 /// Content binding for a waiver against a hit. Lines are display-only:
-/// matching is check/file/construct/`site_hash`, never `w.line == h.line`.
+/// matching is check/file/construct/`site_hash`, never `w.line == h.line()`.
 pub fn waiver_matches_hit(w: &Waiver, h: &Hit, files: &[SourceFile]) -> bool {
-    w.file == h.file
-        && w.construct == h.construct
+    w.file == h.file()
+        && w.construct == h.construct()
         && hit_site_hash(files, h).as_deref() == Some(w.site_hash.as_str())
 }
 
@@ -204,11 +204,7 @@ mod tests {
             anchor_hash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
                 .to_string(),
         };
-        let h = Hit {
-            file: "crates/x/src/a.rs".to_string(),
-            line: item_line,
-            construct: "expect".to_string(),
-        };
+        let h = Hit::admit("crates/x/src/a.rs".to_string(), item_line, "expect".to_string());
         assert!(
             waiver_matches_hit(&w, &h, &files),
             "match is by site_hash; waiver.line is display-only"

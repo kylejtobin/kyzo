@@ -23,22 +23,14 @@ pub fn coverage(b: &Boundary) -> Vec<Hit> {
     b.coverage_proof()
         .missing
         .into_iter()
-        .map(|f| Hit {
-            file: f,
-            line: 0,
-            construct: "coverage_hole".to_string(),
-        })
+        .map(|f| Hit::admit(f, 0, "coverage_hole".to_string()))
         .collect()
 }
 
 pub fn unparsed(b: &Boundary) -> Vec<Hit> {
     b.unparsed()
         .iter()
-        .map(|u| Hit {
-            file: u.rel_path.clone(),
-            line: 0,
-            construct: format!("unparseable: {}", u.error),
-        })
+        .map(|u| Hit::admit(u.rel_path.clone(), 0, format!("unparseable: {}", u.error)))
         .collect()
 }
 
@@ -56,11 +48,7 @@ pub fn stale_waivers(
             *check == w.check && hits.iter().any(|h| identity::waiver_matches_hit(w, h, files))
         });
         if !live {
-            stale.push(Hit {
-                file: w.file.clone(),
-                line: w.line,
-                construct: format!("stale_waiver:{}:{}", w.check, w.construct),
-            });
+            stale.push(Hit::admit(w.file.clone(), w.line, format!("stale_waiver:{}:{}", w.check, w.construct)));
         }
     }
     stale
@@ -77,11 +65,7 @@ pub fn forbid_roots(b: &Boundary) -> Vec<Hit> {
             || f.rel_path().contains("/src/bin/")
             || f.rel_path().ends_with("/build.rs");
         if is_root && !f.text().contains("#![forbid(unsafe_code)]") {
-            hits.push(Hit {
-                file: f.rel_path().to_string(),
-                line: 1,
-                construct: "root_without_forbid_unsafe".to_string(),
-            });
+            hits.push(Hit::admit(f.rel_path().to_string(), 1, "root_without_forbid_unsafe".to_string()));
         }
     }
     hits
@@ -164,11 +148,7 @@ why_not_sabotage = {why}
         };
         let live = vec![(
             "expect".to_string(),
-            vec![Hit {
-                file: "crates/x/src/a.rs".to_string(),
-                line: 1,
-                construct: "expect".to_string(),
-            }],
+            vec![Hit::admit("crates/x/src/a.rs".to_string(), 1, "expect".to_string())],
         )];
         assert!(
             stale_waivers(&live_wf, &live, &files).is_empty(),
@@ -219,11 +199,7 @@ why_not_sabotage = {why}
         };
         let live = vec![(
             "expect".to_string(),
-            vec![Hit {
-                file: "crates/x/src/a.rs".to_string(),
-                line: item_line,
-                construct: "expect".to_string(),
-            }],
+            vec![Hit::admit("crates/x/src/a.rs".to_string(), item_line, "expect".to_string())],
         )];
         assert!(
             stale_waivers(&wf, &live, &files).is_empty(),
