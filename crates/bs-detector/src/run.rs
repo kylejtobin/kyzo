@@ -23,6 +23,7 @@ use crate::boundary::{Boundary, SourceFile};
 use crate::classify;
 use crate::engines::{Hit, graph, meta, shape};
 use crate::grammar::{Grammar, Laws};
+use crate::identity;
 use crate::waiver::WaiverFile;
 
 pub struct Verdict {
@@ -243,19 +244,16 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
         raw_by_check.push((check.to_string(), raw.clone()));
 
         let violations: Vec<&Hit> = if waivable(&grammar, check) {
-            // One waiver covers exactly ONE hit. Two violations of the
-            // same construct sharing a line coordinate cannot ride one
-            // entry — the duplicate-site refusal in WaiverFile::load
-            // means the second occurrence stays red until FIXED.
+            // One waiver covers exactly ONE hit. Binding is by content
+            // (site_hash of the enclosing item) — TRUTH item 6. The
+            // waiver's `line` is display-only and must not gate matching,
+            // or a `//` insert above the item would falsely stale it.
             let entries = waivers.for_check(check);
             let mut consumed = vec![false; entries.len()];
             raw.iter()
                 .filter(|h| {
                     let found = entries.iter().enumerate().find(|(i, w)| {
-                        !consumed[*i]
-                            && w.file == h.file
-                            && w.line == h.line
-                            && w.construct == h.construct
+                        !consumed[*i] && identity::waiver_matches_hit(w, h, &b.files)
                     });
                     if let Some((i, _)) = found {
                         consumed[i] = true;
@@ -279,7 +277,7 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
     }
 
     if only.is_none() {
-        let stale = meta::stale_waivers(&waivers, &raw_by_check);
+        let stale = meta::stale_waivers(&waivers, &raw_by_check, &b.files);
         laws.require("stale_waivers")?;
         if !stale.is_empty() {
             failed.push("stale_waivers".to_string());

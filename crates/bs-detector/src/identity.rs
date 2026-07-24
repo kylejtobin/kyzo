@@ -6,16 +6,26 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! Site identity (TRUTH item 6's `identity_tokens`, built here because
-//! item 1's declared-fn seat binds to it): a ruling binds to CONTENT.
+//! Site identity (TRUTH item 6): a ruling binds to CONTENT.
 //!
-//! The identity of an item is its token stream stringified — identifiers
-//! and literals byte-verbatim. Doc comments are attributes, therefore
-//! tokens, therefore content: editing one changes the identity. Plain
-//! `//` comments and whitespace/layout are not tokens and do not.
+//! `identity_tokens` is the item's token stream stringified — identifiers
+//! and literals byte-verbatim. The site hash is blake3 of that string.
+//! Doc comments are attributes, therefore tokens, therefore content:
+//! editing one changes the identity. Plain `//` comments and
+//! whitespace/layout are not tokens and do not.
+//!
+//! `normalize_tokens` in `engines/graph.rs` collapses identifiers for the
+//! copy detector's clone job. It is never used here. A rename that is
+//! invisible to the clone shingles is still a content change for identity.
 
 use proc_macro2::TokenStream;
 use quote::ToTokens;
+use syn::spanned::Spanned;
+use syn::visit::Visit;
+
+use crate::boundary::SourceFile;
+use crate::engines::Hit;
+use crate::waiver::Waiver;
 
 /// The canonical identity string of an item: its token stream, stringified.
 /// Layout-independent; identifier- and literal-exact.
@@ -24,12 +34,86 @@ pub fn identity_tokens(item: &dyn ToTokens) -> String {
     ts.to_string()
 }
 
-/// The site hash a declared-fn seat (and, at item 6, a waiver) swears to:
-/// blake3 of [`identity_tokens`], lowercase hex.
+/// The site hash a declared-fn seat and a waiver swear to: blake3 of
+/// [`identity_tokens`], lowercase hex.
 pub fn site_hash(item: &dyn ToTokens) -> String {
     blake3::hash(identity_tokens(item).as_bytes())
         .to_hex()
         .to_string()
+}
+
+/// Site hash of the innermost item-like node whose span covers `line`.
+/// Used to bind a hit (which carries a display line) to content.
+pub fn enclosing_item_site_hash(ast: &syn::File, line: usize) -> Option<String> {
+    let mut v = Enclosing {
+        line,
+        best: None,
+    };
+    v.visit_file(ast);
+    v.best.map(|c| c.hash)
+}
+
+/// Look up the content hash for a detector hit via its file + display line.
+pub fn hit_site_hash(files: &[SourceFile], h: &Hit) -> Option<String> {
+    let f = files.iter().find(|f| f.rel_path == h.file)?;
+    enclosing_item_site_hash(&f.ast, h.line)
+}
+
+/// Content binding for a waiver against a hit. Lines are display-only:
+/// matching is check/file/construct/`site_hash`, never `w.line == h.line`.
+pub fn waiver_matches_hit(w: &Waiver, h: &Hit, files: &[SourceFile]) -> bool {
+    w.file == h.file
+        && w.construct == h.construct
+        && hit_site_hash(files, h).as_deref() == Some(w.site_hash.as_str())
+}
+
+struct Candidate {
+    start: usize,
+    end: usize,
+    hash: String,
+}
+
+struct Enclosing {
+    line: usize,
+    best: Option<Candidate>,
+}
+
+impl Enclosing {
+    fn consider(&mut self, node: &dyn ToTokens, span: proc_macro2::Span) {
+        let start = span.start().line;
+        let end = span.end().line;
+        if self.line < start || self.line > end {
+            return;
+        }
+        let tighter = match &self.best {
+            None => true,
+            Some(c) => (end - start) < (c.end - c.start),
+        };
+        if tighter {
+            self.best = Some(Candidate {
+                start,
+                end,
+                hash: site_hash(node),
+            });
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for Enclosing {
+    fn visit_item(&mut self, node: &'ast syn::Item) {
+        self.consider(node, node.span());
+        syn::visit::visit_item(self, node);
+    }
+
+    fn visit_impl_item(&mut self, node: &'ast syn::ImplItem) {
+        self.consider(node, node.span());
+        syn::visit::visit_impl_item(self, node);
+    }
+
+    fn visit_trait_item(&mut self, node: &'ast syn::TraitItem) {
+        self.consider(node, node.span());
+        syn::visit::visit_trait_item(self, node);
+    }
 }
 
 #[cfg(test)]
@@ -38,6 +122,10 @@ mod tests {
 
     fn item(src: &str) -> syn::Item {
         syn::parse_str(src).expect("fixture parses")
+    }
+
+    fn file(src: &str) -> syn::File {
+        syn::parse_file(src).expect("fixture parses")
     }
 
     #[test]
@@ -51,5 +139,82 @@ mod tests {
 
         let d = site_hash(&item("/// documented\nfn f(x: u64) -> u64 { x }"));
         assert_ne!(a, d, "a doc comment is an attribute, therefore content");
+    }
+
+    #[test]
+    fn item_6_proof_rename_local_changes_site_hash() {
+        let before = site_hash(&item("fn f() { let x = 1; x }"));
+        let after = site_hash(&item("fn f() { let y = 1; y }"));
+        assert_ne!(
+            before, after,
+            "rename a local in a waived body must change site_hash (stale)"
+        );
+    }
+
+    #[test]
+    fn item_6_proof_line_comment_above_item_keeps_site_hash() {
+        let bare = file("fn f() { let x = 1; x }");
+        let with_noise = file("// noise above the item\nfn f() { let x = 1; x }");
+        let h_bare = site_hash(bare.items.first().expect("item"));
+        let h_noise = site_hash(with_noise.items.first().expect("item"));
+        assert_eq!(
+            h_bare, h_noise,
+            "a // line above the item is layout, not content — must NOT stale"
+        );
+        // Enclosing lookup at the shifted line still yields the same hash.
+        let line = with_noise.items.first().expect("item").span().start().line;
+        assert_eq!(
+            enclosing_item_site_hash(&with_noise, line).as_deref(),
+            Some(h_bare.as_str())
+        );
+    }
+
+    #[test]
+    fn item_6_identity_keeps_identifiers_verbatim_unlike_clone_normalize() {
+        // graph::normalize_tokens collapses idents to "id" for clone shingles.
+        // Identity must NOT: two rename-apart bodies must differ here.
+        let a = identity_tokens(&item("fn f() { let alpha = 1; alpha }"));
+        let b = identity_tokens(&item("fn f() { let beta = 1; beta }"));
+        assert_ne!(a, b, "identity_tokens must keep identifier spelling");
+        assert!(
+            a.contains("alpha") && b.contains("beta"),
+            "byte-verbatim identifiers required: a={a:?} b={b:?}"
+        );
+    }
+
+    #[test]
+    fn item_6_waiver_matches_by_site_hash_not_line() {
+        let src = "// shift\nfn f() { let x = 1; x }";
+        let ast = file(src);
+        let item_line = ast.items.first().expect("item").span().start().line;
+        let hash = site_hash(ast.items.first().expect("item"));
+        let files = vec![SourceFile {
+            rel_path: "crates/x/src/a.rs".to_string(),
+            text: src.to_string(),
+            ast,
+        }];
+        let w = Waiver {
+            check: "expect".to_string(),
+            file: "crates/x/src/a.rs".to_string(),
+            line: 1, // deliberately wrong display line
+            construct: "expect".to_string(),
+            why_not_sabotage: "a genuinely long justification for the fixture".to_string(),
+            site_hash: hash.clone(),
+        };
+        let h = Hit {
+            file: "crates/x/src/a.rs".to_string(),
+            line: item_line,
+            construct: "expect".to_string(),
+        };
+        assert!(
+            waiver_matches_hit(&w, &h, &files),
+            "match is by site_hash; waiver.line is display-only"
+        );
+        let mut drifted = w.clone();
+        drifted.site_hash = "0".repeat(64);
+        assert!(
+            !waiver_matches_hit(&drifted, &h, &files),
+            "site_hash mismatch must refuse the waiver"
+        );
     }
 }

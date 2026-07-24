@@ -8,12 +8,13 @@
 
 //! An approved waiver: the ONLY way a detector hit survives without a fix.
 //!
-//! A waiver binds to exactly one site (check, file, line, construct) and
-//! carries a `why_not_sabotage` the operator audits — earned by argument,
-//! never by incumbency. The moment its site drifts, the waiver does not
-//! quietly keep counting as waived: it becomes a reported violation of
-//! its own (BANNED #22). Blanket waiver entrys are not representable: there
-//! is no pattern-wide or file-wide waiver constructor.
+//! A waiver binds to content (TRUTH item 6): check, file, construct, and
+//! `site_hash` (blake3 of the item's [`crate::identity::identity_tokens`]).
+//! The `line` field is display-only — a `//` inserted above the item shifts
+//! the editor line but does not stale the ruling. A content edit that
+//! changes the site hash makes the waiver STALE: it stops applying and is
+//! reported. Blanket waiver entrys are not representable: there is no
+//! pattern-wide or file-wide waiver constructor.
 //!
 //! File format: `crates/bs-detector/waivers.toml`, one `[[waiver]]` table
 //! per waiver entry, plus `[[scope_waiver]]` for the single lawful way a
@@ -25,7 +26,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
-/// One approved, site-bound waiver entry.
+/// One approved, content-bound waiver entry.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Waiver {
@@ -34,11 +35,15 @@ pub struct Waiver {
     pub check: String,
     /// Repo-root-relative file of the waived site.
     pub file: String,
-    /// 1-indexed line of the waived site.
+    /// Display-only 1-indexed line (editor coordinate). Never used to
+    /// decide whether the waiver still applies — that is `site_hash`.
     pub line: usize,
     /// The construct at the site, exactly as the check reports it (pattern
     /// name for shape checks, function/member name for graph checks).
     pub construct: String,
+    /// Blake3 hex of the waived item's identity tokens (TRUTH item 6).
+    /// Mismatch against the live item = STALE; the waiver stops applying.
+    pub site_hash: String,
     /// The justification. Validated substantive at load; audited by the
     /// operator; a lie here is the highest-severity fraud in this repo.
     pub why_not_sabotage: String,
@@ -70,16 +75,16 @@ pub struct WaiverFile {
 
 impl WaiverFile {
     /// Load and validate. Refuses: empty/uncited justification, duplicate
-    /// site entries (one waiver entry per site — a duplicate means someone
-    /// is padding), and unknown fields (a typo'd field name silently
-    /// weakening a waiver is itself a lie-shape).
+    /// content bindings (one waiver entry per site_hash — a duplicate means
+    /// someone is padding), malformed site_hash, and unknown fields (a
+    /// typo'd field name silently weakening a waiver is itself a lie-shape).
     pub fn load(path: &Path) -> Result<WaiverFile> {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("reading {}", path.display()))?;
         let parsed: WaiverFile =
             toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
 
-        let mut seen: BTreeSet<(String, String, usize, String)> = BTreeSet::new();
+        let mut seen: BTreeSet<(String, String, String, String)> = BTreeSet::new();
         for w in &parsed.waiver {
             if w.why_not_sabotage.trim().len() < 20 {
                 bail!(
@@ -89,18 +94,26 @@ impl WaiverFile {
                     w.construct
                 );
             }
-            let key = (
-                w.check.clone(),
-                w.file.clone(),
-                w.line,
-                w.construct.clone(),
-            );
-            if !seen.insert(key) {
+            if w.site_hash.len() != 64 || !w.site_hash.chars().all(|c| c.is_ascii_hexdigit()) {
                 bail!(
-                    "duplicate waiver for {}:{} ({}) — one waiver entry per site",
+                    "waiver {}:{} ({}) — site_hash must be 64 hex chars (blake3 of identity_tokens)",
                     w.file,
                     w.line,
                     w.construct
+                );
+            }
+            let key = (
+                w.check.clone(),
+                w.file.clone(),
+                w.construct.clone(),
+                w.site_hash.clone(),
+            );
+            if !seen.insert(key) {
+                bail!(
+                    "duplicate waiver for {} ({}) site_hash={} — one waiver entry per content site",
+                    w.file,
+                    w.construct,
+                    w.site_hash
                 );
             }
         }
@@ -143,9 +156,11 @@ mod tests {
         WaiverFile::load(f.path())
     }
 
+    const HASH: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
     #[test]
     fn a_real_waiver_loads_and_binds_to_its_check() {
-        let wf = load_str(
+        let wf = load_str(&format!(
             r#"
 scope_waiver = []
 
@@ -154,17 +169,19 @@ check = "expect"
 file = "crates/kyzo-lsp/src/translate.rs"
 line = 59
 construct = "expect"
+site_hash = "{HASH}"
 why_not_sabotage = "LSP Position.character is u32 by wire protocol; a >4B-unit line is outside the protocol's representable range."
-"#,
-        )
+"#
+        ))
         .expect("loads");
         assert_eq!(wf.for_check("expect").len(), 1);
         assert!(wf.for_check("unwrap").is_empty());
+        assert_eq!(wf.waiver[0].site_hash, HASH);
     }
 
     #[test]
     fn refuses_thin_justification() {
-        let e = load_str(
+        let e = load_str(&format!(
             r#"
 scope_waiver = []
 
@@ -173,16 +190,64 @@ check = "expect"
 file = "a.rs"
 line = 1
 construct = "expect"
+site_hash = "{HASH}"
 why_not_sabotage = "it's fine"
-"#,
-        );
+"#
+        ));
         assert!(e.is_err(), "sub-20-char justification must refuse to load");
     }
 
     #[test]
-    fn refuses_duplicate_site() {
-        let e = load_str(
+    fn refuses_duplicate_content_site() {
+        let e = load_str(&format!(
             r#"
+scope_waiver = []
+
+[[waiver]]
+check = "expect"
+file = "a.rs"
+line = 1
+construct = "expect"
+site_hash = "{HASH}"
+why_not_sabotage = "a genuinely long enough justification string here"
+
+[[waiver]]
+check = "expect"
+file = "a.rs"
+line = 99
+construct = "expect"
+site_hash = "{HASH}"
+why_not_sabotage = "a second waiver entry for the same content site is padding"
+"#
+        ));
+        assert!(
+            e.is_err(),
+            "duplicate content site (same site_hash) must refuse even when display lines differ"
+        );
+    }
+
+    #[test]
+    fn refuses_malformed_site_hash_and_missing_site_hash() {
+        assert!(
+            load_str(
+                r#"
+scope_waiver = []
+
+[[waiver]]
+check = "expect"
+file = "a.rs"
+line = 1
+construct = "expect"
+site_hash = "deadbeef"
+why_not_sabotage = "a genuinely long enough justification string here"
+"#
+            )
+            .is_err(),
+            "short site_hash must refuse"
+        );
+        assert!(
+            load_str(
+                r#"
 scope_waiver = []
 
 [[waiver]]
@@ -191,22 +256,20 @@ file = "a.rs"
 line = 1
 construct = "expect"
 why_not_sabotage = "a genuinely long enough justification string here"
-
-[[waiver]]
-check = "expect"
-file = "a.rs"
-line = 1
-construct = "expect"
-why_not_sabotage = "a second waiver entry for the same site is padding"
-"#,
+"#
+            )
+            .is_err(),
+            "missing site_hash must refuse — content binding is mandatory"
         );
-        assert!(e.is_err(), "duplicate site must refuse to load");
     }
 
     #[test]
     fn refuses_unknown_fields_and_empty_scope() {
         assert!(
-            load_str("scope_waiver = []\n[[waiver]]\ncheck='x'\nfile='a'\nline=1\nconstruct='c'\nwhy_not_sabotage='long enough justification right here'\nbaseline=5\n").is_err(),
+            load_str(&format!(
+                "scope_waiver = []\n[[waiver]]\ncheck='x'\nfile='a'\nline=1\nconstruct='c'\nsite_hash='{HASH}'\nwhy_not_sabotage='long enough justification right here'\nbaseline=5\n"
+            ))
+            .is_err(),
             "unknown field (e.g. a smuggled 'baseline') must refuse"
         );
         assert!(
