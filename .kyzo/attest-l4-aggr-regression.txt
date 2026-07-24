@@ -1,0 +1,53 @@
+ATTESTATION — MECE L4 aggr.rs regression (tip 607)
+date: 2026-07-23
+agent: cursor-grok-4.5-high
+CARGO_TARGET_DIR: /home/kyle/src/kyzo/target-mailbox
+
+FIX COMMIT (cite this hash — not the attestation commit)
+- d7463d6dc6b85d5362951f705e71e469f25e2d9b
+  cursor: L4 aggr regression — AggrGroupCount::set without unwrap_or/saturating_add
+
+REGRESSION INTRODUCED BY
+- a7d15995 — L4 exec cleanup-fanout replaced
+    `entry(...).or_insert(0); *entry += 1`
+  with
+    `get(&key).copied().unwrap_or(0).saturating_add(1)`
+  which detonated both unwrap_or and unchecked_arith at
+  crates/kyzo-core/src/exec/fold/aggr.rs:439.
+
+SCOPE
+- ONLY crates/kyzo-core/src/exec/fold/aggr.rs (exec/** lease).
+- Did not touch crates/bs-detector/**.
+
+BEFORE (site)
+- Line ~439: `.unwrap_or(0).saturating_add(1)`
+- Meter (cached binary target-mailbox/debug/bs-detector):
+  - --only unwrap_or → FAIL aggr.rs:439 (1)
+  - --only unchecked_arith → FAIL aggr.rs:439 (1)
+
+AFTER (site)
+- AggrGroupCount::set: BTreeMap Entry match —
+  Vacant → insert(1); Occupied → i64::checked_add(1) or
+  miette!("'group_count' multiplicity overflowed i64").
+- No unwrap_or / saturating_* / wrapping_* / overflowing_* /
+  unchecked_* method calls at the site.
+- Meter (same binary):
+  - --only unwrap_or → PASS (0)
+  - --only unchecked_arith → PASS (0)
+- err_costume this wave in exec/**: none (0 FAIL under exec/).
+  Residual err_costume:2 both under crates/bs-detector/** (out of lease).
+
+NOTE ON cargo run -p bs-detector
+- Live bs-detector sources currently fail to compile (Waiver field
+  rename mid-flight in citation.rs). Remeter used the already-built
+  target-mailbox/debug/bs-detector binary from this CARGO_TARGET_DIR,
+  same checks grammar as `cargo run -p bs-detector -- --only …`.
+
+HOST COMPILE
+- cargo check -p kyzo --lib: FAIL on pre-existing unrelated errors
+  (WriteTx::del_range_chunk, Range::partition_point) outside this
+  file/lease — not introduced by d7463d6d.
+
+TRUE OR FALSE: aggr.rs still carries unwrap_or or saturating_add
+at AggrGroupCount::set.
+FALSE.
