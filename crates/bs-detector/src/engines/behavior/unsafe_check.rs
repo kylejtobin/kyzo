@@ -89,77 +89,73 @@ pub struct UnsafeCheckGate;
 impl UnsafeCheckGate {
     /// Check entry door — declared-fn seat (tip 815).
     pub fn check_at(repo_root: &Path) -> Result<String, UnsafeCheckError> {
-        check_at_body(repo_root)
-    }
-}
-
-fn check_at_body(repo_root: &Path) -> Result<String, UnsafeCheckError> {
-    if !repo_root.join("Cargo.toml").is_file() {
-        return Ok("unsafe gate: no Cargo workspace yet — armed but idle".to_string());
-    }
-
-    let mut checked = Vec::new();
-    for (root_file, src_dir) in ENGINE_CRATES {
-        let root_path = repo_root.join(root_file);
-        if !root_path.is_file() {
-            continue;
-        }
-        let root_text = std::fs::read_to_string(&root_path)
-            .map_err(|e| UnsafeCheckError::Io(anyhow::anyhow!("reading {root_file}: {e}")))?;
-        if !root_text.contains("#![forbid(unsafe_code)]") {
-            return Err(UnsafeCheckError::MissingForbid {
-                root: (*root_file).to_string(),
-            });
+        if !repo_root.join("Cargo.toml").is_file() {
+            return Ok("unsafe gate: no Cargo workspace yet — armed but idle".to_string());
         }
 
-        let src_path = repo_root.join(src_dir);
-        let mut allow_offenders = Vec::new();
-        let mut liar_offenders = Vec::new();
-        for entry in WalkDir::new(&src_path).into_iter().filter_map(|e| e.ok()) {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+        let mut checked = Vec::new();
+        for (root_file, src_dir) in ENGINE_CRATES {
+            let root_path = repo_root.join(root_file);
+            if !root_path.is_file() {
                 continue;
             }
-            let text = std::fs::read_to_string(path).map_err(|e| {
-                UnsafeCheckError::Io(anyhow::anyhow!("reading {}: {e}", path.display()))
-            })?;
-            let rel = match path.strip_prefix(repo_root) {
-                Ok(rel) => rel,
-                Err(_) => path,
+            let root_text = std::fs::read_to_string(&root_path)
+                .map_err(|e| UnsafeCheckError::Io(anyhow::anyhow!("reading {root_file}: {e}")))?;
+            if !root_text.contains("#![forbid(unsafe_code)]") {
+                return Err(UnsafeCheckError::MissingForbid {
+                    root: (*root_file).to_string(),
+                });
             }
-            .to_string_lossy()
-            .replace('\\', "/");
-            if ALLOW_PATTERN.is_match(&text) {
-                allow_offenders.push(rel.clone());
-            }
-            if LIAR_PATTERN.is_match(&text) {
-                liar_offenders.push(rel);
-            }
-        }
-        if !allow_offenders.is_empty() {
-            allow_offenders.sort();
-            return Err(UnsafeCheckError::AllowFound {
-                offenders: allow_offenders,
-            });
-        }
-        if !liar_offenders.is_empty() {
-            liar_offenders.sort();
-            return Err(UnsafeCheckError::LyingDoc {
-                offenders: liar_offenders,
-            });
-        }
-        checked.push((*root_file).to_string());
-    }
 
-    if checked.is_empty() {
-        return Ok(
-            "unsafe gate: workspace exists but no engine crate roots yet — armed but idle"
-                .to_string(),
-        );
-    }
+            let src_path = repo_root.join(src_dir);
+            let mut allow_offenders = Vec::new();
+            let mut liar_offenders = Vec::new();
+            for entry in WalkDir::new(&src_path).into_iter().filter_map(|e| e.ok()) {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                    continue;
+                }
+                let text = std::fs::read_to_string(path).map_err(|e| {
+                    UnsafeCheckError::Io(anyhow::anyhow!("reading {}: {e}", path.display()))
+                })?;
+                let rel = match path.strip_prefix(repo_root) {
+                    Ok(rel) => rel,
+                    Err(_) => path,
+                }
+                .to_string_lossy()
+                .replace('\\', "/");
+                if ALLOW_PATTERN.is_match(&text) {
+                    allow_offenders.push(rel.clone());
+                }
+                if LIAR_PATTERN.is_match(&text) {
+                    liar_offenders.push(rel);
+                }
+            }
+            if !allow_offenders.is_empty() {
+                allow_offenders.sort();
+                return Err(UnsafeCheckError::AllowFound {
+                    offenders: allow_offenders,
+                });
+            }
+            if !liar_offenders.is_empty() {
+                liar_offenders.sort();
+                return Err(UnsafeCheckError::LyingDoc {
+                    offenders: liar_offenders,
+                });
+            }
+            checked.push((*root_file).to_string());
+        }
 
-    Ok(format!(
-        "unsafe gate: clean — both engine crates forbid unsafe with zero exceptions:{}",
-        checked.iter().map(|c| format!(" {c}")).collect::<String>()
-    ))
+        if checked.is_empty() {
+            return Ok(
+                "unsafe gate: workspace exists but no engine crate roots yet — armed but idle"
+                    .to_string(),
+            );
+        }
+
+        Ok(format!(
+            "unsafe gate: clean — both engine crates forbid unsafe with zero exceptions:{}",
+            checked.iter().map(|c| format!(" {c}")).collect::<String>()
+        ))
+    }
 }

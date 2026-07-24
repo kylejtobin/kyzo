@@ -745,59 +745,6 @@ fn check_workspace(
     result
 }
 
-fn check_at_scoped_body(
-    repo_root: &Path,
-    owned_target_override: Option<&Path>,
-) -> Result<String, BuildScriptSandboxError> {
-    if !repo_root.join("Cargo.toml").is_file() {
-        return Ok(
-            "build-script sandbox gate: no Cargo workspace yet — armed but idle".to_string(),
-        );
-    }
-
-    let sandbox = verify_sandbox_available()?;
-
-    let metadata = run_metadata(repo_root)?;
-    let owned_target = match owned_target_override {
-        Some(p) => p.to_path_buf(),
-        None => PathBuf::from(&metadata.target_directory).join("build-script-sandbox"),
-    };
-    let workspace_root = PathBuf::from(&metadata.workspace_root);
-    let targets = discover_build_script_packages(&metadata);
-
-    if targets.is_empty() {
-        return Ok(
-            "build-script sandbox gate: no custom-build targets in the full dependency graph — armed but idle"
-                .to_string(),
-        );
-    }
-
-    let member_names = discover_workspace_member_names(&metadata);
-    let mut known_names: Vec<String> = targets.iter().map(|t| t.name.clone()).collect();
-    known_names.extend(member_names);
-    known_names.sort_unstable();
-    known_names.dedup();
-
-    let dirs = package_dirs(&metadata);
-
-    check_workspace(
-        repo_root,
-        &workspace_root,
-        &owned_target,
-        &known_names,
-        &dirs,
-        sandbox,
-    )?;
-
-    Ok(format!(
-        "build-script sandbox gate: clean (checked, net-isolated, whole-workspace build:{} — wrote only inside their own build/<pkg>-*/out/, touched no network)",
-        targets
-            .iter()
-            .map(|t| format!(" {}", t.spec))
-            .collect::<String>()
-    ))
-}
-
 /// Live build-script sandbox gate.
 pub struct BuildScriptSandboxGate;
 
@@ -820,7 +767,53 @@ impl BuildScriptSandboxGate {
         repo_root: &Path,
         owned_target_override: Option<&Path>,
     ) -> Result<String, BuildScriptSandboxError> {
-        check_at_scoped_body(repo_root, owned_target_override)
+        if !repo_root.join("Cargo.toml").is_file() {
+            return Ok(
+                "build-script sandbox gate: no Cargo workspace yet — armed but idle".to_string(),
+            );
+        }
+
+        let sandbox = verify_sandbox_available()?;
+
+        let metadata = run_metadata(repo_root)?;
+        let owned_target = match owned_target_override {
+            Some(p) => p.to_path_buf(),
+            None => PathBuf::from(&metadata.target_directory).join("build-script-sandbox"),
+        };
+        let workspace_root = PathBuf::from(&metadata.workspace_root);
+        let targets = discover_build_script_packages(&metadata);
+
+        if targets.is_empty() {
+            return Ok(
+                "build-script sandbox gate: no custom-build targets in the full dependency graph — armed but idle"
+                    .to_string(),
+            );
+        }
+
+        let member_names = discover_workspace_member_names(&metadata);
+        let mut known_names: Vec<String> = targets.iter().map(|t| t.name.clone()).collect();
+        known_names.extend(member_names);
+        known_names.sort_unstable();
+        known_names.dedup();
+
+        let dirs = package_dirs(&metadata);
+
+        check_workspace(
+            repo_root,
+            &workspace_root,
+            &owned_target,
+            &known_names,
+            &dirs,
+            sandbox,
+        )?;
+
+        Ok(format!(
+            "build-script sandbox gate: clean (checked, net-isolated, whole-workspace build:{} — wrote only inside their own build/<pkg>-*/out/, touched no network)",
+            targets
+                .iter()
+                .map(|t| format!(" {}", t.spec))
+                .collect::<String>()
+        ))
     }
 }
 

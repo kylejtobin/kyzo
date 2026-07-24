@@ -87,7 +87,119 @@ impl PureRustGate {
     /// Check entry door — declared-fn seat (tip 815): static live-check with
     /// no natural receiver; seated individually, not bulk-grandfathered.
     pub fn check_at(repo_root: &Path) -> Result<String, PureRustError> {
-        check_at_body(repo_root)
+        if !repo_root.join("Cargo.toml").is_file() {
+            return Ok("pure-Rust gate: no Cargo workspace yet — armed but idle".to_string());
+        }
+
+        // Warm the registry/dep cache first: a cold cache pollutes stderr with
+        // "Updating index / Downloading ..." noise that would false-match the
+        // banned-crate scan below. The warm is best-effort — the scan below is
+        // the gate — so its outcome is carried into the report, never dropped.
+        let warm_note = match run_cargo(repo_root, &["fetch", "--locked"])
+            .or_else(|_| run_cargo(repo_root, &["fetch"]))
+        {
+            Ok(fetch_warm) if fetch_warm.status.success() => String::new(),
+            Ok(fetch_warm) => format!(
+                " [cache warm exited {}; scan ran against a possibly cold cache]",
+                fetch_warm.status
+            ),
+            Err(fetch_warm_refuse) => format!(
+                " [cache warm failed to spawn: {fetch_warm_refuse}; scan ran against a possibly cold cache]"
+            ),
+        };
+
+        // Story #322: the set of package trees scanned is derived from `cargo
+        // metadata`'s real workspace-member list, not a hand-maintained package
+        // list — see `discover_roots`.
+        let meta_output = run_cargo(repo_root, &["metadata", "--format-version=1", "--no-deps"])
+            .map_err(PureRustError::Spawn)?;
+        let meta_combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&meta_output.stdout),
+            String::from_utf8_lossy(&meta_output.stderr)
+        );
+        if !meta_output.status.success() {
+            return Err(PureRustError::TreeCommandFailed {
+                package: "workspace metadata".to_string(),
+                output: meta_combined,
+            });
+        }
+
+        let metadata: CargoMetadata = serde_json::from_slice(&meta_output.stdout).map_err(|e| {
+            PureRustError::TreeCommandFailed {
+                package: "workspace metadata".to_string(),
+                output: format!("could not parse `cargo metadata` JSON: {e}"),
+            }
+        })?;
+
+        let roots = discover_roots(&metadata);
+
+        // Each discovered root gets its dependency tree scanned via `cargo
+        // tree`, exactly as the ported script did: `cargo tree` resolves a
+        // package's own precise, per-consumer feature set, which `cargo
+        // metadata`'s resolve graph cannot represent under whole-workspace
+        // feature unification (verified: `cargo build -p kyzo-bin` never
+        // compiles `ring`/`js-sys`/`cc`, yet metadata's unfiltered resolve
+        // graph claims all three are reachable from `kyzo-bin` — a real crate
+        // pulled in only by *other* workspace members' feature requests, not by
+        // `kyzo-bin` itself). `cargo metadata` supplies the package SET to
+        // scan; `cargo tree` stays the source of the scanned lines so the scan
+        // itself does not regress to false positives.
+        let mut trees = String::new();
+        let mut checked = Vec::new();
+        for pkg in &roots {
+            let output = run_cargo(
+                repo_root,
+                &[
+                    "tree",
+                    "-p",
+                    pkg,
+                    "-e",
+                    "normal,build",
+                    "--target=all",
+                    "--prefix",
+                    "none",
+                ],
+            )
+            .map_err(PureRustError::Spawn)?;
+            let combined = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            if !output.status.success() {
+                return Err(PureRustError::TreeCommandFailed {
+                    package: pkg.clone(),
+                    output: combined,
+                });
+            }
+            trees.push_str(&combined);
+            trees.push('\n');
+            checked.push(pkg.clone());
+        }
+
+        if checked.is_empty() {
+            return Err(PureRustError::NoPackageFound);
+        }
+
+        let mut lines: Vec<&str> = trees.lines().collect();
+        lines.sort_unstable();
+        lines.dedup();
+        let hits: Vec<String> = lines
+            .into_iter()
+            .filter(|l| BANNED_RE.is_match(l) || BANNED_SUFFIX_RE.is_match(l))
+            .filter(|l| !PURE_SYS_RE.is_match(l))
+            .map(|s| s.to_string())
+            .collect();
+
+        if !hits.is_empty() {
+            return Err(PureRustError::BannedCratesFound(hits));
+        }
+
+        Ok(format!(
+            "pure-Rust gate: clean (checked:{} — no C/C++-toolchain crate in the dependency tree){warm_note}",
+            checked.iter().map(|c| format!(" {c}")).collect::<String>()
+        ))
     }
 }
 
@@ -143,122 +255,6 @@ fn discover_roots(metadata: &CargoMetadata) -> Vec<String> {
 }
 
 const KEEP_MANIFEST_OUTSIDE_WORKSPACE: bool = true;
-
-fn check_at_body(repo_root: &Path) -> Result<String, PureRustError> {
-    if !repo_root.join("Cargo.toml").is_file() {
-        return Ok("pure-Rust gate: no Cargo workspace yet — armed but idle".to_string());
-    }
-
-    // Warm the registry/dep cache first: a cold cache pollutes stderr with
-    // "Updating index / Downloading ..." noise that would false-match the
-    // banned-crate scan below. The warm is best-effort — the scan below is
-    // the gate — so its outcome is carried into the report, never dropped.
-    let warm_note = match run_cargo(repo_root, &["fetch", "--locked"])
-        .or_else(|_| run_cargo(repo_root, &["fetch"]))
-    {
-        Ok(fetch_warm) if fetch_warm.status.success() => String::new(),
-        Ok(fetch_warm) => format!(
-            " [cache warm exited {}; scan ran against a possibly cold cache]",
-            fetch_warm.status
-        ),
-        Err(fetch_warm_refuse) => format!(
-            " [cache warm failed to spawn: {fetch_warm_refuse}; scan ran against a possibly cold cache]"
-        ),
-    };
-
-    // Story #322: the set of package trees scanned is derived from `cargo
-    // metadata`'s real workspace-member list, not a hand-maintained package
-    // list — see `discover_roots`.
-    let meta_output = run_cargo(repo_root, &["metadata", "--format-version=1", "--no-deps"])
-        .map_err(PureRustError::Spawn)?;
-    let meta_combined = format!(
-        "{}{}",
-        String::from_utf8_lossy(&meta_output.stdout),
-        String::from_utf8_lossy(&meta_output.stderr)
-    );
-    if !meta_output.status.success() {
-        return Err(PureRustError::TreeCommandFailed {
-            package: "workspace metadata".to_string(),
-            output: meta_combined,
-        });
-    }
-
-    let metadata: CargoMetadata = serde_json::from_slice(&meta_output.stdout).map_err(|e| {
-        PureRustError::TreeCommandFailed {
-            package: "workspace metadata".to_string(),
-            output: format!("could not parse `cargo metadata` JSON: {e}"),
-        }
-    })?;
-
-    let roots = discover_roots(&metadata);
-
-    // Each discovered root gets its dependency tree scanned via `cargo
-    // tree`, exactly as the ported script did: `cargo tree` resolves a
-    // package's own precise, per-consumer feature set, which `cargo
-    // metadata`'s resolve graph cannot represent under whole-workspace
-    // feature unification (verified: `cargo build -p kyzo-bin` never
-    // compiles `ring`/`js-sys`/`cc`, yet metadata's unfiltered resolve
-    // graph claims all three are reachable from `kyzo-bin` — a real crate
-    // pulled in only by *other* workspace members' feature requests, not by
-    // `kyzo-bin` itself). `cargo metadata` supplies the package SET to
-    // scan; `cargo tree` stays the source of the scanned lines so the scan
-    // itself does not regress to false positives.
-    let mut trees = String::new();
-    let mut checked = Vec::new();
-    for pkg in &roots {
-        let output = run_cargo(
-            repo_root,
-            &[
-                "tree",
-                "-p",
-                pkg,
-                "-e",
-                "normal,build",
-                "--target=all",
-                "--prefix",
-                "none",
-            ],
-        )
-        .map_err(PureRustError::Spawn)?;
-        let combined = format!(
-            "{}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        if !output.status.success() {
-            return Err(PureRustError::TreeCommandFailed {
-                package: pkg.clone(),
-                output: combined,
-            });
-        }
-        trees.push_str(&combined);
-        trees.push('\n');
-        checked.push(pkg.clone());
-    }
-
-    if checked.is_empty() {
-        return Err(PureRustError::NoPackageFound);
-    }
-
-    let mut lines: Vec<&str> = trees.lines().collect();
-    lines.sort_unstable();
-    lines.dedup();
-    let hits: Vec<String> = lines
-        .into_iter()
-        .filter(|l| BANNED_RE.is_match(l) || BANNED_SUFFIX_RE.is_match(l))
-        .filter(|l| !PURE_SYS_RE.is_match(l))
-        .map(|s| s.to_string())
-        .collect();
-
-    if !hits.is_empty() {
-        return Err(PureRustError::BannedCratesFound(hits));
-    }
-
-    Ok(format!(
-        "pure-Rust gate: clean (checked:{} — no C/C++-toolchain crate in the dependency tree){warm_note}",
-        checked.iter().map(|c| format!(" {c}")).collect::<String>()
-    ))
-}
 
 #[cfg(test)]
 #[derive(Debug)]
