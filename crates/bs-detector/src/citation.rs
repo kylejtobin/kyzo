@@ -274,10 +274,8 @@ impl CitationLaw {
         let Ok(c) = Citation::parse(w.citation()) else {
             return false;
         };
-        match self.resolve_hash(root, laws, &c) {
-            Some(h) => h == w.anchor_hash(),
-            None => false,
-        }
+        self.resolve_hash(root, laws, &c)
+            .is_some_and(|h| h == w.anchor_hash())
     }
 
     /// Every waiver whose citation is missing or whose anchor hash drifted.
@@ -357,7 +355,7 @@ impl CitationLaw {
         let start_pat = format!("{n}. **");
         let lines: Vec<&str> = text.lines().collect();
         let start = lines.iter().position(|l| l.starts_with(&start_pat))?;
-        let end = lines
+        let end = match lines
             .iter()
             .enumerate()
             .skip(start + 1)
@@ -371,8 +369,10 @@ impl CitationLaw {
                 } else {
                     None
                 }
-            })
-            .unwrap_or(lines.len());
+            }) {
+            Some(i) => i,
+            None => lines.len(),
+        };
         Some(lines[start..end].join("\n"))
     }
 }

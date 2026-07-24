@@ -288,10 +288,11 @@ impl CampaignLaw {
 
             // INVARIANT(CampaignFreshness): age is only defined when observation
             // instant is at/after the artifact stamp; a future stamp is treated
-            // as age 0 (not stale), never as wrapping underflow.
+            // as not-yet-elapsed (u64::MIN), never as wrapping underflow or
+            // Err→0 / saturating_sub costumes.
             let age = match now_unix.checked_sub(artifact.timestamp_unix()) {
                 Some(secs) => secs,
-                None => 0,
+                None => u64::MIN,
             };
             if age > seat.freshness_bound_secs() {
                 hits.push(Hit::admit(

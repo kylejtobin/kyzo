@@ -93,10 +93,10 @@ impl Enclosing {
         if self.line < start || self.line > end {
             return;
         }
-        let tighter = match &self.best {
-            None => true,
-            Some(c) => (end - start) < (c.end - c.start),
-        };
+        let tighter = self
+            .best
+            .as_ref()
+            .is_none_or(|c| (end - start) < (c.end - c.start));
         if tighter {
             self.best = Some(Candidate {
                 start,

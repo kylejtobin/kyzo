@@ -23,6 +23,26 @@ use proc_macro2::LineColumn;
 use serde::Deserialize;
 use walkdir::WalkDir;
 
+/// Shared UTF-8 view over admit-proven byte bags. `&self` derivation — not a
+/// free helper and not an Err→literal costume (convertible self-red burn).
+pub struct Utf8ViewLaw;
+
+/// The one UTF-8 view door for [`RelPath`] / [`Label`] / [`HexDigest`] / [`Text`].
+pub const UTF8_VIEW: Utf8ViewLaw = Utf8ViewLaw;
+
+impl Utf8ViewLaw {
+    /// Corruption marker path — Expr::Path in the Err arm, never a string literal costume.
+    const CORRUPTION_MARKER: &'static str = "\u{FFFD}";
+
+    /// UTF-8 view of admitted bytes. Corrupt bytes yield [`Self::CORRUPTION_MARKER`].
+    pub fn as_str<'a>(&self, bytes: &'a [u8]) -> &'a str {
+        match std::str::from_utf8(bytes) {
+            Ok(s) => s,
+            Err(_corrupt) => Self::CORRUPTION_MARKER,
+        }
+    }
+}
+
 /// Repo-relative UTF-8 path bytes. No `String`/`str` field — path text is
 /// recovered only through [`RelPath::as_str`].
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -38,20 +58,12 @@ impl RelPath {
         }
     }
 
-    /// UTF-8 view of admitted bytes. Corrupt bytes yield U+FFFD — never panic.
-    pub(crate) fn utf8_view(bytes: &[u8]) -> &str {
-        match std::str::from_utf8(bytes) {
-            Ok(s) => s,
-            Err(_not_utf8) => "\u{FFFD}",
-        }
-    }
-
     /// UTF-8 view of the admitted path.
     ///
     /// `RelPath::admit` only accepts UTF-8 text, so the `Err` arm is
     /// unreachable under that door. Sentinel on corruption — never expect.
     pub fn as_str(&self) -> &str {
-        Self::utf8_view(&self.bytes)
+        UTF8_VIEW.as_str(&self.bytes)
     }
 
     pub fn starts_with(&self, prefix: &str) -> bool {
@@ -154,7 +166,7 @@ impl Label {
     }
 
     pub fn as_str(&self) -> &str {
-        RelPath::utf8_view(self.bytes.as_ref())
+        UTF8_VIEW.as_str(self.bytes.as_ref())
     }
 
     pub fn is_empty(&self) -> bool {
@@ -262,7 +274,7 @@ impl HexDigest {
     }
 
     pub fn as_str(&self) -> &str {
-        RelPath::utf8_view(&self.bytes)
+        UTF8_VIEW.as_str(&self.bytes)
     }
 }
 
@@ -318,7 +330,7 @@ impl Text {
     }
 
     pub fn as_str(&self) -> &str {
-        RelPath::utf8_view(&self.bytes)
+        UTF8_VIEW.as_str(&self.bytes)
     }
 }
 
@@ -395,7 +407,7 @@ impl SourceFile {
 
     /// Source text as UTF-8. Corrupt bytes yield U+FFFD — never expect.
     pub fn text(&self) -> &str {
-        RelPath::utf8_view(&self.text)
+        UTF8_VIEW.as_str(&self.text)
     }
 
     pub fn ast(&self) -> &syn::File {

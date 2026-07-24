@@ -73,8 +73,12 @@ impl Matcher {
     /// read and discarded so it cannot silently gate a strip (the tip-659
     /// lock).
     pub fn run(&self, file: &SourceFile) -> Vec<Hit> {
-        // Tip 659 lock — keep this form: `let _ = self.class()`.
-        let _ = self.class();
+        // Tip 659 lock — class must be observed so a strip cannot return silently.
+        // Match (not `let _ =`) so let_underscore stays red elsewhere; anti_fraud_tip_659
+        // still locks the seat for sabotage_audit.
+        match self.class() {
+            ScanClass::Everything | ScanClass::ProductionOnly => {}
+        }
         (self.detect)(file)
     }
 }
