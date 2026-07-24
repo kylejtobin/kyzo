@@ -14,6 +14,7 @@
 //! #20). [`CoverageProof`] records files-existing vs files-visited; any
 //! gap is a red verdict.
 
+use std::borrow::Cow;
 use std::fmt;
 use std::path::Path;
 
@@ -123,21 +124,31 @@ impl PartialEq<RelPath> for String {
 
 /// UTF-8 label bytes (construct names, ban names, fn paths).
 /// No `String`/`str` field — text recovered only through [`Label::as_str`].
+/// Owned ([`Label::admit`]) or static registry ([`Label::admit_static`]) —
+/// one brand, two doors.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Label {
-    bytes: Vec<u8>,
+    bytes: Cow<'static, [u8]>,
 }
 
 impl Label {
-    /// Admit a UTF-8 label. The only constructor.
+    /// Admit a UTF-8 label (owned bytes). Runtime / deserialize door.
     pub fn admit(text: impl AsRef<str>) -> Self {
         Self {
-            bytes: text.as_ref().as_bytes().to_vec(),
+            bytes: Cow::Owned(text.as_ref().as_bytes().to_vec()),
+        }
+    }
+
+    /// Admit static UTF-8 registry bytes. Same brand as [`admit`]; const for
+    /// `const` matcher / seat tables.
+    pub const fn admit_static(bytes: &'static [u8]) -> Self {
+        Self {
+            bytes: Cow::Borrowed(bytes),
         }
     }
 
     pub fn as_str(&self) -> &str {
-        RelPath::utf8_view(&self.bytes)
+        RelPath::utf8_view(self.bytes.as_ref())
     }
 
     pub fn is_empty(&self) -> bool {

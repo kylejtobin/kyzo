@@ -23,7 +23,7 @@
 use quote::ToTokens;
 use syn::visit::{self, Visit};
 
-use crate::boundary::{SourceFile, span_line};
+use crate::boundary::{Label, SourceFile, span_line};
 use crate::engines::Hit;
 
 /// Matcher family label. Does **not** gate scanning (tip 650/659: no strip).
@@ -35,33 +35,32 @@ pub enum ScanClass {
 
 /// Named shape matcher — sealed-struct (TRUTH item 9).
 ///
-/// Fields private; sole admission is [`Matcher::admit`]. Name identity is
-/// UTF-8 bytes (`&'static [u8]`), never a `str`/`String` field terminal.
-/// [`ScanClass`] is retained as historical family metadata and does **not**
-/// gate the scan (tip 650/659).
+/// Fields private; sole admission is [`Matcher::admit`]. Name is [`Label`],
+/// never a `str`/`String` field terminal. [`ScanClass`] is retained as
+/// historical family metadata and does **not** gate the scan (tip 650/659).
 pub struct Matcher {
-    name: &'static [u8],
+    name: Label,
     class: ScanClass,
     detect: fn(&SourceFile) -> Vec<Hit>,
 }
 
 impl Matcher {
-    /// Sole admission for registry rows.
+    /// Sole admission for registry rows. Name bytes enter as [`Label`].
     pub const fn admit(
         name: &'static [u8],
         class: ScanClass,
         detect: fn(&SourceFile) -> Vec<Hit>,
     ) -> Self {
         Self {
-            name,
+            name: Label::admit_static(name),
             class,
             detect,
         }
     }
 
-    /// UTF-8 view of the matcher name. Corrupt bytes → U+FFFD, never panic.
+    /// UTF-8 view of the matcher name.
     pub fn name(&self) -> &str {
-        crate::boundary::RelPath::utf8_view(self.name)
+        self.name.as_str()
     }
 
     /// Historical scan-class label (does not gate — tip 650/659).
