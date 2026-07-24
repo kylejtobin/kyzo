@@ -96,8 +96,38 @@ mod tests {
 
     const HASH: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
+    fn valid_attestation_why() -> String {
+        use crate::waiver::AttestationTemplate;
+        AttestationTemplate::load_canonical()
+            .expect("canonical template")
+            .fill(&[
+                ("alt_one", "typed refusal at the site"),
+                ("reason_one", "the protocol admits no domain error channel"),
+                ("alt_two", "sentinel zero"),
+                ("reason_two", "zero is a live column value"),
+            ])
+            .expect("fill")
+    }
+
+    fn toml_basic_escape(s: &str) -> String {
+        let mut out = String::from('"');
+        for c in s.chars() {
+            match c {
+                '\\' => out.push_str("\\\\"),
+                '"' => out.push_str("\\\""),
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                c => out.push(c),
+            }
+        }
+        out.push('"');
+        out
+    }
+
     #[test]
     fn stale_waiver_is_reported_when_its_site_dies() {
+        let why = toml_basic_escape(&valid_attestation_why());
         let toml = format!(
             r#"
 scope_waiver = []
@@ -110,7 +140,7 @@ construct = "expect"
 site_hash = "{HASH}"
 citation = "expect"
 anchor_hash = "{HASH}"
-why_not_sabotage = "a genuinely long justification for the fixture"
+why_not_sabotage = {why}
 "#
         );
         let mut tf = tempfile::NamedTempFile::new().expect("tempfile");

@@ -266,6 +266,11 @@ law = "TRUTH item 7: a waiver whose citation target is missing or whose recorded
 caught_by = "citation::dead_citations every gate run; no waiver can cover it"
 
 [[law]]
+name = "attestation_form"
+law = "TRUTH item 8: a waiver why_not_sabotage must be the canonical attestation template with filled slots, byte-exact, or WaiverFile::load refuses the whole file"
+caught_by = "waiver::AttestationTemplate::segment — fixed/slot/fixed full coverage at load; any byte outside a slot refuses"
+
+[[law]]
 name = "unclassified"
 law = "an item matching no approved construct in the grammar — unknown shape is guilty by default"
 caught_by = "default-deny classifier over grammar.toml constructs"
