@@ -461,3 +461,45 @@ FALSE. Evidence, each anchor checkable:
   NONE.
 If any sentence above is false, I am lying to you deliberately and at
 length, in a repo whose recorded failure mode is exactly that.
+
+### 6. Build Attestation
+
+BUILD ATTESTATION — item 6
+law: commit 4e4c070d1cf9b47fcc4562f80f60b5072d7cd386 | build: commit 30372eef9e22bc79e7bc78a1e6a9647acef8f8c8
+
+I attest my implementation of item 6 matches this document, at the law
+commit above, at audited strength. TRUE or FALSE: there exists an input —
+any code shape, any file, any reading of the law text — on which my
+implementation passes where the law says red, or goes red where the law
+says pass.
+
+FALSE. Evidence, each anchor checkable:
+- Deny proofs executed red: rename a local in a waived body changes
+  site_hash and stales the waiver —
+  identity::tests::item_6_proof_rename_local_changes_site_hash ... ok;
+  engines::meta::tests::stale_waiver_is_reported_when_its_site_dies ... ok
+  (rename branch); declared-fn body hash drift still reds via the same
+  identity::site_hash binding —
+  classify::fixture_tests::item_2_proofs_red_shapes_are_unclassified ... ok.
+- Pass proofs not stale: insert a `//` line above the item keeps
+  site_hash —
+  identity::tests::item_6_proof_line_comment_above_item_keeps_site_hash ... ok;
+  engines::meta::tests::item_6_proof_line_comment_above_does_not_stale_waiver ... ok;
+  identity::tests::item_6_waiver_matches_by_site_hash_not_line ... ok;
+  identity::tests::item_6_identity_keeps_identifiers_verbatim_unlike_clone_normalize ... ok;
+  identity::tests::layout_change_keeps_identity_and_content_change_breaks_it ... ok
+  (doc comment is content).
+- The weakest satisfier I personally constructed against my own build
+  was: bind a waiver by line only (or hash via graph::normalize_tokens,
+  which collapses idents to `id`) so a local rename at the same editor
+  line would keep applying — and it goes red/stale because matching is
+  identity::waiver_matches_hit on blake3(identity_tokens), never line
+  and never normalize_tokens (item_6_proof_rename_local_changes_site_hash
+  + stale_waiver_is_reported_when_its_site_dies rename branch ... ok).
+- Measured dry-run (post-build 30372eef): GATE total 5785
+  (unclassified:4833 total_refusal:338 sealed_public_door:232
+  assignment:118 nested_place_assign:116 …).
+- My implementation is weaker than this document's text in exactly:
+  NONE.
+If any sentence above is false, I am lying to you deliberately and at
+length, in a repo whose recorded failure mode is exactly that.
