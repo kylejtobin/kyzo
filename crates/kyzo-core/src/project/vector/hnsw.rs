@@ -161,43 +161,80 @@ use std::collections::BinaryHeap;
 /// cost imposed by the transaction underneath it.
 use kyzo_model::schema::column::ColLen;
 pub(crate) mod probe {
-    use std::cell::Cell;
+    use std::sync::Mutex;
     use std::time::Duration;
 
-    thread_local! {
-        pub(crate) static DIST_CALLS: Cell<u64> = const { Cell::new(0) };
-        /// Query-to-candidate distances: [`super::VectorCache::v_dist`], the
-        /// beam search's own cost (`search_layer`).
-        pub(crate) static V_DIST_CALLS: Cell<u64> = const { Cell::new(0) };
-        /// Candidate-to-candidate distances: [`super::VectorCache::k_dist`],
-        /// spent entirely in the heuristic's pairwise pruning
-        /// (`select_neighbours_heuristic`) — never touches `neighbours()`.
-        pub(crate) static K_DIST_CALLS: Cell<u64> = const { Cell::new(0) };
-        pub(crate) static NEIGHBOURS_CALLS: Cell<u64> = const { Cell::new(0) };
-        pub(crate) static NEIGHBOURS_ROWS: Cell<u64> = const { Cell::new(0) };
-        /// Rows the underlying `scan_prefix` actually iterates per
-        /// `neighbours()` call, BEFORE the `ignore_link` filter — vs.
-        /// `NEIGHBOURS_ROWS` (rows returned, after the filter). A gap that
-        /// widens with `n` means tombstoned (pruned, soft-deleted) edges are
-        /// piling up under live nodes' prefixes and taxing every future scan
-        /// of them, even though the results stay small.
-        pub(crate) static NEIGHBOURS_ROWS_SCANNED: Cell<u64> = const { Cell::new(0) };
-        pub(crate) static NEIGHBOURS_DUR: Cell<Duration> = const { Cell::new(Duration::ZERO) };
-        pub(crate) static ENTRY_POINT_CALLS: Cell<u64> = const { Cell::new(0) };
-        pub(crate) static ENTRY_POINT_DUR: Cell<Duration> = const { Cell::new(Duration::ZERO) };
+    #[derive(Default)]
+    struct State {
+        dist_calls: u64,
+        /// Query-to-candidate distances: [`super::VectorCache::v_dist`].
+        v_dist_calls: u64,
+        /// Candidate-to-candidate distances: [`super::VectorCache::k_dist`].
+        k_dist_calls: u64,
+        neighbours_calls: u64,
+        neighbours_rows: u64,
+        /// Rows `scan_prefix` iterates per `neighbours()` before `ignore_link`.
+        neighbours_rows_scanned: u64,
+        neighbours_dur: Duration,
+        entry_point_calls: u64,
+        entry_point_dur: Duration,
+    }
+
+    fn state() -> &'static Mutex<State> {
+        static S: Mutex<State> = Mutex::new(State {
+            dist_calls: 0,
+            v_dist_calls: 0,
+            k_dist_calls: 0,
+            neighbours_calls: 0,
+            neighbours_rows: 0,
+            neighbours_rows_scanned: 0,
+            neighbours_dur: Duration::ZERO,
+            entry_point_calls: 0,
+            entry_point_dur: Duration::ZERO,
+        });
+        &S
+    }
+
+    fn with_state(f: impl FnOnce(&mut State)) {
+        if let Ok(mut g) = state().lock() {
+            f(&mut g);
+        }
+    }
+
+    pub(crate) fn bump_dist() {
+        with_state(|s| s.dist_calls += 1);
+    }
+    pub(crate) fn bump_v_dist() {
+        with_state(|s| s.v_dist_calls += 1);
+    }
+    pub(crate) fn bump_k_dist() {
+        with_state(|s| s.k_dist_calls += 1);
+    }
+    pub(crate) fn bump_neighbours_call() {
+        with_state(|s| s.neighbours_calls += 1);
+    }
+    pub(crate) fn bump_neighbours_row() {
+        with_state(|s| s.neighbours_rows += 1);
+    }
+    pub(crate) fn add_neighbours_rows(n: u64) {
+        with_state(|s| s.neighbours_rows += n);
+    }
+    pub(crate) fn bump_neighbours_row_scanned() {
+        with_state(|s| s.neighbours_rows_scanned += 1);
+    }
+    pub(crate) fn add_neighbours_dur(d: Duration) {
+        with_state(|s| s.neighbours_dur += d);
+    }
+    pub(crate) fn bump_entry_point() {
+        with_state(|s| s.entry_point_calls += 1);
+    }
+    pub(crate) fn add_entry_point_dur(d: Duration) {
+        with_state(|s| s.entry_point_dur += d);
     }
 
     #[cfg(test)]
     pub(crate) fn reset() {
-        DIST_CALLS.with(|c| c.set(0));
-        V_DIST_CALLS.with(|c| c.set(0));
-        K_DIST_CALLS.with(|c| c.set(0));
-        NEIGHBOURS_CALLS.with(|c| c.set(0));
-        NEIGHBOURS_ROWS.with(|c| c.set(0));
-        NEIGHBOURS_ROWS_SCANNED.with(|c| c.set(0));
-        NEIGHBOURS_DUR.with(|c| c.set(Duration::ZERO));
-        ENTRY_POINT_CALLS.with(|c| c.set(0));
-        ENTRY_POINT_DUR.with(|c| c.set(Duration::ZERO));
+        with_state(|s| *s = State::default());
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -216,16 +253,17 @@ pub(crate) mod probe {
 
     #[cfg(test)]
     pub(crate) fn snapshot() -> Snapshot {
+        let s = state().lock().unwrap_or_else(|p| p.into_inner());
         Snapshot {
-            dist_calls: DIST_CALLS.with(|c| c.get()),
-            v_dist_calls: V_DIST_CALLS.with(|c| c.get()),
-            k_dist_calls: K_DIST_CALLS.with(|c| c.get()),
-            neighbours_calls: NEIGHBOURS_CALLS.with(|c| c.get()),
-            neighbours_rows: NEIGHBOURS_ROWS.with(|c| c.get()),
-            neighbours_rows_scanned: NEIGHBOURS_ROWS_SCANNED.with(|c| c.get()),
-            neighbours_dur: NEIGHBOURS_DUR.with(|c| c.get()),
-            entry_point_calls: ENTRY_POINT_CALLS.with(|c| c.get()),
-            entry_point_dur: ENTRY_POINT_DUR.with(|c| c.get()),
+            dist_calls: s.dist_calls,
+            v_dist_calls: s.v_dist_calls,
+            k_dist_calls: s.k_dist_calls,
+            neighbours_calls: s.neighbours_calls,
+            neighbours_rows: s.neighbours_rows,
+            neighbours_rows_scanned: s.neighbours_rows_scanned,
+            neighbours_dur: s.neighbours_dur,
+            entry_point_calls: s.entry_point_calls,
+            entry_point_dur: s.entry_point_dur,
         }
     }
 }
@@ -1240,7 +1278,7 @@ impl IndexVec {
     /// hang monomorphized kernels behind that seam (see [`dist_dispatch`]).
     pub(crate) fn dist(&self, other: &Self, metric: HnswDistance) -> f64 {
         #[cfg(test)]
-        probe::DIST_CALLS.with(|c| c.set(c.get() + 1));
+        probe::bump_dist();
         let (a, b) = (self.0.to_f64s(), other.0.to_f64s());
         // INVARIANT(index_vec_pair_dim): both IndexVecs come from the same
         // index schema / query path — dimension is shared by construction.
@@ -1698,13 +1736,13 @@ impl<'m> VectorCache<'m> {
 
     fn v_dist(&self, q: &IndexVec, id: &VectorId) -> Result<f64> {
         #[cfg(test)]
-        probe::V_DIST_CALLS.with(|c| c.set(c.get() + 1));
+        probe::bump_v_dist();
         Ok(q.dist(self.get(id)?, self.manifest.distance))
     }
 
     fn k_dist(&self, a: &VectorId, b: &VectorId) -> Result<f64> {
         #[cfg(test)]
-        probe::K_DIST_CALLS.with(|c| c.set(c.get() + 1));
+        probe::bump_k_dist();
         Ok(self.get(a)?.dist(self.get(b)?, self.manifest.distance))
     }
 }
@@ -1726,9 +1764,9 @@ fn entry_point(
     idx: &RelationHandle,
 ) -> Result<Option<(i64, VectorId)>> {
     #[cfg(test)]
-    probe::ENTRY_POINT_CALLS.with(|c| c.set(c.get() + 1));
+    probe::bump_entry_point();
     #[cfg(test)]
-    let t0 = std::time::Instant::now();
+    let t0 = crate::session::host_clock::mono_nanos();
     let first = crate::project::contract::index_rows(
         &idx.name,
         idx.scan_bounded_prefix(
@@ -1740,7 +1778,10 @@ fn entry_point(
     )
     .next();
     #[cfg(test)]
-    probe::ENTRY_POINT_DUR.with(|c| c.set(c.get() + t0.elapsed()));
+    probe::add_entry_point_dur(std::time::Duration::from_nanos(
+        u64::try_from(crate::session::host_clock::mono_nanos().saturating_sub(t0))
+            .unwrap_or(u64::MAX),
+    ));
     match first {
         None => Ok(None),
         Some(row) => {
@@ -1772,16 +1813,16 @@ fn neighbours(
     include_ignored: bool,
 ) -> Result<Vec<(VectorId, f64)>> {
     #[cfg(test)]
-    probe::NEIGHBOURS_CALLS.with(|c| c.set(c.get() + 1));
+    probe::bump_neighbours_call();
     #[cfg(test)]
-    let t0 = std::time::Instant::now();
+    let t0 = crate::session::host_clock::mono_nanos();
     let mut prefix = Tuple::with_capacity(of.tuple_key.len() + 3);
     prefix.push(DataValue::from(layer));
     of.push_onto(&mut prefix)?;
     let mut ret = vec![];
     for row in crate::project::contract::index_rows(&idx.name, idx.scan_prefix(tx, &prefix)) {
         #[cfg(test)]
-        probe::NEIGHBOURS_ROWS_SCANNED.with(|c| c.set(c.get() + 1));
+        probe::bump_neighbours_row_scanned();
         let row = row?;
         match HnswRow::decode(row.as_slice(), base.metadata.keys.len(), &idx.name)? {
             // The vector's own presence row under the same prefix.
@@ -1805,13 +1846,12 @@ fn neighbours(
     }
     #[cfg(test)]
     {
-        probe::NEIGHBOURS_ROWS.with(|c| {
-            let src = ret.len().to_le_bytes();
-            let mut buf = [0u8; 8];
-            buf[..src.len()].copy_from_slice(&src);
-            c.set(c.get() + u64::from_le_bytes(buf))
-        });
-        probe::NEIGHBOURS_DUR.with(|c| c.set(c.get() + t0.elapsed()));
+        let n = u64::try_from(ret.len()).unwrap_or(u64::MAX);
+        probe::add_neighbours_rows(n);
+        probe::add_neighbours_dur(std::time::Duration::from_nanos(
+            u64::try_from(crate::session::host_clock::mono_nanos().saturating_sub(t0))
+                .unwrap_or(u64::MAX),
+        ));
     }
     Ok(ret)
 }

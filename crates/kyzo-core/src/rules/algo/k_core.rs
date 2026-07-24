@@ -49,21 +49,26 @@ use kyzo_model::value::{DataValue, Tuple};
 // load-independent effect of the per-vertex poll instead of wall-clock. In a
 // non-test build the note fn is an empty inlined no-op.
 #[cfg(test)]
-#[cfg(test)]
 use crate::rules::contract::{CancelAuthority, Cancelled};
-thread_local! {
-    static KCORE_VERTS_PEELED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+
+#[cfg(test)]
+fn kcore_verts_peeled() -> &'static std::sync::Mutex<u64> {
+    static CELL: std::sync::Mutex<u64> = std::sync::Mutex::new(0);
+    &CELL
 }
 
 #[cfg(test)]
 fn note_kcore_vertex_peeled() {
-    KCORE_VERTS_PEELED.with(|c| c.set(c.get() + 1));
+    *kcore_verts_peeled().lock().expect("kcore probe lock") += 1;
 }
 
 /// Reset the counter and return what it held (for the cancellation test).
 #[cfg(test)]
 fn take_kcore_verts_peeled() -> u64 {
-    KCORE_VERTS_PEELED.with(|c| c.replace(0))
+    let mut g = kcore_verts_peeled().lock().expect("kcore probe lock");
+    let n = *g;
+    *g = 0;
+    n
 }
 
 #[cfg(not(test))]

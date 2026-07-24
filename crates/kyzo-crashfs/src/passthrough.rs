@@ -193,12 +193,7 @@ fn lock<'a, T>(m: &'a Mutex<T>) -> Result<std::sync::MutexGuard<'a, T>, Errno> {
     m.lock().map_err(|_| Errno::EIO)
 }
 
-/// FUSE success reply — `Reply*::ok` is the kernel-success door, not `Result::ok`.
-macro_rules! fuse_ok {
-    ($reply:expr) => {
-        $reply.ok()
-    };
-}
+/// FUSE kernel-success door is `Reply*::ok` (not `Result::ok`).
 
 fn usize_from_u64(n: u64) -> Result<usize, Errno> {
     usize::try_from(n).map_err(|_| Errno::EINVAL)
@@ -342,7 +337,7 @@ impl PassthroughFs {
             return;
         };
         match remove(&self.real_path(&parent_rel.join(name))) {
-            Ok(()) => fuse_ok!(reply),
+            Ok(()) => reply.ok(),
             Err(e) => reply.error(io_errno(e)),
         }
     }
@@ -701,7 +696,7 @@ impl Filesystem for PassthroughFs {
             // The power cut lands at this fsync boundary: nothing queued
             // since the last real fsync reaches the backing file.
             handle.pending.clear();
-            fuse_ok!(reply);
+            reply.ok();
             return;
         }
         for pw in handle.pending.drain(..) {
@@ -725,7 +720,7 @@ impl Filesystem for PassthroughFs {
             reply.error(io_errno(e));
             return;
         }
-        fuse_ok!(reply);
+        reply.ok();
     }
 
     fn flush(
@@ -738,7 +733,7 @@ impl Filesystem for PassthroughFs {
     ) {
         // flush() (close(2)/dup path) carries no durability guarantee in
         // POSIX and none in this model either: only fsync materializes.
-        fuse_ok!(reply);
+        reply.ok();
     }
 
     fn release(
@@ -792,7 +787,7 @@ impl Filesystem for PassthroughFs {
                 }
             }
         }
-        fuse_ok!(reply);
+        reply.ok();
     }
 
     fn opendir(&self, _req: &Request, _ino: INodeNo, _flags: fuser::OpenFlags, reply: ReplyOpen) {
@@ -877,7 +872,7 @@ impl Filesystem for PassthroughFs {
                 break;
             }
         }
-        fuse_ok!(reply);
+        reply.ok();
     }
 
     fn mkdir(
@@ -965,7 +960,7 @@ impl Filesystem for PassthroughFs {
             return;
         };
         inodes.rename(&old_rel, &new_rel);
-        fuse_ok!(reply);
+        reply.ok();
     }
 
     /// Grant every lock/unlock request unconditionally. This injector's
@@ -988,6 +983,6 @@ impl Filesystem for PassthroughFs {
         _sleep: bool,
         reply: ReplyEmpty,
     ) {
-        fuse_ok!(reply);
+        reply.ok();
     }
 }

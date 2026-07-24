@@ -46,21 +46,26 @@ use kyzo_model::value::{DataValue, Tuple};
 // don't interfere. In a non-test build `note_bfs_node_expanded` is an empty
 // inlined no-op, so the production loop is unchanged.
 #[cfg(test)]
-#[cfg(test)]
 use crate::rules::contract::{CancelAuthority, Cancelled};
-thread_local! {
-    static BFS_NODES_EXPANDED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+
+#[cfg(test)]
+fn bfs_nodes_expanded() -> &'static std::sync::Mutex<u64> {
+    static CELL: std::sync::Mutex<u64> = std::sync::Mutex::new(0);
+    &CELL
 }
 
 #[cfg(test)]
 fn note_bfs_node_expanded() {
-    BFS_NODES_EXPANDED.with(|c| c.set(c.get() + 1));
+    *bfs_nodes_expanded().lock().expect("bfs probe lock") += 1;
 }
 
 /// Reset the counter and return what it held (for the cancellation test).
 #[cfg(test)]
 fn take_bfs_nodes_expanded() -> u64 {
-    BFS_NODES_EXPANDED.with(|c| c.replace(0))
+    let mut g = bfs_nodes_expanded().lock().expect("bfs probe lock");
+    let n = *g;
+    *g = 0;
+    n
 }
 
 #[cfg(not(test))]

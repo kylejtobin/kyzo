@@ -84,19 +84,23 @@ const EPS: f64 = 1e-9;
 // asserts a deterministic, load-independent effect of the per-pop poll. In a
 // non-test build the note fn is an empty inlined no-op.
 #[cfg(test)]
-thread_local! {
-    static MAXFLOW_BFS_POPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+fn maxflow_bfs_pops() -> &'static std::sync::Mutex<u64> {
+    static CELL: std::sync::Mutex<u64> = std::sync::Mutex::new(0);
+    &CELL
 }
 
 #[cfg(test)]
 fn note_maxflow_bfs_pop() {
-    MAXFLOW_BFS_POPS.with(|c| c.set(c.get() + 1));
+    *maxflow_bfs_pops().lock().expect("maxflow probe lock") += 1;
 }
 
 /// Reset the counter and return what it held (for the cancellation test).
 #[cfg(test)]
 fn take_maxflow_bfs_pops() -> u64 {
-    MAXFLOW_BFS_POPS.with(|c| c.replace(0))
+    let mut g = maxflow_bfs_pops().lock().expect("maxflow probe lock");
+    let n = *g;
+    *g = 0;
+    n
 }
 
 #[cfg(not(test))]

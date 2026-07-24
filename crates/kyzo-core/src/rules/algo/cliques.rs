@@ -83,43 +83,54 @@ pub(crate) const DEFAULT_MAX_CLIQUES: usize = 1 << 20;
 // pre-raised flag is always caught first by the degeneracy poll. In a
 // non-test build the note fns are empty inlined no-ops.
 #[cfg(test)]
-thread_local! {
-    static CLIQUE_DEGEN_REMOVALS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-    static CLIQUE_EXPANSION_STEPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-    static CANCEL_AT_EXPANSION_STEP: std::cell::RefCell<Option<(u64, CancelAuthority)>> =
-        const { std::cell::RefCell::new(None) };
+fn clique_degen_removals() -> &'static std::sync::Mutex<u64> {
+    static CELL: std::sync::Mutex<u64> = std::sync::Mutex::new(0);
+    &CELL
+}
+
+#[cfg(test)]
+fn clique_expansion_steps() -> &'static std::sync::Mutex<u64> {
+    static CELL: std::sync::Mutex<u64> = std::sync::Mutex::new(0);
+    &CELL
+}
+
+#[cfg(test)]
+fn cancel_at_expansion_step() -> &'static std::sync::Mutex<Option<(u64, CancelAuthority)>> {
+    static CELL: std::sync::Mutex<Option<(u64, CancelAuthority)>> = std::sync::Mutex::new(None);
+    &CELL
 }
 
 #[cfg(test)]
 fn note_clique_degen_removal() {
-    CLIQUE_DEGEN_REMOVALS.with(|c| c.set(c.get() + 1));
+    *clique_degen_removals().lock().expect("clique probe lock") += 1;
 }
 
 #[cfg(test)]
 fn note_clique_expansion_step() {
-    let now = CLIQUE_EXPANSION_STEPS.with(|c| {
-        c.set(c.get() + 1);
-        c.get()
-    });
-    CANCEL_AT_EXPANSION_STEP.with(|h| {
-        let mut slot = h.borrow_mut();
-        if let Some((at, _)) = slot.as_ref()
-            && now == *at
-            && let Some((_, auth)) = slot.take()
-        {
-            let Cancelled = auth.cancel();
-        }
-    });
+    let now = {
+        let mut g = clique_expansion_steps().lock().expect("clique probe lock");
+        *g += 1;
+        *g
+    };
+    let mut slot = cancel_at_expansion_step().lock().expect("clique cancel lock");
+    if let Some((at, _)) = slot.as_ref()
+        && now == *at
+        && let Some((_, auth)) = slot.take()
+    {
+        let Cancelled = auth.cancel();
+    }
 }
 
 /// Reset both counters and return them as (degeneracy removals, expansion
 /// steps) — for the cancellation tests.
 #[cfg(test)]
 fn take_clique_counters() -> (u64, u64) {
-    (
-        CLIQUE_DEGEN_REMOVALS.with(|c| c.replace(0)),
-        CLIQUE_EXPANSION_STEPS.with(|c| c.replace(0)),
-    )
+    let mut d = clique_degen_removals().lock().expect("clique probe lock");
+    let mut e = clique_expansion_steps().lock().expect("clique probe lock");
+    let out = (*d, *e);
+    *d = 0;
+    *e = 0;
+    out
 }
 
 #[cfg(not(test))]
@@ -862,9 +873,9 @@ mod tests {
 
         let (auth, flag) = CancelAuthority::arm();
         take_clique_counters();
-        CANCEL_AT_EXPANSION_STEP.with(|h| *h.borrow_mut() = Some((5, auth)));
+        *cancel_at_expansion_step().lock().expect("clique cancel lock") = Some((5, auth));
         let cancelled = prepared.run(&MaximalCliques, flag);
-        CANCEL_AT_EXPANSION_STEP.with(|h| *h.borrow_mut() = None);
+        *cancel_at_expansion_step().lock().expect("clique cancel lock") = None;
         let (removals, steps) = take_clique_counters();
 
         assert!(
