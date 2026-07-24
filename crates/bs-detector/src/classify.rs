@@ -341,6 +341,16 @@ fn recurse_into_item(ctx: &Ctx, item: &syn::Item, hits: &mut Vec<Hit>) {
 }
 
 fn classify_block_items(ctx: &Ctx, block: &syn::Block, hits: &mut Vec<Hit>) {
+    // Nested items are NOT impl/trait members — `in_container` must not
+    // bleed from the enclosing method or a nested `fn` false-greens as
+    // admission-door (tip 650 hard-count: no soft drain).
+    let nested_ctx = Ctx {
+        rel: ctx.rel,
+        grammar: ctx.grammar,
+        aliases: ctx.aliases,
+        self_ty: None,
+        in_container: false,
+    };
     struct Nested<'a, 'c> {
         ctx: &'a Ctx<'c>,
         hits: &'a mut Vec<Hit>,
@@ -360,7 +370,10 @@ fn classify_block_items(ctx: &Ctx, block: &syn::Block, hits: &mut Vec<Hit>) {
             }
         }
     }
-    let mut v = Nested { ctx, hits };
+    let mut v = Nested {
+        ctx: &nested_ctx,
+        hits,
+    };
     for stmt in &block.stmts {
         v.visit_stmt(stmt);
     }
@@ -1291,6 +1304,23 @@ mod fixture_tests {
         assert!(
             hits.is_empty(),
             "admission-door pass shape must not be unclassified: {hits:?}"
+        );
+    }
+
+    #[test]
+    fn tip_650_nested_fn_in_method_body_does_not_false_green_as_admission_door() {
+        // Soft drain: nested Item::Fn inherited in_container=true from the
+        // enclosing impl method and matched admission-door. Nested items are
+        // not impl members — they must go red as unseated.
+        let grammar = real_grammar();
+        let src = "impl S { fn method(&self) { fn helper() -> Self { S } } }";
+        let rel = "crates/probe/src/lib.rs";
+        let ast = syn::parse_file(src).expect("parses");
+        let f = SourceFile::admit(rel.to_string(), src.to_string(), ast);
+        let hits = classify_file(&grammar, &f, &crate::alias::AliasTable::build(&[&f]).expect("aliases"));
+        assert!(
+            hits.iter().any(|h| h.construct().contains("unclassified-fn:helper")),
+            "nested helper returning Self must not false-green as admission-door: {hits:?}"
         );
     }
 
