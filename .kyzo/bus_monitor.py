@@ -3,6 +3,9 @@
 
 Writes `.kyzo/bus-unread.json` when tips exist after the consume arm.
 Never advances the arm — only `mailbox.py read` consumes.
+
+Log line `BUS_UNREAD` is edge-triggered: printed only when the unread id
+set changes. Polling the same tip every 3s must not spam follow-up hooks.
 """
 from __future__ import annotations
 
@@ -30,19 +33,26 @@ def main() -> None:
     mb = _load_mailbox()
     PID.write_text(f"{os.getpid()}\n")
     print(f"BUS_MONITOR armed_after={mb.read_arm()} pid={os.getpid()}", flush=True)
+    last_ids: tuple[int, ...] | None = None
     try:
         while True:
             try:
                 tips = mb.claude_to_cursor(mb.read_arm())
+                ids = tuple(sorted(int(t["id"]) for t in tips))
                 if tips:
                     mb.write_unread(tips)
-                    print(
-                        f"BUS_UNREAD count={len(tips)} ids={[t['id'] for t in tips]}",
-                        flush=True,
-                    )
+                    if ids != last_ids:
+                        print(
+                            f"BUS_UNREAD count={len(tips)} ids={list(ids)}",
+                            flush=True,
+                        )
+                        last_ids = ids
                 else:
                     mb.clear_unread()
-            except Exception as e:
+                    if last_ids is not None:
+                        print("BUS_CLEAR", flush=True)
+                        last_ids = None
+            except (OSError, TimeoutError, RuntimeError, ValueError) as e:
                 print(f"BUS_MONITOR_ERR {e}", flush=True)
             time.sleep(POLL_S)
     finally:

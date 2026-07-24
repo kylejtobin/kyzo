@@ -105,7 +105,7 @@ def main() -> None:
     p.add_argument("--from", dest="from_agent", default="cursor")
     p.add_argument("--to", dest="to_agent", default="claude")
     p.add_argument("--kind", required=True)
-    p.add_argument("--story", default="resonance")
+    p.add_argument("--story", default="gate")
     p.add_argument("--task", default="")
     p.add_argument("--standing", default="Open")
     p.add_argument("--body", required=True)

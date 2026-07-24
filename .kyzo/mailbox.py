@@ -91,7 +91,7 @@ def cmd_peek() -> int:
     """Non-consuming: refresh unread from bus relative to arm; print JSON."""
     try:
         tips = claude_to_cursor(read_arm())
-    except Exception as e:
+    except (OSError, TimeoutError, RuntimeError, ValueError, json.JSONDecodeError) as e:
         print(json.dumps({"ok": False, "error": str(e)}))
         return 1
     write_unread(tips)
@@ -104,7 +104,7 @@ def cmd_read() -> int:
     arm = read_arm()
     try:
         tips = claude_to_cursor(arm)
-    except Exception as e:
+    except (OSError, TimeoutError, RuntimeError, ValueError, json.JSONDecodeError) as e:
         print(json.dumps({"ok": False, "error": str(e)}))
         return 1
     if tips:

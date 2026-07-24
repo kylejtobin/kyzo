@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Legacy one-shot tip printer. Does NOT advance the consume arm.
+"""One-shot tip printer. Does NOT advance the consume arm.
 
 Only `mailbox.py read` advances `.kyzo/bus-arm.txt`. This watcher uses its own
 watermark (`.kyzo/bus-watch-arm.txt`) so it cannot silence the stop-hook latch.
