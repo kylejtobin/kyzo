@@ -272,8 +272,8 @@ caught_by = "waiver::AttestationTemplate::segment — fixed/slot/fixed full cove
 
 [[law]]
 name = "unclassified"
-law = "an item matching no approved construct in the grammar — unknown shape is guilty by default"
-caught_by = "default-deny classifier over grammar.toml constructs"
+law = "TRUTH default-deny + tip 641: an item matching no approved construct is guilty by default — hard-counted at full weight, per-site file:line, never waivable, no soft bucket"
+caught_by = "default-deny classifier over grammar.toml constructs; run.rs waivable() refuses unclassified (absolute standing)"
 
 [[law]]
 name = "extern_crate"
