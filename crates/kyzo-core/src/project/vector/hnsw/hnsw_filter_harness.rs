@@ -290,13 +290,8 @@ impl FilterSpec {
     }
 
     fn true_match_count(&self, rows: &[Tuple]) -> Result<usize> {
-        let mut n = 0usize;
-        for r in rows {
-            if self.passes(r.as_slice())? {
-                n += 1;
-            }
-        }
-        Ok(n)
+        rows.iter()
+            .try_fold(0usize, |n, r| self.passes(r.as_slice()).map(|hit| n + usize::from(hit)))
     }
 }
 

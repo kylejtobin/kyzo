@@ -112,51 +112,46 @@ impl<'a> SplitCompoundWordsTokenStream<'a> {
     // can fully be split into consecutive matches against `self.dict`.
     fn split(&mut self) {
         let token = self.tail.token();
-        let mut text = token.text();
-
-        self.cuts.clear();
-        let mut pos = 0;
-
-        for match_ in self.dict.find_iter(text) {
-            if pos != match_.start() {
-                break;
-            }
-
-            self.cuts.push(pos);
-            pos = match_.end();
-        }
-
-        if pos == token.text().len() {
-            // Fill `self.parts` in reverse order,
-            // so that `self.parts.pop()` yields
-            // the tokens in their original order.
-            //
-            // KYZO DEVIATION: each part gets byte offsets inside the parent
-            // token (parent.from + cut .. + part.len). The vendored code
-            // copied the full parent range onto every part — wrong for
-            // highlighting and for multi-byte (umlaut) compounds.
-            let parent_from = token.offset_from();
-            for &cut in self.cuts.iter().rev() {
-                let (head, tail) = text.split_at(cut);
-                let part_from = parent_from + cut;
-                let part_to = part_from + tail.len();
-                text = head;
-                let Some(part) = Token::new(
-                    part_from,
-                    part_to,
-                    token.position(),
-                    tail.to_owned(),
-                    token.position_length(),
-                ) else {
-                    // Offsets should be lawful (parent + cut); if admit
-                    // refuses, abandon the split and keep the parent token.
-                    self.parts.clear();
-                    return;
-                };
-                self.parts.push(part);
-            }
+        if let Some(parts) = split_compound_token_parts(&self.dict, token) {
+            self.parts = parts;
         }
     }
+}
+
+fn split_compound_token_parts(dict: &AhoCorasick, token: &Token) -> Option<Vec<Token>> {
+    let mut text = token.text();
+    let mut cuts = Vec::new();
+    let mut pos = 0usize;
+
+    for match_ in dict.find_iter(text) {
+        if pos != match_.start() {
+            break;
+        }
+        cuts.push(pos);
+        pos = match_.end();
+    }
+
+    if pos != token.text().len() {
+        return None;
+    }
+
+    let parent_from = token.offset_from();
+    let mut parts = Vec::new();
+    for &cut in cuts.iter().rev() {
+        let (head, tail) = text.split_at(cut);
+        let part_from = parent_from + cut;
+        let part_to = part_from + tail.len();
+        text = head;
+        let part = Token::new(
+            part_from,
+            part_to,
+            token.position(),
+            tail.to_owned(),
+            token.position_length(),
+        )?;
+        parts.push(part);
+    }
+    Some(parts)
 }
 
 impl<'a> TokenStream for SplitCompoundWordsTokenStream<'a> {

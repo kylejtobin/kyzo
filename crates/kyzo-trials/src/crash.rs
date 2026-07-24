@@ -498,10 +498,9 @@ mod fuse_crash_matrix {
     /// force-aborting the FUSE connection from outside it) frees it. A hang
     /// inside `body` is therefore not "the test fails slowly," it is "the
     /// whole suite wedges forever" unless something outside the wedged thread
-    /// enforces a deadline. `process::exit` here is that enforcement: it is
-    /// itself the report (the message names the exact invariant story #31
-    /// polices — never hang — and that this run just violated it), landing
-    /// the campaign's verdict as a hard failure instead of an unbounded stall.
+    /// enforces a deadline. On budget exhaustion the campaign fails loud via
+    /// `assert!(false, …)` (never `process::exit` / `abort` — gate item 5).
+    #[cfg(test)]
     fn run_bounded(label: &str, body: impl FnOnce() + Send + 'static) {
         let handle = std::thread::spawn(body);
         // Poll budget — structural, not Instant. 50ms sleep × polls ≈ PER_SEED_BUDGET.
@@ -516,13 +515,13 @@ mod fuse_crash_matrix {
         let mut polls = 0u64;
         while !handle.is_finished() {
             if polls >= max_polls {
-                eprintln!(
+                assert!(
+                    false,
                     "HANG DETECTED in {label}: exceeded the {PER_SEED_BUDGET:?} budget — this IS \
                  the \"never hang\" property story #31 exists to police, caught by the campaign \
                  rather than wedging the suite. File it (injector or engine, whichever is \
                  actually stuck) rather than raising the budget."
                 );
-                std::process::exit(90);
             }
             polls = match polls.checked_add(1) {
                 Some(v) => v,
@@ -655,12 +654,14 @@ mod fuse_crash_matrix {
     }
 
     /// Process-crash consistency: a child process commits one transaction,
-    /// stages a second without committing, then `abort()`s. Reopening the store
-    /// must show every committed write and nothing from the uncommitted one.
+    /// stages a second without committing, then is SIGKILL'd by the parent.
+    /// Reopening the store must show every committed write and nothing from
+    /// the uncommitted one.
     ///
     /// # SCOPE HONESTY (carried obligation — power-cut-honesty)
     ///
-    /// `abort()` simulates a process crash (committed data has reached OS buffers —
+    /// Parent `kill()` simulates abrupt process death (committed data has
+    /// reached OS buffers — fjall's `Buffer` persist mode). A power cut is a
     /// fjall's `Buffer` persist mode). A power cut is a stronger event; surviving
     /// it is what `Storage::sync` (fsync) is for, and testing THAT honestly requires
     /// fault-injection infrastructure (kyzo-crashfs / dm-flakey class), not a unit
@@ -692,25 +693,47 @@ mod fuse_crash_matrix {
                 tx.put(b"uncommitted", b"must-vanish"),
                 "child put uncommitted",
             );
-            std::process::abort();
+            let ready = std::path::Path::new(&dir).with_extension("ready");
+            admit(std::fs::write(&ready, b"1"), "child ready marker");
+            loop {
+                std::thread::park();
+            }
         }
 
         let dir = admit(tempfile::tempdir(), "parent tempdir");
+        let child_db = dir.path().join("db");
+        let ready = child_db.with_extension("ready");
         let exe = admit(std::env::current_exe(), "current_exe");
-        let status = admit(
+        let mut child = admit(
             std::process::Command::new(exe)
                 .args([
                     "store::sweep::crash::fuse_crash_matrix::crash_consistency_process_abort",
                     "--exact",
                     "--nocapture",
                 ])
-                .env("KYZO_CRASH_CHILD_DIR", dir.path().join("db"))
-                .status(),
+                .env("KYZO_CRASH_CHILD_DIR", &child_db)
+                .spawn(),
             "spawn crash child",
         );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !ready.exists() {
+            if std::time::Instant::now() >= deadline {
+                match child.kill() {
+                    Ok(()) => {}
+                    Err(e) => panic!("failed to SIGKILL crash child: {e}"),
+                }
+                panic!("crash child never wrote ready marker");
+            }
+            std::thread::park_timeout(std::time::Duration::from_millis(10));
+        }
+        match child.kill() {
+            Ok(()) => {}
+            Err(e) => panic!("failed to SIGKILL crash child: {e}"),
+        }
+        let status = admit(child.wait(), "wait crash child");
         assert!(
             !status.success(),
-            "child must die by abort, not exit cleanly"
+            "child must die by signal, not exit cleanly"
         );
 
         let db = admit(
@@ -736,18 +759,20 @@ mod fuse_crash_matrix {
 }
 
 // ---------------------------------------------------------------------------
-// Crypto-shred deep reachability DST (story #376 T3 / H8) — path-wired under
+// Residual-secret deep reachability DST (story #376 T3 / H8) — path-wired under
 // `kyzo::store::sweep::crash`. Searches every sealed CanonicalTranscript kind
 // (incl. KeyCommit / WalHeader), production CheckpointSeal encode, and
-// leave-is-free pack bytes for residual DEK / KEK / plaintext ShredSalt after
-// production `shred`.
+// leave-is-free pack bytes for residual DEK / KEK / plaintext ShredSalt.
+// Seat 64 Store destroy door is UNBUILT (tip 477); ledger `name_revoked` is
+// bookkeeping only — not on-disk crypto-shred. COP[OPEN] owed: real shred +
+// post-destroy residual campaign.
 // ---------------------------------------------------------------------------
 mod crypto_shred_deep_reachability {
     use crate::store::authority::{Entropy, IncarnationMintCap, OpenOrdinal};
     use crate::store::backup::{LeaveIsFreeKind, LeaveIsFreePack, LeaveIsFreeParts, PackRefuse};
     use crate::store::crypto::{
-        derive_dek, shred, unwrap_shred_salt, wrap_shred_salt, CryptoRefuse, Dek, Kek, KekUnwrapCap,
-        SegmentCounter, ShredLedger, ShredSalt,
+        derive_dek, unwrap_shred_salt, wrap_shred_salt, CryptoRefuse, Dek, Kek, KekUnwrapCap,
+        SegmentCounter, ShredLedger, ShredSalt, ShredTombstone,
     };
     use crate::store::epoch::{CryptoDomain, FenceEpoch};
     use crate::store::open::StoreId;
@@ -766,16 +791,18 @@ mod crypto_shred_deep_reachability {
 
     use super::admit;
 
-    fn shredded_secret_needles<'a>(
-        kek: &'a Kek,
-        salt: &'a ShredSalt,
-        dek: &'a Dek,
-    ) -> [&'a [u8]; 3] {
-        [
-            kek.as_bytes().as_slice(),
-            salt.as_bytes().as_slice(),
-            dek.as_bytes().as_slice(),
-        ]
+    /// Bind needle bytes for residual scrub. Callers must keep the returned
+    /// `Bytes32` values alive for as long as the slices are used.
+    fn shredded_secret_needles(
+        kek: &Kek,
+        salt: &ShredSalt,
+        dek: &Dek,
+    ) -> (
+        crate::data::fixed_bytes::Bytes32,
+        crate::data::fixed_bytes::Bytes32,
+        crate::data::fixed_bytes::Bytes32,
+    ) {
+        (kek.as_bytes(), salt.as_bytes(), dek.as_bytes())
     }
 
     fn clean_seal_parts(store: StoreId, incarnation_entropy: Entropy) -> CheckpointSealParts {
@@ -790,18 +817,18 @@ mod crypto_shred_deep_reachability {
             crypto_domain: domain,
             fence_epoch: fence,
             cut: CommitOrdinal::ZERO,
-            state_root: SealDigest::from_digest([0x01; 32]),
-            final_wal_hash: WalHash::from_digest([0x02; 32]),
-            checkpoint_manifest: SealDigest::from_digest([0x03; 32]),
+            state_root: SealDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x01; 32])),
+            final_wal_hash: WalHash::from_digest(crate::data::fixed_bytes::Bytes32([0x02; 32])),
+            checkpoint_manifest: SealDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x03; 32])),
             format_version: FormatVersion::CURRENT,
             catalog_generation: CommitOrdinal::ZERO,
-            retained_object_manifest: SealDigest::from_digest([0x04; 32]),
-            permanence_candidate_manifest: SealDigest::from_digest([0x05; 32]),
-            replica_custody_manifest: SealDigest::from_digest([0x06; 32]),
+            retained_object_manifest: SealDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x04; 32])),
+            permanence_candidate_manifest: SealDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x05; 32])),
+            replica_custody_manifest: SealDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x06; 32])),
             nonce_floors: NonceLeaseFloors::genesis(),
             incarnation_boundary: incarnation,
             prior_seal_digest: GENESIS_PRIOR_SEAL,
-            retention_certificate_digest: SealDigest::from_digest([0x07; 32]),
+            retention_certificate_digest: SealDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x07; 32])),
         }
     }
 
@@ -827,44 +854,47 @@ mod crypto_shred_deep_reachability {
         )
     }
 
-    /// H8 deep reachability: after production shred, every sealed artifact
-    /// (golden transcript kinds incl. KeyCommit + WalHeader + CheckpointSeal
-    /// encode + leave-is-free pack) is searched for residual
-    /// DEK/KEK/plaintext ShredSalt bytes. Clean artifacts pass; planting a
-    /// shredded needle into each CheckpointSeal digest-bearing field (and
-    /// leave-is-free / transcript surfaces) must refuse via the production
-    /// scrub doors.
+    /// H8 deep reachability: every sealed artifact (golden transcript kinds
+    /// incl. KeyCommit + WalHeader + CheckpointSeal encode + leave-is-free
+    /// pack) is searched for residual DEK/KEK/plaintext ShredSalt bytes.
+    /// Clean artifacts pass; planting a needle into each CheckpointSeal
+    /// digest-bearing field (and leave-is-free / transcript surfaces) must
+    /// refuse via the production scrub doors.
+    ///
+    /// Does **not** claim Store destroy-on-disk shred (seat 64 UNBUILT).
+    /// Ledger revoke via [`ShredTombstone::name_revoked`] is bookkeeping only.
     #[test]
     fn crypto_shred_deep_reachability_refuses_residual_secrets_in_sealed_artifacts() {
-        let kek_bytes = [0xA1u8; 32];
-        let salt_bytes = [0xB2u8; 32];
-        let store = StoreId::from_digest([0x76; 32]);
+        let kek_bytes = crate::data::fixed_bytes::Bytes32([0xA1u8; 32]);
+        let salt_bytes = crate::data::fixed_bytes::Bytes32([0xB2u8; 32]);
+        let store = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0x76; 32]));
         let domain = CryptoDomain::new(FenceEpoch::genesis(store));
         let kek = Kek::admit(kek_bytes);
         let cap = KekUnwrapCap::from_kek(kek.clone());
         let salt = ShredSalt::admit(salt_bytes);
         let seg = SegmentCounter::of_u64(9);
         let wrapped = admit(wrap_shred_salt(&cap, &salt, seg, domain), "production wrap");
-        // Retained wrap copy for leave-is-free pack (post-shred pack may still
-        // carry ciphertext bytes; plaintext needles must not survive in pack
-        // payload / entropy / ciphertext as raw residual).
+        // Pack may still carry wrapped ciphertext; plaintext needles must not
+        // survive in pack payload / entropy / ciphertext as raw residual.
         let pack_wrap = wrapped.clone();
-        let stale_wrap = wrapped.clone();
         let dek = derive_dek(&cap, domain, seg, &salt);
-        let dek_bytes = *dek.as_bytes();
-        let needles = shredded_secret_needles(&kek, &salt, &dek);
+        let (kek_needle, salt_needle, dek_needle) = shredded_secret_needles(&kek, &salt, &dek);
+        let needles = [
+            kek_needle.as_slice(),
+            salt_needle.as_slice(),
+            dek_needle.as_slice(),
+        ];
+        let dek_bytes = dek_needle;
 
-        // Production shred path — consumes the wrap handle; ledger tombstone
-        // refuses post-shred unwrap (production door, not a log scrub).
-        let (_receipt, tombstone) = shred(wrapped);
+        // Ledger bookkeeping refuse — not on-disk destroy (seat 64 unbuilt).
         let mut ledger = ShredLedger::new();
-        ledger.record(tombstone);
+        ledger.record(ShredTombstone::name_revoked(seg, domain));
         assert!(
             matches!(
-                unwrap_shred_salt(&cap, &stale_wrap, &ledger),
+                unwrap_shred_salt(&cap, &wrapped, &ledger),
                 Err(CryptoRefuse::Shredded)
             ),
-            "production shred must refuse post-shred unwrap via Shredded"
+            "ledger-named revoke must refuse unwrap via Shredded"
         );
 
         // Every sealed golden kind (incl. WalHeader + KeyCommit) via the
@@ -904,7 +934,7 @@ mod crypto_shred_deep_reachability {
 
         // Production CheckpointSeal mint + encode + scrub — clean seal passes.
         let clean = admit(
-            CheckpointSeal::mint(clean_seal_parts(store, Entropy::admit([0x26; 32]))),
+            CheckpointSeal::mint(clean_seal_parts(store, Entropy::admit(crate::data::fixed_bytes::Bytes32([0x26; 32])))),
             "mint",
         );
         admit(
@@ -922,7 +952,7 @@ mod crypto_shred_deep_reachability {
         let clean_pack = sample_leave_is_free_pack(
             store,
             pack_wrap.clone(),
-            Entropy::admit([0x2A; 32]),
+            Entropy::admit(crate::data::fixed_bytes::Bytes32([0x2A; 32])),
             b"leave-is-free-clean-payload".to_vec(),
         );
         admit(
@@ -978,21 +1008,21 @@ mod crypto_shred_deep_reachability {
         // state_root: salt / KEK / DEK (all three needles on the primary digest lane).
         assert_digest_field_refuses(
             store,
-            Entropy::admit([0x27; 32]),
+            Entropy::admit(crate::data::fixed_bytes::Bytes32([0x27; 32])),
             "state_root/salt",
             |p| p.state_root = SealDigest::from_digest(salt_bytes),
             &needles,
         );
         assert_digest_field_refuses(
             store,
-            Entropy::admit([0x28; 32]),
+            Entropy::admit(crate::data::fixed_bytes::Bytes32([0x28; 32])),
             "state_root/kek",
             |p| p.state_root = SealDigest::from_digest(kek_bytes),
             &needles,
         );
         assert_digest_field_refuses(
             store,
-            Entropy::admit([0x29; 32]),
+            Entropy::admit(crate::data::fixed_bytes::Bytes32([0x29; 32])),
             "state_root/dek",
             |p| p.state_root = SealDigest::from_digest(dek_bytes),
             &needles,
@@ -1002,49 +1032,49 @@ mod crypto_shred_deep_reachability {
         // (salt), independently planted so a scrub hole on any lane detonate.
         assert_digest_field_refuses(
             store,
-            Entropy::admit([0x2E; 32]),
+            Entropy::admit(crate::data::fixed_bytes::Bytes32([0x2E; 32])),
             "final_wal_hash",
             |p| p.final_wal_hash = WalHash::from_digest(salt_bytes),
             &needles,
         );
         assert_digest_field_refuses(
             store,
-            Entropy::admit([0x2F; 32]),
+            Entropy::admit(crate::data::fixed_bytes::Bytes32([0x2F; 32])),
             "checkpoint_manifest",
             |p| p.checkpoint_manifest = SealDigest::from_digest(salt_bytes),
             &needles,
         );
         assert_digest_field_refuses(
             store,
-            Entropy::admit([0x30; 32]),
+            Entropy::admit(crate::data::fixed_bytes::Bytes32([0x30; 32])),
             "retained_object_manifest",
             |p| p.retained_object_manifest = SealDigest::from_digest(salt_bytes),
             &needles,
         );
         assert_digest_field_refuses(
             store,
-            Entropy::admit([0x31; 32]),
+            Entropy::admit(crate::data::fixed_bytes::Bytes32([0x31; 32])),
             "permanence_candidate_manifest",
             |p| p.permanence_candidate_manifest = SealDigest::from_digest(salt_bytes),
             &needles,
         );
         assert_digest_field_refuses(
             store,
-            Entropy::admit([0x32; 32]),
+            Entropy::admit(crate::data::fixed_bytes::Bytes32([0x32; 32])),
             "replica_custody_manifest",
             |p| p.replica_custody_manifest = SealDigest::from_digest(salt_bytes),
             &needles,
         );
         assert_digest_field_refuses(
             store,
-            Entropy::admit([0x33; 32]),
+            Entropy::admit(crate::data::fixed_bytes::Bytes32([0x33; 32])),
             "prior_seal_digest",
             |p| p.prior_seal_digest = SealDigest::from_digest(salt_bytes),
             &needles,
         );
         assert_digest_field_refuses(
             store,
-            Entropy::admit([0x34; 32]),
+            Entropy::admit(crate::data::fixed_bytes::Bytes32([0x34; 32])),
             "retention_certificate_digest",
             |p| p.retention_certificate_digest = SealDigest::from_digest(salt_bytes),
             &needles,
@@ -1055,7 +1085,7 @@ mod crypto_shred_deep_reachability {
         let dirty_salt_pack = sample_leave_is_free_pack(
             store,
             pack_wrap.clone(),
-            Entropy::admit([0x2B; 32]),
+            Entropy::admit(crate::data::fixed_bytes::Bytes32([0x2B; 32])),
             salt_bytes.to_vec(),
         );
         assert_eq!(
@@ -1066,7 +1096,7 @@ mod crypto_shred_deep_reachability {
         let dirty_kek_pack = sample_leave_is_free_pack(
             store,
             pack_wrap.clone(),
-            Entropy::admit([0x2C; 32]),
+            Entropy::admit(crate::data::fixed_bytes::Bytes32([0x2C; 32])),
             kek_bytes.to_vec(),
         );
         assert_eq!(
@@ -1077,7 +1107,7 @@ mod crypto_shred_deep_reachability {
         let dirty_dek_pack = sample_leave_is_free_pack(
             store,
             pack_wrap,
-            Entropy::admit([0x2D; 32]),
+            Entropy::admit(crate::data::fixed_bytes::Bytes32([0x2D; 32])),
             dek_bytes.to_vec(),
         );
         assert_eq!(

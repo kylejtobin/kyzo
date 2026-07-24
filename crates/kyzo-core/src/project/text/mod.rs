@@ -502,32 +502,42 @@ impl<'de> Deserialize<'de> for TokenizerConfig {
             }
             fn visit_map<A: MapAccess<'de>>(
                 self,
-                mut map: A,
+                map: A,
             ) -> std::result::Result<Self::Value, A::Error> {
-                let mut name = None;
-                let mut args = None;
-                while let Some(key) = map.next_key::<String>()? {
-                    match key.as_str() {
-                        "name" => name = Some(map.next_value()?),
-                        "args" => args = Some(map.next_value()?),
-                        _other => match map.next_value()? {
-                            value => {
-                                let typed: serde::de::IgnoredAny = value;
-                                core::mem::size_of_val(&typed);
-                            }
-                        },
-                    }
-                }
-                Ok((
-                    name.ok_or_else(|| A::Error::missing_field("name"))?,
-                    args.ok_or_else(|| A::Error::missing_field("args"))?,
-                ))
+                read_tokenizer_config_map(map)
             }
         }
         let (name, args) =
             deserializer.deserialize_struct("TokenizerConfig", &["name", "args"], RawVisitor)?;
         TokenizerConfig::admit(name, args).map_err(serde::de::Error::custom)
     }
+}
+
+fn read_tokenizer_config_map<'de, A>(
+    mut map: A,
+) -> std::result::Result<(SmartString<LazyCompact>, Vec<DataValue>), A::Error>
+where
+    A: serde::de::MapAccess<'de>,
+{
+    use serde::de::Error as _;
+    let mut name = None;
+    let mut args = None;
+    while let Some(key) = map.next_key::<String>()? {
+        match key.as_str() {
+            "name" => name = Some(map.next_value()?),
+            "args" => args = Some(map.next_value()?),
+            _other => match map.next_value()? {
+                value => {
+                    let typed: serde::de::IgnoredAny = value;
+                    core::mem::size_of_val(&typed);
+                }
+            },
+        }
+    }
+    Ok((
+        name.ok_or_else(|| A::Error::missing_field("name"))?,
+        args.ok_or_else(|| A::Error::missing_field("args"))?,
+    ))
 }
 
 #[cfg(test)]

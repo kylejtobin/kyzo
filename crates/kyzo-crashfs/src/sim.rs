@@ -99,8 +99,9 @@ use crate::store::{Aborted, CommitFailure, CommitIo, ConflictError, ReadTx, Stor
 use kyzo_model::value::Tuple;
 use kyzo_model::value::{AsOf, ValidityTs};
 
-#[path = "identity.rs"]
-mod identity;
+mod identity {
+    include!("identity.rs");
+}
 use identity::{op_identity, wrap_add, wrap_mul, usize_as_u64};
 
 /// Typed refuse for sim-storage mutex poison — never into_inner continue.

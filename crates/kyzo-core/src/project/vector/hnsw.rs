@@ -611,23 +611,7 @@ impl HnswIndexManifest {
     /// zero cannot overflow the layer arithmetic (a 64-layer graph already
     /// implies on the order of `2^64` vectors).
     fn random_level(&self, hash: &VecContentHash) -> i64 {
-        let mut state = seed_from_vec_content(hash);
-        // Uniform in (0, 1]: [1,2) from 52 mantissa bits minus 1 → [0,1);
-        // map 0 → 1 so ln is finite. No lossy `as` cast.
-        let bits = crate::rules::rng::splitmix64_step(&mut state) >> 12;
-        let u = {
-            let unit = f64::from_bits(0x3FF0_0000_0000_0000 | bits) - 1.0;
-            if unit == 0.0 { 1.0 } else { unit }
-        };
-        let r = -u.ln() * self.level_multiplier;
-        // level = -floor(r), clamped via the loop bound. r ≥ 0 always.
-        let mut rem = r.floor();
-        let mut level_mag: i64 = 0;
-        while rem >= 1.0 && level_mag < 64 {
-            rem -= 1.0;
-            level_mag += 1;
-        }
-        -level_mag
+        random_level_from_content_hash(self.level_multiplier, hash)
     }
 
     /// Derive Vamana build params: R = m_max0, L >= R from ef_construction, α = 1.2.
@@ -640,6 +624,26 @@ impl HnswIndexManifest {
         };
         VamanaBuildParams::admit(r, l, VAMANA_DEFAULT_ALPHA)
     }
+}
+
+fn random_level_from_content_hash(level_multiplier: f64, hash: &VecContentHash) -> i64 {
+    let mut state = seed_from_vec_content(hash);
+    // Uniform in (0, 1]: [1,2) from 52 mantissa bits minus 1 → [0,1);
+    // map 0 → 1 so ln is finite. No lossy `as` cast.
+    let bits = crate::rules::rng::splitmix64_step(&mut state) >> 12;
+    let u = {
+        let unit = f64::from_bits(0x3FF0_0000_0000_0000 | bits) - 1.0;
+        if unit == 0.0 { 1.0 } else { unit }
+    };
+    let r = -u.ln() * level_multiplier;
+    // level = -floor(r), clamped via the loop bound. r ≥ 0 always.
+    let mut rem = r.floor();
+    let mut level_mag: i64 = 0;
+    while rem >= 1.0 && level_mag < 64 {
+        rem -= 1.0;
+        level_mag += 1;
+    }
+    -level_mag
 }
 
 /// Mint the index relation's column metadata for an HNSW index over `base`.
@@ -1477,35 +1481,56 @@ impl RaBitQRotation {
 
     /// Max |⟨col_i, col_j⟩ − δᵢⱼ| over the packed `P⁻¹` columns.
     fn orthonormality_error(&self) -> f64 {
-        let d = self.dim;
-        let mut err = 0.0f64;
-        for i in 0..d {
-            for j in i..d {
-                let mut dot = 0.0f64;
-                for r in 0..d {
-                    dot += self.inv[r * d + i] * self.inv[r * d + j];
-                }
-                let target = if i == j { 1.0 } else { 0.0 };
-                err = err.max((dot - target).abs());
-            }
-        }
-        err
+        rabitq_orthonormality_error(&self.inv, self.dim)
     }
 
     /// Apply `P⁻¹` (row-major mat-vec).
     fn transform(&self, v: &[f64]) -> Vec<f64> {
-        // INVARIANT(rabitq_transform_dim): callers pass a dim-sized vector.
-        let mut out = vec![0.0f64; self.dim];
-        for (r, slot) in out.iter_mut().enumerate() {
-            let mut s = 0.0f64;
-            let row = &self.inv[r * self.dim..(r + 1) * self.dim];
-            for (c, &vc) in v.iter().enumerate().take(self.dim) {
-                s += row[c] * vc;
-            }
-            *slot = s;
-        }
-        out
+        rabitq_transform(&self.inv, self.dim, v)
     }
+}
+
+fn rabitq_orthonormality_error(inv: &[f64], dim: usize) -> f64 {
+    let mut err = 0.0f64;
+    for i in 0..dim {
+        for j in i..dim {
+            let mut dot = 0.0f64;
+            for r in 0..dim {
+                dot += inv[r * dim + i] * inv[r * dim + j];
+            }
+            let target = if i == j { 1.0 } else { 0.0 };
+            err = err.max((dot - target).abs());
+        }
+    }
+    err
+}
+
+fn rabitq_transform(inv: &[f64], dim: usize, v: &[f64]) -> Vec<f64> {
+    // INVARIANT(rabitq_transform_dim): callers pass a dim-sized vector.
+    let mut out = vec![0.0f64; dim];
+    for (r, slot) in out.iter_mut().enumerate() {
+        let mut s = 0.0f64;
+        let row = &inv[r * dim..(r + 1) * dim];
+        for (c, &vc) in v.iter().enumerate().take(dim) {
+            s += row[c] * vc;
+        }
+        *slot = s;
+    }
+    out
+}
+
+fn rabitq_signed_ip_bar(bits: &[u64], dim: usize, q_prime: &[f64]) -> f64 {
+    let inv_sqrt_d = 1.0 / usize_to_f64(dim).sqrt();
+    let mut ip_bar_q = 0.0f64;
+    for (i, &q) in q_prime.iter().enumerate() {
+        let sign = if (bits[i / 64] >> (i % 64)) & 1 == 1 {
+            1.0
+        } else {
+            -1.0
+        };
+        ip_bar_q += sign * q;
+    }
+    ip_bar_q * inv_sqrt_d
 }
 
 /// Standard normal via Box–Muller over the house [`splitmix64`] stream.
@@ -1609,18 +1634,9 @@ impl RaBitQCode {
             return None;
         }
         let q_prime = rotation.transform(q_unit);
-        let inv_sqrt_d = 1.0 / usize_to_f64(self.dim).sqrt();
-        let mut ip_bar_q = 0.0f64;
-        for (i, &q) in q_prime.iter().enumerate() {
-            let sign = if (self.bits[i / 64] >> (i % 64)) & 1 == 1 {
-                1.0
-            } else {
-                -1.0
-            };
-            ip_bar_q += sign * q;
-        }
-        ip_bar_q *= inv_sqrt_d;
-        Some(ip_bar_q / self.ip_with_data())
+        Some(
+            rabitq_signed_ip_bar(&self.bits, self.dim, &q_prime) / self.ip_with_data(),
+        )
     }
 
     /// Theorem 3.2 error half-width at the paper-default `ε₀`
@@ -1703,31 +1719,28 @@ impl<'m> VectorCache<'m> {
                 IndexCorruptReason::BaseRowMissing,
             ));
         };
-        let mut field = tuple.get(id.field).ok_or_else(|| {
+        let field = tuple.get(id.field).ok_or_else(|| {
             miette!(IndexRowCorrupt::new(
                 &base.name,
                 tuple.as_slice(),
                 IndexCorruptReason::HnswFieldBeyondArity { field: id.field },
             ))
         })?;
-        if let Some(sub) = id.sub {
-            match field {
-                DataValue::List(l) => {
-                    field = l.get(sub).ok_or_else(|| {
-                        miette!(IndexRowCorrupt::new(
-                            &base.name,
-                            tuple.as_slice(),
-                            IndexCorruptReason::HnswListElementBeyondList { sub },
-                        ))
-                    })?;
-                }
-                data_value_any!() => bail!(IndexRowCorrupt::new(
+        let field = match (field, id.sub) {
+            (DataValue::List(l), Some(sub)) => l.get(sub).ok_or_else(|| {
+                miette!(IndexRowCorrupt::new(
                     &base.name,
                     tuple.as_slice(),
-                    IndexCorruptReason::HnswExpectsListOfVectors,
-                )),
-            }
-        }
+                    IndexCorruptReason::HnswListElementBeyondList { sub },
+                ))
+            })?,
+            (other, None) => other,
+            (data_value_any!(), Some(_sub)) => bail!(IndexRowCorrupt::new(
+                &base.name,
+                tuple.as_slice(),
+                IndexCorruptReason::HnswExpectsListOfVectors,
+            )),
+        };
         match field {
             DataValue::Vector(v) => {
                 let admitted = IndexVec::admit(v, self.manifest)?;
@@ -5483,8 +5496,5 @@ mod tests {
     }
 }
 
-// Phase-2 filter-aware-traversal proof harness (story #3): ground-truth
-// oracle, selectivity sweep, recall meter, determinism + order-invariance.
 #[cfg(test)]
-#[path = "hnsw_filter_harness.rs"]
 mod hnsw_filter_harness;

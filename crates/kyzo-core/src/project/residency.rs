@@ -146,16 +146,7 @@ impl Residency {
     ) -> Result<bool, ResidencyRefuse> {
         let key = ResidentIndexKey::for_relation(relation);
         let mut misses = self.misses_lock()?;
-        Ok(match misses.get_mut(&key) {
-            Some((recorded, count)) if *recorded == live => {
-                *count = crate::rules::convert::saturating_add_u32(*count, 1);
-                *count >= REBUILD_AFTER_STABLE_MISSES
-            }
-            _other => {
-                misses.insert(key, (live, 1));
-                false
-            }
-        })
+        Ok(should_build_from_miss_map(&mut misses, key, live))
     }
 
     /// Clear the miss streak after a successful install.
@@ -171,6 +162,23 @@ impl Residency {
         self.misses_lock()?.remove(&key);
         self.marks_lock()?.remove(&key);
         Ok(())
+    }
+}
+
+fn should_build_from_miss_map(
+    misses: &mut BTreeMap<ResidentIndexKey, (Generation, u32)>,
+    key: ResidentIndexKey,
+    live: Generation,
+) -> bool {
+    match misses.get_mut(&key) {
+        Some((recorded, count)) if *recorded == live => {
+            *count = crate::rules::convert::saturating_add_u32(*count, 1);
+            *count >= REBUILD_AFTER_STABLE_MISSES
+        }
+        _other => {
+            misses.insert(key, (live, 1));
+            false
+        }
     }
 }
 

@@ -217,11 +217,10 @@ impl TextAnalyzer {
 
     /// Creates a token stream for a given `str`.
     pub(crate) fn token_stream<'a>(&self, text: &'a str) -> BoxTokenStream<'a> {
-        let mut token_stream = self.tokenizer.token_stream(text);
-        for token_filter in &self.token_filters {
-            token_stream = token_filter.transform(token_stream);
-        }
-        token_stream
+        self.token_filters.iter().fold(
+            self.tokenizer.token_stream(text),
+            |stream, token_filter| token_filter.transform(stream),
+        )
     }
     pub(crate) fn unique_ngrams(
         &self,

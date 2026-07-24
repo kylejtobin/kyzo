@@ -272,6 +272,10 @@ where
     }
 }
 
+fn write_stuttering_memory(memory: &mut [usize], cursor: usize, next_val: usize) {
+    memory[cursor] = next_val;
+}
+
 impl<T> Iterator for StutteringIterator<T>
 where
     T: Iterator<Item = usize>,
@@ -286,7 +290,7 @@ where
             // Time to advance.
             self.gram_len = self.min_gram;
             if let Some(next_val) = self.underlying.next() {
-                self.memory[self.cursor] = next_val;
+                write_stuttering_memory(&mut self.memory, self.cursor, next_val);
             } else {
                 // KYZO DEVIATION: the vendored source had `self.max_gram -= 1`,
                 // which underflows if `next()` is called again after exhaustion

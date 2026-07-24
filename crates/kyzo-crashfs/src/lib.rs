@@ -71,6 +71,8 @@
 
 #![forbid(unsafe_code)]
 
+mod identity;
+
 pub mod fault;
 pub mod harness;
 pub mod passthrough;

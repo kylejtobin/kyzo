@@ -2371,7 +2371,7 @@ pub mod storage_campaign_lanes {
     };
     use crate::store::crypto::{
         CryptoRefuse, Digest, Kek, KekUnwrapCap, SegmentCounter, ShredLedger, ShredSalt, Signature,
-        derive_dek, shred, unwrap_shred_salt, wrap_shred_salt,
+        derive_dek, unwrap_shred_salt, wrap_shred_salt, ShredTombstone,
     };
     use crate::store::failure::{
         CarriageReport, KeyspaceId, ScopedMismatchCarriage, UnknownInvariantCarriage,
@@ -4285,17 +4285,32 @@ pub mod storage_campaign_lanes {
         );
     }
 
-    /// §64/§79 — shred × leave-is-free: shred → Shredded tombstone; neighbors decrypt; pack refuses.
+    /// §64/§79 — ledger tombstone × leave-is-free refuse surface.
+    ///
+    /// Seat 64 Store destroy door is UNBUILT (tip 477). This DST proves only
+    /// that [`ShredTombstone::name_revoked`] + [`ShredLedger`] refuse unwrap /
+    /// pack import for the named segment while neighbors still decrypt —
+    /// not on-disk destroy / KEK-adversary irreversibility (COP[OPEN]).
     #[test]
     fn shred_salt_leave_is_free_dst() {
-        let store = StoreId::from_digest([0x64; 32]);
+        let store = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0x64; 32]));
         let domain = CryptoDomain::new(FenceEpoch::genesis(store));
-        let cap = KekUnwrapCap::from_kek(Kek::admit([0x55; 32]));
+        let cap = KekUnwrapCap::from_kek(Kek::admit(crate::data::fixed_bytes::Bytes32([0x55; 32])));
         let seg_a = SegmentCounter::ZERO;
         let seg_b = SegmentCounter::of_u64(1);
-        let wrap_a = wrap_shred_salt(&cap, &ShredSalt::admit([0xAA; 32]), seg_a, domain)
+        let wrap_a = wrap_shred_salt(
+            &cap,
+            &ShredSalt::admit(crate::data::fixed_bytes::Bytes32([0xAA; 32])),
+            seg_a,
+            domain,
+        )
             .must("INVARIANT/harness: wrap A");
-        let wrap_b = wrap_shred_salt(&cap, &ShredSalt::admit([0xBB; 32]), seg_b, domain)
+        let wrap_b = wrap_shred_salt(
+            &cap,
+            &ShredSalt::admit(crate::data::fixed_bytes::Bytes32([0xBB; 32])),
+            seg_b,
+            domain,
+        )
             .must("INVARIANT/harness: wrap B");
 
         let mut ledger = ShredLedger::new();
@@ -4308,31 +4323,30 @@ pub mod storage_campaign_lanes {
             "neighbor DEK must bind the wrap's CryptoDomain"
         );
 
-        let stale_a = wrap_a.clone();
-        let (_receipt, tombstone) = shred(wrap_a);
-        ledger.record(tombstone);
+        // Ledger bookkeeping only — wrap_a bytes remain (destroy door unbuilt).
+        ledger.record(ShredTombstone::name_revoked(seg_a, domain));
         assert!(
             matches!(
-                unwrap_shred_salt(&cap, &stale_a, &ledger),
+                unwrap_shred_salt(&cap, &wrap_a, &ledger),
                 Err(CryptoRefuse::Shredded)
             ),
-            "shredded wrap must refuse Shredded"
+            "ledger-named revoke must refuse Shredded"
         );
         let opened_b_after = unwrap_shred_salt(&cap, &wrap_b, &ledger)
-            .must("INVARIANT/harness: neighbor still decrypts after shred");
+            .must("INVARIANT/harness: neighbor still decrypts after peer ledger revoke");
         assert_eq!(
             derive_dek(&cap, domain, seg_b, &opened_b_after),
             neighbor_dek,
-            "neighbor DEK must be unchanged when a peer shred salt is shredded"
+            "neighbor DEK must be unchanged when a peer segment is ledger-revoked"
         );
 
         let incarnation = IncarnationMintCap::issue(store, OpenOrdinal::ZERO)
-            .mint(Entropy::admit([0x77; 32]))
+            .mint(Entropy::admit(crate::data::fixed_bytes::Bytes32([0x77; 32])))
             .must("INVARIANT/harness: incarnation history");
         let pack = LeaveIsFreePack::build(LeaveIsFreeParts {
             kind: LeaveIsFreeKind::FullWal,
             format_version: FormatVersion::CURRENT,
-            wrapped_shred_salts: vec![stale_a],
+            wrapped_shred_salts: vec![wrap_a],
             incarnation_history: vec![incarnation],
             payload: vec![1, 2, 3],
         })
@@ -4352,7 +4366,7 @@ pub mod storage_campaign_lanes {
         assert_eq!(
             import_verify(&pack, verified, ObjectsCompleteness::Complete, &ledger,),
             Err(PackRefuse::Shredded),
-            "leave-is-free pack carrying shredded salt must refuse Shredded"
+            "leave-is-free pack carrying ledger-revoked salt must refuse Shredded"
         );
     }
 

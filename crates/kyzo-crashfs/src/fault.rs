@@ -37,9 +37,7 @@
 
 use std::collections::HashMap;
 
-#[path = "identity.rs"]
-mod identity;
-use identity::{op_identity, wrap_add, wrap_mul};
+use crate::identity::{op_identity, wrap_add, wrap_mul};
 
 // Both mix doors are live in the identity module (sim uses wrap_add; fault uses wrap_mul).
 // Name the pair here so the crashfs lib unit keeps the full door set reachable.

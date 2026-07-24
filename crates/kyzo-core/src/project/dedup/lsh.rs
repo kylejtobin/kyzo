@@ -444,6 +444,10 @@ fn ngram_bytes(tokens: &[SmartString<LazyCompact>]) -> Vec<u8> {
     b
 }
 
+fn minhash_fold_slot(slot: &mut u32, hash: u32) {
+    *slot = min(*slot, hash);
+}
+
 impl HashValues {
     #[cfg(test)]
     fn from_hashes_for_test(hashes: Vec<u32>) -> Self {
@@ -486,7 +490,7 @@ impl HashValues {
                         0
                     },
                 };
-                self.0[i] = min(self.0[i], hash);
+                minhash_fold_slot(&mut self.0[i], hash);
             }
         }
     }

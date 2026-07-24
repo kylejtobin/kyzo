@@ -302,18 +302,22 @@ impl Segment {
     /// First index where `pred` turns false (rows are pred-partitioned by
     /// key order).
     fn partition(&self, pred: impl Fn(&Self, usize) -> bool) -> usize {
-        let mut lo = 0usize;
-        let mut hi = self.len();
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            if pred(self, mid) {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
-        lo
+        partition_segment_rows(self.len(), |i| pred(self, i))
     }
+}
+
+fn partition_segment_rows(len: usize, pred: impl Fn(usize) -> bool) -> usize {
+    let mut lo = 0usize;
+    let mut hi = len;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if pred(mid) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
 }
 
 #[cfg(test)]
