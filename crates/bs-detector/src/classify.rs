@@ -400,11 +400,9 @@ fn rule_matches_trait_item(ctx: &Ctx, rule: StructuralRule, item: &syn::TraitIte
 // ---------------------------------------------------------------------------
 
 fn type_is_string_terminal(ctx: &Ctx<'_>, ty: &syn::Type) -> bool {
-    // Fail closed: a resolve error (should be impossible after AliasTable::build)
-    // treats the type as string-carrying so a soft drain cannot green.
-    ctx.aliases
-        .type_carries_string(ctx.rel, ty)
-        .unwrap_or(true)
+    // AliasTable is acyclic by construction (build refused cycles);
+    // type_carries_string returns bool — no Result at the classify door.
+    ctx.aliases.type_carries_string(ctx.rel, ty)
 }
 
 // ---------------------------------------------------------------------------

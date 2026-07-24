@@ -10,8 +10,9 @@
 //!
 //! Every `ItemType` and every `use … as` rename across the boundary is an
 //! edge keyed by `(file, name)` — workspace-wide collection, file-scoped
-//! resolution (Rust's own alias scope). Fixpoint within a file; a cycle
-//! refuses the run.
+//! resolution. [`AliasTable::build`] refuses cycles; the resulting table
+//! is acyclic by construction and [`AliasTable::type_carries_string`] is
+//! infallible (precomputed string-carrying names, no Result at classify).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -21,41 +22,85 @@ use syn::visit::{self, Visit};
 
 use crate::boundary::SourceFile;
 
-/// Workspace-wide alias edges: (rel_path, simple name) → RHS type.
+/// Validated alias table: constructible only via [`AliasTable::build`]
+/// (or [`AliasTable::empty`]), which has already refused every cycle.
 #[derive(Debug, Default)]
 pub struct AliasTable {
-    edges: BTreeMap<(String, String), syn::Type>,
+    /// `(rel_path, simple name)` known to resolve to a string-carrying type.
+    string_names: BTreeSet<(String, String)>,
 }
 
 impl AliasTable {
     pub fn empty() -> Self {
         Self {
-            edges: BTreeMap::new(),
+            string_names: BTreeSet::new(),
         }
     }
 
     /// Collect every `type Name = …` and `use … as Rename` across `files`,
-    /// then prove each file's alias graph is acyclic.
+    /// refuse cycles, and seal the string-carrying name set.
     pub fn build(files: &[&SourceFile]) -> Result<Self> {
         let mut edges: BTreeMap<(String, String), syn::Type> = BTreeMap::new();
         for f in files {
             collect_file(f, &mut edges)?;
         }
-        let table = Self { edges };
-        let keys: Vec<(String, String)> = table.edges.keys().cloned().collect();
+        let raw = RawEdges { edges };
+        let mut string_names = BTreeSet::new();
+        let keys: Vec<(String, String)> = raw.edges.keys().cloned().collect();
         for (file, name) in keys {
             let mut stack = BTreeSet::new();
-            table.resolve_name_is_string(&file, &name, &mut stack)?;
+            if raw.resolve_name_is_string(&file, &name, &mut stack)? {
+                string_names.insert((file, name));
+            }
         }
-        Ok(table)
+        Ok(Self { string_names })
     }
 
     /// Whether `ty` carries a string terminal under aliases visible in `file`.
-    pub fn type_carries_string(&self, file: &str, ty: &syn::Type) -> Result<bool> {
-        let mut stack = BTreeSet::new();
-        self.type_carries_string_rec(file, ty, &mut stack)
+    /// Infallible: acyclicity was proven at [`AliasTable::build`].
+    pub fn type_carries_string(&self, file: &str, ty: &syn::Type) -> bool {
+        match ty {
+            syn::Type::Reference(r) => self.type_carries_string(file, &r.elem),
+            syn::Type::Paren(p) => self.type_carries_string(file, &p.elem),
+            syn::Type::Group(g) => self.type_carries_string(file, &g.elem),
+            syn::Type::Array(a) => self.type_carries_string(file, &a.elem),
+            syn::Type::Slice(s) => self.type_carries_string(file, &s.elem),
+            syn::Type::Tuple(t) => t.elems.iter().any(|e| self.type_carries_string(file, e)),
+            syn::Type::Path(tp) => {
+                if path_is_string_terminal(&tp.path) {
+                    return true;
+                }
+                if let Some(seg) = tp.path.segments.last() {
+                    if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
+                        for a in &args.args {
+                            if let syn::GenericArgument::Type(inner) = a {
+                                if self.type_carries_string(file, inner) {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                    // Only bare idents resolve through the alias table.
+                    if tp.path.segments.len() == 1 {
+                        let name = seg.ident.to_string();
+                        return self
+                            .string_names
+                            .contains(&(file.to_string(), name));
+                    }
+                }
+                false
+            }
+            _not_walked_further => false,
+        }
     }
+}
 
+/// Unvalidated edge bag — exists only inside [`AliasTable::build`].
+struct RawEdges {
+    edges: BTreeMap<(String, String), syn::Type>,
+}
+
+impl RawEdges {
     fn resolve_name_is_string(
         &self,
         file: &str,
@@ -110,8 +155,6 @@ impl AliasTable {
                             }
                         }
                     }
-                    // Only bare idents resolve through the alias table —
-                    // `foo::Pair` is not the local alias `Pair`.
                     if tp.path.segments.len() == 1 {
                         let name = seg.ident.to_string();
                         return self.resolve_name_is_string(file, &name, stack);
@@ -158,8 +201,6 @@ fn insert_edge(
         let new_toks = rhs.to_token_stream().to_string();
         if prev_toks != new_toks {
             // Same-file dual binding (almost always cfg-forked imports).
-            // Ambiguous names leave the fixpoint — drop them. Direct
-            // string terminals still fire; R1 covers unresolved externals.
             edges.remove(&key);
             ambiguous.insert(key);
             return;
@@ -184,8 +225,6 @@ fn collect_use_renames(
         }
         syn::UseTree::Rename(r) => {
             let rename = r.rename.to_string();
-            // `use … as _` is a trait-import discard, not a name that types
-            // can resolve through — skip it (multiple `_` renames are lawful).
             if rename == "_" {
                 return;
             }
@@ -275,7 +314,7 @@ mod tests {
         let f = file("type Name = String;");
         let t = AliasTable::build(&[&f]).expect("builds");
         let ty: syn::Type = syn::parse_str("Name").expect("type");
-        assert!(t.type_carries_string(&f.rel_path, &ty).expect("resolve"));
+        assert!(t.type_carries_string(&f.rel_path, &ty));
     }
 
     #[test]
@@ -283,14 +322,14 @@ mod tests {
         let f = file("use std::string::String as Text;");
         let t = AliasTable::build(&[&f]).expect("builds");
         let ty: syn::Type = syn::parse_str("Text").expect("type");
-        assert!(t.type_carries_string(&f.rel_path, &ty).expect("resolve"));
+        assert!(t.type_carries_string(&f.rel_path, &ty));
     }
 
     #[test]
     fn item_4_proof_restrict_does_not_carry() {
         let t = AliasTable::empty();
         let ty: syn::Type = syn::parse_str("Restrict").expect("type");
-        assert!(!t.type_carries_string("crates/probe/src/lib.rs", &ty).expect("resolve"));
+        assert!(!t.type_carries_string("crates/probe/src/lib.rs", &ty));
     }
 
     #[test]
