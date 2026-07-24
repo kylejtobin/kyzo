@@ -94,62 +94,6 @@ impl Citation {
     }
 }
 
-/// Blake3 hex of arbitrary anchor bytes (law text, seat block, …).
-pub fn anchor_bytes_hash(bytes: &[u8]) -> String {
-    blake3::hash(bytes).to_hex().to_string()
-}
-
-/// Resolve a citation to its live identity hash, or None if the target is
-/// missing.
-pub fn resolve_hash(root: &Path, laws: &Laws, citation: &Citation) -> Option<String> {
-    match citation {
-        Citation::LawName(name) => laws.get(name).map(|text| anchor_bytes_hash(text.as_bytes())),
-        Citation::FileItem { file, item_path } => {
-            let ast = parse_rs(root, file)?;
-            let item = find_item(&ast, item_path)?;
-            Some(identity::IDENTITY.site_hash(&item))
-        }
-        Citation::TestFn { file, fn_name } => {
-            let ast = parse_rs(root, file)?;
-            let item = find_fn(&ast, fn_name)?;
-            Some(identity::IDENTITY.site_hash(&item))
-        }
-        Citation::DecisionsSeat(n) => {
-            let text = std::fs::read_to_string(root.join("docs/decisions.md")).ok()?;
-            let block = seat_block(&text, *n)?;
-            Some(anchor_bytes_hash(block.as_bytes()))
-        }
-    }
-}
-
-/// Whether a waiver's citation still resolves to the recorded hash.
-pub fn citation_live(root: &Path, laws: &Laws, w: &Waiver) -> bool {
-    let Ok(c) = Citation::parse(w.citation()) else {
-        return false;
-    };
-    match resolve_hash(root, laws, &c) {
-        Some(h) => h == w.anchor_hash(),
-        None => false,
-    }
-}
-
-/// Every waiver whose citation is missing or whose anchor hash drifted.
-pub fn dead_citations(root: &Path, laws: &Laws, waivers: &WaiverFile) -> Vec<Hit> {
-    let mut hits = vec![];
-    for w in waivers.waivers() {
-        if citation_live(root, laws, w) {
-            continue;
-        }
-        hits.push(Hit::admit(w.file(), w.line(), format!("dead_citation:{}", w.citation())));
-    }
-    hits
-}
-
-fn parse_rs(root: &Path, rel: &str) -> Option<syn::File> {
-    let text = std::fs::read_to_string(root.join(rel)).ok()?;
-    syn::parse_file(&text).ok()
-}
-
 /// Owned token-stream carrier so `site_hash` can borrow it.
 struct FoundItem(proc_macro2::TokenStream);
 
@@ -159,152 +103,222 @@ impl ToTokens for FoundItem {
     }
 }
 
-fn find_item(ast: &syn::File, item_path: &str) -> Option<FoundItem> {
-    if let Some((ty, method)) = item_path.split_once("::") {
-        return find_impl_method(ast, ty, method);
-    }
-    find_named_item(ast, item_path)
-}
+/// Citation-anchor resolution authority — tip 806/914: no free helpers.
+pub struct CitationLaw;
 
-fn find_fn(ast: &syn::File, name: &str) -> Option<FoundItem> {
-    find_named_item(ast, name)
-}
+/// The one production door for citation anchor resolution.
+pub const CITATION: CitationLaw = CitationLaw;
 
-fn find_named_item(ast: &syn::File, name: &str) -> Option<FoundItem> {
-    struct V {
-        name: Label,
-        found: Option<FoundItem>,
+impl CitationLaw {
+    /// Blake3 hex of arbitrary anchor bytes (law text, seat block, …).
+    pub fn anchor_bytes_hash(&self, bytes: &[u8]) -> String {
+        blake3::hash(bytes).to_hex().to_string()
     }
-    impl<'ast> Visit<'ast> for V {
-        fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
-            if self.found.is_none() && node.sig.ident == self.name.as_str() {
-                self.found = Some(FoundItem(node.to_token_stream()));
-            }
-            syn::visit::visit_item_fn(self, node);
-        }
-        fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
-            if self.found.is_none() && node.sig.ident == self.name.as_str() {
-                self.found = Some(FoundItem(node.to_token_stream()));
-            }
-            syn::visit::visit_impl_item_fn(self, node);
-        }
-        fn visit_item_struct(&mut self, node: &'ast syn::ItemStruct) {
-            if self.found.is_none() && node.ident == self.name.as_str() {
-                self.found = Some(FoundItem(node.to_token_stream()));
-            }
-            syn::visit::visit_item_struct(self, node);
-        }
-        fn visit_item_enum(&mut self, node: &'ast syn::ItemEnum) {
-            if self.found.is_none() && node.ident == self.name.as_str() {
-                self.found = Some(FoundItem(node.to_token_stream()));
-            }
-            syn::visit::visit_item_enum(self, node);
-        }
-        // Tip 686: citing const/type/static/trait was blind (resolve None →
-        // dead or, worse, a wrong earlier match). Exact name, first hit.
-        fn visit_item_const(&mut self, node: &'ast syn::ItemConst) {
-            if self.found.is_none() && node.ident == self.name.as_str() {
-                self.found = Some(FoundItem(node.to_token_stream()));
-            }
-            syn::visit::visit_item_const(self, node);
-        }
-        fn visit_item_static(&mut self, node: &'ast syn::ItemStatic) {
-            if self.found.is_none() && node.ident == self.name.as_str() {
-                self.found = Some(FoundItem(node.to_token_stream()));
-            }
-            syn::visit::visit_item_static(self, node);
-        }
-        fn visit_item_type(&mut self, node: &'ast syn::ItemType) {
-            if self.found.is_none() && node.ident == self.name.as_str() {
-                self.found = Some(FoundItem(node.to_token_stream()));
-            }
-            syn::visit::visit_item_type(self, node);
-        }
-        fn visit_item_trait(&mut self, node: &'ast syn::ItemTrait) {
-            if self.found.is_none() && node.ident == self.name.as_str() {
-                self.found = Some(FoundItem(node.to_token_stream()));
-            }
-            syn::visit::visit_item_trait(self, node);
-        }
-    }
-    let mut v = V {
-        name: name.into(),
-        found: None,
-    };
-    v.visit_file(ast);
-    v.found
-}
 
-fn find_impl_method(ast: &syn::File, ty: &str, method: &str) -> Option<FoundItem> {
-    struct V {
-        ty: Label,
-        method: Label,
-        in_match: bool,
-        found: Option<FoundItem>,
-    }
-    impl<'ast> Visit<'ast> for V {
-        fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {
-            let self_ty = type_path_tail(&node.self_ty);
-            let prev = self.in_match;
-            self.in_match = self_ty.as_deref() == Some(self.ty.as_str());
-            syn::visit::visit_item_impl(self, node);
-            self.in_match = prev;
-        }
-        fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
-            if self.in_match && self.found.is_none() && node.sig.ident == self.method.as_str() {
-                self.found = Some(FoundItem(node.to_token_stream()));
+    /// Resolve a citation to its live identity hash, or None if the target is
+    /// missing.
+    pub fn resolve_hash(&self, root: &Path, laws: &Laws, citation: &Citation) -> Option<String> {
+        match citation {
+            Citation::LawName(name) => laws
+                .get(name)
+                .map(|text| self.anchor_bytes_hash(text.as_bytes())),
+            Citation::FileItem { file, item_path } => {
+                let ast = self.parse_rs(root, file)?;
+                let item = self.find_item(&ast, item_path)?;
+                Some(identity::IDENTITY.site_hash(&item))
             }
-            syn::visit::visit_impl_item_fn(self, node);
-        }
-    }
-    let mut v = V {
-        ty: ty.into(),
-        method: method.into(),
-        in_match: false,
-        found: None,
-    };
-    v.visit_file(ast);
-    v.found
-}
-
-fn type_path_tail(ty: &syn::Type) -> Option<String> {
-    // if-let chain — syn::Type is non_exhaustive, so a match `_ =>` would be
-    // catchall_arm (tip 794). Unhandled shapes are citation-blind by design.
-    if let syn::Type::Path(p) = ty {
-        return p.path.segments.last().map(|s| s.ident.to_string());
-    }
-    // Tip 686: `impl &Foo` / `impl (Foo)` were citation-blind for Type::method.
-    if let syn::Type::Reference(r) = ty {
-        return type_path_tail(&r.elem);
-    }
-    if let syn::Type::Paren(p) = ty {
-        return type_path_tail(&p.elem);
-    }
-    if let syn::Type::Group(g) = ty {
-        return type_path_tail(&g.elem);
-    }
-    None
-}
-
-/// Extract the prose block for seat `n` from decisions.md (from the
-/// `n. **` heading through the line before the next seat or EOF).
-fn seat_block(text: &str, n: u32) -> Option<String> {
-    let start_pat = format!("{n}. **");
-    let lines: Vec<&str> = text.lines().collect();
-    let start = lines.iter().position(|l| l.starts_with(&start_pat))?;
-    let mut end = lines.len();
-    for (i, l) in lines.iter().enumerate().skip(start + 1) {
-        // Next numbered seat: `^\d+\. \*\*`
-        let trimmed = l.trim_start();
-        if let Some(dot) = trimmed.find(". **") {
-            let num = &trimmed[..dot];
-            if !num.is_empty() && num.chars().all(|c| c.is_ascii_digit()) {
-                end = i;
-                break;
+            Citation::TestFn { file, fn_name } => {
+                let ast = self.parse_rs(root, file)?;
+                let item = self.find_fn(&ast, fn_name)?;
+                Some(identity::IDENTITY.site_hash(&item))
+            }
+            Citation::DecisionsSeat(n) => {
+                let text = std::fs::read_to_string(root.join("docs/decisions.md")).ok()?;
+                let block = self.seat_block(&text, *n)?;
+                Some(self.anchor_bytes_hash(block.as_bytes()))
             }
         }
     }
-    Some(lines[start..end].join("\n"))
+
+    /// Whether a waiver's citation still resolves to the recorded hash.
+    pub fn citation_live(&self, root: &Path, laws: &Laws, w: &Waiver) -> bool {
+        let Ok(c) = Citation::parse(w.citation()) else {
+            return false;
+        };
+        match self.resolve_hash(root, laws, &c) {
+            Some(h) => h == w.anchor_hash(),
+            None => false,
+        }
+    }
+
+    /// Every waiver whose citation is missing or whose anchor hash drifted.
+    pub fn dead_citations(&self, root: &Path, laws: &Laws, waivers: &WaiverFile) -> Vec<Hit> {
+        let mut hits = vec![];
+        for w in waivers.waivers() {
+            if self.citation_live(root, laws, w) {
+                continue;
+            }
+            hits.push(Hit::admit(
+                w.file(),
+                w.line(),
+                format!("dead_citation:{}", w.citation()),
+            ));
+        }
+        hits
+    }
+
+    fn parse_rs(&self, root: &Path, rel: &str) -> Option<syn::File> {
+        let text = std::fs::read_to_string(root.join(rel)).ok()?;
+        syn::parse_file(&text).ok()
+    }
+
+    fn find_item(&self, ast: &syn::File, item_path: &str) -> Option<FoundItem> {
+        if let Some((ty, method)) = item_path.split_once("::") {
+            return self.find_impl_method(ast, ty, method);
+        }
+        self.find_named_item(ast, item_path)
+    }
+
+    fn find_fn(&self, ast: &syn::File, name: &str) -> Option<FoundItem> {
+        self.find_named_item(ast, name)
+    }
+
+    fn find_named_item(&self, ast: &syn::File, name: &str) -> Option<FoundItem> {
+        struct V {
+            name: Label,
+            found: Option<FoundItem>,
+        }
+        impl<'ast> Visit<'ast> for V {
+            fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
+                if self.found.is_none() && node.sig.ident == self.name.as_str() {
+                    self.found = Some(FoundItem(node.to_token_stream()));
+                }
+                syn::visit::visit_item_fn(self, node);
+            }
+            fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
+                if self.found.is_none() && node.sig.ident == self.name.as_str() {
+                    self.found = Some(FoundItem(node.to_token_stream()));
+                }
+                syn::visit::visit_impl_item_fn(self, node);
+            }
+            fn visit_item_struct(&mut self, node: &'ast syn::ItemStruct) {
+                if self.found.is_none() && node.ident == self.name.as_str() {
+                    self.found = Some(FoundItem(node.to_token_stream()));
+                }
+                syn::visit::visit_item_struct(self, node);
+            }
+            fn visit_item_enum(&mut self, node: &'ast syn::ItemEnum) {
+                if self.found.is_none() && node.ident == self.name.as_str() {
+                    self.found = Some(FoundItem(node.to_token_stream()));
+                }
+                syn::visit::visit_item_enum(self, node);
+            }
+            // Tip 686: citing const/type/static/trait was blind (resolve None →
+            // dead or, worse, a wrong earlier match). Exact name, first hit.
+            fn visit_item_const(&mut self, node: &'ast syn::ItemConst) {
+                if self.found.is_none() && node.ident == self.name.as_str() {
+                    self.found = Some(FoundItem(node.to_token_stream()));
+                }
+                syn::visit::visit_item_const(self, node);
+            }
+            fn visit_item_static(&mut self, node: &'ast syn::ItemStatic) {
+                if self.found.is_none() && node.ident == self.name.as_str() {
+                    self.found = Some(FoundItem(node.to_token_stream()));
+                }
+                syn::visit::visit_item_static(self, node);
+            }
+            fn visit_item_type(&mut self, node: &'ast syn::ItemType) {
+                if self.found.is_none() && node.ident == self.name.as_str() {
+                    self.found = Some(FoundItem(node.to_token_stream()));
+                }
+                syn::visit::visit_item_type(self, node);
+            }
+            fn visit_item_trait(&mut self, node: &'ast syn::ItemTrait) {
+                if self.found.is_none() && node.ident == self.name.as_str() {
+                    self.found = Some(FoundItem(node.to_token_stream()));
+                }
+                syn::visit::visit_item_trait(self, node);
+            }
+        }
+        let mut v = V {
+            name: name.into(),
+            found: None,
+        };
+        v.visit_file(ast);
+        v.found
+    }
+
+    fn find_impl_method(&self, ast: &syn::File, ty: &str, method: &str) -> Option<FoundItem> {
+        struct V {
+            ty: Label,
+            method: Label,
+            in_match: bool,
+            found: Option<FoundItem>,
+        }
+        impl<'ast> Visit<'ast> for V {
+            fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {
+                let self_ty = CITATION.type_path_tail(&node.self_ty);
+                let prev = self.in_match;
+                self.in_match = self_ty.as_deref() == Some(self.ty.as_str());
+                syn::visit::visit_item_impl(self, node);
+                self.in_match = prev;
+            }
+            fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
+                if self.in_match && self.found.is_none() && node.sig.ident == self.method.as_str() {
+                    self.found = Some(FoundItem(node.to_token_stream()));
+                }
+                syn::visit::visit_impl_item_fn(self, node);
+            }
+        }
+        let mut v = V {
+            ty: ty.into(),
+            method: method.into(),
+            in_match: false,
+            found: None,
+        };
+        v.visit_file(ast);
+        v.found
+    }
+
+    fn type_path_tail(&self, ty: &syn::Type) -> Option<String> {
+        // if-let chain — syn::Type is non_exhaustive, so a match `_ =>` would be
+        // catchall_arm (tip 794). Unhandled shapes are citation-blind by design.
+        if let syn::Type::Path(p) = ty {
+            return p.path.segments.last().map(|s| s.ident.to_string());
+        }
+        // Tip 686: `impl &Foo` / `impl (Foo)` were citation-blind for Type::method.
+        if let syn::Type::Reference(r) = ty {
+            return self.type_path_tail(&r.elem);
+        }
+        if let syn::Type::Paren(p) = ty {
+            return self.type_path_tail(&p.elem);
+        }
+        if let syn::Type::Group(g) = ty {
+            return self.type_path_tail(&g.elem);
+        }
+        None
+    }
+
+    /// Extract the prose block for seat `n` from decisions.md (from the
+    /// `n. **` heading through the line before the next seat or EOF).
+    fn seat_block(&self, text: &str, n: u32) -> Option<String> {
+        let start_pat = format!("{n}. **");
+        let lines: Vec<&str> = text.lines().collect();
+        let start = lines.iter().position(|l| l.starts_with(&start_pat))?;
+        let mut end = lines.len();
+        for (i, l) in lines.iter().enumerate().skip(start + 1) {
+            // Next numbered seat: `^\d+\. \*\*`
+            let trimmed = l.trim_start();
+            if let Some(dot) = trimmed.find(". **") {
+                let num = &trimmed[..dot];
+                if !num.is_empty() && num.chars().all(|c| c.is_ascii_digit()) {
+                    end = i;
+                    break;
+                }
+            }
+        }
+        Some(lines[start..end].join("\n"))
+    }
 }
 
 /// Typed test refusal — file-level for `total_refusal` workspace-enum index (tip 777).
@@ -354,10 +368,7 @@ impl CitationProofRefuse {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        citation_live, dead_citations, resolve_hash, Citation, CitationProofRefuse, Laws, Path,
-        WaiverFile,
-    };
+    use super::{Citation, CitationProofRefuse, Laws, Path, WaiverFile, CITATION};
     use std::path::PathBuf;
 
     type TestResult = Result<(), CitationProofRefuse>;
@@ -428,7 +439,7 @@ caught_by = "fixture"
         C.write_temp_rs(root, file, before)?;
         let c = Citation::parse(&format!("{file}::cited")).map_err(|_| CitationProofRefuse::Parse)?;
         let hash =
-            resolve_hash(root, &laws, &c).ok_or(CitationProofRefuse::Resolve)?;
+            CITATION.resolve_hash(root, &laws, &c).ok_or(CitationProofRefuse::Resolve)?;
 
         let template = crate::waiver::AttestationTemplate::load_canonical()
             .map_err(|_| CitationProofRefuse::Template)?;
@@ -448,13 +459,13 @@ caught_by = "fixture"
         let wf = WaiverFile::load(&waivers_path).map_err(|_| CitationProofRefuse::Load)?;
         let w = wf.waivers()[0].clone();
 
-        CitationProofRefuse::LiveMustNotBeDead.require(dead_citations(root, &laws, &wf).is_empty())?;
+        CitationProofRefuse::LiveMustNotBeDead.require(CITATION.dead_citations(root, &laws, &wf).is_empty())?;
 
         let after = "#[cfg(test)]\nmod tests {\n    fn cited() { let y = 1; y }\n}\n";
         C.write_temp_rs(root, file, after)?;
-        let dead = dead_citations(root, &laws, &wf);
+        let dead = CITATION.dead_citations(root, &laws, &wf);
         CitationProofRefuse::EditMustDead.require(dead.len() == 1)?;
-        CitationProofRefuse::DeadMustStopWaiver.require(!citation_live(root, &laws, &w))
+        CitationProofRefuse::DeadMustStopWaiver.require(!CITATION.citation_live(root, &laws, &w))
     }
 
     #[test]
@@ -468,12 +479,12 @@ caught_by = "fixture"
         let laws = Laws::load(&root.join("crates/bs-detector/laws.toml"))
             .map_err(|_| CitationProofRefuse::LawsLoad)?;
         let c = Citation::parse("stale_waivers").map_err(|_| CitationProofRefuse::Parse)?;
-        let h = resolve_hash(&root, &laws, &c).ok_or(CitationProofRefuse::Resolve)?;
+        let h = CITATION.resolve_hash(&root, &laws, &c).ok_or(CitationProofRefuse::Resolve)?;
         CitationProofRefuse::HashLen.require(h.len() == 64)?;
         let seat = Citation::parse("decisions.md#1").map_err(|_| CitationProofRefuse::Parse)?;
-        let sh = resolve_hash(&root, &laws, &seat).ok_or(CitationProofRefuse::Resolve)?;
+        let sh = CITATION.resolve_hash(&root, &laws, &seat).ok_or(CitationProofRefuse::Resolve)?;
         CitationProofRefuse::HashLen.require(sh.len() == 64)?;
-        CitationProofRefuse::MissingSeatMustNone.require(resolve_hash(&root, &laws, &Citation::DecisionsSeat(99999)).is_none())
+        CitationProofRefuse::MissingSeatMustNone.require(CITATION.resolve_hash(&root, &laws, &Citation::DecisionsSeat(99999)).is_none())
     }
 
     #[test]
@@ -491,9 +502,9 @@ caught_by = "x"
         let file = "crates/x/src/lib.rs";
         C.write_temp_rs(root, file, "fn target() { let a = 1; a }\n")?;
         let c = Citation::parse(&format!("{file}#target")).map_err(|_| CitationProofRefuse::Parse)?;
-        let h1 = resolve_hash(root, &laws, &c).ok_or(CitationProofRefuse::Resolve)?;
+        let h1 = CITATION.resolve_hash(root, &laws, &c).ok_or(CitationProofRefuse::Resolve)?;
         C.write_temp_rs(root, file, "fn target() { let b = 1; b }\n")?;
-        let h2 = resolve_hash(root, &laws, &c).ok_or(CitationProofRefuse::Resolve)?;
+        let h2 = CITATION.resolve_hash(root, &laws, &c).ok_or(CitationProofRefuse::Resolve)?;
         CitationProofRefuse::HashMustChange.require(h1 != h2)
     }
 
@@ -513,10 +524,10 @@ caught_by = "x"
         let file = "crates/x/src/lib.rs";
         C.write_temp_rs(root, file, "const TARGET: u8 = 1;\n")?;
         let c = Citation::parse(&format!("{file}#TARGET")).map_err(|_| CitationProofRefuse::Parse)?;
-        let h = resolve_hash(root, &laws, &c).ok_or(CitationProofRefuse::ConstResolveBlind)?;
+        let h = CITATION.resolve_hash(root, &laws, &c).ok_or(CitationProofRefuse::ConstResolveBlind)?;
         CitationProofRefuse::HashLen.require(h.len() == 64)?;
         C.write_temp_rs(root, file, "const TARGET: u8 = 2;\n")?;
-        let h2 = resolve_hash(root, &laws, &c).ok_or(CitationProofRefuse::Resolve)?;
+        let h2 = CITATION.resolve_hash(root, &laws, &c).ok_or(CitationProofRefuse::Resolve)?;
         CitationProofRefuse::ConstHashMustChange.require(h != h2)
     }
 
@@ -541,7 +552,7 @@ caught_by = "x"
         )?;
         let c = Citation::parse(&format!("{file}#Foo::method"))
             .map_err(|_| CitationProofRefuse::Parse)?;
-        let h = resolve_hash(root, &laws, &c).ok_or(CitationProofRefuse::ImplRefResolveBlind)?;
+        let h = CITATION.resolve_hash(root, &laws, &c).ok_or(CitationProofRefuse::ImplRefResolveBlind)?;
         CitationProofRefuse::HashLen.require(h.len() == 64)
     }
 }

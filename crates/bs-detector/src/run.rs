@@ -387,7 +387,7 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
                             && identity::IDENTITY.waiver_matches_hit(w, h, b.files())
                             // TRUTH item 7: a dead citation stops the waiver
                             // from applying (in addition to reporting it).
-                            && citation::citation_live(root, &laws, w)
+                            && citation::CITATION.citation_live(root, &laws, w)
                     });
                     if let Some((i, _)) = found {
                         consumed[i] = true;
@@ -431,7 +431,7 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
                 ));
             }
         }
-        let dead = citation::dead_citations(root, &laws, &waivers);
+        let dead = citation::CITATION.dead_citations(root, &laws, &waivers);
         laws.require("dead_citation")?;
         if !dead.is_empty() {
             failed.push("dead_citation".to_string());
