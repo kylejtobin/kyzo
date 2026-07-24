@@ -324,30 +324,44 @@ fn m_let_underscore(f: &SourceFile) -> Vec<Hit> {
     v.hits
 }
 
-/// `.ok()` in statement position — a Result told to shut up.
+/// `.ok()`/`.err()` in statement position, and every one-arg `drop(...)`
+/// call — a value told to shut up. Tip 686: match-arm / tail-position
+/// `mem::drop(value)` was silent-green when only semicolon stmts were scanned.
 fn m_ok_drop(f: &SourceFile) -> Vec<Hit> {
+    fn is_drop_call(c: &syn::ExprCall) -> bool {
+        c.args.len() == 1
+            && c.func
+                .to_token_stream()
+                .to_string()
+                .ends_with("drop")
+    }
     struct V<'a> {
         rel: &'a str,
         hits: Vec<Hit>,
     }
     impl<'ast, 'a> Visit<'ast> for V<'a> {
         fn visit_stmt(&mut self, node: &'ast syn::Stmt) {
+            // `.ok();` / `.err();` — only with a semicolon: a bare tail
+            // `.ok()` may be returning the Option, not discarding it.
             if let syn::Stmt::Expr(syn::Expr::MethodCall(mc), Some(_)) = node {
                 if (mc.method == "ok" || mc.method == "err") && mc.args.is_empty() {
                     push(&mut self.hits, self.rel, span_line(&mc.method.span()), "ok_drop");
                 }
             }
-            if let syn::Stmt::Expr(syn::Expr::Call(c), Some(_)) = node {
-                let is_drop = c
-                    .func
-                    .to_token_stream()
-                    .to_string()
-                    .ends_with("drop");
-                if is_drop && c.args.len() == 1 {
-                    push(&mut self.hits, self.rel, span_line(&c.paren_token.span.open()), "ok_drop");
-                }
-            }
             visit::visit_stmt(self, node);
+        }
+        fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
+            // Every one-arg `drop(...)` / `mem::drop(...)` — arm body,
+            // tail expr, or stmt. The call's only job is discarding.
+            if is_drop_call(node) {
+                push(
+                    &mut self.hits,
+                    self.rel,
+                    span_line(&node.paren_token.span.open()),
+                    "ok_drop",
+                );
+            }
+            visit::visit_expr_call(self, node);
         }
     }
     let mut v = V {
@@ -1441,6 +1455,31 @@ mod tests {
             run("naked_array_sig", "struct D([u8; 32]); impl D { fn from_derived(b: [u8; 32]) -> D { D(b) } fn as_bytes(&self) -> &[u8; 32] { &self.0 } }").len(),
             2,
             "the type's own doors are naked too — real wrap doors swear waivers"
+        );
+    }
+
+    /// Tip 686: match-arm `mem::drop(value)` was a silent-green drain —
+    /// stmt-only ok_drop required a trailing semicolon. RED before the widen.
+    #[test]
+    fn anti_fraud_ok_drop_match_arm_mem_drop_must_be_counted() {
+        assert_eq!(
+            run(
+                "ok_drop",
+                "fn f(x: u8) { match x { value => core::mem::drop(value) } }",
+            )
+            .len(),
+            1,
+            "match-arm mem::drop is the same shut-up as drop(x);",
+        );
+        assert_eq!(
+            run("ok_drop", "fn f(x: u8) { drop(x) }").len(),
+            1,
+            "tail-position drop without semicolon must still fire",
+        );
+        assert_eq!(
+            run("ok_drop", "fn f(x: u8) -> u8 { x }").len(),
+            0,
+            "clean pass shape must stay silent",
         );
     }
 }
