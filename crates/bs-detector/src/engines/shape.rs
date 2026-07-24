@@ -226,24 +226,92 @@ fn push(hits: &mut Vec<Hit>, rel: &str, line: usize, construct: &str) {
     });
 }
 
-/// One visitor-boilerplate authority. Matcher fns stay thin wrappers so
-/// copy_detector sees one template, not three cloned `struct V` bodies.
-macro_rules! file_visitor_hits {
-    ($file:ident, $($visit_methods:tt)*) => {{
-        struct V<'a> {
-            rel: &'a str,
-            hits: Vec<Hit>,
+/// Which shape a shared file walk is collecting. One `Visit` impl — not three
+/// cloned visitor bodies, and not a `macro_rules!` (condemned `macro_item`).
+#[derive(Clone, Copy)]
+enum FileHitKind {
+    AsCast,
+    DefaultImpl,
+    UnsafeToken,
+}
+
+struct FileHitVisitor<'a> {
+    rel: &'a str,
+    kind: FileHitKind,
+    hits: Vec<Hit>,
+}
+
+impl FileHitVisitor<'_> {
+    fn hit(&mut self, line: usize, construct: &str) {
+        push(&mut self.hits, self.rel, line, construct);
+    }
+}
+
+impl<'ast> Visit<'ast> for FileHitVisitor<'_> {
+    fn visit_expr_cast(&mut self, node: &'ast syn::ExprCast) {
+        if matches!(self.kind, FileHitKind::AsCast) {
+            self.hit(span_line(&node.as_token.span), "as_cast");
         }
-        impl<'ast, 'a> Visit<'ast> for V<'a> {
-            $($visit_methods)*
+        visit::visit_expr_cast(self, node);
+    }
+    fn visit_expr_unsafe(&mut self, node: &'ast syn::ExprUnsafe) {
+        if matches!(self.kind, FileHitKind::UnsafeToken) {
+            self.hit(span_line(&node.unsafe_token.span), "unsafe_token");
         }
-        let mut v = V {
-            rel: &$file.rel_path,
-            hits: vec![],
-        };
-        v.visit_file(&$file.ast);
-        v.hits
-    }};
+        visit::visit_expr_unsafe(self, node);
+    }
+    fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
+        if matches!(self.kind, FileHitKind::UnsafeToken) {
+            if let Some(u) = &node.sig.unsafety {
+                self.hit(span_line(&u.span), "unsafe_token");
+            }
+        }
+        visit::visit_item_fn(self, node);
+    }
+    fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {
+        match self.kind {
+            FileHitKind::DefaultImpl => {
+                if let Some((_, path, _)) = &node.trait_ {
+                    if path.segments.last().is_some_and(|s| s.ident == "Default") {
+                        self.hit(span_line(&node.impl_token.span), "default_impl");
+                    }
+                }
+            }
+            FileHitKind::UnsafeToken => {
+                if let Some(u) = &node.unsafety {
+                    self.hit(span_line(&u.span), "unsafe_token");
+                }
+            }
+            FileHitKind::AsCast => {}
+        }
+        visit::visit_item_impl(self, node);
+    }
+    fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
+        if matches!(self.kind, FileHitKind::UnsafeToken) {
+            if let Some(u) = &node.sig.unsafety {
+                self.hit(span_line(&u.span), "unsafe_token");
+            }
+        }
+        visit::visit_impl_item_fn(self, node);
+    }
+    fn visit_item_trait(&mut self, node: &'ast syn::ItemTrait) {
+        if matches!(self.kind, FileHitKind::UnsafeToken) {
+            if let Some(u) = &node.unsafety {
+                self.hit(span_line(&u.span), "unsafe_token");
+            }
+        }
+        visit::visit_item_trait(self, node);
+    }
+}
+
+fn file_hits(f: &SourceFile, kind: FileHitKind) -> Vec<Hit> {
+    let mut v = FileHitVisitor {
+        rel: &f.rel_path,
+        kind,
+        hits: vec![],
+    };
+    v.visit_file(&f.ast);
+    v.hits
 }
 
 fn name_sites<'a>(
@@ -427,12 +495,7 @@ fn m_ok_drop(f: &SourceFile) -> Vec<Hit> {
 fn m_as_cast(f: &SourceFile) -> Vec<Hit> {
     // Every `as` cast, no numeric shortlist: `type W = u8; x as W` dodges
     // any list of names. Lossless and pointer-shaped casts buy waivers.
-    file_visitor_hits!(f,
-        fn visit_expr_cast(&mut self, node: &'ast syn::ExprCast) {
-            push(&mut self.hits, self.rel, span_line(&node.as_token.span), "as_cast");
-            visit::visit_expr_cast(self, node);
-        }
-    )
+    file_hits(f, FileHitKind::AsCast)
 }
 
 /// wrapping_*/saturating_*/overflowing_*/unchecked_* arithmetic — every
@@ -601,16 +664,7 @@ fn m_default_derive(f: &SourceFile) -> Vec<Hit> {
 }
 
 fn m_default_impl(f: &SourceFile) -> Vec<Hit> {
-    file_visitor_hits!(f,
-        fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {
-            if let Some((_, path, _)) = &node.trait_ {
-                if path.segments.last().is_some_and(|s| s.ident == "Default") {
-                    push(&mut self.hits, self.rel, span_line(&node.impl_token.span), "default_impl");
-                }
-            }
-            visit::visit_item_impl(self, node);
-        }
-    )
+    file_hits(f, FileHitKind::DefaultImpl)
 }
 
 /// Unchecked construction doors: `from_raw` / `*_unchecked` /
@@ -1011,36 +1065,7 @@ fn m_naked_array_sig(f: &SourceFile) -> Vec<Hit> {
 /// `#![forbid(unsafe_code)]` are the meta engine's business; the token
 /// itself is this matcher's).
 fn m_unsafe_token(f: &SourceFile) -> Vec<Hit> {
-    file_visitor_hits!(f,
-        fn visit_expr_unsafe(&mut self, node: &'ast syn::ExprUnsafe) {
-            push(&mut self.hits, self.rel, span_line(&node.unsafe_token.span), "unsafe_token");
-            visit::visit_expr_unsafe(self, node);
-        }
-        fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
-            if let Some(u) = &node.sig.unsafety {
-                push(&mut self.hits, self.rel, span_line(&u.span), "unsafe_token");
-            }
-            visit::visit_item_fn(self, node);
-        }
-        fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {
-            if let Some(u) = &node.unsafety {
-                push(&mut self.hits, self.rel, span_line(&u.span), "unsafe_token");
-            }
-            visit::visit_item_impl(self, node);
-        }
-        fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
-            if let Some(u) = &node.sig.unsafety {
-                push(&mut self.hits, self.rel, span_line(&u.span), "unsafe_token");
-            }
-            visit::visit_impl_item_fn(self, node);
-        }
-        fn visit_item_trait(&mut self, node: &'ast syn::ItemTrait) {
-            if let Some(u) = &node.unsafety {
-                push(&mut self.hits, self.rel, span_line(&u.span), "unsafe_token");
-            }
-            visit::visit_item_trait(self, node);
-        }
-    )
+    file_hits(f, FileHitKind::UnsafeToken)
 }
 
 /// `assert!`/`assert_eq!`/`assert_ne!` on a caller-reachable path — a
