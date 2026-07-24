@@ -38,7 +38,7 @@ pub fn mono_nanos() -> u128 {
 /// Mint [`StoreId`] + genesis [`FenceEpoch`] via [`genesis`] — no SweepDoor.
 pub fn mint_store_identity(identity_seed: IdentitySeed) -> (StoreId, FenceEpoch) {
     let sealed = genesis(GenesisParams {
-        identity_seed: identity_seed.as_bytes(),
+        identity_seed: *identity_seed.as_bytes(),
         recovery_matrix: None,
         staging_ttl: StagingTtl::new(1_024),
         size_class: SizeClass::Compact,
