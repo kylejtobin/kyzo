@@ -112,34 +112,42 @@ mod tests {
 
     const HASH: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
-    fn valid_attestation_why() -> Result<String, MetaProofRefuse> {
-        use crate::waiver::AttestationTemplate;
-        AttestationTemplate::load_canonical()
-            .map_err(|_| MetaProofRefuse::Template)?
-            .fill(&[
-                ("alt_one", "typed refusal at the site"),
-                ("reason_one", "the protocol admits no domain error channel"),
-                ("alt_two", "sentinel zero"),
-                ("reason_two", "zero is a live column value"),
-            ])
-            .map_err(|_| MetaProofRefuse::Fill)
+    /// Receiver for meta test helpers (tip 806/896).
+    struct MetaProofs;
+
+    impl MetaProofs {
+        fn valid_attestation_why(&self) -> Result<String, MetaProofRefuse> {
+            use crate::waiver::AttestationTemplate;
+            AttestationTemplate::load_canonical()
+                .map_err(|_| MetaProofRefuse::Template)?
+                .fill(&[
+                    ("alt_one", "typed refusal at the site"),
+                    ("reason_one", "the protocol admits no domain error channel"),
+                    ("alt_two", "sentinel zero"),
+                    ("reason_two", "zero is a live column value"),
+                ])
+                .map_err(|_| MetaProofRefuse::Fill)
+        }
+
+        fn toml_basic_escape(&self, s: &str) -> String {
+            let mut out = String::from('"');
+            for c in s.chars() {
+                match c {
+                    '\\' => out.push_str("\\\\"),
+                    '"' => out.push_str("\\\""),
+                    '\n' => out.push_str("\\n"),
+                    '\r' => out.push_str("\\r"),
+                    '\t' => out.push_str("\\t"),
+                    c => out.push(c),
+                }
+            }
+            out.push('"');
+            out
+        }
+
     }
 
-    fn toml_basic_escape(s: &str) -> String {
-        let mut out = String::from('"');
-        for c in s.chars() {
-            match c {
-                '\\' => out.push_str("\\\\"),
-                '"' => out.push_str("\\\""),
-                '\n' => out.push_str("\\n"),
-                '\r' => out.push_str("\\r"),
-                '\t' => out.push_str("\\t"),
-                c => out.push(c),
-            }
-        }
-        out.push('"');
-        out
-    }
+    const M: MetaProofs = MetaProofs;
 
     #[test]
     fn stale_waiver_is_reported_when_its_site_dies() -> TestResult {
@@ -155,7 +163,7 @@ mod tests {
         )];
 
         // Live hit whose enclosing item hash matches the waiver from the start.
-        let why = toml_basic_escape(&valid_attestation_why()?);
+        let why = M.toml_basic_escape(&M.valid_attestation_why()?);
         let toml = format!(
             r#"
 scope_waiver = []
@@ -216,7 +224,7 @@ why_not_sabotage = {why}
             noisy.to_string(),
             noisy_ast,
         )];
-        let why = toml_basic_escape(&valid_attestation_why()?);
+        let why = M.toml_basic_escape(&M.valid_attestation_why()?);
         let toml = format!(
             r#"
 scope_waiver = []

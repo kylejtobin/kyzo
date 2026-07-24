@@ -359,26 +359,31 @@ mod tests {
 
     type TestResult = Result<(), CitationProofRefuse>;
 
+    /// Receiver for citation test helpers (tip 806/896).
+    struct CitationProofs;
 
-
-    fn write_temp_rs(dir: &Path, rel: &str, src: &str) -> TestResult {
-        let path = dir.join(rel);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|_| CitationProofRefuse::Mkdir)?;
+    impl CitationProofs {
+        fn write_temp_rs(&self, dir: &Path, rel: &str, src: &str) -> TestResult {
+            let path = dir.join(rel);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).map_err(|_| CitationProofRefuse::Mkdir)?;
+            }
+            std::fs::write(&path, src).map_err(|_| CitationProofRefuse::Write)?;
+            Ok(())
         }
-        std::fs::write(&path, src).map_err(|_| CitationProofRefuse::Write)?;
-        Ok(())
+
+        fn fixture_laws(&self, root: &Path, body: &str) -> Result<Laws, CitationProofRefuse> {
+            let laws_path = root.join("laws.toml");
+            std::fs::write(&laws_path, body).map_err(|_| CitationProofRefuse::LawsWrite)?;
+            Laws::load(&laws_path).map_err(|_| CitationProofRefuse::LawsLoad)
+        }
+
+        fn temp_root(&self) -> Result<tempfile::TempDir, CitationProofRefuse> {
+            tempfile::tempdir().map_err(|_| CitationProofRefuse::TempDir)
+        }
     }
 
-    fn fixture_laws(root: &Path, body: &str) -> Result<Laws, CitationProofRefuse> {
-        let laws_path = root.join("laws.toml");
-        std::fs::write(&laws_path, body).map_err(|_| CitationProofRefuse::LawsWrite)?;
-        Laws::load(&laws_path).map_err(|_| CitationProofRefuse::LawsLoad)
-    }
-
-    fn temp_root() -> Result<tempfile::TempDir, CitationProofRefuse> {
-        tempfile::tempdir().map_err(|_| CitationProofRefuse::TempDir)
-    }
+    const C: CitationProofs = CitationProofs;
 
     #[test]
     fn citation_grammar_parses_four_forms() -> TestResult {
@@ -403,9 +408,9 @@ mod tests {
 
     #[test]
     fn item_7_proof_edit_cited_test_fn_is_dead_citation() -> TestResult {
-        let dir = temp_root()?;
+        let dir = C.temp_root()?;
         let root = dir.path();
-        let laws = fixture_laws(
+        let laws = C.fixture_laws(
             root,
             r#"
 [[law]]
@@ -417,7 +422,7 @@ caught_by = "fixture"
 
         let file = "crates/probe/src/lib.rs";
         let before = "#[cfg(test)]\nmod tests {\n    fn cited() { let x = 1; x }\n}\n";
-        write_temp_rs(root, file, before)?;
+        C.write_temp_rs(root, file, before)?;
         let c = Citation::parse(&format!("{file}::cited")).map_err(|_| CitationProofRefuse::Parse)?;
         let hash =
             resolve_hash(root, &laws, &c).ok_or(CitationProofRefuse::Resolve)?;
@@ -443,7 +448,7 @@ caught_by = "fixture"
         CitationProofRefuse::LiveMustNotBeDead.require(dead_citations(root, &laws, &wf).is_empty())?;
 
         let after = "#[cfg(test)]\nmod tests {\n    fn cited() { let y = 1; y }\n}\n";
-        write_temp_rs(root, file, after)?;
+        C.write_temp_rs(root, file, after)?;
         let dead = dead_citations(root, &laws, &wf);
         CitationProofRefuse::EditMustDead.require(dead.len() == 1)?;
         CitationProofRefuse::DeadMustStopWaiver.require(!citation_live(root, &laws, &w))
@@ -470,9 +475,9 @@ caught_by = "fixture"
 
     #[test]
     fn file_item_path_hashes_with_identity_tokens() -> TestResult {
-        let dir = temp_root()?;
+        let dir = C.temp_root()?;
         let root = dir.path();
-        let laws = fixture_laws(
+        let laws = C.fixture_laws(
             root,
             r#"[[law]]
 name = "x"
@@ -481,10 +486,10 @@ caught_by = "x"
 "#,
         )?;
         let file = "crates/x/src/lib.rs";
-        write_temp_rs(root, file, "fn target() { let a = 1; a }\n")?;
+        C.write_temp_rs(root, file, "fn target() { let a = 1; a }\n")?;
         let c = Citation::parse(&format!("{file}#target")).map_err(|_| CitationProofRefuse::Parse)?;
         let h1 = resolve_hash(root, &laws, &c).ok_or(CitationProofRefuse::Resolve)?;
-        write_temp_rs(root, file, "fn target() { let b = 1; b }\n")?;
+        C.write_temp_rs(root, file, "fn target() { let b = 1; b }\n")?;
         let h2 = resolve_hash(root, &laws, &c).ok_or(CitationProofRefuse::Resolve)?;
         CitationProofRefuse::HashMustChange.require(h1 != h2)
     }
@@ -492,9 +497,9 @@ caught_by = "x"
     /// Tip 686: const citations were resolve-None blind.
     #[test]
     fn anti_fraud_file_item_const_citation_resolves() -> TestResult {
-        let dir = temp_root()?;
+        let dir = C.temp_root()?;
         let root = dir.path();
-        let laws = fixture_laws(
+        let laws = C.fixture_laws(
             root,
             r#"[[law]]
 name = "x"
@@ -503,11 +508,11 @@ caught_by = "x"
 "#,
         )?;
         let file = "crates/x/src/lib.rs";
-        write_temp_rs(root, file, "const TARGET: u8 = 1;\n")?;
+        C.write_temp_rs(root, file, "const TARGET: u8 = 1;\n")?;
         let c = Citation::parse(&format!("{file}#TARGET")).map_err(|_| CitationProofRefuse::Parse)?;
         let h = resolve_hash(root, &laws, &c).ok_or(CitationProofRefuse::ConstResolveBlind)?;
         CitationProofRefuse::HashLen.require(h.len() == 64)?;
-        write_temp_rs(root, file, "const TARGET: u8 = 2;\n")?;
+        C.write_temp_rs(root, file, "const TARGET: u8 = 2;\n")?;
         let h2 = resolve_hash(root, &laws, &c).ok_or(CitationProofRefuse::Resolve)?;
         CitationProofRefuse::ConstHashMustChange.require(h != h2)
     }
@@ -515,9 +520,9 @@ caught_by = "x"
     /// Tip 686: `impl &Type { fn m }` was type_path_tail-blind.
     #[test]
     fn anti_fraud_impl_ref_self_ty_method_citation_resolves() -> TestResult {
-        let dir = temp_root()?;
+        let dir = C.temp_root()?;
         let root = dir.path();
-        let laws = fixture_laws(
+        let laws = C.fixture_laws(
             root,
             r#"[[law]]
 name = "x"
@@ -526,7 +531,7 @@ caught_by = "x"
 "#,
         )?;
         let file = "crates/x/src/lib.rs";
-        write_temp_rs(
+        C.write_temp_rs(
             root,
             file,
             "struct Foo;\nimpl &Foo { fn method(&self) { let a = 1; let _ = a; } }\n",
