@@ -238,7 +238,7 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
         let all: Vec<Hit> = b
             .files()
             .iter()
-            .flat_map(|f| classify::classify_file(&grammar, f, aliases))
+            .flat_map(|f| classify::CLASSIFY.classify_file(&grammar, f, aliases))
             .collect();
         let mut condemned_hits: BTreeMap<&str, Vec<Hit>> =
             condemned_names.iter().map(|n| (*n, Vec::new())).collect();
@@ -291,7 +291,7 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
                 };
                 let mut hits = Vec::new();
                 for f in b.files().iter().filter(|f| in_scope(f.rel_path())) {
-                    let spans = classify::scoped_construct_spans(&grammar, f, aliases);
+                    let spans = classify::CLASSIFY.scoped_construct_spans(&grammar, f, aliases);
                     let raw = m.run(f);
                     for h in raw {
                         let inside = spans.iter().any(|s| {

@@ -99,7 +99,7 @@ impl BiteProofs {
         )
         .map_err(|_| BiteProofRefuse::Grammar)?;
         let aliases = bs_detector::alias::AliasTable::build(&[&f]).map_err(|_| BiteProofRefuse::Classify)?;
-        Ok(bs_detector::classify::classify_file(&grammar, &f, &aliases))
+        Ok(bs_detector::classify::CLASSIFY.classify_file(&grammar, &f, &aliases))
     }
 
     fn fixture_src(&self, name: &str) -> Result<String, BiteProofRefuse> {

@@ -42,20 +42,54 @@ struct Ctx<'a> {
     in_container: bool,
 }
 
-/// Classify every item in `file` under the workspace alias table (item 4).
-pub fn classify_file(grammar: &Grammar, file: &SourceFile, aliases: &AliasTable) -> Vec<Hit> {
-    let mut hits = vec![];
-    let ctx = Ctx {
-        rel: file.rel_path_ref(),
-        grammar,
-        aliases,
-        self_ty: None,
-        in_container: false,
-    };
-    for item in &file.ast().items {
-        ctx.classify_item(item, &mut hits);
+/// Default-deny classifier authority — tip 806/914: no free helpers.
+pub struct ClassifyLaw;
+
+/// The one production door for item classification.
+pub const CLASSIFY: ClassifyLaw = ClassifyLaw;
+
+impl ClassifyLaw {
+    /// Classify every item in `file` under the workspace alias table (item 4).
+    pub fn classify_file(
+        &self,
+        grammar: &Grammar,
+        file: &SourceFile,
+        aliases: &AliasTable,
+    ) -> Vec<Hit> {
+        let mut hits = vec![];
+        let ctx = Ctx {
+            rel: file.rel_path_ref(),
+            grammar,
+            aliases,
+            self_ty: None,
+            in_container: false,
+        };
+        for item in &file.ast().items {
+            ctx.classify_item(item, &mut hits);
+        }
+        hits
     }
-    hits
+
+    /// Spans of fn items whose *shape* matches a construct that lists construct-scoped
+    /// bans. Body bans attributed by run.rs span containment are ignored here
+    /// (shape-only), so a nested-place assign still sits inside its construct's span.
+    pub fn scoped_construct_spans(
+        &self,
+        grammar: &Grammar,
+        file: &SourceFile,
+        aliases: &AliasTable,
+    ) -> Vec<ScopedConstructSpan> {
+        let mut out = vec![];
+        let ctx = Ctx {
+            rel: file.rel_path_ref(),
+            grammar,
+            aliases,
+            self_ty: None,
+            in_container: false,
+        };
+        ctx.collect_scoped_spans_items(&file.ast().items, &mut out);
+        out
+    }
 }
 
 /// Inclusive line span of one construct instance that declares construct-scoped bans.
@@ -92,26 +126,6 @@ impl ScopedConstructSpan {
     pub fn bans(&self) -> &[crate::boundary::Label] {
         &self.bans
     }
-}
-
-/// Spans of fn items whose *shape* matches a construct that lists construct-scoped
-/// bans. Body bans attributed by run.rs span containment are ignored here
-/// (shape-only), so a nested-place assign still sits inside its construct's span.
-pub fn scoped_construct_spans(
-    grammar: &Grammar,
-    file: &SourceFile,
-    aliases: &AliasTable,
-) -> Vec<ScopedConstructSpan> {
-    let mut out = vec![];
-    let ctx = Ctx {
-        rel: file.rel_path_ref(),
-        grammar,
-        aliases,
-        self_ty: None,
-        in_container: false,
-    };
-    ctx.collect_scoped_spans_items(&file.ast().items, &mut out);
-    out
 }
 
 // ---------------------------------------------------------------------------
@@ -1217,7 +1231,7 @@ impl ClassifyProofRefuse {
 #[cfg(test)]
 mod fixture_tests {
     use super::{
-        classify_file, ClassifyProofRefuse, Ctx, Hit, KindName, RelPath, SourceFile,
+        ClassifyProofRefuse, Ctx, Hit, KindName, RelPath, SourceFile, CLASSIFY,
         StructuralRule,
     };
     use crate::boundary::Label;
@@ -1327,7 +1341,7 @@ mod fixture_tests {
                 self.parse_file(src)?,
             );
             let aliases = self.aliases_for(&f)?;
-            Ok(classify_file(&grammar, &f, &aliases))
+            Ok(CLASSIFY.classify_file(&grammar, &f, &aliases))
         }
 
         fn require_hit_count(&self, src: &str, n: usize, refuse: ClassifyProofRefuse) -> TestResult {
@@ -1580,7 +1594,7 @@ mod fixture_tests {
             let pass_ast = syn::parse_file(&pass_src)
                 .map_err(|_| ClassifyProofRefuse::Tip689PassParses)?;
             let pass_f = SourceFile::admit(case.pass_rel.to_string(), pass_src, pass_ast);
-            let pass_hits = classify_file(&grammar, &pass_f, &C.aliases_for(&pass_f)?);
+            let pass_hits = CLASSIFY.classify_file(&grammar, &pass_f, &C.aliases_for(&pass_f)?);
             let pass_unclass: Vec<&str> = pass_hits
                 .iter()
                 .map(|h| h.construct())
@@ -1595,7 +1609,7 @@ mod fixture_tests {
                     let deny_ast = syn::parse_file(&deny_src)
                         .map_err(|_| ClassifyProofRefuse::Tip689DenyParses)?;
                     let deny_f = SourceFile::admit(case.deny_rel.to_string(), deny_src, deny_ast);
-                    let deny_hits = classify_file(&grammar, &deny_f, &C.aliases_for(&deny_f)?);
+                    let deny_hits = CLASSIFY.classify_file(&grammar, &deny_f, &C.aliases_for(&deny_f)?);
                     let got: Vec<String> = deny_hits
                         .iter()
                         .map(|h| h.construct().to_string())
@@ -1645,7 +1659,7 @@ mod fixture_tests {
                 src,
                 ast,
             );
-            let hits = classify_file(&grammar, &f, &C.aliases_for(&f)?);
+            let hits = CLASSIFY.classify_file(&grammar, &f, &C.aliases_for(&f)?);
             ClassifyProofRefuse::CondemnedDenyMustHit.require(hits.iter().any(|h| h.construct() == law))?;
         }
         Ok(())
@@ -1669,7 +1683,7 @@ mod fixture_tests {
             "static mut G: u64 = 0;".to_string(),
             C.parse_file("static mut G: u64 = 0;")?,
         );
-        let hits = classify_file(&grammar, &f, &C.aliases_for(&f)?);
+        let hits = CLASSIFY.classify_file(&grammar, &f, &C.aliases_for(&f)?);
         ClassifyProofRefuse::StaticMutMustDeny.require(hits.len() == 1)
     }
 
@@ -1744,7 +1758,7 @@ mod fixture_tests {
             src.clone(),
             syn::parse_file(&src).map_err(|_| ClassifyProofRefuse::DeclaredFnDenyParses)?,
         );
-        let hits = classify_file(&grammar, &f, &C.aliases_for(&f)?);
+        let hits = CLASSIFY.classify_file(&grammar, &f, &C.aliases_for(&f)?);
         let mut got: Vec<String> = hits.iter().map(|h| h.construct().to_string()).collect();
         got.sort();
         ClassifyProofRefuse::DeclaredFnDenyEmpty.require(!got.is_empty())?;
@@ -1796,7 +1810,7 @@ mod fixture_tests {
         let first = ast.items.first().ok_or(ClassifyProofRefuse::MissingItem)?;
         ClassifyProofRefuse::AdmissionDoorMustSeat.require(C.probe_matches(&grammar, rel, StructuralRule::AdmissionDoorBans, first))?;
         let f = SourceFile::admit(rel.to_string(), src.to_string(), ast);
-        let hits = classify_file(&grammar, &f, &C.aliases_for(&f)?);
+        let hits = CLASSIFY.classify_file(&grammar, &f, &C.aliases_for(&f)?);
         ClassifyProofRefuse::AdmissionDoorMustSilent.require(hits.is_empty())
     }
 
