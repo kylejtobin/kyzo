@@ -543,7 +543,37 @@ fn arm_sites(f: &SourceFile, pick: fn(&syn::Arm) -> Option<(usize, &'static str)
 }
 
 fn m_default_derive(f: &SourceFile) -> Vec<Hit> {
-    line_starts_scan(f, "#[derive(", Some("Default"), "default_derive")
+    // AST attribute walk — not line_starts_scan. A split
+    // `#[derive(\n  Default,\n)]` is the same second door; reading only the
+    // `#[derive(` line was the tip-686 soft drain.
+    struct V<'a> {
+        rel: &'a str,
+        hits: Vec<Hit>,
+    }
+    impl<'ast, 'a> Visit<'ast> for V<'a> {
+        fn visit_attribute(&mut self, node: &'ast syn::Attribute) {
+            let toks = node.to_token_stream().to_string();
+            let direct = node.path().is_ident("derive") && toks.contains("Default");
+            let smuggled = node.path().is_ident("cfg_attr")
+                && toks.contains("derive")
+                && toks.contains("Default");
+            if direct || smuggled {
+                push(
+                    &mut self.hits,
+                    self.rel,
+                    span_line(&node.pound_token.spans[0]),
+                    "default_derive",
+                );
+            }
+            visit::visit_attribute(self, node);
+        }
+    }
+    let mut v = V {
+        rel: f.rel_path(),
+        hits: vec![],
+    };
+    v.visit_file(f.ast());
+    v.hits
 }
 
 fn m_default_impl(f: &SourceFile) -> Vec<Hit> {
@@ -868,24 +898,6 @@ fn attr_sites(f: &SourceFile, name: &str, construct: &str) -> Vec<Hit> {
     v.hits
 }
 
-/// The one attribute-line scanner: a line whose trimmed text starts with
-/// `prefix` (and, when given, also contains `needle`) is a site.
-fn line_starts_scan(
-    f: &SourceFile,
-    prefix: &str,
-    needle: Option<&str>,
-    construct: &str,
-) -> Vec<Hit> {
-    let mut hits = vec![];
-    for (idx, raw) in f.text().lines().enumerate() {
-        let t = raw.trim_start();
-        let extra = needle.is_none_or(|n| t.contains(n));
-        if t.starts_with(prefix) && extra {
-            push(&mut hits, f.rel_path(), idx + 1, construct);
-        }
-    }
-    hits
-}
 
 /// Error laundered into a normal-looking value: an `Err(..)`/`None` match
 /// arm whose body is a costume value (`Json::Null`, `0`, `0.0`, `T::MAX`,
@@ -1481,5 +1493,31 @@ mod tests {
             0,
             "clean pass shape must stay silent",
         );
+    }
+    /// Tip 686: `line_starts_scan` only saw `Default` on the `#[derive(` line.
+    /// Split / cfg_attr-smuggled derive is the same second door — empty = blind.
+    /// Proven RED against pre-fix line scanner (0 hits); AST walk closes it.
+    #[test]
+    fn anti_fraud_multiline_default_derive_must_be_counted() {
+        let hits = run(
+            "default_derive",
+            "#[derive(\n    Debug,\n    Default,\n)]\nstruct S;",
+        );
+        assert_eq!(
+            hits.len(),
+            1,
+            "multiline derive(Default) must detonate (line-scan soft drain): {hits:?}"
+        );
+        assert_eq!(hits[0].construct(), "default_derive");
+        let smuggled = run(
+            "default_derive",
+            "#[cfg_attr(feature = \"x\", derive(Default))]\nstruct T;",
+        );
+        assert_eq!(
+            smuggled.len(),
+            1,
+            "cfg_attr-smuggled derive(Default) must detonate: {smuggled:?}"
+        );
+        assert_eq!(smuggled[0].construct(), "default_derive");
     }
 }
