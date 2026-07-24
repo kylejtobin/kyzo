@@ -230,62 +230,54 @@ fn line_of<T: ?Sized + syn::spanned::Spanned>(node: &T) -> usize {
 // variant is a reported violation, never a silent pass)
 // ---------------------------------------------------------------------------
 
-/// One kind-map authority for Item / ImplItem / TraitItem. Thin wrappers
-/// below keep call sites typed; a second parallel `match` is the twin this
-/// closes.
+/// One kind-map authority for Item / ImplItem / TraitItem. The match lives
+/// on the sum type as a derivation — free `*_kind` twins are the shape this
+/// burns (tip 745 / item-9 unclassified-fn).
 enum SynMember<'a> {
     Item(&'a syn::Item),
     Impl(&'a syn::ImplItem),
     Trait(&'a syn::TraitItem),
 }
 
-fn syn_member_kind(member: SynMember<'_>) -> Option<KindName> {
-    match member {
-        SynMember::Item(syn::Item::Const(_)) => Some(KindName::Const),
-        SynMember::Item(syn::Item::Enum(_)) => Some(KindName::Enum),
-        SynMember::Item(syn::Item::ExternCrate(_)) => Some(KindName::ExternCrate),
-        SynMember::Item(syn::Item::Fn(_)) => Some(KindName::Fn),
-        SynMember::Item(syn::Item::ForeignMod(_)) => Some(KindName::ForeignMod),
-        SynMember::Item(syn::Item::Impl(_)) => Some(KindName::Impl),
-        SynMember::Item(syn::Item::Macro(_)) => Some(KindName::Macro),
-        SynMember::Item(syn::Item::Mod(_)) => Some(KindName::Mod),
-        SynMember::Item(syn::Item::Static(_)) => Some(KindName::Static),
-        SynMember::Item(syn::Item::Struct(_)) => Some(KindName::Struct),
-        SynMember::Item(syn::Item::Trait(_)) => Some(KindName::Trait),
-        SynMember::Item(syn::Item::TraitAlias(_)) => Some(KindName::TraitAlias),
-        SynMember::Item(syn::Item::Type(_)) => Some(KindName::Type),
-        SynMember::Item(syn::Item::Union(_)) => Some(KindName::Union),
-        SynMember::Item(syn::Item::Use(_)) => Some(KindName::Use),
-        SynMember::Item(syn::Item::Verbatim(_)) => Some(KindName::Verbatim),
-        // Named (not bare `_`) so a future syn variant is a visible red,
-        // never a silent catch-all. Leading underscore = unused-ok without
-        // a `let _ =` discard.
-        SynMember::Item(_unrecognized_item_variant) => None,
-        SynMember::Impl(syn::ImplItem::Const(_)) => Some(KindName::ImplConst),
-        SynMember::Impl(syn::ImplItem::Fn(_)) => Some(KindName::ImplFn),
-        SynMember::Impl(syn::ImplItem::Type(_)) => Some(KindName::ImplType),
-        SynMember::Impl(syn::ImplItem::Macro(_)) => Some(KindName::ImplMacro),
-        SynMember::Impl(syn::ImplItem::Verbatim(_)) => Some(KindName::Verbatim),
-        SynMember::Impl(_unrecognized_impl_item_variant) => None,
-        SynMember::Trait(syn::TraitItem::Const(_)) => Some(KindName::TraitConst),
-        SynMember::Trait(syn::TraitItem::Fn(_)) => Some(KindName::TraitFn),
-        SynMember::Trait(syn::TraitItem::Type(_)) => Some(KindName::TraitType),
-        SynMember::Trait(syn::TraitItem::Macro(_)) => Some(KindName::TraitMacro),
-        SynMember::Trait(syn::TraitItem::Verbatim(_)) => Some(KindName::Verbatim),
-        SynMember::Trait(_unrecognized_trait_item_variant) => None,
+impl SynMember<'_> {
+    /// Kind of this syn member, or `None` for an unrecognized future variant
+    /// (named binding below — never a bare `_` soft drain).
+    fn kind(&self) -> Option<KindName> {
+        match self {
+            SynMember::Item(syn::Item::Const(_)) => Some(KindName::Const),
+            SynMember::Item(syn::Item::Enum(_)) => Some(KindName::Enum),
+            SynMember::Item(syn::Item::ExternCrate(_)) => Some(KindName::ExternCrate),
+            SynMember::Item(syn::Item::Fn(_)) => Some(KindName::Fn),
+            SynMember::Item(syn::Item::ForeignMod(_)) => Some(KindName::ForeignMod),
+            SynMember::Item(syn::Item::Impl(_)) => Some(KindName::Impl),
+            SynMember::Item(syn::Item::Macro(_)) => Some(KindName::Macro),
+            SynMember::Item(syn::Item::Mod(_)) => Some(KindName::Mod),
+            SynMember::Item(syn::Item::Static(_)) => Some(KindName::Static),
+            SynMember::Item(syn::Item::Struct(_)) => Some(KindName::Struct),
+            SynMember::Item(syn::Item::Trait(_)) => Some(KindName::Trait),
+            SynMember::Item(syn::Item::TraitAlias(_)) => Some(KindName::TraitAlias),
+            SynMember::Item(syn::Item::Type(_)) => Some(KindName::Type),
+            SynMember::Item(syn::Item::Union(_)) => Some(KindName::Union),
+            SynMember::Item(syn::Item::Use(_)) => Some(KindName::Use),
+            SynMember::Item(syn::Item::Verbatim(_)) => Some(KindName::Verbatim),
+            // Named (not bare `_`) so a future syn variant is a visible red,
+            // never a silent catch-all. Leading underscore = unused-ok without
+            // a `let _ =` discard.
+            SynMember::Item(_unrecognized_item_variant) => None,
+            SynMember::Impl(syn::ImplItem::Const(_)) => Some(KindName::ImplConst),
+            SynMember::Impl(syn::ImplItem::Fn(_)) => Some(KindName::ImplFn),
+            SynMember::Impl(syn::ImplItem::Type(_)) => Some(KindName::ImplType),
+            SynMember::Impl(syn::ImplItem::Macro(_)) => Some(KindName::ImplMacro),
+            SynMember::Impl(syn::ImplItem::Verbatim(_)) => Some(KindName::Verbatim),
+            SynMember::Impl(_unrecognized_impl_item_variant) => None,
+            SynMember::Trait(syn::TraitItem::Const(_)) => Some(KindName::TraitConst),
+            SynMember::Trait(syn::TraitItem::Fn(_)) => Some(KindName::TraitFn),
+            SynMember::Trait(syn::TraitItem::Type(_)) => Some(KindName::TraitType),
+            SynMember::Trait(syn::TraitItem::Macro(_)) => Some(KindName::TraitMacro),
+            SynMember::Trait(syn::TraitItem::Verbatim(_)) => Some(KindName::Verbatim),
+            SynMember::Trait(_unrecognized_trait_item_variant) => None,
+        }
     }
-}
-
-fn item_kind(item: &syn::Item) -> Option<KindName> {
-    syn_member_kind(SynMember::Item(item))
-}
-
-fn impl_item_kind(item: &syn::ImplItem) -> Option<KindName> {
-    syn_member_kind(SynMember::Impl(item))
-}
-
-fn trait_item_kind(item: &syn::TraitItem) -> Option<KindName> {
-    syn_member_kind(SynMember::Trait(item))
 }
 
 fn item_label(item: &syn::Item) -> String {
@@ -309,7 +301,7 @@ fn item_label(item: &syn::Item) -> String {
 // ---------------------------------------------------------------------------
 
 fn classify_item(ctx: &Ctx, item: &syn::Item, hits: &mut Vec<Hit>) {
-    let Some(kind) = item_kind(item) else {
+    let Some(kind) = SynMember::Item(item).kind() else {
         hits.push(hit(ctx.rel, line_of(item), "unknown-syn-item-kind"));
         return;
     };
@@ -570,8 +562,8 @@ fn classify_trait_item(ctx: &Ctx, item: &syn::TraitItem, hits: &mut Vec<Hit>) {
 
 fn classify_container_member(ctx: &Ctx, member: ContainerMember<'_>, hits: &mut Vec<Hit>) {
     let (kind, unknown) = match member {
-        ContainerMember::Impl(item) => (impl_item_kind(item), "unknown-syn-implitem-kind"),
-        ContainerMember::Trait(item) => (trait_item_kind(item), "unknown-syn-traititem-kind"),
+        ContainerMember::Impl(item) => (SynMember::Impl(item).kind(), "unknown-syn-implitem-kind"),
+        ContainerMember::Trait(item) => (SynMember::Trait(item).kind(), "unknown-syn-traititem-kind"),
     };
     let Some(kind) = kind else {
         hits.push(hit(ctx.rel, 0, unknown));
@@ -733,8 +725,12 @@ fn rule_matches_item(ctx: &Ctx, rule: StructuralRule, item: &syn::Item) -> bool 
         syn::Item::Const(_) => constant_matches_non_static(rule),
         syn::Item::Static(s) => constant_matches_static(rule, s),
         syn::Item::Mod(m) => module_matches(rule, m),
-        syn::Item::Impl(i) => container_matches(rule, ctx.grammar, impl_item_kind, &i.items),
-        syn::Item::Trait(t) => container_matches(rule, ctx.grammar, trait_item_kind, &t.items),
+        syn::Item::Impl(i) => {
+            container_matches(rule, ctx.grammar, |it| SynMember::Impl(it).kind(), &i.items)
+        }
+        syn::Item::Trait(t) => {
+            container_matches(rule, ctx.grammar, |it| SynMember::Trait(it).kind(), &t.items)
+        }
         _no_rule_applies_to_this_item_variant => false,
     }
 }
@@ -870,12 +866,15 @@ fn module_matches(rule: StructuralRule, _node: &syn::ItemMod) -> bool {
 /// are additionally, individually reported at their own condemned law name
 /// by the caller; this is the container's OWN in-cell refusal, required by
 /// the preamble law since containers are not zero-freedom cells.
-fn container_matches<I>(
+fn container_matches<I, F>(
     rule: StructuralRule,
     grammar: &Grammar,
-    kind_of: fn(&I) -> Option<KindName>,
+    kind_of: F,
     items: &[I],
-) -> bool {
+) -> bool
+where
+    F: Fn(&I) -> Option<KindName>,
+{
     match rule {
         StructuralRule::InteriorsClassify => items
             .iter()
