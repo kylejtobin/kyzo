@@ -24,10 +24,13 @@ use thiserror::Error;
 pub(crate) struct MonoMillis(u64);
 
 impl MonoMillis {
-    /// Elapsed duration since `earlier`, saturating at zero if clocks moved
-    /// backwards within the process (should not happen for a mono Instant).
+    /// Elapsed duration since `earlier`; zero if clocks moved backwards
+    /// within the process (should not happen for a mono Instant).
     pub(crate) fn saturating_elapsed_since(self, earlier: MonoMillis) -> Duration {
-        Duration::from_millis(self.0.saturating_sub(earlier.0))
+        match self.0.checked_sub(earlier.0) {
+            Some(ms) => Duration::from_millis(ms),
+            None => Duration::ZERO,
+        }
     }
 
     /// Whole milliseconds since the process anchor.

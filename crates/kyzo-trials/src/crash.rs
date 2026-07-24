@@ -711,8 +711,11 @@ mod fuse_crash_matrix {
         let handle = std::thread::spawn(body);
         // Poll budget — structural, not Instant. 50ms sleep × polls ≈ PER_SEED_BUDGET.
         let max_polls = match u64::try_from(PER_SEED_BUDGET.as_millis() / 50) {
-            Ok(n) => n.saturating_add(1),
-            // Budget that cannot fit u64 still ends the poll loop (saturate).
+            Ok(n) => match n.checked_add(1) {
+                Some(v) => v,
+                None => POLL_BUDGET_CEILING,
+            },
+            // Budget that cannot fit u64 still ends the poll loop (ceiling).
             Err(_budget_past_u64) => POLL_BUDGET_CEILING,
         };
         let mut polls = 0u64;
@@ -726,7 +729,10 @@ mod fuse_crash_matrix {
                 );
                 std::process::exit(90);
             }
-            polls = polls.saturating_add(1);
+            polls = match polls.checked_add(1) {
+                Some(v) => v,
+                None => max_polls,
+            };
             std::thread::park_timeout(std::time::Duration::from_millis(50));
         }
         if let Err(panic_payload) = handle.join() {

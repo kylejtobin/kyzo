@@ -49,14 +49,18 @@ impl LineIndex {
     pub(crate) fn position(&self, text: &str, byte_offset: usize) -> Position {
         let byte_offset = byte_offset.min(text.len());
         // line_starts always begins at byte 0, so partition_point is ≥ 1 for any
-        // in-range offset and saturating_sub(1) is the containing line.
-        let line = self
+        // in-range offset; checked_sub maps the empty-prefix edge to line 0.
+        let line = match self
             .line_starts
             .partition_point(|&s| s <= byte_offset)
-            .saturating_sub(1);
+            .checked_sub(1)
+        {
+            Some(n) => n,
+            None => 0,
+        };
         let line_start = self.line_starts[line];
-        // Count UTF-16 units in u32 with saturating add — LSP positions are u32;
-        // a line wider than u32::MAX columns is unrepresentable on the wire.
+        // Count UTF-16 units in u32 — LSP positions are u32; a line wider than
+        // u32::MAX columns is unrepresentable on the wire (ceiling).
         let mut character = 0u32;
         for ch in text[line_start..byte_offset].chars() {
             let width = match ch.len_utf16() {
@@ -64,12 +68,15 @@ impl LineIndex {
                 2 => 2u32,
                 _ => 1u32, // Unicode scalar UTF-16 width is only 1 or 2
             };
-            character = character.saturating_add(width);
+            character = match character.checked_add(width) {
+                Some(c) => c,
+                None => u32::MAX,
+            };
         }
-        let mut line_u32 = 0u32;
-        for _ in 0..line {
-            line_u32 = line_u32.saturating_add(1);
-        }
+        let line_u32 = match u32::try_from(line) {
+            Ok(n) => n,
+            Err(_) => u32::MAX,
+        };
         Position::new(line_u32, character)
     }
 

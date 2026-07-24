@@ -203,7 +203,10 @@ fn sample_real_replay(seed: u64, target_bytes: u64) -> Sample {
         Err(e) => std::panic::resume_unwind(Box::new(format!("timed replay: {e:?}"))),
     };
     black_box(recovered);
-    let recovery_time_ns = match u64_from_u128(mono_nanos().saturating_sub(start)) {
+    let recovery_time_ns = match u64_from_u128(match mono_nanos().checked_sub(start) {
+        Some(n) => n,
+        None => 0,
+    }) {
         Ok(n) => n,
         Err(e) => refuse_width("recovery_time_ns", e),
     };
