@@ -33,9 +33,9 @@ use crate::waiver::{Waiver, WaiverFile};
 /// Parsed citation form.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Citation {
-    LawName(String),
-    FileItem { file: String, item_path: String },
-    TestFn { file: String, fn_name: String },
+    LawName(Label),
+    FileItem { file: Label, item_path: Label },
+    TestFn { file: Label, fn_name: Label },
     DecisionsSeat(u32),
 }
 
@@ -63,8 +63,8 @@ impl Citation {
                 return Err(format!("file#item-path malformed: `{s}`"));
             }
             return Ok(Citation::FileItem {
-                file: file.to_string(),
-                item_path: item.to_string(),
+                file: Label::admit(file),
+                item_path: Label::admit(item),
             });
         }
         if s.contains("::") {
@@ -77,8 +77,8 @@ impl Citation {
                 ));
             }
             return Ok(Citation::TestFn {
-                file: file.to_string(),
-                fn_name: name.to_string(),
+                file: Label::admit(file),
+                fn_name: Label::admit(name),
             });
         }
         // laws.toml law name: identifier matching [[law]].name (snake / R-*).
@@ -86,7 +86,7 @@ impl Citation {
             && s.chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
         {
-            return Ok(Citation::LawName(s.to_string()));
+            return Ok(Citation::LawName(Label::admit(s)));
         }
         Err(format!(
             "citation `{s}` matches none of: laws.toml law name, file#item-path, file.rs::fn, decisions.md#N"
@@ -203,16 +203,16 @@ impl CitationLaw {
     pub fn resolve_hash(&self, root: &Path, laws: &Laws, citation: &Citation) -> Option<String> {
         match citation {
             Citation::LawName(name) => laws
-                .get(name)
+                .get(name.as_str())
                 .map(|text| self.anchor_bytes_hash(text.as_bytes())),
             Citation::FileItem { file, item_path } => {
-                let ast = self.parse_rs(root, file)?;
-                let item = self.find_item(&ast, item_path)?;
+                let ast = self.parse_rs(root, file.as_str())?;
+                let item = self.find_item(&ast, item_path.as_str())?;
                 Some(identity::IDENTITY.site_hash(&item))
             }
             Citation::TestFn { file, fn_name } => {
-                let ast = self.parse_rs(root, file)?;
-                let item = self.find_fn(&ast, fn_name)?;
+                let ast = self.parse_rs(root, file.as_str())?;
+                let item = self.find_fn(&ast, fn_name.as_str())?;
                 Some(identity::IDENTITY.site_hash(&item))
             }
             Citation::DecisionsSeat(n) => {

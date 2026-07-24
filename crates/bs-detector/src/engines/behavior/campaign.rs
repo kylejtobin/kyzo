@@ -158,16 +158,16 @@ impl CampaignSeat {
 /// Refuse reasons when loading/building an artifact (typed, not String).
 #[derive(Debug)]
 pub enum ArtifactRefuse {
-    Io(String),
-    Parse(String),
-    Hash(String),
+    Io(Label),
+    Parse(Label),
+    Hash(Label),
 }
 
 impl std::fmt::Display for ArtifactRefuse {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ArtifactRefuse::Io(s) | ArtifactRefuse::Parse(s) | ArtifactRefuse::Hash(s) => {
-                f.write_str(s)
+                f.write_str(s.as_str())
             }
         }
     }
@@ -176,10 +176,10 @@ impl std::fmt::Display for ArtifactRefuse {
 impl CampaignArtifact {
     pub fn load(path: &Path) -> Result<Self, ArtifactRefuse> {
         let text = std::fs::read_to_string(path).map_err(|e| {
-            ArtifactRefuse::Io(format!("reading {}: {e}", path.display()))
+            ArtifactRefuse::Io(Label::admit(format!("reading {}: {e}", path.display())))
         })?;
         toml::from_str(&text).map_err(|e| {
-            ArtifactRefuse::Parse(format!("parsing {}: {e}", path.display()))
+            ArtifactRefuse::Parse(Label::admit(format!("parsing {}: {e}", path.display())))
         })
     }
 
@@ -194,7 +194,7 @@ impl CampaignArtifact {
         for rel in sources {
             let abs = repo_root.join(rel);
             let bytes = std::fs::read(&abs).map_err(|e| {
-                ArtifactRefuse::Io(format!("hashing {rel}: {e}"))
+                ArtifactRefuse::Io(Label::admit(format!("hashing {rel}: {e}")))
             })?;
             let digest = blake3::hash(&bytes);
             out.push(ArtifactSource::admit(
@@ -242,7 +242,7 @@ impl CampaignLaw {
 
     fn live_blake3(&self, repo_root: &Path, rel: &str) -> Result<String, ArtifactRefuse> {
         let bytes = std::fs::read(repo_root.join(rel))
-            .map_err(|e| ArtifactRefuse::Io(format!("reading {rel}: {e}")))?;
+            .map_err(|e| ArtifactRefuse::Io(Label::admit(format!("reading {rel}: {e}"))))?;
         Ok(blake3::hash(&bytes).to_hex().to_string())
     }
 

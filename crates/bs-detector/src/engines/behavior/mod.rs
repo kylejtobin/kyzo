@@ -36,7 +36,7 @@ impl BehaviorLaw {
                     Hit::admit(
                         "Cargo.toml".to_string(),
                         1,
-                        format!("pure_rust_banned:{line}"),
+                        format!("pure_rust_banned:{}", line.as_str()),
                     )
                 })
                 .collect(),
@@ -53,15 +53,15 @@ impl BehaviorLaw {
         match unsafe_check::UnsafeCheckGate::check_at(repo_root) {
             Ok(_) => vec![],
             Err(unsafe_check::UnsafeCheckError::MissingForbid { root }) => {
-                vec![Hit::admit(root, 1, "unsafe_missing_forbid".to_string())]
+                vec![Hit::admit(root.as_str(), 1, "unsafe_missing_forbid".to_string())]
             }
             Err(unsafe_check::UnsafeCheckError::AllowFound { offenders }) => offenders
                 .into_iter()
-                .map(|f| Hit::admit(f, 1, "unsafe_allow_found".to_string()))
+                .map(|f| Hit::admit(f.as_str(), 1, "unsafe_allow_found".to_string()))
                 .collect(),
             Err(unsafe_check::UnsafeCheckError::LyingDoc { offenders }) => offenders
                 .into_iter()
-                .map(|f| Hit::admit(f, 1, "unsafe_lying_doc".to_string()))
+                .map(|f| Hit::admit(f.as_str(), 1, "unsafe_lying_doc".to_string()))
                 .collect(),
             Err(e) => vec![Hit::admit(
                 "Cargo.toml".to_string(),

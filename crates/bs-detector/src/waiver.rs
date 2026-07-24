@@ -45,8 +45,8 @@ const ATTESTATION_TEMPLATE_TOML: &str = include_str!("../attestation_template.to
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum TemplateSegment {
-    Fixed { text: String },
-    Slot { name: String },
+    Fixed { text: Label },
+    Slot { name: Label },
 }
 
 #[derive(Debug, Deserialize)]
@@ -129,7 +129,7 @@ impl AttestationTemplate {
                             "attestation fixed segment {i} mismatch at byte {pos}"
                         ));
                     }
-                    pos += text.len();
+                    pos += text.as_str().len();
                     i += 1;
                 }
                 TemplateSegment::Slot { name } => {
@@ -137,7 +137,8 @@ impl AttestationTemplate {
                         Some(TemplateSegment::Fixed { text }) => text.as_str(),
                         Some(TemplateSegment::Slot { .. }) | None => {
                             return Err(format!(
-                                "attestation slot `{name}` has no following fixed delimiter"
+                                "attestation slot `{}` has no following fixed delimiter",
+                                name.as_str()
                             ));
                         }
                     };
@@ -147,14 +148,15 @@ impl AttestationTemplate {
                     };
                     let Some(rel) = rest.find(delim) else {
                         return Err(format!(
-                            "attestation slot `{name}`: following fixed delimiter not found"
+                            "attestation slot `{}`: following fixed delimiter not found",
+                            name.as_str()
                         ));
                     };
                     if rel == 0 {
-                        return Err(format!("attestation slot `{name}` is empty"));
+                        return Err(format!("attestation slot `{}` is empty", name.as_str()));
                     }
                     let content = &rest[..rel];
-                    filled.push((name.clone(), content.to_string()));
+                    filled.push((name.as_str().to_string(), content.to_string()));
                     pos += rel;
                     // Next loop iteration matches the delimiter as Fixed.
                     i += 1;
@@ -176,16 +178,19 @@ impl AttestationTemplate {
         let mut slot_i = 0usize;
         for seg in &self.segments {
             match seg {
-                TemplateSegment::Fixed { text } => out.push_str(text),
+                TemplateSegment::Fixed { text } => out.push_str(text.as_str()),
                 TemplateSegment::Slot { name } => {
                     let Some((n, v)) = slots.get(slot_i) else {
-                        return Err(format!("missing slot value for `{name}`"));
+                        return Err(format!("missing slot value for `{}`", name.as_str()));
                     };
                     if *n != name.as_str() {
-                        return Err(format!("slot order: expected `{name}`, got `{n}`"));
+                        return Err(format!(
+                            "slot order: expected `{}`, got `{n}`",
+                            name.as_str()
+                        ));
                     }
                     if v.is_empty() {
-                        return Err(format!("slot `{name}` must be non-empty"));
+                        return Err(format!("slot `{}` must be non-empty", name.as_str()));
                     }
                     out.push_str(v);
                     slot_i += 1;
@@ -615,7 +620,7 @@ why_not_sabotage = {why}
         let mut raw = String::new();
         for seg in &t.segments {
             match seg {
-                TemplateSegment::Fixed { text } => raw.push_str(text),
+                TemplateSegment::Fixed { text } => raw.push_str(text.as_str()),
                 TemplateSegment::Slot { name } if name == "alt_one" => {}
                 TemplateSegment::Slot { name } if name == "reason_one" => {
                     raw.push_str("reason one text")

@@ -20,6 +20,7 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
+use crate::boundary::Label;
 use crate::cargo_meta::CargoMetadata;
 
 /// Crates whose presence means a C/C++ compiler or a banned base backend
@@ -61,9 +62,9 @@ static PURE_SYS_RE: LazyLock<Regex> = LazyLock::new(|| {
 #[derive(Debug)]
 pub enum PureRustError {
     Spawn(std::io::Error),
-    TreeCommandFailed { package: String, output: String },
+    TreeCommandFailed { package: Label, output: Label },
     NoPackageFound,
-    BannedCratesFound(Vec<String>),
+    BannedCratesFound(Vec<Label>),
 }
 
 impl fmt::Display for PureRustError {
@@ -72,7 +73,9 @@ impl fmt::Display for PureRustError {
             PureRustError::Spawn(e) => write!(f, "pure-Rust gate: failed to spawn cargo: {e}"),
             PureRustError::TreeCommandFailed { package, output } => write!(
                 f,
-                "pure-Rust gate: 'cargo tree -p {package}' errored (an unreadable tree is not a clean tree):\n{output}"
+                "pure-Rust gate: 'cargo tree -p {}' errored (an unreadable tree is not a clean tree):\n{}",
+                package.as_str(),
+                output.as_str()
             ),
             PureRustError::NoPackageFound => {
                 write!(
@@ -83,7 +86,10 @@ impl fmt::Display for PureRustError {
             PureRustError::BannedCratesFound(hits) => write!(
                 f,
                 "pure-Rust gate: C/C++-toolchain crates found in the engine dependency tree:\n{}",
-                hits.join("\n")
+                hits.iter()
+                    .map(|h| h.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n")
             ),
         }
     }
@@ -137,15 +143,15 @@ impl PureRustGate {
         );
         if !meta_output.status.success() {
             return Err(PureRustError::TreeCommandFailed {
-                package: "workspace metadata".to_string(),
-                output: meta_combined,
+                package: Label::admit("workspace metadata"),
+                output: Label::admit(meta_combined),
             });
         }
 
         let metadata: CargoMetadata = serde_json::from_slice(&meta_output.stdout).map_err(|e| {
             PureRustError::TreeCommandFailed {
-                package: "workspace metadata".to_string(),
-                output: format!("could not parse `cargo metadata` JSON: {e}"),
+                package: Label::admit("workspace metadata"),
+                output: Label::admit(format!("could not parse `cargo metadata` JSON: {e}")),
             }
         })?;
 
@@ -187,8 +193,8 @@ impl PureRustGate {
             );
             if !output.status.success() {
                 return Err(PureRustError::TreeCommandFailed {
-                    package: pkg.clone(),
-                    output: combined,
+                    package: Label::admit(pkg.clone()),
+                    output: Label::admit(combined),
                 });
             }
             trees.push_str(&combined);
@@ -203,11 +209,11 @@ impl PureRustGate {
         let mut lines: Vec<&str> = trees.lines().collect();
         lines.sort_unstable();
         lines.dedup();
-        let hits: Vec<String> = lines
+        let hits: Vec<Label> = lines
             .into_iter()
             .filter(|l| BANNED_RE.is_match(l) || BANNED_SUFFIX_RE.is_match(l))
             .filter(|l| !PURE_SYS_RE.is_match(l))
-            .map(|s| s.to_string())
+            .map(Label::admit)
             .collect();
 
         if !hits.is_empty() {
@@ -483,10 +489,10 @@ mod tests {
 
         let outcome = PureRustGate::check_at(root);
         if let Err(PureRustError::BannedCratesFound(hits)) = outcome {
-            PureRustProofRefuse::PlantedCcMustHit.require(hits.iter().any(|h| h.starts_with("cc v")))?;
-            PureRustProofRefuse::PlantedOpensslMustHit.require(hits.iter().any(|h| h.starts_with("openssl v")))?;
-            PureRustProofRefuse::BindgenMustStayOut.require(!hits.iter().any(|h| h.starts_with("bindgen v")))?;
-            PureRustProofRefuse::AwsLcSysMustStayOut.require(!hits.iter().any(|h| h.starts_with("aws-lc-sys v")))
+            PureRustProofRefuse::PlantedCcMustHit.require(hits.iter().any(|h| h.as_str().starts_with("cc v")))?;
+            PureRustProofRefuse::PlantedOpensslMustHit.require(hits.iter().any(|h| h.as_str().starts_with("openssl v")))?;
+            PureRustProofRefuse::BindgenMustStayOut.require(!hits.iter().any(|h| h.as_str().starts_with("bindgen v")))?;
+            PureRustProofRefuse::AwsLcSysMustStayOut.require(!hits.iter().any(|h| h.as_str().starts_with("aws-lc-sys v")))
         } else {
             Err(PureRustProofRefuse::ExpectedBannedCratesFound)
         }

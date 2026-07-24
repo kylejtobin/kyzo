@@ -23,6 +23,8 @@ use std::sync::LazyLock;
 use regex::Regex;
 use walkdir::WalkDir;
 
+use crate::boundary::Label;
+
 /// (crate root file, crate src dir), same pair the script checked, in the
 /// same order.
 const ENGINE_CRATES: &[(&str, &str)] = &[
@@ -58,9 +60,9 @@ static LIAR_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
 #[derive(Debug)]
 pub enum UnsafeCheckError {
     Io(anyhow::Error),
-    MissingForbid { root: String },
-    AllowFound { offenders: Vec<String> },
-    LyingDoc { offenders: Vec<String> },
+    MissingForbid { root: Label },
+    AllowFound { offenders: Vec<Label> },
+    LyingDoc { offenders: Vec<Label> },
 }
 
 impl fmt::Display for UnsafeCheckError {
@@ -69,17 +71,26 @@ impl fmt::Display for UnsafeCheckError {
             UnsafeCheckError::Io(e) => write!(f, "unsafe gate: {e:#}"),
             UnsafeCheckError::MissingForbid { root } => write!(
                 f,
-                "unsafe gate: {root} does not declare #![forbid(unsafe_code)]. First-party engine code forbids unsafe with zero exceptions; removing forbid is a reviewed, in-story decision, not an edit."
+                "unsafe gate: {} does not declare #![forbid(unsafe_code)]. First-party engine code forbids unsafe with zero exceptions; removing forbid is a reviewed, in-story decision, not an edit.",
+                root.as_str()
             ),
             UnsafeCheckError::AllowFound { offenders } => write!(
                 f,
                 "unsafe gate: allow(unsafe_code) found in the forbid-governed surface: {}. There is no unsafe exception. A new one must be introduced deliberately in its own story with a full safety case.",
-                offenders.join(" ")
+                offenders
+                    .iter()
+                    .map(|o| o.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
             ),
             UnsafeCheckError::LyingDoc { offenders } => write!(
                 f,
                 "unsafe gate: claims an unsafe exception that does not exist: {}. The value plane is pure safe Rust. Delete the phantom exception language so the docs match the enforced rule.",
-                offenders.join(" ")
+                offenders
+                    .iter()
+                    .map(|o| o.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
             ),
         }
     }
@@ -107,13 +118,13 @@ impl UnsafeCheckGate {
                 .map_err(|e| UnsafeCheckError::Io(anyhow::anyhow!("reading {root_file}: {e}")))?;
             if !root_text.contains("#![forbid(unsafe_code)]") {
                 return Err(UnsafeCheckError::MissingForbid {
-                    root: (*root_file).to_string(),
+                    root: Label::admit(*root_file),
                 });
             }
 
             let src_path = repo_root.join(src_dir);
-            let mut allow_offenders = Vec::new();
-            let mut liar_offenders = Vec::new();
+            let mut allow_offenders: Vec<Label> = Vec::new();
+            let mut liar_offenders: Vec<Label> = Vec::new();
             for entry in WalkDir::new(&src_path).into_iter().filter_map(|e| e.ok()) {
                 let path = entry.path();
                 if path.extension().and_then(|e| e.to_str()) != Some("rs") {
@@ -122,12 +133,14 @@ impl UnsafeCheckGate {
                 let text = std::fs::read_to_string(path).map_err(|e| {
                     UnsafeCheckError::Io(anyhow::anyhow!("reading {}: {e}", path.display()))
                 })?;
-                let rel = match path.strip_prefix(repo_root) {
-                    Ok(rel) => rel,
-                    Err(_) => path,
-                }
-                .to_string_lossy()
-                .replace('\\', "/");
+                let rel = Label::admit(
+                    match path.strip_prefix(repo_root) {
+                        Ok(rel) => rel,
+                        Err(_) => path,
+                    }
+                    .to_string_lossy()
+                    .replace('\\', "/"),
+                );
                 if ALLOW_PATTERN.is_match(&text) {
                     allow_offenders.push(rel.clone());
                 }

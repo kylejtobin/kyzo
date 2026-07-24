@@ -52,8 +52,8 @@ use crate::cargo_meta::CargoMetadata;
 /// case it is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Attribution {
-    Attributed(String),
-    Ambiguous(Vec<String>),
+    Attributed(Label),
+    Ambiguous(Vec<Label>),
 }
 
 impl fmt::Display for Attribution {
@@ -61,7 +61,15 @@ impl fmt::Display for Attribution {
         match self {
             Attribution::Attributed(name) => write!(f, "{name}"),
             Attribution::Ambiguous(candidates) => {
-                write!(f, "ambiguous among: {}", candidates.join(", "))
+                write!(
+                    f,
+                    "ambiguous among: {}",
+                    candidates
+                        .iter()
+                        .map(|c| c.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
             }
         }
     }
@@ -70,43 +78,43 @@ impl fmt::Display for Attribution {
 #[derive(Debug)]
 pub enum BuildScriptSandboxError {
     /// `cargo metadata` itself could not be run (spawn failure or nonzero exit).
-    Metadata(String),
+    Metadata(Label),
     /// `cargo metadata` ran but its JSON could not be parsed.
     MetadataParse {
-        reason: String,
+        reason: Label,
     },
     /// Resetting the check-owned target directory failed (Amendment 3:
     /// this replaced `cargo clean` outright).
     Clean {
-        output: String,
+        output: Label,
     },
     /// A before/after filesystem snapshot could not be taken.
     Snapshot {
-        reason: String,
+        reason: Label,
     },
     /// The sandboxed build failed, and the control build (whole workspace,
     /// re-cleaned, plain network) succeeded — the only difference between
     /// the two runs was network access, so some build script needs it.
     NetworkAccessAttempted {
-        sandboxed_output: String,
+        sandboxed_output: Label,
     },
     /// The sandboxed build failed AND the control build reproduced the
     /// failure — an ordinary build defect, not a network dependency.
     ControlBuildFailed {
-        output: String,
+        output: Label,
     },
     /// The sandboxed build (or its control) succeeded, but some build
     /// script wrote somewhere it never should have: the workspace source
     /// tree, or the target directory outside its own `build/<pkg>-*/` area.
     WriteOutsideOutDir {
         package: Attribution,
-        paths: Vec<String>,
+        paths: Vec<Label>,
     },
     /// Namespace setup itself failed (neither `unshare --user --map-root-user
     /// --net` nor `unshare --net` could create a network namespace) — this
     /// FAILS the gate; it is never treated as "nothing to check."
     SandboxUnavailable {
-        reason: String,
+        reason: Label,
     },
 }
 
@@ -176,7 +184,11 @@ impl fmt::Display for BuildScriptSandboxError {
                 f,
                 "build-script sandbox gate: {package}'s build script wrote outside its own \
                  OUT_DIR:\n{}",
-                paths.join("\n")
+                paths
+                    .iter()
+                    .map(|p| p.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n")
             ),
             BuildScriptSandboxError::SandboxUnavailable { reason } => write!(
                 f,
@@ -324,12 +336,16 @@ impl BuildScriptSandboxGate {
             .current_dir(repo_root);
         let output = cmd
             .output()
-            .map_err(|e| BuildScriptSandboxError::Metadata(format!("failed to spawn: {e}")))?;
+            .map_err(|e| {
+                BuildScriptSandboxError::Metadata(Label::admit(format!("failed to spawn: {e}")))
+            })?;
         if !output.status.success() {
-            return Err(BuildScriptSandboxError::Metadata(self.combined_output(&output)));
+            return Err(BuildScriptSandboxError::Metadata(Label::admit(
+                self.combined_output(&output),
+            )));
         }
         serde_json::from_slice(&output.stdout).map_err(|e| BuildScriptSandboxError::MetadataParse {
-            reason: format!("{e}"),
+            reason: Label::admit(format!("{e}")),
         })
     }
 
@@ -418,7 +434,7 @@ impl BuildScriptSandboxGate {
             }
         }
         Err(BuildScriptSandboxError::SandboxUnavailable {
-            reason: refusals.join("; "),
+            reason: Label::admit(refusals.join("; ")),
         })
     }
 
@@ -431,18 +447,18 @@ impl BuildScriptSandboxGate {
         if let Err(e) = std::fs::remove_dir_all(owned_target) {
             if e.kind() != std::io::ErrorKind::NotFound {
                 return Err(BuildScriptSandboxError::Clean {
-                    output: format!(
+                    output: Label::admit(format!(
                         "failed to remove check-owned target dir {}: {e}",
                         owned_target.display()
-                    ),
+                    )),
                 });
             }
         }
         std::fs::create_dir_all(owned_target).map_err(|e| BuildScriptSandboxError::Clean {
-            output: format!(
+            output: Label::admit(format!(
                 "failed to create check-owned target dir {}: {e}",
                 owned_target.display()
-            ),
+            )),
         })
     }
 
@@ -688,12 +704,21 @@ impl BuildScriptSandboxGate {
                             1 => {
                                 let mut it = candidates.into_iter();
                                 match it.next() {
-                                    Some(name) => return Attribution::Attributed(name),
+                                    Some(name) => {
+                                        return Attribution::Attributed(Label::admit(name));
+                                    }
                                     None => break,
                                 }
                             }
                             0 => break,
-                            2.. => return Attribution::Ambiguous(candidates),
+                            2.. => {
+                                return Attribution::Ambiguous(
+                                    candidates
+                                        .into_iter()
+                                        .map(|n| Label::admit(n))
+                                        .collect(),
+                                );
+                            }
                         }
                     }
                 }
@@ -712,10 +737,15 @@ impl BuildScriptSandboxGate {
             }
         });
         if let Some((name, _)) = best {
-            return Attribution::Attributed(name.to_string());
+            return Attribution::Attributed(Label::admit(name));
         }
 
-        Attribution::Ambiguous(known_names.to_vec())
+        Attribution::Ambiguous(
+            known_names
+                .iter()
+                .map(|n| Label::admit(n.as_str()))
+                .collect(),
+        )
     }
 
 
@@ -725,7 +755,7 @@ impl BuildScriptSandboxGate {
     /// this only decides how the failure names its culprit, never whether it
     /// fires.
     fn reduce_attributions(&self, attributions: Vec<Attribution>) -> Attribution {
-        let mut names: Vec<String> = Vec::new();
+        let mut names: Vec<Label> = Vec::new();
         for a in attributions {
             match a {
                 Attribution::Attributed(n) => names.push(n),
@@ -762,11 +792,11 @@ impl BuildScriptSandboxGate {
         let skip = ["target", ".git"];
         let src_before =
             self.snapshot_dir(workspace_root, &skip).map_err(|e| BuildScriptSandboxError::Snapshot {
-                reason: format!("workspace source tree (pre-build): {e}"),
+                reason: Label::admit(format!("workspace source tree (pre-build): {e}")),
             })?;
         let target_before =
             self.snapshot_dir(owned_target, &[]).map_err(|e| BuildScriptSandboxError::Snapshot {
-                reason: format!("check-owned target directory (pre-build): {e}"),
+                reason: Label::admit(format!("check-owned target directory (pre-build): {e}")),
             })?;
 
         let sandboxed = self.run_sandboxed_build(repo_root, owned_target, sandbox);
@@ -775,12 +805,14 @@ impl BuildScriptSandboxGate {
             Ok(_sandboxed_output) => {
                 let src_after = self.snapshot_dir(workspace_root, &skip).map_err(|e| {
                     BuildScriptSandboxError::Snapshot {
-                        reason: format!("workspace source tree (post-build): {e}"),
+                        reason: Label::admit(format!("workspace source tree (post-build): {e}")),
                     }
                 })?;
                 let target_after =
                     self.snapshot_dir(owned_target, &[]).map_err(|e| BuildScriptSandboxError::Snapshot {
-                        reason: format!("check-owned target directory (post-build): {e}"),
+                        reason: Label::admit(format!(
+                            "check-owned target directory (post-build): {e}"
+                        )),
                     })?;
 
                 let src_violations: Vec<PathBuf> = self.diff_paths(&src_before, &src_after)
@@ -810,7 +842,7 @@ impl BuildScriptSandboxGate {
                         package,
                         paths: violations
                             .into_iter()
-                            .map(|p| p.display().to_string())
+                            .map(|p| Label::admit(p.display().to_string()))
                             .collect(),
                     });
                 }
@@ -823,9 +855,11 @@ impl BuildScriptSandboxGate {
                 // the two apart: only the network differs between the two runs.
                 self.reset_owned_target(owned_target)?;
                 match self.run_plain_build(repo_root, owned_target) {
-                    Ok(_) => Err(BuildScriptSandboxError::NetworkAccessAttempted { sandboxed_output }),
+                    Ok(_) => Err(BuildScriptSandboxError::NetworkAccessAttempted {
+                        sandboxed_output: Label::admit(sandboxed_output),
+                    }),
                     Err(control_output) => Err(BuildScriptSandboxError::ControlBuildFailed {
-                        output: control_output,
+                        output: Label::admit(control_output),
                     }),
                 }
             }
@@ -889,6 +923,7 @@ mod tests {
         Attribution, BuildScriptSandboxError, BuildScriptSandboxGate,
         BuildScriptSandboxProofRefuse,
     };
+    use crate::boundary::Label;
     use std::fs;
     use std::path::Path as StdPath;
 
@@ -1009,7 +1044,10 @@ mod tests {
             Some(&tmp.path().join("target")),
         );
         if let Err(BuildScriptSandboxError::WriteOutsideOutDir { package, paths }) = outcome {
-            BuildScriptSandboxProofRefuse::AttributionMismatch.require_eq(package, Attribution::Attributed(crate_name.to_string()))?;
+            BuildScriptSandboxProofRefuse::AttributionMismatch.require_eq(
+                package,
+                Attribution::Attributed(Label::admit(crate_name)),
+            )?;
             BuildScriptSandboxProofRefuse::EscapedPathMissing.require(paths.iter().any(|p| p.contains("ESCAPED.txt")))
         } else {
             Err(BuildScriptSandboxProofRefuse::ExpectedWriteOutsideOutDir)
@@ -1100,9 +1138,14 @@ mod tests {
         let outcome =
             BuildScriptSandboxGate::check_at_scoped(root, Some(&root.join("target")));
         if let Err(BuildScriptSandboxError::WriteOutsideOutDir { package, paths }) = outcome {
-            BuildScriptSandboxProofRefuse::AttributionMismatch.require_eq(package, Attribution::Attributed(violator_name.to_string()))?;
-            BuildScriptSandboxProofRefuse::EscapedPathMissing.require(paths.iter().any(|p| p.contains("VIOLATOR_ESCAPED.txt")))?;
-            BuildScriptSandboxProofRefuse::CleanSiblingLeak.require(!paths.iter().any(|p| p.contains(clean_name)))
+            BuildScriptSandboxProofRefuse::AttributionMismatch.require_eq(
+                package,
+                Attribution::Attributed(Label::admit(violator_name)),
+            )?;
+            BuildScriptSandboxProofRefuse::EscapedPathMissing
+                .require(paths.iter().any(|p| p.contains("VIOLATOR_ESCAPED.txt")))?;
+            BuildScriptSandboxProofRefuse::CleanSiblingLeak
+                .require(!paths.iter().any(|p| p.contains(clean_name)))
         } else {
             Err(BuildScriptSandboxProofRefuse::ExpectedWriteOutsideOutDir)
         }

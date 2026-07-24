@@ -526,7 +526,7 @@ fn bite_pure_rust() -> BiteOutcome {
     P.write_file(deps.path(), "planted-cc/src/lib.rs", "")?;
     match PureRustGate::check_at(root) {
         Err(PureRustError::BannedCratesFound(hits)) => {
-            P.require(hits.iter().any(|h| h.starts_with("cc v")), BiteProofRefuse::Behavior)?;
+            P.require(hits.iter().any(|h| h.as_str().starts_with("cc v")), BiteProofRefuse::Behavior)?;
         }
         _other => return Err(BiteProofRefuse::Behavior),
     }
@@ -546,7 +546,7 @@ fn bite_unsafe_check() -> BiteOutcome {
     P.write_file(root, "crates/kyzo-bin/src/main.rs", "#![forbid(unsafe_code)]\nfn main() {}\n")?;
     match UnsafeCheckGate::check_at(root) {
         Err(UnsafeCheckError::MissingForbid { root }) => {
-            P.require(root.contains("kyzo-core"), BiteProofRefuse::Behavior)?;
+            P.require(root.as_str().contains("kyzo-core"), BiteProofRefuse::Behavior)?;
         }
         _other => return Err(BiteProofRefuse::Behavior),
     }
