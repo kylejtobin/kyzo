@@ -1,7 +1,7 @@
 LEASE: MECE lane 8 — remaining gate families mop
 (after copy_detector / unclassified / naked_array_sig / nondeterminism / hand_layout / unchecked_arith)
 
-BUILD COMMIT: da9f734cedc863aab979325997acc574748294c0 (this attestation tip)
+BUILD COMMIT: 5b12da6a370bcaa97d6f4f0e6f8e59e6ccb97de8
   mop clears on branch at fb984e5f+ (expect/sleep_sync/capacity/as_cast/assert_bang/allow_clippy/default_impl)
 
 FALSE-GREEN ATTEST: FALSE
