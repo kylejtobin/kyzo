@@ -485,6 +485,7 @@ fn the_real_grammar_and_laws_load_and_bind_to_this_file() {
         "unparsed",
         "forbid_roots",
         "stale_waivers",
+        "dead_citation",
         // TRUTH item 1 condemned kinds — each has its own laws.toml entry.
         "extern_crate",
         "foreign_mod",

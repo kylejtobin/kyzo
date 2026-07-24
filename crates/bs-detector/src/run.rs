@@ -20,6 +20,7 @@ use anyhow::{Context, Result};
 
 use crate::alias::AliasTable;
 use crate::boundary::{Boundary, SourceFile};
+use crate::citation;
 use crate::classify;
 use crate::engines::{Hit, graph, meta, shape};
 use crate::grammar::{Grammar, Laws};
@@ -54,7 +55,10 @@ fn waivable(grammar: &Grammar, check: &str) -> bool {
     {
         return false;
     }
-    !matches!(check, "agreement_registry" | "coverage" | "unparsed" | "stale_waivers")
+    !matches!(
+        check,
+        "agreement_registry" | "coverage" | "unparsed" | "stale_waivers" | "dead_citation"
+    )
 }
 
 pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
@@ -253,7 +257,11 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
             raw.iter()
                 .filter(|h| {
                     let found = entries.iter().enumerate().find(|(i, w)| {
-                        !consumed[*i] && identity::waiver_matches_hit(w, h, &b.files)
+                        !consumed[*i]
+                            && identity::waiver_matches_hit(w, h, &b.files)
+                            // TRUTH item 7: a dead citation stops the waiver
+                            // from applying (in addition to reporting it).
+                            && citation::citation_live(root, &laws, w)
                     });
                     if let Some((i, _)) = found {
                         consumed[i] = true;
@@ -283,6 +291,15 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
             failed.push("stale_waivers".to_string());
             counts.insert("stale_waivers".to_string(), stale.len());
             for h in &stale {
+                report.push_str(&format!("FAIL {}:{} — {}\n", h.file, h.line, h.construct));
+            }
+        }
+        let dead = citation::dead_citations(root, &laws, &waivers);
+        laws.require("dead_citation")?;
+        if !dead.is_empty() {
+            failed.push("dead_citation".to_string());
+            counts.insert("dead_citation".to_string(), dead.len());
+            for h in &dead {
                 report.push_str(&format!("FAIL {}:{} — {}\n", h.file, h.line, h.construct));
             }
         }

@@ -13,8 +13,11 @@
 //! The `line` field is display-only — a `//` inserted above the item shifts
 //! the editor line but does not stale the ruling. A content edit that
 //! changes the site hash makes the waiver STALE: it stops applying and is
-//! reported. Blanket waiver entrys are not representable: there is no
-//! pattern-wide or file-wide waiver constructor.
+//! reported.
+//!
+//! Every waiver also cites a checkable anchor (TRUTH item 7): `citation`
+//! plus `anchor_hash`. Missing target or hash mismatch is `dead_citation`;
+//! the waiver stops applying. Blanket waiver entrys are not representable.
 //!
 //! File format: `crates/bs-detector/waivers.toml`, one `[[waiver]]` table
 //! per waiver entry, plus `[[scope_waiver]]` for the single lawful way a
@@ -25,6 +28,8 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
+
+use crate::citation::Citation;
 
 /// One approved, content-bound waiver entry.
 #[derive(Clone, Debug, Deserialize)]
@@ -44,8 +49,16 @@ pub struct Waiver {
     /// Blake3 hex of the waived item's identity tokens (TRUTH item 6).
     /// Mismatch against the live item = STALE; the waiver stops applying.
     pub site_hash: String,
+    /// Checkable anchor (TRUTH item 7): laws.toml law name, file#item-path,
+    /// `file.rs::test_fn`, or `decisions.md#N`.
+    pub citation: String,
+    /// Blake3 hex of the cited anchor's identity at grant time. Mismatch
+    /// or missing target = dead_citation; the waiver stops applying.
+    pub anchor_hash: String,
     /// The justification. Validated substantive at load; audited by the
     /// operator; a lie here is the highest-severity fraud in this repo.
+    /// Fit of this prose to the citation is NOT mechanically verified
+    /// (laws.toml residual `R-citation-prose`).
     pub why_not_sabotage: String,
 }
 
@@ -75,9 +88,8 @@ pub struct WaiverFile {
 
 impl WaiverFile {
     /// Load and validate. Refuses: empty/uncited justification, duplicate
-    /// content bindings (one waiver entry per site_hash — a duplicate means
-    /// someone is padding), malformed site_hash, and unknown fields (a
-    /// typo'd field name silently weakening a waiver is itself a lie-shape).
+    /// content bindings, malformed site_hash/anchor_hash, unparseable
+    /// citation grammar, and unknown fields.
     pub fn load(path: &Path) -> Result<WaiverFile> {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("reading {}", path.display()))?;
@@ -97,6 +109,22 @@ impl WaiverFile {
             if w.site_hash.len() != 64 || !w.site_hash.chars().all(|c| c.is_ascii_hexdigit()) {
                 bail!(
                     "waiver {}:{} ({}) — site_hash must be 64 hex chars (blake3 of identity_tokens)",
+                    w.file,
+                    w.line,
+                    w.construct
+                );
+            }
+            if w.anchor_hash.len() != 64 || !w.anchor_hash.chars().all(|c| c.is_ascii_hexdigit()) {
+                bail!(
+                    "waiver {}:{} ({}) — anchor_hash must be 64 hex chars (blake3 of cited anchor)",
+                    w.file,
+                    w.line,
+                    w.construct
+                );
+            }
+            if let Err(e) = Citation::parse(&w.citation) {
+                bail!(
+                    "waiver {}:{} ({}) — citation grammar refused: {e}",
                     w.file,
                     w.line,
                     w.construct
@@ -157,10 +185,10 @@ mod tests {
     }
 
     const HASH: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const ANCHOR: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
-    #[test]
-    fn a_real_waiver_loads_and_binds_to_its_check() {
-        let wf = load_str(&format!(
+    fn waiver_toml(extra: &str) -> String {
+        format!(
             r#"
 scope_waiver = []
 
@@ -170,13 +198,22 @@ file = "crates/kyzo-lsp/src/translate.rs"
 line = 59
 construct = "expect"
 site_hash = "{HASH}"
+citation = "expect"
+anchor_hash = "{ANCHOR}"
 why_not_sabotage = "LSP Position.character is u32 by wire protocol; a >4B-unit line is outside the protocol's representable range."
+{extra}
 "#
-        ))
-        .expect("loads");
+        )
+    }
+
+    #[test]
+    fn a_real_waiver_loads_and_binds_to_its_check() {
+        let wf = load_str(&waiver_toml("")).expect("loads");
         assert_eq!(wf.for_check("expect").len(), 1);
         assert!(wf.for_check("unwrap").is_empty());
         assert_eq!(wf.waiver[0].site_hash, HASH);
+        assert_eq!(wf.waiver[0].citation, "expect");
+        assert_eq!(wf.waiver[0].anchor_hash, ANCHOR);
     }
 
     #[test]
@@ -191,6 +228,8 @@ file = "a.rs"
 line = 1
 construct = "expect"
 site_hash = "{HASH}"
+citation = "expect"
+anchor_hash = "{ANCHOR}"
 why_not_sabotage = "it's fine"
 "#
         ));
@@ -209,6 +248,8 @@ file = "a.rs"
 line = 1
 construct = "expect"
 site_hash = "{HASH}"
+citation = "expect"
+anchor_hash = "{ANCHOR}"
 why_not_sabotage = "a genuinely long enough justification string here"
 
 [[waiver]]
@@ -217,6 +258,8 @@ file = "a.rs"
 line = 99
 construct = "expect"
 site_hash = "{HASH}"
+citation = "expect"
+anchor_hash = "{ANCHOR}"
 why_not_sabotage = "a second waiver entry for the same content site is padding"
 "#
         ));
@@ -227,9 +270,9 @@ why_not_sabotage = "a second waiver entry for the same content site is padding"
     }
 
     #[test]
-    fn refuses_malformed_site_hash_and_missing_site_hash() {
+    fn refuses_malformed_site_hash_citation_and_missing_anchor() {
         assert!(
-            load_str(
+            load_str(&format!(
                 r#"
 scope_waiver = []
 
@@ -239,11 +282,32 @@ file = "a.rs"
 line = 1
 construct = "expect"
 site_hash = "deadbeef"
+citation = "expect"
+anchor_hash = "{ANCHOR}"
 why_not_sabotage = "a genuinely long enough justification string here"
 "#
-            )
+            ))
             .is_err(),
             "short site_hash must refuse"
+        );
+        assert!(
+            load_str(&format!(
+                r#"
+scope_waiver = []
+
+[[waiver]]
+check = "expect"
+file = "a.rs"
+line = 1
+construct = "expect"
+site_hash = "{HASH}"
+citation = "crates/x/src/a.rs#"
+anchor_hash = "{ANCHOR}"
+why_not_sabotage = "a genuinely long enough justification string here"
+"#
+            ))
+            .is_err(),
+            "malformed file#item-path must refuse"
         );
         assert!(
             load_str(
@@ -255,11 +319,13 @@ check = "expect"
 file = "a.rs"
 line = 1
 construct = "expect"
+site_hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+citation = "expect"
 why_not_sabotage = "a genuinely long enough justification string here"
 "#
             )
             .is_err(),
-            "missing site_hash must refuse — content binding is mandatory"
+            "missing anchor_hash must refuse"
         );
     }
 
@@ -267,7 +333,7 @@ why_not_sabotage = "a genuinely long enough justification string here"
     fn refuses_unknown_fields_and_empty_scope() {
         assert!(
             load_str(&format!(
-                "scope_waiver = []\n[[waiver]]\ncheck='x'\nfile='a'\nline=1\nconstruct='c'\nsite_hash='{HASH}'\nwhy_not_sabotage='long enough justification right here'\nbaseline=5\n"
+                "scope_waiver = []\n[[waiver]]\ncheck='x'\nfile='a'\nline=1\nconstruct='c'\nsite_hash='{HASH}'\ncitation='x'\nanchor_hash='{ANCHOR}'\nwhy_not_sabotage='long enough justification right here'\nbaseline=5\n"
             ))
             .is_err(),
             "unknown field (e.g. a smuggled 'baseline') must refuse"

@@ -108,6 +108,8 @@ file = "crates/x/src/a.rs"
 line = 3
 construct = "expect"
 site_hash = "{HASH}"
+citation = "expect"
+anchor_hash = "{HASH}"
 why_not_sabotage = "a genuinely long justification for the fixture"
 "#
         );
@@ -182,6 +184,9 @@ why_not_sabotage = "a genuinely long justification for the fixture"
                 line: 1, // old display line, pre-insert
                 construct: "expect".to_string(),
                 site_hash: hash,
+                citation: "expect".to_string(),
+                anchor_hash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                    .to_string(),
                 why_not_sabotage: "a genuinely long justification for the fixture".to_string(),
             }],
             scope_waiver: vec![],

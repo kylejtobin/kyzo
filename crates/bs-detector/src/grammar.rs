@@ -856,6 +856,12 @@ impl Laws {
             ),
         }
     }
+
+    /// Lookup for citation resolve (TRUTH item 7): a laws.toml law name
+    /// citation hashes this text.
+    pub fn get(&self, name: &str) -> Option<&str> {
+        self.by_name.get(name).map(|s| s.as_str())
+    }
 }
 
 #[cfg(test)]

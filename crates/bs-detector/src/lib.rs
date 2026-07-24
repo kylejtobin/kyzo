@@ -14,6 +14,7 @@
 
 pub mod alias;
 pub mod boundary;
+pub mod citation;
 pub mod classify;
 pub mod engines;
 pub mod grammar;

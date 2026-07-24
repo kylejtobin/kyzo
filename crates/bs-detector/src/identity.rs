@@ -200,6 +200,9 @@ mod tests {
             construct: "expect".to_string(),
             why_not_sabotage: "a genuinely long justification for the fixture".to_string(),
             site_hash: hash.clone(),
+            citation: "expect".to_string(),
+            anchor_hash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                .to_string(),
         };
         let h = Hit {
             file: "crates/x/src/a.rs".to_string(),

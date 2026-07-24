@@ -261,6 +261,11 @@ law = "a waiver whose site no longer matches any live hit is itself a violation"
 caught_by = "meta pass, unchanged; no waiver can cover it"
 
 [[law]]
+name = "dead_citation"
+law = "TRUTH item 7: a waiver whose citation target is missing or whose recorded anchor_hash no longer matches the live anchor identity is itself a violation; the waiver stops applying"
+caught_by = "citation::dead_citations every gate run; no waiver can cover it"
+
+[[law]]
 name = "unclassified"
 law = "an item matching no approved construct in the grammar — unknown shape is guilty by default"
 caught_by = "default-deny classifier over grammar.toml constructs"
@@ -339,3 +344,8 @@ caught_by = "named residual — whole of R2 stated once; covers all macro-expans
 name = "R-verbatim-presence"
 law = "TRUTH item 1 residual: verbatim.deny.rs is presence-only because a true Item::Verbatim cannot be authored in a file syn::parse_file accepts"
 caught_by = "named residual — classify::fixture_tests::every_condemned_kind_deny_fixture_is_red_under_its_own_law"
+
+[[law]]
+name = "R-citation-prose"
+law = "TRUTH item 7 residual: no mechanism verifies that prose reasons truly from its anchor — the attestation deters; the operator spot-audits; both are non-mechanical and this entry says so"
+caught_by = "named residual only — dead_citation checks existence and identity hash, never that why_not_sabotage follows from the anchor"
