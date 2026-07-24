@@ -450,8 +450,18 @@ fn classify_container_member(ctx: &Ctx, member: ContainerMember<'_>, hits: &mut 
                 classify_block_items(ctx, block, hits);
             }
         }
-        ContainerMember::Impl(_not_fn) => {}
-        ContainerMember::Trait(_not_fn) => {}
+        // Tip 650: associated-const RHS nests — same soft drain as Item::Const
+        // when only Fn bodies were walked.
+        ContainerMember::Impl(syn::ImplItem::Const(c)) => {
+            classify_expr_items(ctx, &c.expr, hits);
+        }
+        ContainerMember::Trait(syn::TraitItem::Const(c)) => {
+            if let Some((_, expr)) = &c.default {
+                classify_expr_items(ctx, expr, hits);
+            }
+        }
+        ContainerMember::Impl(_not_fn_or_const) => {}
+        ContainerMember::Trait(_not_fn_or_const) => {}
     }
 }
 
@@ -1244,29 +1254,31 @@ mod fixture_tests {
         assert_eq!(hits.len(), n, "hits for `{src}`: {hits:?}");
     }
 
-    fn assert_unclassified(src: &str) {
+    /// Exact adversary — soft any(contains("unclassified")) is FORBIDDEN.
+    fn assert_exact_constructs(src: &str, want: &[&str]) {
         let hits = classify_src(src);
-        assert!(
-            hits.iter().any(|h| h.construct().contains("unclassified")),
-            "expected unclassified for `{src}`: {hits:?}"
+        let mut got: Vec<String> = hits.iter().map(|h| h.construct().to_string()).collect();
+        got.sort();
+        let mut want_s: Vec<String> = want.iter().map(|s| (*s).to_string()).collect();
+        want_s.sort();
+        assert_eq!(
+            got, want_s,
+            "exact constructs for `{src}` (soft any/contains is fraud): {hits:?}"
         );
     }
 
     #[test]
     fn item_2_proofs_red_shapes_are_unclassified() {
-        // Shapes that match NO skeleton remain unclassified. Await /
-        // nested_place_assign inside an otherwise-matching skeleton are
-        // construct.bans (item 5) — they classify, then run.rs hits.
-        let cases = [
+        assert_exact_constructs(
             "impl S { fn f(self: Box<Self>) {} }",
+            &["unclassified-impl-fn:f"],
+        );
+        assert_exact_constructs(
             "impl S { fn with_x(mut self) -> Self { self.x = 1; self } }",
-            "fn smuggled() {}",
-            "async fn bare_async() {}",
-        ];
-        for src in cases {
-            assert_unclassified(src);
-        }
-        // Declared-fn hash drift (deny fixture seated with wrong hash).
+            &["unclassified-impl-fn:with_x"],
+        );
+        assert_exact_constructs("fn smuggled() {}", &["unclassified-fn:smuggled"]);
+        assert_exact_constructs("async fn bare_async() {}", &["unclassified-fn:bare_async"]);
         let grammar = real_grammar();
         let path = crate_dir().join("fixtures/declared-fn.deny.rs");
         let src = match std::fs::read_to_string(&path) {
@@ -1275,10 +1287,18 @@ mod fixture_tests {
         };
         let f = SourceFile::admit("crates/bs-detector/fixtures/declared-fn.deny.rs".to_string(), src.clone(), syn::parse_file(&src).expect("parses"));
         let hits = classify_file(&grammar, &f, &crate::alias::AliasTable::build(&[&f]).expect("aliases"));
+        let mut got: Vec<String> = hits.iter().map(|h| h.construct().to_string()).collect();
+        got.sort();
         assert!(
-            hits.iter().any(|h| h.construct().contains("unclassified")),
-            "declared fn hash drift must be red: {hits:?}"
+            !got.is_empty(),
+            "declared fn hash drift must produce at least one exact red hit"
         );
+        for g in &got {
+            assert!(
+                g.starts_with("unclassified-"),
+                "declared-fn.deny hit must be exact unclassified-* construct, got {g} full={got:?}"
+            );
+        }
     }
 
     #[test]
@@ -1478,9 +1498,9 @@ mod fixture_tests {
     #[test]
     fn item_3_proof_multi_field_tuple_and_pub_field_are_red() {
         // Build text: multi-field tuple or any pub field → red.
-        assert_unclassified("struct Multi(u64, u64);");
-        assert_unclassified("struct Open(pub u64);");
-        assert_unclassified("struct Open { pub a: u64 }");
+        assert_exact_constructs("struct Multi(u64, u64);", &["unclassified-struct:Multi"]);
+        assert_exact_constructs("struct Open(pub u64);", &["unclassified-struct:Open"]);
+        assert_exact_constructs("struct Open { pub a: u64 }", &["unclassified-struct:Open"]);
     }
 
     #[test]
@@ -1546,12 +1566,18 @@ mod fixture_tests {
 
     #[test]
     fn item_4_proof_type_alias_to_string_struct_is_red() {
-        assert_unclassified("type Name = String; struct S { n: Name }");
+        assert_exact_constructs(
+            "type Name = String; struct S { n: Name }",
+            &["unclassified-struct:S", "unclassified-type:Name"],
+        );
     }
 
     #[test]
     fn item_4_proof_use_as_string_struct_is_red() {
-        assert_unclassified("use std::string::String as Text; struct T { t: Text }");
+        assert_exact_constructs(
+            "use std::string::String as Text; struct T { t: Text }",
+            &["unclassified-struct:T"],
+        );
     }
 
     /// Adversary 6a: expression-nested FREE FN — unit struct was a false
@@ -1611,9 +1637,16 @@ mod fixture_tests {
 
     #[test]
     fn anti_fraud_match_arm_nested_fn_must_be_exact_unclassified() {
-        assert_expression_nest_exact(
-            "fn f() { match 0u8 { _ => { fn nested_hide() {} } } }",
-            "match-arm",
+        let hits = classify_src("fn f() { match 0 { _ => { fn h() {} } } }");
+        let nested: Vec<String> = hits
+            .iter()
+            .filter(|hit| hit.construct().ends_with(":h"))
+            .map(|hit| hit.construct().to_string())
+            .collect();
+        assert_eq!(
+            nested,
+            vec!["unclassified-fn:h".to_string()],
+            "match-arm fn must be exactly unclassified-fn:h: {nested:?} full={hits:?}"
         );
     }
 
@@ -1705,6 +1738,25 @@ mod fixture_tests {
         assert_expression_nest_exact(
             "fn f() { let _x = const { fn nested_hide() {} 1 }; }",
             "inline-const",
+        );
+    }
+
+    /// Adversary 16: impl-associated const RHS nest — container walk only
+    /// recursed ImplItem::Fn, so Const value expr was a silent-green drain.
+    #[test]
+    fn anti_fraud_impl_const_rhs_nested_fn_must_be_exact_unclassified() {
+        assert_expression_nest_exact(
+            "impl S { const X: i32 = { fn nested_hide() {} 1 }; }",
+            "impl-const-rhs",
+        );
+    }
+
+    /// Adversary 17: trait-associated const default RHS nest.
+    #[test]
+    fn anti_fraud_trait_const_rhs_nested_fn_must_be_exact_unclassified() {
+        assert_expression_nest_exact(
+            "trait T { const X: i32 = { fn nested_hide() {} 1 }; }",
+            "trait-const-rhs",
         );
     }
 
