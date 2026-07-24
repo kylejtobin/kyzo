@@ -271,9 +271,84 @@ law = "TRUTH item 8: a waiver why_not_sabotage must be the canonical attestation
 caught_by = "waiver::AttestationTemplate::segment — fixed/slot/fixed full coverage at load; any byte outside a slot refuses"
 
 [[law]]
-name = "unclassified"
-law = "TRUTH default-deny + tip 641: an item matching no approved construct is guilty by default — hard-counted at full weight, per-site file:line, never waivable, no soft bucket"
-caught_by = "default-deny classifier over grammar.toml constructs; run.rs waivable() refuses unclassified (absolute standing)"
+name = "unclassified-const"
+law = "TRUTH default-deny + tip 650: an unseated const item is guilty by default — hard-counted under unclassified-const, never waivable, no soft umbrella"
+caught_by = "classify.rs construct prefix unclassified-const:; run.rs partitions to this check; waivable() refuses unclassified-*"
+
+[[law]]
+name = "unclassified-enum"
+law = "TRUTH default-deny + tip 650: an unseated enum item is guilty by default — hard-counted under unclassified-enum, never waivable, no soft umbrella"
+caught_by = "classify.rs construct prefix unclassified-enum:; run.rs partitions to this check; waivable() refuses unclassified-*"
+
+[[law]]
+name = "unclassified-fn"
+law = "TRUTH default-deny + tip 650: an unseated free fn is guilty by default — hard-counted under unclassified-fn, never waivable, no soft umbrella"
+caught_by = "classify.rs construct prefix unclassified-fn:; run.rs partitions to this check; waivable() refuses unclassified-*"
+
+[[law]]
+name = "unclassified-impl"
+law = "TRUTH default-deny + tip 650: an unseated impl block is guilty by default — hard-counted under unclassified-impl, never waivable, no soft umbrella"
+caught_by = "classify.rs construct prefix unclassified-impl:; run.rs partitions to this check; waivable() refuses unclassified-*"
+
+[[law]]
+name = "unclassified-mod"
+law = "TRUTH default-deny + tip 650: an unseated mod item is guilty by default — hard-counted under unclassified-mod, never waivable, no soft umbrella"
+caught_by = "classify.rs construct prefix unclassified-mod:; run.rs partitions to this check; waivable() refuses unclassified-*"
+
+[[law]]
+name = "unclassified-static"
+law = "TRUTH default-deny + tip 650: an unseated static item is guilty by default — hard-counted under unclassified-static, never waivable, no soft umbrella"
+caught_by = "classify.rs construct prefix unclassified-static:; run.rs partitions to this check; waivable() refuses unclassified-*"
+
+[[law]]
+name = "unclassified-struct"
+law = "TRUTH default-deny + tip 650: an unseated struct item is guilty by default — hard-counted under unclassified-struct, never waivable, no soft umbrella"
+caught_by = "classify.rs construct prefix unclassified-struct:; run.rs partitions to this check; waivable() refuses unclassified-*"
+
+[[law]]
+name = "unclassified-trait"
+law = "TRUTH default-deny + tip 650: an unseated trait item is guilty by default — hard-counted under unclassified-trait, never waivable, no soft umbrella"
+caught_by = "classify.rs construct prefix unclassified-trait:; run.rs partitions to this check; waivable() refuses unclassified-*"
+
+[[law]]
+name = "unclassified-type"
+law = "TRUTH default-deny + tip 650: an unseated type alias is guilty by default — hard-counted under unclassified-type, never waivable, no soft umbrella"
+caught_by = "classify.rs construct prefix unclassified-type:; run.rs partitions to this check; waivable() refuses unclassified-*"
+
+[[law]]
+name = "unclassified-use"
+law = "TRUTH default-deny + tip 650: an unseated use item is guilty by default — hard-counted under unclassified-use, never waivable, no soft umbrella"
+caught_by = "classify.rs construct prefix unclassified-use:; run.rs partitions to this check; waivable() refuses unclassified-*"
+
+[[law]]
+name = "unclassified-impl-const"
+law = "TRUTH default-deny + tip 650: an unseated impl const is guilty by default — hard-counted under unclassified-impl-const, never waivable, no soft umbrella"
+caught_by = "classify.rs construct prefix unclassified-impl-const:; run.rs partitions to this check; waivable() refuses unclassified-*"
+
+[[law]]
+name = "unclassified-impl-fn"
+law = "TRUTH default-deny + tip 650: an unseated impl method is guilty by default — hard-counted under unclassified-impl-fn, never waivable, no soft umbrella"
+caught_by = "classify.rs construct prefix unclassified-impl-fn:; run.rs partitions to this check; waivable() refuses unclassified-*"
+
+[[law]]
+name = "unclassified-impl-type"
+law = "TRUTH default-deny + tip 650: an unseated impl type is guilty by default — hard-counted under unclassified-impl-type, never waivable, no soft umbrella"
+caught_by = "classify.rs construct prefix unclassified-impl-type:; run.rs partitions to this check; waivable() refuses unclassified-*"
+
+[[law]]
+name = "unclassified-trait-const"
+law = "TRUTH default-deny + tip 650: an unseated trait const is guilty by default — hard-counted under unclassified-trait-const, never waivable, no soft umbrella"
+caught_by = "classify.rs construct prefix unclassified-trait-const:; run.rs partitions to this check; waivable() refuses unclassified-*"
+
+[[law]]
+name = "unclassified-trait-fn"
+law = "TRUTH default-deny + tip 650: an unseated trait fn is guilty by default — hard-counted under unclassified-trait-fn, never waivable, no soft umbrella"
+caught_by = "classify.rs construct prefix unclassified-trait-fn:; run.rs partitions to this check; waivable() refuses unclassified-*"
+
+[[law]]
+name = "unclassified-trait-type"
+law = "TRUTH default-deny + tip 650: an unseated trait type is guilty by default — hard-counted under unclassified-trait-type, never waivable, no soft umbrella"
+caught_by = "classify.rs construct prefix unclassified-trait-type:; run.rs partitions to this check; waivable() refuses unclassified-*"
 
 [[law]]
 name = "extern_crate"

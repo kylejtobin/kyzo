@@ -87,6 +87,11 @@ fn waivable(grammar: &Grammar, check: &str) -> bool {
     {
         return false;
     }
+    // Tip 650: every unseated kind is a first-class hard check
+    // (`unclassified-fn`, `unclassified-struct`, …) — never waivable.
+    if check.starts_with("unclassified-") {
+        return false;
+    }
     !matches!(
         check,
         "agreement_registry"
@@ -94,8 +99,26 @@ fn waivable(grammar: &Grammar, check: &str) -> bool {
             | "unparsed"
             | "stale_waivers"
             | "dead_citation"
-            | "unclassified"
     )
+}
+
+/// Hard check name for a non-condemned classify hit.
+///
+/// Construct form is `unclassified-<kind>:<label>` (classify.rs). The
+/// check name is the exact prefix before `:`. Anything else is refused —
+/// no soft umbrella may absorb an unexpected construct shape.
+fn hard_unclassified_check(construct: &str) -> Result<String> {
+    let Some((prefix, _label)) = construct.split_once(':') else {
+        anyhow::bail!(
+            "classify hit `{construct}` has no kind prefix — refuse soft umbrella"
+        );
+    };
+    if !prefix.starts_with("unclassified-") {
+        anyhow::bail!(
+            "classify hit `{construct}` is not unclassified-* and not condemned — refuse"
+        );
+    }
+    Ok(prefix.to_string())
 }
 
 pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
@@ -125,7 +148,7 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
         .map(|s| s.as_str())
         .collect();
 
-    let mut passes: Vec<(&str, Vec<Hit>)> = vec![];
+    let mut passes: Vec<(String, Vec<Hit>)> = vec![];
     for name in &ban_names {
         if let Some(o) = only {
             if o != *name {
@@ -144,18 +167,20 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
         let scoped: Vec<&SourceFile> =
             b.files().iter().filter(|f| in_scope(f.rel_path())).collect();
         let hits: Vec<Hit> = scoped.iter().flat_map(|f| shape::run_matcher(m, f)).collect();
-        passes.push((name, hits));
+        passes.push(((*name).to_string(), hits));
     }
     let run_pass = |name: &str| only.is_none() || only == Some(name);
-    // Item 1: one walk, then partition. Condemned kinds report under their
-    // own laws.toml name (red on sight, never absorbed by `unclassified`).
-    // Seated items matching no construct report under `unclassified`.
+    // Item 1 + tip 650: one walk, then partition. Condemned kinds report
+    // under their own laws.toml name (red on sight). Unseated items report
+    // under a HARD check named by construct prefix (`unclassified-fn`,
+    // `unclassified-struct`, …) — the soft umbrella `unclassified` is gone.
     let condemned_names: Vec<&str> = grammar
         .condemned()
         .iter()
         .filter_map(|k| k.condemned_law_name())
         .collect();
-    let need_classify = run_pass("unclassified")
+    let need_classify = only.is_none()
+        || only.is_some_and(|o| o.starts_with("unclassified-"))
         || condemned_names.iter().any(|n| run_pass(n));
     let all_files: Vec<&SourceFile> = b.files().iter().collect();
     let aliases = if need_classify
@@ -179,16 +204,19 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
             .collect();
         let mut condemned_hits: BTreeMap<&str, Vec<Hit>> =
             condemned_names.iter().map(|n| (*n, Vec::new())).collect();
-        let mut unclassified_hits: Vec<Hit> = Vec::new();
+        let mut by_unclassified_kind: BTreeMap<String, Vec<Hit>> = BTreeMap::new();
         for h in all {
             if let Some(bucket) = condemned_hits.get_mut(h.construct()) {
                 bucket.push(h);
             } else {
-                unclassified_hits.push(h);
+                let check = hard_unclassified_check(h.construct())?;
+                by_unclassified_kind.entry(check).or_default().push(h);
             }
         }
-        if run_pass("unclassified") {
-            passes.push(("unclassified", unclassified_hits));
+        for (name, hits) in by_unclassified_kind {
+            if run_pass(&name) {
+                passes.push((name, hits));
+            }
         }
         for name in &condemned_names {
             if run_pass(name) {
@@ -197,7 +225,7 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
                         "condemned hit bucket for `{name}` vanished post-partition — refuse"
                     )
                 })?;
-                passes.push((name, hits));
+                passes.push(((*name).to_string(), hits));
             }
         }
     }
@@ -238,58 +266,61 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
                         }
                     }
                 }
-                passes.push((name, hits));
+                passes.push((name.to_string(), hits));
             }
         }
     }
     let all: Vec<&SourceFile> = b.files().iter().collect();
     if run_pass("derive_bypass") {
-        passes.push(("derive_bypass", graph::derive_bypass(&all)));
+        passes.push(("derive_bypass".to_string(), graph::derive_bypass(&all)));
     }
     if run_pass("copy_detector") {
-        passes.push(("copy_detector", graph::copy_detector(&all)));
+        passes.push(("copy_detector".to_string(), graph::copy_detector(&all)));
     }
     if run_pass("agreement_registry") {
         let reg_path = root.join("crates/xtask/agreements.toml");
         let text = std::fs::read_to_string(&reg_path)
             .with_context(|| "reading agreements.toml — a missing registry is drift, not a pass")?;
-        passes.push(("agreement_registry", graph::agreement_registry(&all, &text)));
+        passes.push((
+            "agreement_registry".to_string(),
+            graph::agreement_registry(&all, &text),
+        ));
     }
     if run_pass("total_refusal") {
-        passes.push(("total_refusal", graph::total_refusal(&all)));
+        passes.push(("total_refusal".to_string(), graph::total_refusal(&all)));
     }
     if run_pass("sealed_public_door") {
         passes.push((
-            "sealed_public_door",
+            "sealed_public_door".to_string(),
             graph::sealed_public_door(&all, grammar.hosts()),
         ));
     }
     if run_pass("config_once") {
         passes.push((
-            "config_once",
+            "config_once".to_string(),
             graph::config_once(&all, grammar.config_once()),
         ));
     }
     if run_pass("coverage") {
-        passes.push(("coverage", meta::coverage(&b)));
+        passes.push(("coverage".to_string(), meta::coverage(&b)));
     }
     if run_pass("unparsed") {
-        passes.push(("unparsed", meta::unparsed(&b)));
+        passes.push(("unparsed".to_string(), meta::unparsed(&b)));
     }
     if run_pass("forbid_roots") {
-        passes.push(("forbid_roots", meta::forbid_roots(&b)));
+        passes.push(("forbid_roots".to_string(), meta::forbid_roots(&b)));
     }
 
     for (check, raw) in passes {
-        let law = laws.require(check)?;
-        raw_by_check.push((check.to_string(), raw.clone()));
+        let law = laws.require(&check)?;
+        raw_by_check.push((check.clone(), raw.clone()));
 
-        let violations: Vec<&Hit> = if waivable(&grammar, check) {
+        let violations: Vec<&Hit> = if waivable(&grammar, &check) {
             // One waiver covers exactly ONE hit. Binding is by content
             // (site_hash of the enclosing item) — TRUTH item 6. The
             // waiver's `line` is display-only and must not gate matching,
             // or a `//` insert above the item would falsely stale it.
-            let entries = waivers.for_check(check);
+            let entries = waivers.for_check(&check);
             let mut consumed = vec![false; entries.len()];
             raw.iter()
                 .filter(|h| {
@@ -313,9 +344,9 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
         };
 
         if !violations.is_empty() {
-            failed.push(check.to_string());
+            failed.push(check.clone());
         }
-        counts.insert(check.to_string(), violations.len());
+        counts.insert(check, violations.len());
         for h in &violations {
             report.push_str(&format!(
                 "FAIL {}:{} — {} — {}\n",
@@ -379,4 +410,109 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
     };
 
     Ok(Verdict::admit(header, report, counts_line, red))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+
+    fn crate_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    }
+
+    /// Stage grammar/laws/waivers/fixtures/bite so `run` can load, plus one
+    /// probe crate whose free fn is unseated. Fixture `.rs` bodies are
+    /// replaced with a seated unit struct so Boundary walk does not inflate
+    /// `unclassified-fn` (filenames must still exist for Grammar::load).
+    fn stage_root_with_free_fn(probe_src: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let src = crate_dir();
+        let det = root.join("crates/bs-detector");
+        fs::create_dir_all(det.join("tests")).expect("mkdir tests");
+        fs::create_dir_all(det.join("fixtures")).expect("mkdir fixtures");
+        fs::create_dir_all(root.join("crates/probe/src")).expect("mkdir probe");
+        for name in ["grammar.toml", "laws.toml", "waivers.toml"] {
+            fs::copy(src.join(name), det.join(name)).unwrap_or_else(|e| {
+                panic!("copy {name}: {e}");
+            });
+        }
+        fs::copy(
+            src.join("tests/bite_proofs.rs"),
+            det.join("tests/bite_proofs.rs"),
+        )
+        .expect("copy bite_proofs");
+        for entry in fs::read_dir(src.join("fixtures")).expect("fixtures dir") {
+            let entry = entry.expect("entry");
+            let name = entry.file_name();
+            let to = det.join("fixtures").join(&name);
+            fs::write(&to, "struct FixtureUnit;\n").unwrap_or_else(|e| {
+                panic!("write fixture {:?}: {e}", name);
+            });
+        }
+        fs::write(root.join("crates/probe/src/lib.rs"), probe_src).expect("write probe");
+        dir
+    }
+
+    /// Tip 650 anti-fraud: free unseated fn meters as hard `unclassified-fn:N`
+    /// on the counts banner — exact token equality, not soft contains/any.
+    #[test]
+    fn anti_fraud_counts_line_meters_unclassified_fn_exactly() {
+        let dir = stage_root_with_free_fn("fn free_unseated() {}\n");
+        let v = run(dir.path(), Some("unclassified-fn")).expect("run");
+        let n = v
+            .report()
+            .lines()
+            .filter(|line| {
+                let Some((_, rest)) = line.split_once(" — ") else {
+                    return false;
+                };
+                let Some((construct, _)) = rest.split_once(" — ") else {
+                    return false;
+                };
+                construct.starts_with("unclassified-fn:")
+            })
+            .count();
+        assert_eq!(
+            v.counts_line(),
+            format!("unclassified-fn:{n} = {n} violations"),
+            "banner must hard-count unclassified-fn (not umbrella unclassified); report=\n{}",
+            v.report()
+        );
+        assert_eq!(
+            n == 0,
+            false,
+            "free unseated fn exists — unclassified-fn count must be non-zero"
+        );
+        let probe_hits = v
+            .report()
+            .lines()
+            .filter(|line| {
+                line.starts_with(
+                    "FAIL crates/probe/src/lib.rs:1 — unclassified-fn:free_unseated — ",
+                )
+            })
+            .count();
+        assert_eq!(
+            probe_hits, 1,
+            "probe free_unseated must appear exactly once under unclassified-fn: {}",
+            v.report()
+        );
+    }
+
+    #[test]
+    fn hard_unclassified_check_extracts_prefix() {
+        assert_eq!(
+            hard_unclassified_check("unclassified-fn:foo").expect("ok"),
+            "unclassified-fn"
+        );
+        assert_eq!(
+            hard_unclassified_check("unclassified-impl-fn:m").expect("ok"),
+            "unclassified-impl-fn"
+        );
+        assert!(hard_unclassified_check("extern_crate").is_err());
+        assert!(hard_unclassified_check("unknown-syn-item-kind").is_err());
+    }
 }
