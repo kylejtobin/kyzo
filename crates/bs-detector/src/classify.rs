@@ -1193,22 +1193,122 @@ fn fn_matches(
 // refused by the SAME construct's own rule (not a neighbor's).
 // ---------------------------------------------------------------------------
 
+/// Typed test refusal — file-level so `total_refusal` indexes it as a workspace
+/// enum (tip 777). Nested inside `mod fixture_tests` was `not-workspace-enum`.
+#[cfg(test)]
+#[derive(Debug)]
+enum ClassifyProofRefuse {
+    ReadGrammar,
+    ReadBite,
+    Tempfile,
+    WriteFixture,
+    LoadGrammar,
+    Parse,
+    MissingItem,
+    Aliases,
+    PassFixtureReadable,
+    PassFixtureParses,
+    PassFixtureHasItem,
+    PassMustClassify,
+    DenyFixtureReadable,
+    DenyFixtureParses,
+    DenyFixtureHasItem,
+    DenyMustRefuse,
+    Tip689CaseCount,
+    Tip689PassReadable,
+    Tip689PassParses,
+    Tip689Aliases,
+    Tip689PassMustSilent,
+    Tip689DenyReadable,
+    Tip689DenyParses,
+    Tip689DenyExact,
+    Tip689VacuousSeat,
+    CondemnedLawMissing,
+    CondemnedDenyReadable,
+    VerbatimDenyNamesWhy,
+    CondemnedDenyParses,
+    CondemnedDenyMustHit,
+    ConstMustBeSeated,
+    StaticMutMustDeny,
+    PathMatcher,
+    PathAttrMustHit,
+    PathModuleMustSeat,
+    GlobUseMustDeny,
+    ImplMacroMustHit,
+    DenyShapeMustHit,
+    BoxSelfMustUnclass,
+    MutSelfMustUnclass,
+    SmuggledMustUnclass,
+    BareAsyncMustUnclass,
+    DeclaredFnDenyReadable,
+    DeclaredFnDenyParses,
+    DeclaredFnDenyEmpty,
+    DeclaredFnDenyNotUnclass,
+    ScopedBanMustSeat,
+    AwaitMatcher,
+    NestMatcher,
+    AwaitMatcherHit,
+    NestMatcherHit,
+    AdmissionDoorMustSeat,
+    AdmissionDoorMustSilent,
+    AttackLockAdmissionDoor,
+    HelperMustSilentGreen,
+    NestedBleedHelper,
+    NestedBleedMethodSwept,
+    NestedResultHelper,
+    NestedTraitHelper,
+    NestedFreeHelper,
+    NestedFreeOuter,
+    CompositionRootMustRefuse,
+    FnSkeletonExactlyOne,
+    MultiFieldTupleRed,
+    PubTupleFieldRed,
+    PubNamedFieldRed,
+    StructConstructExactlyOne,
+    StructMustBeSeatedNotCondemned,
+    StructMustBeSeated,
+    UniqueConstructName,
+    AliasStringStructRed,
+    UseAsStringStructRed,
+    ExprNestFnExact,
+    ExprNestFnOuter,
+    ExprNestStringStructExact,
+    ExprNestUnitStillGreen,
+    MatchArmNestExact,
+    ExpressionNestExact,
+    RestrictStructClean,
+}
+
 #[cfg(test)]
 mod fixture_tests {
     use super::*;
     use crate::grammar::Grammar;
     use std::path::PathBuf;
 
+    type TestResult = std::result::Result<(), ClassifyProofRefuse>;
+
+    fn require(cond: bool, refuse: ClassifyProofRefuse) -> TestResult {
+        if cond {
+            Ok(())
+        } else {
+            Err(refuse)
+        }
+    }
+
     fn crate_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
     }
 
-    fn real_grammar() -> Grammar {
-        let text = std::fs::read_to_string(crate_dir().join("grammar.toml")).expect("grammar.toml readable");
-        let bite_src = std::fs::read_to_string(crate_dir().join("tests/bite_proofs.rs")).expect("bite src");
-        let mut f = tempfile::NamedTempFile::new().expect("tempfile");
-        std::io::Write::write_all(&mut f, text.as_bytes()).expect("write");
-        Grammar::load(f.path(), &bite_src, &crate_dir().join("fixtures")).expect("real grammar loads")
+    fn real_grammar() -> std::result::Result<Grammar, ClassifyProofRefuse> {
+        let text = std::fs::read_to_string(crate_dir().join("grammar.toml"))
+            .map_err(|_| ClassifyProofRefuse::ReadGrammar)?;
+        let bite_src = std::fs::read_to_string(crate_dir().join("tests/bite_proofs.rs"))
+            .map_err(|_| ClassifyProofRefuse::ReadBite)?;
+        let mut f = tempfile::NamedTempFile::new().map_err(|_| ClassifyProofRefuse::Tempfile)?;
+        std::io::Write::write_all(&mut f, text.as_bytes())
+            .map_err(|_| ClassifyProofRefuse::WriteFixture)?;
+        Grammar::load(f.path(), &bite_src, &crate_dir().join("fixtures"))
+            .map_err(|_| ClassifyProofRefuse::LoadGrammar)
     }
 
     /// `declared-fn`'s seats bind to the FIXTURE FILE's own repo-root-relative
@@ -1269,9 +1369,65 @@ mod fixture_tests {
         }
     }
 
+    fn parse_file(src: &str) -> std::result::Result<syn::File, ClassifyProofRefuse> {
+        syn::parse_file(src).map_err(|_| ClassifyProofRefuse::Parse)
+    }
+
+    fn aliases_for(f: &SourceFile) -> std::result::Result<crate::alias::AliasTable, ClassifyProofRefuse> {
+        crate::alias::AliasTable::build(&[f]).map_err(|_| ClassifyProofRefuse::Aliases)
+    }
+
+    fn classify_src(src: &str) -> std::result::Result<Vec<Hit>, ClassifyProofRefuse> {
+        let grammar = real_grammar()?;
+        let f = SourceFile::admit(
+            "crates/probe/src/lib.rs".to_string(),
+            src.to_string(),
+            parse_file(src)?,
+        );
+        let aliases = aliases_for(&f)?;
+        Ok(classify_file(&grammar, &f, &aliases))
+    }
+
+    fn require_hit_count(src: &str, n: usize, refuse: ClassifyProofRefuse) -> TestResult {
+        let hits = classify_src(src)?;
+        require(hits.len() == n, refuse)
+    }
+
+    /// Exact adversary — soft any(contains("unclassified")) is FORBIDDEN.
+    fn require_exact_constructs(
+        src: &str,
+        want: &[&str],
+        refuse: ClassifyProofRefuse,
+    ) -> TestResult {
+        let hits = classify_src(src)?;
+        let mut got: Vec<String> = hits.iter().map(|h| h.construct().to_string()).collect();
+        got.sort();
+        let mut want_s: Vec<String> = want.iter().map(|s| (*s).to_string()).collect();
+        want_s.sort();
+        require(got == want_s, refuse)
+    }
+
+    fn hit_constructs_for(hits: &[Hit], name: &str) -> Vec<String> {
+        hits.iter()
+            .filter(|h| h.construct().contains(name))
+            .map(|h| h.construct().to_string())
+            .collect()
+    }
+
+    /// Tip 650 nest surfaces — each costume must emit exactly
+    /// `unclassified-fn:nested_hide`. Empty hits = walk blind soft drain.
+    fn require_expression_nest_exact(src: &str) -> TestResult {
+        let hits = classify_src(src)?;
+        let nested = hit_constructs_for(&hits, "nested_hide");
+        require(
+            nested == vec!["unclassified-fn:nested_hide".to_string()],
+            ClassifyProofRefuse::ExpressionNestExact,
+        )
+    }
+
     #[test]
-    fn every_construct_pass_classifies_and_deny_is_refused_by_its_own_rule() {
-        let grammar = real_grammar();
+    fn every_construct_pass_classifies_and_deny_is_refused_by_its_own_rule() -> TestResult {
+        let grammar = real_grammar()?;
         for c in grammar.constructs() {
             let rel = if c.name() == "declared-fn" {
                 "crates/bs-detector/fixtures/declared-fn.pass.rs"
@@ -1279,22 +1435,18 @@ mod fixture_tests {
                 rel_for(c.name())
             };
             let pass_path = crate_dir().join("fixtures").join(format!("{}.pass.rs", c.name()));
-            let pass_src = match std::fs::read_to_string(&pass_path) {
-                Ok(s) => s,
-                Err(e) => panic!("{} pass fixture readable: {e}", c.name()),
-            };
-            let pass_ast = match syn::parse_file(&pass_src) {
-                Ok(a) => a,
-                Err(e) => panic!("{} pass fixture parses: {e}", c.name()),
-            };
-            let Some(first) = pass_ast.items.first() else {
-                panic!("{} pass fixture has an item", c.name());
-            };
-            assert!(
+            let pass_src = std::fs::read_to_string(&pass_path)
+                .map_err(|_| ClassifyProofRefuse::PassFixtureReadable)?;
+            let pass_ast = syn::parse_file(&pass_src)
+                .map_err(|_| ClassifyProofRefuse::PassFixtureParses)?;
+            let first = pass_ast
+                .items
+                .first()
+                .ok_or(ClassifyProofRefuse::PassFixtureHasItem)?;
+            require(
                 probe_matches(&grammar, rel, c.rule(), first),
-                "{} pass fixture must classify as its own construct",
-                c.name()
-            );
+                ClassifyProofRefuse::PassMustClassify,
+            )?;
 
             if c.rule().deny_exempt() {
                 continue;
@@ -1305,23 +1457,20 @@ mod fixture_tests {
                 rel_for(c.name())
             };
             let deny_path = crate_dir().join("fixtures").join(format!("{}.deny.rs", c.name()));
-            let deny_src = match std::fs::read_to_string(&deny_path) {
-                Ok(s) => s,
-                Err(e) => panic!("{} deny fixture readable: {e}", c.name()),
-            };
-            let deny_ast = match syn::parse_file(&deny_src) {
-                Ok(a) => a,
-                Err(e) => panic!("{} deny fixture parses: {e}", c.name()),
-            };
-            let Some(first) = deny_ast.items.first() else {
-                panic!("{} deny fixture has an item", c.name());
-            };
-            assert!(
+            let deny_src = std::fs::read_to_string(&deny_path)
+                .map_err(|_| ClassifyProofRefuse::DenyFixtureReadable)?;
+            let deny_ast = syn::parse_file(&deny_src)
+                .map_err(|_| ClassifyProofRefuse::DenyFixtureParses)?;
+            let first = deny_ast
+                .items
+                .first()
+                .ok_or(ClassifyProofRefuse::DenyFixtureHasItem)?;
+            require(
                 !probe_matches(&grammar, deny_rel, c.rule(), first),
-                "{} deny fixture must be refused by its OWN rule",
-                c.name()
-            );
+                ClassifyProofRefuse::DenyMustRefuse,
+            )?;
         }
+        Ok(())
     }
 
     /// Tip 689: every hard `unclassified-<kind>` check that can fire has a
@@ -1329,8 +1478,8 @@ mod fixture_tests {
     /// that prefix). Reuses construct seat fixtures where they already prove
     /// the kind — gap-fill files only for missing adversaries.
     #[test]
-    fn tip_689_every_unclassified_kind_deny_and_pass() {
-        let grammar = real_grammar();
+    fn tip_689_every_unclassified_kind_deny_and_pass() -> TestResult {
+        let grammar = real_grammar()?;
         let fixtures = crate_dir().join("fixtures");
 
         /// One seated kind's tip-689 proof pair.
@@ -1465,311 +1614,300 @@ mod fixture_tests {
             },
         ];
 
-        assert_eq!(
-            cases.len(),
-            16,
-            "tip 689 must cover all 16 seated-kind hard checks"
-        );
+        require(cases.len() == 16, ClassifyProofRefuse::Tip689CaseCount)?;
 
         for case in cases {
             let prefix = format!("unclassified-{}:", case.kind);
             let pass_src = std::fs::read_to_string(fixtures.join(case.pass))
-                .unwrap_or_else(|e| panic!("{} pass readable: {e}", case.kind));
+                .map_err(|_| ClassifyProofRefuse::Tip689PassReadable)?;
             let pass_ast = syn::parse_file(&pass_src)
-                .unwrap_or_else(|e| panic!("{} pass parses: {e}", case.kind));
+                .map_err(|_| ClassifyProofRefuse::Tip689PassParses)?;
             let pass_f = SourceFile::admit(case.pass_rel.to_string(), pass_src, pass_ast);
-            let pass_hits = classify_file(
-                &grammar,
-                &pass_f,
-                &crate::alias::AliasTable::build(&[&pass_f]).expect("aliases"),
-            );
+            let pass_hits = classify_file(&grammar, &pass_f, &aliases_for(&pass_f)?);
             let pass_unclass: Vec<&str> = pass_hits
                 .iter()
                 .map(|h| h.construct())
                 .filter(|c| c.starts_with(&prefix))
                 .collect();
-            assert_eq!(
-                pass_unclass,
-                Vec::<&str>::new(),
-                "{} PASS fixture must not fire {prefix}*: {pass_hits:?}",
-                case.kind
-            );
+            require(
+                pass_unclass.is_empty(),
+                ClassifyProofRefuse::Tip689PassMustSilent,
+            )?;
 
             match case.deny {
                 Some((deny_file, want)) => {
                     let deny_src = std::fs::read_to_string(fixtures.join(deny_file))
-                        .unwrap_or_else(|e| panic!("{} deny readable: {e}", case.kind));
+                        .map_err(|_| ClassifyProofRefuse::Tip689DenyReadable)?;
                     let deny_ast = syn::parse_file(&deny_src)
-                        .unwrap_or_else(|e| panic!("{} deny parses: {e}", case.kind));
+                        .map_err(|_| ClassifyProofRefuse::Tip689DenyParses)?;
                     let deny_f = SourceFile::admit(case.deny_rel.to_string(), deny_src, deny_ast);
-                    let deny_hits = classify_file(
-                        &grammar,
-                        &deny_f,
-                        &crate::alias::AliasTable::build(&[&deny_f]).expect("aliases"),
-                    );
+                    let deny_hits = classify_file(&grammar, &deny_f, &aliases_for(&deny_f)?);
                     let got: Vec<String> = deny_hits
                         .iter()
                         .map(|h| h.construct().to_string())
                         .filter(|c| c.starts_with(&prefix))
                         .collect();
-                    assert_eq!(
-                        got,
-                        vec![want.to_string()],
-                        "{} DENY must be exact `{want}` under {prefix}: {deny_hits:?}",
-                        case.kind
-                    );
+                    require(
+                        got == vec![want.to_string()],
+                        ClassifyProofRefuse::Tip689DenyExact,
+                    )?;
                 }
                 None => {
                     // Vacuous seat: the check cannot fire. Adversary shapes that
                     // look "open" must still seat — a detonating DENY here would
                     // be fabricated fake-up.
-                    assert!(
+                    require(
                         matches!(
                             case.kind,
                             "const" | "mod" | "impl-const" | "trait-const"
                         ),
-                        "{} has no DENY but is not a named vacuous seat",
-                        case.kind
-                    );
+                        ClassifyProofRefuse::Tip689VacuousSeat,
+                    )?;
                 }
             }
         }
+        Ok(())
     }
 
     #[test]
-    fn every_condemned_kind_deny_fixture_is_red_under_its_own_law() {
-        let grammar = real_grammar();
+    fn every_condemned_kind_deny_fixture_is_red_under_its_own_law() -> TestResult {
+        let grammar = real_grammar()?;
         for kind in grammar.condemned() {
-            let Some(law) = kind.condemned_law_name() else {
-                panic!("{} must have a condemnation law", kind.kebab());
-            };
+            let law = kind
+                .condemned_law_name()
+                .ok_or(ClassifyProofRefuse::CondemnedLawMissing)?;
             let path = crate_dir()
                 .join("fixtures")
                 .join(format!("{}.deny.rs", kind.kebab()));
-            let src = match std::fs::read_to_string(&path) {
-                Ok(s) => s,
-                Err(e) => panic!("{} deny fixture readable: {e}", kind.kebab()),
-            };
+            let src = std::fs::read_to_string(&path)
+                .map_err(|_| ClassifyProofRefuse::CondemnedDenyReadable)?;
             // Verbatim cannot be authored inside a file syn::parse_file accepts —
             // by definition it is what syn could not interpret. Presence is the
             // load law; live-tree Verbatim is the classify path. Skip parse-exec
             // for that one kind only, named here so it is not silent.
             if *kind == KindName::Verbatim {
-                assert!(
+                require(
                     src.contains("Item::Verbatim") || src.contains("verbatim"),
-                    "verbatim.deny.rs must name why it cannot be a parseable Verbatim specimen"
-                );
+                    ClassifyProofRefuse::VerbatimDenyNamesWhy,
+                )?;
                 continue;
             }
-            let ast = match syn::parse_file(&src) {
-                Ok(a) => a,
-                Err(e) => panic!("{} deny fixture parses: {e}", kind.kebab()),
-            };
+            let ast = syn::parse_file(&src)
+                .map_err(|_| ClassifyProofRefuse::CondemnedDenyParses)?;
             let f = SourceFile::admit(
                 format!("crates/bs-detector/fixtures/{}.deny.rs", kind.kebab()),
                 src,
                 ast,
             );
-            let hits = classify_file(&grammar, &f, &crate::alias::AliasTable::build(&[&f]).expect("aliases"));
-            assert!(
+            let hits = classify_file(&grammar, &f, &aliases_for(&f)?);
+            require(
                 hits.iter().any(|h| h.construct() == law),
-                "{} deny fixture must hit under `{law}`: {hits:?}",
-                kind.kebab()
-            );
+                ClassifyProofRefuse::CondemnedDenyMustHit,
+            )?;
         }
+        Ok(())
     }
 
     #[test]
-    fn item_1_proof_const_kind_neither_seated_nor_condemned_would_be_a_load_error() {
+    fn item_1_proof_const_kind_neither_seated_nor_condemned_would_be_a_load_error() -> TestResult {
         // Covered directly in grammar.rs's own load tests (removing the
         // `const` seat entry refuses to load); re-asserted here at the
         // classify boundary: a kind with NO disposition is treated as a
         // hit, never a silent pass, if it ever reached the classifier.
-        let grammar = real_grammar();
-        assert!(grammar.disposition(KindName::Const).is_some(), "const IS seated in the live grammar");
+        let grammar = real_grammar()?;
+        require(
+            grammar.disposition(KindName::Const).is_some(),
+            ClassifyProofRefuse::ConstMustBeSeated,
+        )
     }
 
     #[test]
-    fn item_1_proof_static_mut_is_denied() {
-        let grammar = real_grammar();
+    fn item_1_proof_static_mut_is_denied() -> TestResult {
+        let grammar = real_grammar()?;
         let f = SourceFile::admit(
             "crates/probe/src/lib.rs".to_string(),
             "static mut G: u64 = 0;".to_string(),
-            syn::parse_file("static mut G: u64 = 0;").expect("parses"),
+            parse_file("static mut G: u64 = 0;")?,
         );
-        let hits = classify_file(&grammar, &f, &crate::alias::AliasTable::build(&[&f]).expect("aliases"));
-        assert_eq!(hits.len(), 1, "static mut must be denied: {hits:?}");
+        let hits = classify_file(&grammar, &f, &aliases_for(&f)?);
+        require(hits.len() == 1, ClassifyProofRefuse::StaticMutMustDeny)
     }
 
     #[test]
-    fn item_1_proof_path_attr_mod_is_denied() {
+    fn item_1_proof_path_attr_mod_is_denied() -> TestResult {
         // Item 5: #[path] is bans_attribute only — module still seats;
         // the attribute matcher is the one door.
-        let m = crate::engines::shape::matcher_by_name("path").expect("path matcher");
-        let f = SourceFile::admit("crates/probe/src/lib.rs".to_string(), "#[path = \"x.rs\"]\nmod m;".to_string(), syn::parse_file("#[path = \"x.rs\"]\nmod m;").expect("parses"));
-        let hits = crate::engines::shape::run_matcher(m, &f);
-        assert_eq!(hits.len(), 1, "path attr must hit under bans_attribute: {hits:?}");
-        assert_eq!(classify_src("#[path = \"x.rs\"] mod m;").len(), 0, "module seats; path is not unclassified");
-    }
-
-    #[test]
-    fn item_1_proof_glob_use_is_denied() {
-        assert_hit_count("use crate::foo::*;", 1);
-    }
-
-    #[test]
-    fn item_1_proof_impl_macro_is_denied() {
-        let hits = classify_src("struct T; impl T { some_macro!{} }");
-        assert!(
-            hits.iter().any(|h| h.construct() == "impl_item_macro"),
-            "impl-interior macro must hit under its law: {hits:?}"
+        let m = crate::engines::shape::matcher_by_name("path")
+            .ok_or(ClassifyProofRefuse::PathMatcher)?;
+        let f = SourceFile::admit(
+            "crates/probe/src/lib.rs".to_string(),
+            "#[path = \"x.rs\"]\nmod m;".to_string(),
+            parse_file("#[path = \"x.rs\"]\nmod m;")?,
         );
+        let hits = crate::engines::shape::run_matcher(m, &f);
+        require(hits.len() == 1, ClassifyProofRefuse::PathAttrMustHit)?;
+        require(
+            classify_src("#[path = \"x.rs\"] mod m;")?.len() == 0,
+            ClassifyProofRefuse::PathModuleMustSeat,
+        )
     }
 
     #[test]
-    fn anti_fraud_a_deny_shape_never_slips_through_a_neighboring_seat() {
-        assert_hit_count("struct Leaky { name: String }", 1);
+    fn item_1_proof_glob_use_is_denied() -> TestResult {
+        require_hit_count("use crate::foo::*;", 1, ClassifyProofRefuse::GlobUseMustDeny)
+    }
+
+    #[test]
+    fn item_1_proof_impl_macro_is_denied() -> TestResult {
+        let hits = classify_src("struct T; impl T { some_macro!{} }")?;
+        require(
+            hits.iter().any(|h| h.construct() == "impl_item_macro"),
+            ClassifyProofRefuse::ImplMacroMustHit,
+        )
+    }
+
+    #[test]
+    fn anti_fraud_a_deny_shape_never_slips_through_a_neighboring_seat() -> TestResult {
+        require_hit_count(
+            "struct Leaky { name: String }",
+            1,
+            ClassifyProofRefuse::DenyShapeMustHit,
+        )
     }
 
     // -----------------------------------------------------------------------
     // item 2 proofs (executed — presence is not proof)
     // -----------------------------------------------------------------------
 
-    fn classify_src(src: &str) -> Vec<Hit> {
-        let grammar = real_grammar();
-        let f = SourceFile::admit("crates/probe/src/lib.rs".to_string(), src.to_string(), syn::parse_file(src).expect("parses"));
-        let aliases = crate::alias::AliasTable::build(&[&f]).expect("alias table");
-        classify_file(&grammar, &f, &aliases)
-    }
-
-    fn assert_hit_count(src: &str, n: usize) {
-        let hits = classify_src(src);
-        assert_eq!(hits.len(), n, "hits for `{src}`: {hits:?}");
-    }
-
-    /// Exact adversary — soft any(contains("unclassified")) is FORBIDDEN.
-    fn assert_exact_constructs(src: &str, want: &[&str]) {
-        let hits = classify_src(src);
-        let mut got: Vec<String> = hits.iter().map(|h| h.construct().to_string()).collect();
-        got.sort();
-        let mut want_s: Vec<String> = want.iter().map(|s| (*s).to_string()).collect();
-        want_s.sort();
-        assert_eq!(
-            got, want_s,
-            "exact constructs for `{src}` (soft any/contains is fraud): {hits:?}"
-        );
-    }
-
     #[test]
-    fn item_2_proofs_red_shapes_are_unclassified() {
-        assert_exact_constructs(
+    fn item_2_proofs_red_shapes_are_unclassified() -> TestResult {
+        require_exact_constructs(
             "impl S { fn f(self: Box<Self>) {} }",
             &["unclassified-impl-fn:f"],
-        );
-        assert_exact_constructs(
+            ClassifyProofRefuse::BoxSelfMustUnclass,
+        )?;
+        require_exact_constructs(
             "impl S { fn with_x(mut self) -> Self { self.x = 1; self } }",
             &["unclassified-impl-fn:with_x"],
-        );
-        assert_exact_constructs("fn smuggled() {}", &["unclassified-fn:smuggled"]);
-        assert_exact_constructs("async fn bare_async() {}", &["unclassified-fn:bare_async"]);
-        let grammar = real_grammar();
+            ClassifyProofRefuse::MutSelfMustUnclass,
+        )?;
+        require_exact_constructs(
+            "fn smuggled() {}",
+            &["unclassified-fn:smuggled"],
+            ClassifyProofRefuse::SmuggledMustUnclass,
+        )?;
+        require_exact_constructs(
+            "async fn bare_async() {}",
+            &["unclassified-fn:bare_async"],
+            ClassifyProofRefuse::BareAsyncMustUnclass,
+        )?;
+        let grammar = real_grammar()?;
         let path = crate_dir().join("fixtures/declared-fn.deny.rs");
-        let src = match std::fs::read_to_string(&path) {
-            Ok(s) => s,
-            Err(e) => panic!("deny fixture readable: {e}"),
-        };
-        let f = SourceFile::admit("crates/bs-detector/fixtures/declared-fn.deny.rs".to_string(), src.clone(), syn::parse_file(&src).expect("parses"));
-        let hits = classify_file(&grammar, &f, &crate::alias::AliasTable::build(&[&f]).expect("aliases"));
+        let src = std::fs::read_to_string(&path)
+            .map_err(|_| ClassifyProofRefuse::DeclaredFnDenyReadable)?;
+        let f = SourceFile::admit(
+            "crates/bs-detector/fixtures/declared-fn.deny.rs".to_string(),
+            src.clone(),
+            syn::parse_file(&src).map_err(|_| ClassifyProofRefuse::DeclaredFnDenyParses)?,
+        );
+        let hits = classify_file(&grammar, &f, &aliases_for(&f)?);
         let mut got: Vec<String> = hits.iter().map(|h| h.construct().to_string()).collect();
         got.sort();
-        assert!(
-            !got.is_empty(),
-            "declared fn hash drift must produce at least one exact red hit"
-        );
+        require(!got.is_empty(), ClassifyProofRefuse::DeclaredFnDenyEmpty)?;
         for g in &got {
-            assert!(
+            require(
                 g.starts_with("unclassified-"),
-                "declared-fn.deny hit must be exact unclassified-* construct, got {g} full={got:?}"
-            );
+                ClassifyProofRefuse::DeclaredFnDenyNotUnclass,
+            )?;
         }
+        Ok(())
     }
 
     #[test]
-    fn item_5_scoped_bans_classify_then_matcher_hits() {
+    fn item_5_scoped_bans_classify_then_matcher_hits() -> TestResult {
         // Await / nested_place inside a matching skeleton: classify clean,
         // construct-scoped matcher still detonates (one jurisdiction).
-        let grammar = real_grammar();
+        let grammar = real_grammar()?;
         let await_src = "impl S { fn get(&self) -> u64 { async { 1u64 }.await } }";
         let nest_src = "impl S { fn into_x(mut self) -> u64 { self.a.b = 1; self.x } }";
         for (src, rule) in [
             (await_src, StructuralRule::DerivationBans),
             (nest_src, StructuralRule::ConsumingVerbBans),
         ] {
-            let ast = syn::parse_file(src).expect("parses");
-            let first = ast.items.first().expect("item");
-            assert!(
+            let ast = parse_file(src)?;
+            let first = ast.items.first().ok_or(ClassifyProofRefuse::MissingItem)?;
+            require(
                 probe_matches(&grammar, "crates/probe/src/lib.rs", rule, first),
-                "scoped-ban body must still seat: {src}"
-            );
+                ClassifyProofRefuse::ScopedBanMustSeat,
+            )?;
         }
-        let m_await = crate::engines::shape::matcher_by_name("await").expect("await");
-        let m_nest = crate::engines::shape::matcher_by_name("nested_place_assign").expect("nest");
-        let f_await = SourceFile::admit("crates/probe/src/lib.rs".to_string(), await_src.to_string(), syn::parse_file(await_src).expect("parses"));
-        let f_nest = SourceFile::admit("crates/probe/src/lib.rs".to_string(), nest_src.to_string(), syn::parse_file(nest_src).expect("parses"));
-        assert_eq!(crate::engines::shape::run_matcher(m_await, &f_await).len(), 1);
-        assert_eq!(crate::engines::shape::run_matcher(m_nest, &f_nest).len(), 1);
+        let m_await = crate::engines::shape::matcher_by_name("await")
+            .ok_or(ClassifyProofRefuse::AwaitMatcher)?;
+        let m_nest = crate::engines::shape::matcher_by_name("nested_place_assign")
+            .ok_or(ClassifyProofRefuse::NestMatcher)?;
+        let f_await = SourceFile::admit(
+            "crates/probe/src/lib.rs".to_string(),
+            await_src.to_string(),
+            parse_file(await_src)?,
+        );
+        let f_nest = SourceFile::admit(
+            "crates/probe/src/lib.rs".to_string(),
+            nest_src.to_string(),
+            parse_file(nest_src)?,
+        );
+        require(
+            crate::engines::shape::run_matcher(m_await, &f_await).len() == 1,
+            ClassifyProofRefuse::AwaitMatcherHit,
+        )?;
+        require(
+            crate::engines::shape::run_matcher(m_nest, &f_nest).len() == 1,
+            ClassifyProofRefuse::NestMatcherHit,
+        )
     }
 
     #[test]
-    fn item_2_proof_admission_door_classifies() {
-        let grammar = real_grammar();
+    fn item_2_proof_admission_door_classifies() -> TestResult {
+        let grammar = real_grammar()?;
         let src = "impl S { fn new() -> Result<Self, ()> { Ok(S) } }";
         let rel = "crates/probe/src/lib.rs";
-        let ast = syn::parse_file(src).expect("parses");
-        let first = ast.items.first().expect("item");
-        assert!(
+        let ast = parse_file(src)?;
+        let first = ast.items.first().ok_or(ClassifyProofRefuse::MissingItem)?;
+        require(
             probe_matches(&grammar, rel, StructuralRule::AdmissionDoorBans, first),
-            "fn new() -> Result<Self, E> in an impl must classify as admission-door"
-        );
+            ClassifyProofRefuse::AdmissionDoorMustSeat,
+        )?;
         let f = SourceFile::admit(rel.to_string(), src.to_string(), ast);
-        let hits = classify_file(&grammar, &f, &crate::alias::AliasTable::build(&[&f]).expect("aliases"));
-        assert!(
+        let hits = classify_file(&grammar, &f, &aliases_for(&f)?);
+        require(
             hits.is_empty(),
-            "admission-door pass shape must not be unclassified: {hits:?}"
-        );
-    }
-
-    fn hit_constructs_for(hits: &[Hit], name: &str) -> Vec<String> {
-        hits.iter()
-            .filter(|h| h.construct().contains(name))
-            .map(|h| h.construct().to_string())
-            .collect()
+            ClassifyProofRefuse::AdmissionDoorMustSilent,
+        )
     }
 
     /// Adversary 1: the drain shape is REAL — an impl-associated
     /// receiverless `-> Self` fn matches admission-door. If this ever goes
     /// false, the nested-bleed story is fiction and the suite must stop.
     #[test]
-    fn anti_fraud_impl_associated_self_fn_still_matches_admission_door_rule() {
-        let grammar = real_grammar();
+    fn anti_fraud_impl_associated_self_fn_still_matches_admission_door_rule() -> TestResult {
+        let grammar = real_grammar()?;
         let src = "impl S { fn helper() -> Self { S } }";
-        let ast = syn::parse_file(src).expect("parses");
-        let first = ast.items.first().expect("item");
-        assert!(
+        let ast = parse_file(src)?;
+        let first = ast.items.first().ok_or(ClassifyProofRefuse::MissingItem)?;
+        require(
             probe_matches(
                 &grammar,
                 "crates/probe/src/lib.rs",
                 StructuralRule::AdmissionDoorBans,
-                first
+                first,
             ),
-            "ATTACK LOCK FAILED: impl-associated fn helper() -> Self must match admission-door — without this the nested-bleed adversary is undefined"
-        );
-        let hits = classify_src(src);
+            ClassifyProofRefuse::AttackLockAdmissionDoor,
+        )?;
+        let hits = classify_src(src)?;
         let helper = hit_constructs_for(&hits, "helper");
-        assert!(
+        require(
             helper.is_empty(),
-            "impl-associated helper() -> Self must be silent-green as admission-door, not red: {helper:?} full={hits:?}"
-        );
+            ClassifyProofRefuse::HelperMustSilentGreen,
+        )
     }
 
     /// Adversary 2: nested Item::Fn inside a method body must NOT inherit
@@ -1777,86 +1915,81 @@ mod fixture_tests {
     /// test detonates if helper is missing from hits OR is anything other
     /// than unclassified-fn:helper.
     #[test]
-    fn anti_fraud_nested_self_fn_inside_method_body_must_be_unclassified() {
+    fn anti_fraud_nested_self_fn_inside_method_body_must_be_unclassified() -> TestResult {
         let src = "impl S { fn method(&self) { fn helper() -> Self { S } } }";
-        let hits = classify_src(src);
+        let hits = classify_src(src)?;
         let helper = hit_constructs_for(&hits, "helper");
-        assert_eq!(
-            helper,
-            vec!["unclassified-fn:helper".to_string()],
-            "NESTED BLEED STILL OPEN or over-fixed: want exactly unclassified-fn:helper, got {helper:?} full={hits:?}"
-        );
+        require(
+            helper == vec!["unclassified-fn:helper".to_string()],
+            ClassifyProofRefuse::NestedBleedHelper,
+        )?;
         // Method itself is derivation — must not be swept into the helper's guilt.
-        assert!(
+        require(
             !hits.iter().any(|h| h.construct().contains("method")),
-            "method(&self) must remain a seated derivation, not red: {hits:?}"
-        );
+            ClassifyProofRefuse::NestedBleedMethodSwept,
+        )
     }
 
     /// Adversary 3: Result<Self,_> nest — same bleed costume, different return.
     #[test]
-    fn anti_fraud_nested_result_self_fn_inside_method_must_be_unclassified() {
+    fn anti_fraud_nested_result_self_fn_inside_method_must_be_unclassified() -> TestResult {
         let src = "impl S { fn method(&self) { fn helper() -> Result<Self, ()> { Ok(S) } } }";
-        let hits = classify_src(src);
+        let hits = classify_src(src)?;
         let helper = hit_constructs_for(&hits, "helper");
-        assert_eq!(
-            helper,
-            vec!["unclassified-fn:helper".to_string()],
-            "Result<Self> nested helper must be unclassified-fn:helper, got {helper:?} full={hits:?}"
-        );
+        require(
+            helper == vec!["unclassified-fn:helper".to_string()],
+            ClassifyProofRefuse::NestedResultHelper,
+        )
     }
 
     /// Adversary 4: trait default body nest — second container bleed surface.
     #[test]
-    fn anti_fraud_nested_self_fn_inside_trait_default_must_be_unclassified() {
+    fn anti_fraud_nested_self_fn_inside_trait_default_must_be_unclassified() -> TestResult {
         let src = "trait T { fn method(&self) { fn helper() -> Self { todo!() } } }";
-        let hits = classify_src(src);
+        let hits = classify_src(src)?;
         let helper = hit_constructs_for(&hits, "helper");
-        assert_eq!(
-            helper,
-            vec!["unclassified-fn:helper".to_string()],
-            "trait-default nested helper must be unclassified-fn:helper, got {helper:?} full={hits:?}"
-        );
+        require(
+            helper == vec!["unclassified-fn:helper".to_string()],
+            ClassifyProofRefuse::NestedTraitHelper,
+        )
     }
 
     /// Adversary 5: free nested fn inside a free fn — never had in_container;
     /// must still be unclassified (no silent pass via a new costume).
     #[test]
-    fn anti_fraud_nested_fn_inside_free_fn_must_be_unclassified() {
+    fn anti_fraud_nested_fn_inside_free_fn_must_be_unclassified() -> TestResult {
         let src = "fn outer() { fn helper() {} }";
-        let hits = classify_src(src);
+        let hits = classify_src(src)?;
         let helper = hit_constructs_for(&hits, "helper");
-        assert_eq!(
-            helper,
-            vec!["unclassified-fn:helper".to_string()],
-            "free nested helper must be unclassified-fn:helper, got {helper:?} full={hits:?}"
-        );
+        require(
+            helper == vec!["unclassified-fn:helper".to_string()],
+            ClassifyProofRefuse::NestedFreeHelper,
+        )?;
         let outer = hit_constructs_for(&hits, "outer");
-        assert_eq!(
-            outer,
-            vec!["unclassified-fn:outer".to_string()],
-            "free outer must also be unclassified (no seat): {outer:?}"
-        );
+        require(
+            outer == vec!["unclassified-fn:outer".to_string()],
+            ClassifyProofRefuse::NestedFreeOuter,
+        )
     }
 
     #[test]
-    fn item_2_proof_composition_root_positive_body_refuses_non_call_let() {
+    fn item_2_proof_composition_root_positive_body_refuses_non_call_let() -> TestResult {
         // The honesty gap closed here: negative-only (!control_flow) would
         // green `let x = 1; finish(x)`. Positive law reds it.
-        let grammar = real_grammar();
+        let grammar = real_grammar()?;
         let src = "fn main() { let x = 1; finish(x) }";
         let rel = "crates/probe/src/main.rs";
-        let ast = syn::parse_file(src).expect("parses");
-        let first = ast.items.first().expect("item");
-        assert!(
+        let ast = parse_file(src)?;
+        let first = ast.items.first().ok_or(ClassifyProofRefuse::MissingItem)?;
+        require(
             !probe_matches(&grammar, rel, StructuralRule::CompositionRootBody, first),
-            "composition-root must refuse a non-call let RHS under the positive body law"
-        );
+            ClassifyProofRefuse::CompositionRootMustRefuse,
+        )
     }
 
     #[test]
-    fn item_2_anti_fraud_fn_matches_at_most_one_skeleton() {
-        let grammar = real_grammar();
+    fn item_2_anti_fraud_fn_matches_at_most_one_skeleton() -> TestResult {
+        let grammar = real_grammar()?;
         let cases = [
             ("crates/probe/src/main.rs", "fn main() { let x = prep(); finish(x) }"),
             ("crates/probe/src/lib.rs", "impl S { fn get(&self) -> u64 { 0 } }"),
@@ -1871,17 +2004,15 @@ mod fixture_tests {
             .map(|c| c.rule())
             .collect();
         for (rel, src) in cases {
-            let ast = syn::parse_file(src).expect("parses");
-            let first = ast.items.first().expect("item");
+            let ast = parse_file(src)?;
+            let first = ast.items.first().ok_or(ClassifyProofRefuse::MissingItem)?;
             let n = fn_rules
                 .iter()
                 .filter(|r| probe_matches(&grammar, rel, **r, first))
                 .count();
-            assert_eq!(
-                n, 1,
-                "exactly one skeleton must match `{src}` at {rel}, got {n}"
-            );
+            require(n == 1, ClassifyProofRefuse::FnSkeletonExactlyOne)?;
         }
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -1889,16 +2020,28 @@ mod fixture_tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn item_3_proof_multi_field_tuple_and_pub_field_are_red() {
+    fn item_3_proof_multi_field_tuple_and_pub_field_are_red() -> TestResult {
         // Build text: multi-field tuple or any pub field → red.
-        assert_exact_constructs("struct Multi(u64, u64);", &["unclassified-struct:Multi"]);
-        assert_exact_constructs("struct Open(pub u64);", &["unclassified-struct:Open"]);
-        assert_exact_constructs("struct Open { pub a: u64 }", &["unclassified-struct:Open"]);
+        require_exact_constructs(
+            "struct Multi(u64, u64);",
+            &["unclassified-struct:Multi"],
+            ClassifyProofRefuse::MultiFieldTupleRed,
+        )?;
+        require_exact_constructs(
+            "struct Open(pub u64);",
+            &["unclassified-struct:Open"],
+            ClassifyProofRefuse::PubTupleFieldRed,
+        )?;
+        require_exact_constructs(
+            "struct Open { pub a: u64 }",
+            &["unclassified-struct:Open"],
+            ClassifyProofRefuse::PubNamedFieldRed,
+        )
     }
 
     #[test]
-    fn item_3_anti_fraud_struct_matches_at_most_one_construct() {
-        let grammar = real_grammar();
+    fn item_3_anti_fraud_struct_matches_at_most_one_construct() -> TestResult {
+        let grammar = real_grammar()?;
         let cases = [
             "struct Newtype(u64);",
             "struct Sealed { a: u64 }",
@@ -1911,26 +2054,24 @@ mod fixture_tests {
             .map(|c| c.rule())
             .collect();
         for src in cases {
-            let ast = syn::parse_file(src).expect("parses");
-            let first = ast.items.first().expect("item");
+            let ast = parse_file(src)?;
+            let first = ast.items.first().ok_or(ClassifyProofRefuse::MissingItem)?;
             let n = struct_rules
                 .iter()
                 .filter(|r| probe_matches(&grammar, "crates/probe/src/lib.rs", **r, first))
                 .count();
-            assert_eq!(
-                n, 1,
-                "exactly one struct construct must match `{src}`, got {n}"
-            );
+            require(n == 1, ClassifyProofRefuse::StructConstructExactlyOne)?;
         }
+        Ok(())
     }
 
     #[test]
-    fn item_3_classification_emits_unique_construct_name() {
+    fn item_3_classification_emits_unique_construct_name() -> TestResult {
         // Seat match returns the unique name (not a bool from `.any()`).
-        let grammar = real_grammar();
+        let grammar = real_grammar()?;
         let src = "struct Newtype(u64);";
-        let ast = syn::parse_file(src).expect("parses");
-        let item = ast.items.first().expect("item");
+        let ast = parse_file(src)?;
+        let item = ast.items.first().ok_or(ClassifyProofRefuse::MissingItem)?;
         let empty = crate::alias::AliasTable::empty();
         let ctx = Ctx {
             rel: "crates/probe/src/lib.rs",
@@ -1942,15 +2083,14 @@ mod fixture_tests {
         let seats = match grammar.disposition(KindName::Struct) {
             Some(crate::grammar::Disposition::Seated(s)) => s,
             Some(crate::grammar::Disposition::Condemned { .. }) => {
-                panic!("struct must be seated, not condemned")
+                return Err(ClassifyProofRefuse::StructMustBeSeatedNotCondemned);
             }
-            None => panic!("struct must be seated"),
+            None => return Err(ClassifyProofRefuse::StructMustBeSeated),
         };
-        assert_eq!(
-            seat_matches_item(&ctx, item, seats),
-            Some("newtype-scalar"),
-            "classification must emit the unique construct name"
-        );
+        require(
+            seat_matches_item(&ctx, item, seats) == Some("newtype-scalar"),
+            ClassifyProofRefuse::UniqueConstructName,
+        )
     }
 
     // -----------------------------------------------------------------------
@@ -1958,344 +2098,261 @@ mod fixture_tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn item_4_proof_type_alias_to_string_struct_is_red() {
-        assert_exact_constructs(
+    fn item_4_proof_type_alias_to_string_struct_is_red() -> TestResult {
+        require_exact_constructs(
             "type Name = String; struct S { n: Name }",
             &["unclassified-struct:S", "unclassified-type:Name"],
-        );
+            ClassifyProofRefuse::AliasStringStructRed,
+        )
     }
 
     #[test]
-    fn item_4_proof_use_as_string_struct_is_red() {
-        assert_exact_constructs(
+    fn item_4_proof_use_as_string_struct_is_red() -> TestResult {
+        require_exact_constructs(
             "use std::string::String as Text; struct T { t: Text }",
             &["unclassified-struct:T"],
-        );
+            ClassifyProofRefuse::UseAsStringStructRed,
+        )
     }
 
     /// Adversary 6a: expression-nested FREE FN — unit struct was a false
     /// specimen (unit-marker seats green). A receiverless nested fn cannot
     /// seat; if the if-body walk is blind, this is []. Exact construct only.
     #[test]
-    fn anti_fraud_expression_nested_fn_must_be_exact_unclassified() {
-        let hits = classify_src("fn f() { if true { fn nested_hide() {} } }");
+    fn anti_fraud_expression_nested_fn_must_be_exact_unclassified() -> TestResult {
+        let hits = classify_src("fn f() { if true { fn nested_hide() {} } }")?;
         let nested = hit_constructs_for(&hits, "nested_hide");
-        assert_eq!(
-            nested,
-            vec!["unclassified-fn:nested_hide".to_string()],
-            "if-body fn must be exactly unclassified-fn:nested_hide (walk blind or soft seat): {nested:?} full={hits:?}"
-        );
-        assert!(
+        require(
+            nested == vec!["unclassified-fn:nested_hide".to_string()],
+            ClassifyProofRefuse::ExprNestFnExact,
+        )?;
+        require(
             hits.iter().any(|h| h.construct() == "unclassified-fn:f"),
-            "outer free fn f must be unclassified-fn:f: {hits:?}"
-        );
+            ClassifyProofRefuse::ExprNestFnOuter,
+        )
     }
 
     /// Adversary 6b: expression-nested STRING STRUCT — cannot seat as
     /// sealed/newtype/unit. Exact construct; detonates on walk blindness.
     #[test]
-    fn anti_fraud_expression_nested_string_struct_must_be_exact_unclassified() {
-        let hits = classify_src("fn f() { if true { struct NestedHide { name: String } } }");
+    fn anti_fraud_expression_nested_string_struct_must_be_exact_unclassified() -> TestResult {
+        let hits = classify_src("fn f() { if true { struct NestedHide { name: String } } }")?;
         let nested = hit_constructs_for(&hits, "NestedHide");
-        assert_eq!(
-            nested,
-            vec!["unclassified-struct:NestedHide".to_string()],
-            "if-body String struct must be exactly unclassified-struct:NestedHide: {nested:?} full={hits:?}"
-        );
+        require(
+            nested == vec!["unclassified-struct:NestedHide".to_string()],
+            ClassifyProofRefuse::ExprNestStringStructExact,
+        )
     }
 
     /// Adversary 6c: FALSE SPECIMEN LOCK — unit struct in if-body IS
     /// unit-marker (lawful green). If this goes red, we over-fixed.
     #[test]
-    fn anti_fraud_expression_nested_unit_struct_still_seats_as_unit_marker() {
-        let hits = classify_src("fn f() { if true { struct NestedHide; } }");
+    fn anti_fraud_expression_nested_unit_struct_still_seats_as_unit_marker() -> TestResult {
+        let hits = classify_src("fn f() { if true { struct NestedHide; } }")?;
         let nested = hit_constructs_for(&hits, "NestedHide");
-        assert!(
+        require(
             nested.is_empty(),
-            "unit struct NestedHide must remain unit-marker green, not red: {nested:?} full={hits:?}"
-        );
-    }
-
-    /// Tip 650 nest surfaces — each costume must emit exactly
-    /// `unclassified-fn:nested_hide`. Empty hits = walk blind soft drain.
-    fn assert_expression_nest_exact(src: &str, costume: &str) {
-        let hits = classify_src(src);
-        let nested = hit_constructs_for(&hits, "nested_hide");
-        assert_eq!(
-            nested,
-            vec!["unclassified-fn:nested_hide".to_string()],
-            "{costume}-nested fn must be exactly unclassified-fn:nested_hide (walk blind or soft seat): {nested:?} full={hits:?}"
-        );
+            ClassifyProofRefuse::ExprNestUnitStillGreen,
+        )
     }
 
     #[test]
-    fn anti_fraud_match_arm_nested_fn_must_be_exact_unclassified() {
-        let hits = classify_src("fn f() { match 0 { _ => { fn h() {} } } }");
+    fn anti_fraud_match_arm_nested_fn_must_be_exact_unclassified() -> TestResult {
+        let hits = classify_src("fn f() { match 0 { _ => { fn h() {} } } }")?;
         let nested: Vec<String> = hits
             .iter()
             .filter(|hit| hit.construct().ends_with(":h"))
             .map(|hit| hit.construct().to_string())
             .collect();
-        assert_eq!(
-            nested,
-            vec!["unclassified-fn:h".to_string()],
-            "match-arm fn must be exactly unclassified-fn:h: {nested:?} full={hits:?}"
-        );
+        require(
+            nested == vec!["unclassified-fn:h".to_string()],
+            ClassifyProofRefuse::MatchArmNestExact,
+        )
     }
 
     #[test]
-    fn anti_fraud_loop_body_nested_fn_must_be_exact_unclassified() {
-        assert_expression_nest_exact(
-            "fn f() { loop { fn nested_hide() {} break; } }",
-            "loop",
-        );
+    fn anti_fraud_loop_body_nested_fn_must_be_exact_unclassified() -> TestResult {
+        require_expression_nest_exact("fn f() { loop { fn nested_hide() {} break; } }")
     }
 
     #[test]
-    fn anti_fraud_while_body_nested_fn_must_be_exact_unclassified() {
-        assert_expression_nest_exact(
-            "fn f() { while true { fn nested_hide() {} break; } }",
-            "while",
-        );
+    fn anti_fraud_while_body_nested_fn_must_be_exact_unclassified() -> TestResult {
+        require_expression_nest_exact("fn f() { while true { fn nested_hide() {} break; } }")
     }
 
     #[test]
-    fn anti_fraud_for_body_nested_fn_must_be_exact_unclassified() {
-        assert_expression_nest_exact(
-            "fn f() { for _ in 0..1 { fn nested_hide() {} } }",
-            "for",
-        );
+    fn anti_fraud_for_body_nested_fn_must_be_exact_unclassified() -> TestResult {
+        require_expression_nest_exact("fn f() { for _ in 0..1 { fn nested_hide() {} } }")
     }
 
     #[test]
-    fn anti_fraud_closure_body_nested_fn_must_be_exact_unclassified() {
-        assert_expression_nest_exact(
-            "fn f() { let _c = || { fn nested_hide() {} }; }",
-            "closure",
-        );
+    fn anti_fraud_closure_body_nested_fn_must_be_exact_unclassified() -> TestResult {
+        require_expression_nest_exact("fn f() { let _c = || { fn nested_hide() {} }; }")
     }
 
     #[test]
-    fn anti_fraud_async_block_nested_fn_must_be_exact_unclassified() {
-        assert_expression_nest_exact(
-            "fn f() { let _a = async { fn nested_hide() {} }; }",
-            "async-block",
-        );
+    fn anti_fraud_async_block_nested_fn_must_be_exact_unclassified() -> TestResult {
+        require_expression_nest_exact("fn f() { let _a = async { fn nested_hide() {} }; }")
     }
 
     #[test]
-    fn anti_fraud_unsafe_block_nested_fn_must_be_exact_unclassified() {
-        assert_expression_nest_exact(
-            "fn f() { unsafe { fn nested_hide() {} } }",
-            "unsafe-block",
-        );
+    fn anti_fraud_unsafe_block_nested_fn_must_be_exact_unclassified() -> TestResult {
+        require_expression_nest_exact("fn f() { unsafe { fn nested_hide() {} } }")
     }
 
     /// Tip 650: const/static *item* RHS blocks may contain nested items
     /// (legal Rust). recurse_into_item treated Const/Static as
     /// non-containers — silent-green drain.
     #[test]
-    fn anti_fraud_const_item_rhs_nested_fn_must_be_exact_unclassified() {
-        assert_expression_nest_exact(
-            "const X: i32 = { fn nested_hide() {} 1 };",
-            "const-item-rhs",
-        );
+    fn anti_fraud_const_item_rhs_nested_fn_must_be_exact_unclassified() -> TestResult {
+        require_expression_nest_exact("const X: i32 = { fn nested_hide() {} 1 };")
     }
 
     #[test]
-    fn anti_fraud_static_item_rhs_nested_fn_must_be_exact_unclassified() {
-        assert_expression_nest_exact(
-            "static X: i32 = { fn nested_hide() {} 1 };",
-            "static-item-rhs",
-        );
+    fn anti_fraud_static_item_rhs_nested_fn_must_be_exact_unclassified() -> TestResult {
+        require_expression_nest_exact("static X: i32 = { fn nested_hide() {} 1 };")
     }
 
     #[test]
-    fn anti_fraud_nested_const_item_rhs_fn_must_be_exact_unclassified() {
-        assert_expression_nest_exact(
-            "fn f() { const X: i32 = { fn nested_hide() {} 1 }; }",
-            "nested-const-item-rhs",
-        );
+    fn anti_fraud_nested_const_item_rhs_fn_must_be_exact_unclassified() -> TestResult {
+        require_expression_nest_exact("fn f() { const X: i32 = { fn nested_hide() {} 1 }; }")
     }
 
     #[test]
-    fn anti_fraud_const_block_nested_fn_must_be_exact_unclassified() {
-        assert_expression_nest_exact(
-            "fn f() { const { fn nested_hide() {} }; }",
-            "const-block",
-        );
+    fn anti_fraud_const_block_nested_fn_must_be_exact_unclassified() -> TestResult {
+        require_expression_nest_exact("fn f() { const { fn nested_hide() {} }; }")
     }
 
     #[test]
-    fn anti_fraud_inline_const_nested_fn_must_be_exact_unclassified() {
-        assert_expression_nest_exact(
-            "fn f() { let _x = const { fn nested_hide() {} 1 }; }",
-            "inline-const",
-        );
+    fn anti_fraud_inline_const_nested_fn_must_be_exact_unclassified() -> TestResult {
+        require_expression_nest_exact("fn f() { let _x = const { fn nested_hide() {} 1 }; }")
     }
 
     /// Adversary 16: impl-associated const RHS nest — container walk only
     /// recursed ImplItem::Fn, so Const value expr was a silent-green drain.
     #[test]
-    fn anti_fraud_impl_const_rhs_nested_fn_must_be_exact_unclassified() {
-        assert_expression_nest_exact(
-            "impl S { const X: i32 = { fn nested_hide() {} 1 }; }",
-            "impl-const-rhs",
-        );
+    fn anti_fraud_impl_const_rhs_nested_fn_must_be_exact_unclassified() -> TestResult {
+        require_expression_nest_exact("impl S { const X: i32 = { fn nested_hide() {} 1 }; }")
     }
 
     /// Adversary 17: trait-associated const default RHS nest.
     #[test]
-    fn anti_fraud_trait_const_rhs_nested_fn_must_be_exact_unclassified() {
-        assert_expression_nest_exact(
-            "trait T { const X: i32 = { fn nested_hide() {} 1 }; }",
-            "trait-const-rhs",
-        );
+    fn anti_fraud_trait_const_rhs_nested_fn_must_be_exact_unclassified() -> TestResult {
+        require_expression_nest_exact("trait T { const X: i32 = { fn nested_hide() {} 1 }; }")
     }
 
     /// Tip 686: enum discriminant expr nest — recurse_into_item treated
     /// Item::Enum as `_not_a_container` (walk blind soft drain).
     #[test]
-    fn anti_fraud_enum_discriminant_nested_fn_must_be_exact_unclassified() {
-        assert_expression_nest_exact(
-            "enum E { V = { fn nested_hide() {} 1 } }",
-            "enum-discriminant",
-        );
+    fn anti_fraud_enum_discriminant_nested_fn_must_be_exact_unclassified() -> TestResult {
+        require_expression_nest_exact("enum E { V = { fn nested_hide() {} 1 } }")
     }
 
     /// Tip 686: type-position array-len nest on a type alias.
     #[test]
-    fn anti_fraud_type_alias_array_len_nested_fn_must_be_exact_unclassified() {
-        assert_expression_nest_exact(
-            "type T = [u8; { fn nested_hide() {} 1 }];",
-            "type-alias-array-len",
-        );
+    fn anti_fraud_type_alias_array_len_nested_fn_must_be_exact_unclassified() -> TestResult {
+        require_expression_nest_exact("type T = [u8; { fn nested_hide() {} 1 }];")
     }
 
     /// Tip 686: type-position array-len nest on a struct field.
     #[test]
-    fn anti_fraud_struct_field_array_len_nested_fn_must_be_exact_unclassified() {
-        assert_expression_nest_exact(
-            "struct S { f: [u8; { fn nested_hide() {} 1 }] }",
-            "struct-field-array-len",
-        );
+    fn anti_fraud_struct_field_array_len_nested_fn_must_be_exact_unclassified() -> TestResult {
+        require_expression_nest_exact("struct S { f: [u8; { fn nested_hide() {} 1 }] }")
     }
 
     /// Tip 686: type-position array-len nest on an enum variant field.
     #[test]
-    fn anti_fraud_enum_field_array_len_nested_fn_must_be_exact_unclassified() {
-        assert_expression_nest_exact(
-            "enum E { V([u8; { fn nested_hide() {} 1 }]) }",
-            "enum-field-array-len",
-        );
+    fn anti_fraud_enum_field_array_len_nested_fn_must_be_exact_unclassified() -> TestResult {
+        require_expression_nest_exact("enum E { V([u8; { fn nested_hide() {} 1 }]) }")
     }
 
     /// Tip 686: type-position array-len nest on a free-fn return type
     /// (block walk alone does not visit the signature).
     #[test]
-    fn anti_fraud_fn_return_array_len_nested_fn_must_be_exact_unclassified() {
-        assert_expression_nest_exact(
-            "fn f() -> [u8; { fn nested_hide() {} 1 }] { loop {} }",
-            "fn-return-array-len",
-        );
+    fn anti_fraud_fn_return_array_len_nested_fn_must_be_exact_unclassified() -> TestResult {
+        require_expression_nest_exact("fn f() -> [u8; { fn nested_hide() {} 1 }] { loop {} }")
     }
 
     /// Tip 686: type-position array-len nest on a free-fn arg type.
     #[test]
-    fn anti_fraud_fn_arg_array_len_nested_fn_must_be_exact_unclassified() {
-        assert_expression_nest_exact(
-            "fn f(_x: [u8; { fn nested_hide() {} 1 }]) {}",
-            "fn-arg-array-len",
-        );
+    fn anti_fraud_fn_arg_array_len_nested_fn_must_be_exact_unclassified() -> TestResult {
+        require_expression_nest_exact("fn f(_x: [u8; { fn nested_hide() {} 1 }]) {}")
     }
 
     /// Tip 686: type-position array-len nest on impl associated type.
     #[test]
-    fn anti_fraud_impl_type_array_len_nested_fn_must_be_exact_unclassified() {
-        assert_expression_nest_exact(
+    fn anti_fraud_impl_type_array_len_nested_fn_must_be_exact_unclassified() -> TestResult {
+        require_expression_nest_exact(
             "struct S; impl S { type T = [u8; { fn nested_hide() {} 1 }]; }",
-            "impl-type-array-len",
-        );
+        )
     }
 
     /// Tip 686: type-position array-len nest on trait associated type default.
     #[test]
-    fn anti_fraud_trait_type_array_len_nested_fn_must_be_exact_unclassified() {
-        assert_expression_nest_exact(
-            "trait Tr { type T = [u8; { fn nested_hide() {} 1 }]; }",
-            "trait-type-array-len",
-        );
+    fn anti_fraud_trait_type_array_len_nested_fn_must_be_exact_unclassified() -> TestResult {
+        require_expression_nest_exact("trait Tr { type T = [u8; { fn nested_hide() {} 1 }]; }")
     }
 
     /// Tip 686: type-position array-len nest on impl self_ty.
     #[test]
-    fn anti_fraud_impl_self_ty_array_len_nested_fn_must_be_exact_unclassified() {
-        assert_expression_nest_exact(
+    fn anti_fraud_impl_self_ty_array_len_nested_fn_must_be_exact_unclassified() -> TestResult {
+        require_expression_nest_exact(
             "struct S<const N: usize>; impl S<{ { fn nested_hide() {} 1 } }> {}",
-            "impl-self-ty-const-generic",
-        );
+        )
     }
 
     /// Tip 686: type-position array-len nest on const item's type annotation
     /// (RHS expr walk alone does not visit the type).
     #[test]
-    fn anti_fraud_const_ty_array_len_nested_fn_must_be_exact_unclassified() {
-        assert_expression_nest_exact(
-            "const X: [u8; { fn nested_hide() {} 1 }] = [0; 1];",
-            "const-ty-array-len",
-        );
+    fn anti_fraud_const_ty_array_len_nested_fn_must_be_exact_unclassified() -> TestResult {
+        require_expression_nest_exact("const X: [u8; { fn nested_hide() {} 1 }] = [0; 1];")
     }
 
     /// Tip 686: trait supertrait bound nest — Item::Trait walked generics +
     /// members only; `supertraits` was a silent-green drain.
     #[test]
-    fn anti_fraud_trait_supertrait_bound_nested_fn_must_be_exact_unclassified() {
-        assert_expression_nest_exact(
-            "trait T: From<[u8; { fn nested_hide() {} 1 }]> {}",
-            "trait-supertrait-bound",
-        );
+    fn anti_fraud_trait_supertrait_bound_nested_fn_must_be_exact_unclassified() -> TestResult {
+        require_expression_nest_exact("trait T: From<[u8; { fn nested_hide() {} 1 }]> {}")
     }
 
     /// Tip 686: trait associated-type bound nest — default RHS was walked,
     /// but `bounds` after `:` were not.
     #[test]
-    fn anti_fraud_trait_type_bound_nested_fn_must_be_exact_unclassified() {
-        assert_expression_nest_exact(
+    fn anti_fraud_trait_type_bound_nested_fn_must_be_exact_unclassified() -> TestResult {
+        require_expression_nest_exact(
             "trait Tr { type T: From<[u8; { fn nested_hide() {} 1 }]>; }",
-            "trait-type-bound",
-        );
+        )
     }
 
     /// Tip 686: trait-alias bound nest — Item::TraitAlias was `_not_a_container`.
     #[test]
-    fn anti_fraud_trait_alias_bound_nested_fn_must_be_exact_unclassified() {
-        assert_expression_nest_exact(
-            "trait Alias = From<[u8; { fn nested_hide() {} 1 }]>;",
-            "trait-alias-bound",
-        );
+    fn anti_fraud_trait_alias_bound_nested_fn_must_be_exact_unclassified() -> TestResult {
+        require_expression_nest_exact("trait Alias = From<[u8; { fn nested_hide() {} 1 }]>;")
     }
 
     /// Tip 686: foreign-fn arg type-position nest — ForeignMod interiors were
     /// never walked (block condemned, nested items silent-green).
     #[test]
-    fn anti_fraud_foreign_fn_arg_array_len_nested_fn_must_be_exact_unclassified() {
-        assert_expression_nest_exact(
+    fn anti_fraud_foreign_fn_arg_array_len_nested_fn_must_be_exact_unclassified() -> TestResult {
+        require_expression_nest_exact(
             "extern \"C\" { fn f(_x: *const [u8; { fn nested_hide() {} 1 }]); }",
-            "foreign-fn-arg-array-len",
-        );
+        )
     }
 
     /// Tip 686: foreign-static type-position nest.
     #[test]
-    fn anti_fraud_foreign_static_ty_array_len_nested_fn_must_be_exact_unclassified() {
-        assert_expression_nest_exact(
+    fn anti_fraud_foreign_static_ty_array_len_nested_fn_must_be_exact_unclassified() -> TestResult {
+        require_expression_nest_exact(
             "extern \"C\" { static X: [u8; { fn nested_hide() {} 1 }]; }",
-            "foreign-static-ty-array-len",
-        );
+        )
     }
 
     #[test]
-    fn item_4_proof_restrict_struct_is_clean() {
-        assert_hit_count("struct R { r: Restrict }", 0);
+    fn item_4_proof_restrict_struct_is_clean() -> TestResult {
+        require_hit_count(
+            "struct R { r: Restrict }",
+            0,
+            ClassifyProofRefuse::RestrictStructClean,
+        )
     }
 }
