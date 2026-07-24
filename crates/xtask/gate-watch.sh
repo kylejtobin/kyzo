@@ -27,7 +27,7 @@ run_gate_until_clean() {
     touch "$STAMP"
     local raw rc
     raw="$(cd "$REPO" && docker compose run --rm kyzo-dev \
-      cargo run --release --quiet -p bs-detector -- --root . 2>&1)"
+      cargo run --release --quiet -p bs-detector -- --root . --now-unix "$(date +%s)" 2>&1)"
     rc=$?
     # The binary writes the artifacts on every completed run (PASS or
     # FAIL). If the log is older than this run started, the run died

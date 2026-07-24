@@ -34,7 +34,7 @@ mv -f "$tmp" "$LOG"
 
 detector_out="$(cd "$REPO" && docker compose run --rm \
   --name "ci-snapshot-kyzo-dev-run-$short" kyzo-dev \
-  cargo run --release --quiet -p bs-detector -- --root . 2>&1)"
+  cargo run --release --quiet -p bs-detector -- --root . --now-unix "$(date +%s)" 2>&1)"
 detector_rc=$?
 
 if [ "$detector_rc" -ne 0 ]; then

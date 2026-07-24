@@ -80,8 +80,25 @@ pub fn env_report() -> Result<(), ProcessFailure> {
 /// itself writes crates/xtask/resonance.log and bs-counts.txt; a red exit
 /// here is the verdict.
 pub fn bs_detector() -> Result<(), ProcessFailure> {
+    // Host observation instant — bs-detector never reads the wall clock
+    // (campaign freshness is replayable via --now-unix).
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+        .to_string();
     let mut cmd = Command::new("cargo");
-    cmd.args(["run", "--release", "-p", "bs-detector", "--", "--root", "."]);
+    cmd.args([
+        "run",
+        "--release",
+        "-p",
+        "bs-detector",
+        "--",
+        "--root",
+        ".",
+        "--now-unix",
+        &now_unix,
+    ]);
     run_step("bs-detector", cmd)
 }
 

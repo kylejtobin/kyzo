@@ -301,7 +301,7 @@ jobs:
       # Every check registered in crates/bs-detector/checks.toml over ALL of
       # crates/, waivers from crates/bs-detector/waivers.toml, zero baseline.
       # A red exit is the verdict.
-      - run: cargo run -p bs-detector --release -- --root . --dry-run
+      - run: cargo run -p bs-detector --release -- --root . --dry-run --now-unix "$(date +%s)"
       # The bite proofs: every registered check must detonate on its
       # historical bug shape (the registry refuses a check whose proof fn
       # does not exist — this run proves the proofs themselves pass).
