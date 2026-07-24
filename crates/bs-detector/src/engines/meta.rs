@@ -19,57 +19,77 @@ use crate::engines::Hit;
 use crate::identity;
 use crate::waiver::WaiverFile;
 
-pub fn coverage(b: &Boundary) -> Vec<Hit> {
-    b.coverage_proof()
-        .missing()
-        .iter()
-        .cloned()
-        .map(|f| Hit::admit(f, 0, "coverage_hole".to_string()))
-        .collect()
-}
+/// Meta self-policing authority — tip 806/914: no free helpers.
+pub struct MetaLaw;
 
-pub fn unparsed(b: &Boundary) -> Vec<Hit> {
-    b.unparsed()
-        .iter()
-        .map(|u| Hit::admit(u.rel_path().clone(), 0, format!("unparseable: {}", u.error())))
-        .collect()
-}
+/// The one production door for meta engine checks.
+pub const META: MetaLaw = MetaLaw;
 
-/// Waivers whose content binding no longer matches any raw hit of their
-/// check. Matching is by check/file/construct/`site_hash` (TRUTH item 6);
-/// the waiver's `line` is display-only and never decides staleness.
-pub fn stale_waivers(
-    waivers: &WaiverFile,
-    raw_hits: &[(String, Vec<Hit>)],
-    files: &[SourceFile],
-) -> Vec<Hit> {
-    let mut stale = vec![];
-    for w in waivers.waivers() {
-        let live = raw_hits.iter().any(|(check, hits)| {
-            check.as_str() == w.check() && hits.iter().any(|h| identity::IDENTITY.waiver_matches_hit(w, h, files))
-        });
-        if !live {
-            stale.push(Hit::admit(w.file(), w.line(), format!("stale_waiver:{}:{}", w.check(), w.construct())));
-        }
+impl MetaLaw {
+    pub fn coverage(&self, b: &Boundary) -> Vec<Hit> {
+        b.coverage_proof()
+            .missing()
+            .iter()
+            .cloned()
+            .map(|f| Hit::admit(f, 0, "coverage_hole".to_string()))
+            .collect()
     }
-    stale
-}
 
-/// Every compilation root under `crates/` must forbid unsafe at the root:
-/// lib/main roots, every extra binary root under src/bin/, and build
-/// scripts — each is its own crate root where the forbid must live.
-pub fn forbid_roots(b: &Boundary) -> Vec<Hit> {
-    let mut hits = vec![];
-    for f in b.files() {
-        let is_root = f.rel_path().ends_with("/src/lib.rs")
-            || f.rel_path().ends_with("/src/main.rs")
-            || f.rel_path().contains("/src/bin/")
-            || f.rel_path().ends_with("/build.rs");
-        if is_root && !f.text().contains("#![forbid(unsafe_code)]") {
-            hits.push(Hit::admit(f.rel_path().to_string(), 1, "root_without_forbid_unsafe".to_string()));
-        }
+    pub fn unparsed(&self, b: &Boundary) -> Vec<Hit> {
+        b.unparsed()
+            .iter()
+            .map(|u| Hit::admit(u.rel_path().clone(), 0, format!("unparseable: {}", u.error())))
+            .collect()
     }
-    hits
+
+    /// Waivers whose content binding no longer matches any raw hit of their
+    /// check. Matching is by check/file/construct/`site_hash` (TRUTH item 6);
+    /// the waiver's `line` is display-only and never decides staleness.
+    pub fn stale_waivers(
+        &self,
+        waivers: &WaiverFile,
+        raw_hits: &[(String, Vec<Hit>)],
+        files: &[SourceFile],
+    ) -> Vec<Hit> {
+        let mut stale = vec![];
+        for w in waivers.waivers() {
+            let live = raw_hits.iter().any(|(check, hits)| {
+                check.as_str() == w.check()
+                    && hits
+                        .iter()
+                        .any(|h| identity::IDENTITY.waiver_matches_hit(w, h, files))
+            });
+            if !live {
+                stale.push(Hit::admit(
+                    w.file(),
+                    w.line(),
+                    format!("stale_waiver:{}:{}", w.check(), w.construct()),
+                ));
+            }
+        }
+        stale
+    }
+
+    /// Every compilation root under `crates/` must forbid unsafe at the root:
+    /// lib/main roots, every extra binary root under src/bin/, and build
+    /// scripts — each is its own crate root where the forbid must live.
+    pub fn forbid_roots(&self, b: &Boundary) -> Vec<Hit> {
+        let mut hits = vec![];
+        for f in b.files() {
+            let is_root = f.rel_path().ends_with("/src/lib.rs")
+                || f.rel_path().ends_with("/src/main.rs")
+                || f.rel_path().contains("/src/bin/")
+                || f.rel_path().ends_with("/build.rs");
+            if is_root && !f.text().contains("#![forbid(unsafe_code)]") {
+                hits.push(Hit::admit(
+                    f.rel_path().to_string(),
+                    1,
+                    "root_without_forbid_unsafe".to_string(),
+                ));
+            }
+        }
+        hits
+    }
 }
 
 /// Typed test refusal — file-level for `total_refusal` workspace-enum index (tip 777).
@@ -103,7 +123,7 @@ impl MetaProofRefuse {
 
 #[cfg(test)]
 mod tests {
-    use super::{forbid_roots, stale_waivers, Hit, MetaProofRefuse, WaiverFile};
+    use super::{Hit, MetaProofRefuse, WaiverFile, META};
     use crate::boundary::{Boundary, SourceFile};
     use crate::identity;
     use syn::spanned::Spanned;
@@ -187,10 +207,10 @@ why_not_sabotage = {why}
             vec![Hit::admit("crates/x/src/a.rs".to_string(), 1, "expect".to_string())],
         )];
         MetaProofRefuse::LiveNotStale
-            .require(stale_waivers(&live_wf, &live, &files).is_empty())?;
+            .require(META.stale_waivers(&live_wf, &live, &files).is_empty())?;
         let drifted: Vec<(String, Vec<Hit>)> = vec![("expect".to_string(), vec![])];
         MetaProofRefuse::DeadNotReported
-            .require(stale_waivers(&live_wf, &drifted, &files).len() == 1)?;
+            .require(META.stale_waivers(&live_wf, &drifted, &files).len() == 1)?;
         // Content rename: same line/construct, different identity → stale.
         let renamed =
             syn::parse_file("fn f() { let y = 1; y }").map_err(|_| MetaProofRefuse::Parse)?;
@@ -200,7 +220,7 @@ why_not_sabotage = {why}
             renamed,
         )];
         MetaProofRefuse::RenameNotStale
-            .require(stale_waivers(&live_wf, &live, &renamed_files).len() == 1)
+            .require(META.stale_waivers(&live_wf, &live, &renamed_files).len() == 1)
     }
 
     #[test]
@@ -251,7 +271,7 @@ why_not_sabotage = {why}
                 "expect".to_string(),
             )],
         )];
-        MetaProofRefuse::CommentStaled.require(stale_waivers(&wf, &live, &files).is_empty())
+        MetaProofRefuse::CommentStaled.require(META.stale_waivers(&wf, &live, &files).is_empty())
     }
 
     #[test]
@@ -265,6 +285,6 @@ why_not_sabotage = {why}
             vec![],
             vec![crate::boundary::RelPath::admit("crates/x/src/lib.rs")],
         );
-        MetaProofRefuse::ForbidMiss.require(forbid_roots(&b).len() == 1)
+        MetaProofRefuse::ForbidMiss.require(META.forbid_roots(&b).len() == 1)
     }
 }

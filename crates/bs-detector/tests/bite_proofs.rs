@@ -473,7 +473,7 @@ fn bite_agreement_registry() -> BiteOutcome {
 #[test]
 fn bite_coverage() -> BiteOutcome {
     let b = Boundary::admit(vec![], vec![], vec![RelPath::admit("crates/x/src/lib.rs")]);
-    P.require_eq(meta::coverage(&b).len(), 1, BiteProofRefuse::HitCount)?;
+    P.require_eq(meta::META.coverage(&b).len(), 1, BiteProofRefuse::HitCount)?;
     Ok(())
 }
 
@@ -484,7 +484,7 @@ fn bite_unparsed() -> BiteOutcome {
         vec![UnparsedFile::admit("crates/x/src/broken.rs", "expected `{`")],
         vec![RelPath::admit("crates/x/src/broken.rs")],
     );
-    P.require_eq(meta::unparsed(&b).len(), 1, BiteProofRefuse::HitCount)?;
+    P.require_eq(meta::META.unparsed(&b).len(), 1, BiteProofRefuse::HitCount)?;
     Ok(())
 }
 
@@ -492,7 +492,7 @@ fn bite_unparsed() -> BiteOutcome {
 fn bite_forbid_roots() -> BiteOutcome {
     let f = P.parsed("crates/x/src/lib.rs", "pub fn f() {}")?;
     let b = Boundary::admit(vec![f], vec![], vec![RelPath::admit("crates/x/src/lib.rs")]);
-    P.require_eq(meta::forbid_roots(&b).len(), 1, BiteProofRefuse::HitCount)?;
+    P.require_eq(meta::META.forbid_roots(&b).len(), 1, BiteProofRefuse::HitCount)?;
     Ok(())
 }
 

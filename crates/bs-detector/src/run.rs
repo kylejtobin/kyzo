@@ -340,13 +340,13 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
         ));
     }
     if run_pass("coverage") {
-        passes.push(("coverage".to_string(), meta::coverage(&b)));
+        passes.push(("coverage".to_string(), meta::META.coverage(&b)));
     }
     if run_pass("unparsed") {
-        passes.push(("unparsed".to_string(), meta::unparsed(&b)));
+        passes.push(("unparsed".to_string(), meta::META.unparsed(&b)));
     }
     if run_pass("forbid_roots") {
-        passes.push(("forbid_roots".to_string(), meta::forbid_roots(&b)));
+        passes.push(("forbid_roots".to_string(), meta::META.forbid_roots(&b)));
     }
     // TRUTH item 10: live execution checks (ported from xtask/src/checks).
     if run_pass("pure_rust") {
@@ -417,7 +417,7 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
     }
 
     if only.is_none() {
-        let stale = meta::stale_waivers(&waivers, &raw_by_check, b.files());
+        let stale = meta::META.stale_waivers(&waivers, &raw_by_check, b.files());
         laws.require("stale_waivers")?;
         if !stale.is_empty() {
             failed.push("stale_waivers".to_string());
