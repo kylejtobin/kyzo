@@ -27,15 +27,47 @@ use crate::grammar::{Grammar, Laws};
 use crate::identity;
 use crate::waiver::WaiverFile;
 
+/// Gate outcome — frozen contract for the log and counts artifact.
+///
+/// Fields are private (TRUTH item 9). [`Verdict::admit`] is the sole
+/// constructor.
 pub struct Verdict {
     /// `GATE: PASS` or `GATE: FAIL <check, …>` — frozen contract.
-    pub header: String,
+    header: String,
     /// One `FAIL file:line — construct — law` line per violation, plus
     /// `SCOPE`/stale lines.
-    pub report: String,
+    report: String,
     /// `name:N … = TOTAL violations` — frozen contract for the banner.
-    pub counts_line: String,
-    pub red: bool,
+    counts_line: String,
+    red: bool,
+}
+
+impl Verdict {
+    /// Sole admission constructor.
+    pub fn admit(header: String, report: String, counts_line: String, red: bool) -> Self {
+        Self {
+            header,
+            report,
+            counts_line,
+            red,
+        }
+    }
+
+    pub fn header(&self) -> &str {
+        &self.header
+    }
+
+    pub fn report(&self) -> &str {
+        &self.report
+    }
+
+    pub fn counts_line(&self) -> &str {
+        &self.counts_line
+    }
+
+    pub fn red(&self) -> bool {
+        self.red
+    }
 }
 
 /// Whether a waiver may cover hits of this check. Absolute bans and the
@@ -346,10 +378,5 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
         format!("{} = {total} violations", body.join(" "))
     };
 
-    Ok(Verdict {
-        header,
-        report,
-        counts_line,
-        red,
-    })
+    Ok(Verdict::admit(header, report, counts_line, red))
 }

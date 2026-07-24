@@ -60,17 +60,17 @@ fn try_main() -> Result<ExitCode> {
 
     let v = bs_detector::run::run(&root, cli.only.as_deref())?;
 
-    println!("{}", v.header);
-    print!("{}", v.report);
-    println!("[GATE] {}", v.counts_line);
+    println!("{}", v.header());
+    print!("{}", v.report());
+    println!("[GATE] {}", v.counts_line());
 
     // A partial (--only) run NEVER writes the verdict artifacts: a
     // one-check log wearing the full-tree header is a scope lie the hooks
     // would believe.
     if !cli.dry_run && cli.only.is_none() {
-        std::fs::write(root.join(&cli.log), format!("{}\n{}", v.header, v.report))
+        std::fs::write(root.join(&cli.log), format!("{}\n{}", v.header(), v.report()))
             .with_context(|| "writing gate log")?;
-        std::fs::write(root.join(&cli.counts), format!("{}\n", v.counts_line))
+        std::fs::write(root.join(&cli.counts), format!("{}\n", v.counts_line()))
             .with_context(|| "writing counts artifact")?;
     } else if cli.only.is_some() {
         eprintln!("note: --only run — verdict artifacts NOT written (partial scope never speaks for the tree)");
@@ -78,7 +78,7 @@ fn try_main() -> Result<ExitCode> {
 
     // INVARIANT(GateVerdict): red exits FAILURE via Termination so destructors
     // run and block-buffered stdout finishes — not process::exit (tip 262).
-    Ok(if v.red {
+    Ok(if v.red() {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
