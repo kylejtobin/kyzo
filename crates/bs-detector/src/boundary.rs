@@ -227,6 +227,118 @@ impl PartialEq<Label> for String {
     }
 }
 
+/// Blake3 hex digest bytes (site_hash / anchor_hash). Not [`Label`] — a
+/// digest is not a code identifier (tip 875). No `String`/`str` field.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct HexDigest {
+    bytes: Vec<u8>,
+}
+
+impl HexDigest {
+    pub fn admit(text: impl AsRef<str>) -> Self {
+        Self {
+            bytes: text.as_ref().as_bytes().to_vec(),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        RelPath::utf8_view(&self.bytes)
+    }
+}
+
+impl fmt::Display for HexDigest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl PartialEq<str> for HexDigest {
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
+}
+
+impl PartialEq<&str> for HexDigest {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+impl From<&str> for HexDigest {
+    fn from(text: &str) -> Self {
+        Self::admit(text)
+    }
+}
+
+impl From<String> for HexDigest {
+    fn from(text: String) -> Self {
+        Self::admit(text)
+    }
+}
+
+impl<'de> Deserialize<'de> for HexDigest {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        Ok(Self::admit(s))
+    }
+}
+
+/// UTF-8 prose / citation-ref text that is not a code identifier (tip 875:
+/// attestation prose, citation strings). No `String`/`str` field.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct Text {
+    bytes: Vec<u8>,
+}
+
+impl Text {
+    pub fn admit(text: impl AsRef<str>) -> Self {
+        Self {
+            bytes: text.as_ref().as_bytes().to_vec(),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        RelPath::utf8_view(&self.bytes)
+    }
+}
+
+impl fmt::Display for Text {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl PartialEq<str> for Text {
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
+}
+
+impl PartialEq<&str> for Text {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+impl From<&str> for Text {
+    fn from(text: &str) -> Self {
+        Self::admit(text)
+    }
+}
+
+impl From<String> for Text {
+    fn from(text: String) -> Self {
+        Self::admit(text)
+    }
+}
+
+impl<'de> Deserialize<'de> for Text {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        Ok(Self::admit(s))
+    }
+}
+
 /// One parsed source file inside the boundary. The AST is parsed once here
 /// and shared by every engine — a second parse authority would let two
 /// checks disagree about what the file says.

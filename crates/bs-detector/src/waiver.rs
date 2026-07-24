@@ -35,7 +35,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
-use crate::boundary::{Label, RelPath};
+use crate::boundary::{HexDigest, Label, RelPath, Text};
 use crate::citation::Citation;
 
 /// Canonical attestation template embedded from the file beside this schema.
@@ -224,19 +224,18 @@ pub struct Waiver {
     construct: Label,
     /// Blake3 hex of the waived item's identity tokens (TRUTH item 6).
     /// Mismatch against the live item = STALE; the waiver stops applying.
-    /// Not [`Label`] — hex digest, not a code identifier (tip 875).
-    site_hash: String,
+    /// [`HexDigest`], not [`Label`] — tip 875 one-type-per-meaning.
+    site_hash: HexDigest,
     /// Checkable anchor (TRUTH item 7): laws.toml law name, file#item-path,
     /// `file.rs::test_fn`, or `decisions.md#N`. Parsed via [`Citation::parse`].
-    citation: String,
+    citation: Text,
     /// Blake3 hex of the cited anchor's identity at grant time. Mismatch
     /// or missing target = dead_citation; the waiver stops applying.
-    /// Not [`Label`] — hex digest, not a code identifier (tip 875).
-    anchor_hash: String,
+    anchor_hash: HexDigest,
     /// The canonical attestation template with filled slots (TRUTH item 8).
     /// Fit of slot prose to the citation is NOT mechanically verified
-    /// (laws.toml residual `R-citation-prose`). Prose, not [`Label`].
-    why_not_sabotage: String,
+    /// (laws.toml residual `R-citation-prose`).
+    why_not_sabotage: Text,
 }
 
 impl Waiver {
@@ -282,10 +281,10 @@ impl Waiver {
         file: impl Into<RelPath>,
         line: usize,
         construct: impl Into<Label>,
-        site_hash: impl Into<String>,
-        citation: impl Into<String>,
-        anchor_hash: impl Into<String>,
-        why_not_sabotage: impl Into<String>,
+        site_hash: impl Into<HexDigest>,
+        citation: impl Into<Text>,
+        anchor_hash: impl Into<HexDigest>,
+        why_not_sabotage: impl Into<Text>,
     ) -> Self {
         Self {
             check: check.into(),
@@ -315,8 +314,8 @@ pub struct ScopeWaiver {
     /// Path prefixes (repo-root-relative) the check is limited to.
     scope: Vec<RelPath>,
     /// Why the full boundary would break us — written, audited.
-    /// Prose attestation, not [`Label`] (same tip-875 meaning split).
-    why_full_scope_breaks: String,
+    /// Prose attestation ([`Text`]), not [`Label`] (tip 875).
+    why_full_scope_breaks: Text,
 }
 
 impl ScopeWaiver {
@@ -595,8 +594,8 @@ why_not_sabotage = {why}
         WaiverProofRefuse::ExpectCheckBind.require(wf.for_check("expect").len() == 1)?;
         WaiverProofRefuse::UnwrapCheckLeak.require(wf.for_check("unwrap").is_empty())?;
         WaiverProofRefuse::SiteHashMismatch.require(wf.waiver[0].site_hash == HASH)?;
-        WaiverProofRefuse::CitationMismatch.require(wf.waiver[0].citation == "expect")?;
-        WaiverProofRefuse::AnchorMismatch.require(wf.waiver[0].anchor_hash == ANCHOR)
+        WaiverProofRefuse::CitationMismatch.require(wf.waiver[0].citation.as_str() == "expect")?;
+        WaiverProofRefuse::AnchorMismatch.require(wf.waiver[0].anchor_hash.as_str() == ANCHOR)
     }
 
     #[test]
