@@ -114,89 +114,76 @@ impl AttestationTemplate {
     /// Segment `why` against this template. Full coverage, non-empty slots,
     /// or a named refusal. Any leftover byte is outside every slot.
     pub fn segment(&self, why: &str) -> Result<Vec<(String, String)>, String> {
-        let mut pos = 0usize;
-        let mut filled: Vec<(String, String)> = Vec::new();
-        let mut i = 0usize;
-        while i < self.segments.len() {
-            match &self.segments[i] {
-                TemplateSegment::Fixed { text } => {
-                    let rest = match why.get(pos..) {
-                        Some(r) => r,
-                        None => "",
-                    };
-                    if !rest.starts_with(text.as_str()) {
-                        return Err(format!(
-                            "attestation fixed segment {i} mismatch at byte {pos}"
-                        ));
-                    }
-                    pos += text.as_str().len();
-                    i += 1;
+        self.segment_at(why, 0, 0, Vec::new())
+    }
+
+    fn segment_at(
+        &self,
+        why: &str,
+        pos: usize,
+        i: usize,
+        filled: Vec<(String, String)>,
+    ) -> Result<Vec<(String, String)>, String> {
+        let Some(seg) = self.segments.get(i) else {
+            if pos != why.len() {
+                return Err(format!(
+                    "attestation has {} byte(s) outside every slot (after byte {pos})",
+                    why.len() - pos
+                ));
+            }
+            return Ok(filled);
+        };
+        match seg {
+            TemplateSegment::Fixed { text } => {
+                let Some(rest) = why.get(pos..) else {
+                    return Err(format!(
+                        "attestation fixed segment {i}: position {pos} past end of why"
+                    ));
+                };
+                if !rest.starts_with(text.as_str()) {
+                    return Err(format!(
+                        "attestation fixed segment {i} mismatch at byte {pos}"
+                    ));
                 }
-                TemplateSegment::Slot { name } => {
-                    let delim = match self.segments.get(i + 1) {
-                        Some(TemplateSegment::Fixed { text }) => text.as_str(),
-                        Some(TemplateSegment::Slot { .. }) | None => {
-                            return Err(format!(
-                                "attestation slot `{}` has no following fixed delimiter",
-                                name.as_str()
-                            ));
-                        }
-                    };
-                    let rest = match why.get(pos..) {
-                        Some(r) => r,
-                        None => "",
-                    };
-                    let Some(rel) = rest.find(delim) else {
+                self.segment_at(why, pos + text.as_str().len(), i + 1, filled)
+            }
+            TemplateSegment::Slot { name } => {
+                let delim = match self.segments.get(i + 1) {
+                    Some(TemplateSegment::Fixed { text }) => text.as_str(),
+                    Some(TemplateSegment::Slot { .. }) | None => {
                         return Err(format!(
-                            "attestation slot `{}`: following fixed delimiter not found",
+                            "attestation slot `{}` has no following fixed delimiter",
                             name.as_str()
                         ));
-                    };
-                    if rel == 0 {
-                        return Err(format!("attestation slot `{}` is empty", name.as_str()));
                     }
-                    let content = &rest[..rel];
-                    filled.push((name.as_str().to_string(), content.to_string()));
-                    pos += rel;
-                    // Next loop iteration matches the delimiter as Fixed.
-                    i += 1;
+                };
+                let Some(rest) = why.get(pos..) else {
+                    return Err(format!(
+                        "attestation slot `{}`: position {pos} past end of why",
+                        name.as_str()
+                    ));
+                };
+                let Some(rel) = rest.find(delim) else {
+                    return Err(format!(
+                        "attestation slot `{}`: following fixed delimiter not found",
+                        name.as_str()
+                    ));
+                };
+                if rel == 0 {
+                    return Err(format!("attestation slot `{}` is empty", name.as_str()));
                 }
+                let content = &rest[..rel];
+                let mut next_filled = filled;
+                next_filled.push((name.as_str().to_string(), content.to_string()));
+                // Next step matches the delimiter as Fixed.
+                self.segment_at(why, pos + rel, i + 1, next_filled)
             }
         }
-        if pos != why.len() {
-            return Err(format!(
-                "attestation has {} byte(s) outside every slot (after byte {pos})",
-                why.len() - pos
-            ));
-        }
-        Ok(filled)
     }
 
     /// Fill the canonical template with non-empty slot values (test/helper).
     pub fn fill(&self, slots: &[(&str, &str)]) -> Result<String, String> {
-        let mut out = String::new();
-        let mut slot_i = 0usize;
-        for seg in &self.segments {
-            match seg {
-                TemplateSegment::Fixed { text } => out.push_str(text.as_str()),
-                TemplateSegment::Slot { name } => {
-                    let Some((n, v)) = slots.get(slot_i) else {
-                        return Err(format!("missing slot value for `{}`", name.as_str()));
-                    };
-                    if *n != name.as_str() {
-                        return Err(format!(
-                            "slot order: expected `{}`, got `{n}`",
-                            name.as_str()
-                        ));
-                    }
-                    if v.is_empty() {
-                        return Err(format!("slot `{}` must be non-empty", name.as_str()));
-                    }
-                    out.push_str(v);
-                    slot_i += 1;
-                }
-            }
-        }
+        let (out, slot_i) = self.fill_at(0, slots, 0, String::new())?;
         if slot_i != slots.len() {
             return Err(format!(
                 "extra slot values: got {}, template has {slot_i}",
@@ -206,6 +193,42 @@ impl AttestationTemplate {
         // Refuse fill values that would break delimiter scan.
         self.segment(&out)?;
         Ok(out)
+    }
+
+    fn fill_at(
+        &self,
+        seg_i: usize,
+        slots: &[(&str, &str)],
+        slot_i: usize,
+        out: String,
+    ) -> Result<(String, usize), String> {
+        let Some(seg) = self.segments.get(seg_i) else {
+            return Ok((out, slot_i));
+        };
+        match seg {
+            TemplateSegment::Fixed { text } => {
+                let mut next = out;
+                next.push_str(text.as_str());
+                self.fill_at(seg_i + 1, slots, slot_i, next)
+            }
+            TemplateSegment::Slot { name } => {
+                let Some((n, v)) = slots.get(slot_i) else {
+                    return Err(format!("missing slot value for `{}`", name.as_str()));
+                };
+                if *n != name.as_str() {
+                    return Err(format!(
+                        "slot order: expected `{}`, got `{n}`",
+                        name.as_str()
+                    ));
+                }
+                if v.is_empty() {
+                    return Err(format!("slot `{}` must be non-empty", name.as_str()));
+                }
+                let mut next = out;
+                next.push_str(v);
+                self.fill_at(seg_i + 1, slots, slot_i + 1, next)
+            }
+        }
     }
 }
 

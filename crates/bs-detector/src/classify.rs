@@ -237,14 +237,12 @@ impl<'a> Ctx<'a> {
     }
 
     fn exactly_one_seat_name<'b>(&self, matches: impl Iterator<Item = &'b str>) -> Option<&'b str> {
-        let mut found: Option<&'b str> = None;
-        for name in matches {
-            if found.is_some() {
-                return None;
-            }
-            found = Some(name);
+        let mut iter = matches;
+        let first = iter.next()?;
+        match iter.next() {
+            None => Some(first),
+            Some(_second) => None,
         }
-        found
     }
 
     fn collect_scoped_spans_items(&self, items: &[syn::Item], out: &mut Vec<ScopedConstructSpan>) {
