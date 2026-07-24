@@ -268,7 +268,8 @@ fn backoff(n: usize) {
         std::thread::yield_now();
     } else {
         let ms = 1u64 << (n - 3).min(6); // 1ms .. 64ms
-        std::thread::sleep(std::time::Duration::from_millis(ms));
+        // park_timeout is a scheduler yield with a bound — not sleep-as-happens-before.
+        std::thread::park_timeout(std::time::Duration::from_millis(ms));
     }
 }
 

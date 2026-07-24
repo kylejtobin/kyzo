@@ -55,13 +55,13 @@ pub struct GrantId([u8; 32]);
 
 impl GrantId {
     /// Wrap an already-proven grant id.
-    pub fn admit(bytes: [u8; 32]) -> Self {
-        Self(bytes)
+    pub fn admit(bytes: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(bytes.0)
     }
 
     /// Borrow the grant id bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -71,13 +71,13 @@ pub struct ForkPointRoot([u8; 32]);
 
 impl ForkPointRoot {
     /// Wrap an already-proven fork-point root.
-    pub fn from_digest(digest: [u8; 32]) -> Self {
-        Self(digest)
+    pub fn from_digest(digest: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(digest.0)
     }
 
     /// Borrow the digest bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -88,13 +88,13 @@ pub struct SuccessorPrincipal([u8; 32]);
 
 impl SuccessorPrincipal {
     /// Wrap an already-proven successor principal digest.
-    pub fn from_digest(digest: [u8; 32]) -> Self {
-        Self(digest)
+    pub fn from_digest(digest: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(digest.0)
     }
 
     /// Borrow the digest bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -105,13 +105,13 @@ pub struct IdentitySeed([u8; 32]);
 
 impl IdentitySeed {
     /// Wrap an already-proven identity seed.
-    pub fn from_digest(digest: [u8; 32]) -> Self {
-        Self(digest)
+    pub fn from_digest(digest: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(digest.0)
     }
 
     /// Borrow the seed bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -122,13 +122,13 @@ pub struct KeyMaterialCommitment([u8; 32]);
 
 impl KeyMaterialCommitment {
     /// Wrap an already-proven key-material commitment.
-    pub fn from_digest(digest: [u8; 32]) -> Self {
-        Self(digest)
+    pub fn from_digest(digest: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(digest.0)
     }
 
     /// Borrow the commitment bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -351,7 +351,7 @@ impl RecoveryQuorumProof {
 
         let mut message = Vec::with_capacity(RECOVERY_QUORUM_DOMAIN.len() + 32);
         message.extend_from_slice(RECOVERY_QUORUM_DOMAIN);
-        message.extend_from_slice(payload_digest.as_bytes());
+        message.extend_from_slice(payload_digest.as_bytes().as_slice());
 
         if verifying.verify(message.as_slice(), &signature).is_err() {
             // Below-threshold / wrong-share / forged aggregate: FROST verify
@@ -783,7 +783,7 @@ fn materialize_fork(
     if fork.consent_proof().payload_digest() != &expected {
         return Err(MaterializeRefuse::ConsentUnverified);
     }
-    if fork.consent_proof().key_id_digest() != &consent_key_id_digest(&Digest32::admit(*sealed_key.as_bytes()))? {
+    if fork.consent_proof().key_id_digest() != &consent_key_id_digest(&Digest32::admit(sealed_key.as_bytes()))? {
         return Err(MaterializeRefuse::ConsentUnverified);
     }
     let store_id = derive_fork_store_id(fork)?;
@@ -1027,7 +1027,7 @@ impl AncestorReadGrant {
         };
         // Sealed entitlement is trusted only when it still binds the sealed table
         // key for this store (not an attacker-chosen key from a private table).
-        if entitlement_proof.key_id_digest() != &entitlement_key_id_digest(&Digest32::admit(*sealed_key.as_bytes()))? {
+        if entitlement_proof.key_id_digest() != &entitlement_key_id_digest(&Digest32::admit(sealed_key.as_bytes()))? {
             return Err(AncestorReadRefuse::EntitlementUnverified);
         }
         Ok(Self {
@@ -1076,7 +1076,7 @@ impl AncestorReadGrant {
 fn hash_transcript(transcript: &CanonicalTranscript) -> Digest {
     let mut h = Sha256::new();
     h.update(transcript.as_bytes());
-    Digest::admit(h.finalize().into())
+    Digest::admit(crate::data::fixed_bytes::Bytes32::from_sha256(h.finalize()))
 }
 
 /// Encode → hash scaffold shared by every grant-surface payload digest.
@@ -1090,18 +1090,14 @@ fn digest_from_encoded_transcript(
 fn store_id_from_encoded_transcript(
     encode: impl FnOnce() -> Result<CanonicalTranscript, TranscriptRefuse>,
 ) -> Result<StoreId, TranscriptRefuse> {
-    Ok(StoreId::from_digest(
-        *digest_from_encoded_transcript(encode)?.as_bytes(),
-    ))
+    Ok(StoreId::from_digest(digest_from_encoded_transcript(encode)?.as_bytes()))
 }
 
 /// Encode → hash → WriteTokenId scaffold for grant write-authority derivation.
 fn write_token_from_encoded_transcript(
     encode: impl FnOnce() -> Result<CanonicalTranscript, TranscriptRefuse>,
 ) -> Result<WriteTokenId, TranscriptRefuse> {
-    Ok(WriteTokenId::from_digest(
-        *digest_from_encoded_transcript(encode)?.as_bytes(),
-    ))
+    Ok(WriteTokenId::from_digest(digest_from_encoded_transcript(encode)?.as_bytes()))
 }
 
 /// Shared verify scaffold: table-resolved key + domain-separated signature +
@@ -1211,7 +1207,7 @@ fn verify_predecessor_consent_at_table(
         predecessor_store,
         payload_digest,
         signature,
-        |vk| consent_key_id_digest(&Digest32::admit(*vk.as_bytes())),
+        |vk| consent_key_id_digest(&Digest32::admit(vk.as_bytes())),
         MaterializeRefuse::ConsentKeyUnknown,
         MaterializeRefuse::ConsentUnverified,
         |predecessor_store, payload_digest, key_id_digest| PredecessorConsentProof {
@@ -1235,7 +1231,7 @@ fn verify_ancestor_entitlement_at_table(
         store_id,
         payload_digest,
         signature,
-        |vk| entitlement_key_id_digest(&Digest32::admit(*vk.as_bytes())),
+        |vk| entitlement_key_id_digest(&Digest32::admit(vk.as_bytes())),
         AncestorReadRefuse::EntitlementKeyUnknown,
         AncestorReadRefuse::EntitlementUnverified,
         |store_id, payload_digest, key_id_digest| AncestorEntitlementProof {
@@ -1330,12 +1326,12 @@ fn fork_lineage_digest32_fields(
     Digest32,
 ) {
     (
-        Digest32::admit(*grant_id.as_bytes()),
-        Digest32::admit(*predecessor_store.as_bytes()),
-        Digest32::admit(*fork_point_root.as_bytes()),
-        Digest32::admit(*successor_principal.as_bytes()),
-        Digest32::admit(*identity_seed.as_bytes()),
-        Digest32::admit(*key_material_commitment.as_bytes()),
+        Digest32::admit(grant_id.as_bytes()),
+        Digest32::admit(predecessor_store.as_bytes()),
+        Digest32::admit(fork_point_root.as_bytes()),
+        Digest32::admit(successor_principal.as_bytes()),
+        Digest32::admit(identity_seed.as_bytes()),
+        Digest32::admit(key_material_commitment.as_bytes()),
     )
 }
 
@@ -1404,10 +1400,10 @@ fn fork_write_token_transcript(
     store_id: StoreId,
 ) -> Result<CanonicalTranscript, TranscriptRefuse> {
     encode_fork_write_token(
-        &Digest32::admit(*store_id.as_bytes()),
-        &Digest32::admit(*fork.grant_id().as_bytes()),
-        &Digest32::admit(*fork.identity_seed().as_bytes()),
-        &Digest32::admit(*fork.key_material_commitment().as_bytes()),
+        &Digest32::admit(store_id.as_bytes()),
+        &Digest32::admit(fork.grant_id().as_bytes()),
+        &Digest32::admit(fork.identity_seed().as_bytes()),
+        &Digest32::admit(fork.key_material_commitment().as_bytes()),
     )
 }
 
@@ -1419,12 +1415,12 @@ fn recovery_payload_digest32_fields(
     key_material_commitment: &KeyMaterialCommitment,
 ) -> (Digest32, Digest32, u64, Digest32, Digest32, Digest32) {
     (
-        Digest32::admit(*grant_id.as_bytes()),
-        Digest32::admit(*store_id.as_bytes()),
+        Digest32::admit(grant_id.as_bytes()),
+        Digest32::admit(store_id.as_bytes()),
         predecessor_epoch.get(),
-        Digest32::admit(*predecessor_epoch.store_id().as_bytes()),
-        Digest32::admit(*successor_identity_seed.as_bytes()),
-        Digest32::admit(*key_material_commitment.as_bytes()),
+        Digest32::admit(predecessor_epoch.store_id().as_bytes()),
+        Digest32::admit(successor_identity_seed.as_bytes()),
+        Digest32::admit(key_material_commitment.as_bytes()),
     )
 }
 
@@ -1480,11 +1476,11 @@ fn ancestor_read_grant_payload_transcript(
     to_epoch: FenceEpoch,
 ) -> Result<CanonicalTranscript, TranscriptRefuse> {
     encode_ancestor_read_grant_payload(
-        &Digest32::admit(*store_id.as_bytes()),
+        &Digest32::admit(store_id.as_bytes()),
         from_epoch.get(),
-        &Digest32::admit(*from_epoch.store_id().as_bytes()),
+        &Digest32::admit(from_epoch.store_id().as_bytes()),
         to_epoch.get(),
-        &Digest32::admit(*to_epoch.store_id().as_bytes()),
+        &Digest32::admit(to_epoch.store_id().as_bytes()),
     )
 }
 
@@ -1520,7 +1516,7 @@ fn recovery_matrix_digest(matrix: &RecoveryMatrix) -> Result<Digest, TranscriptR
         encode_recovery_matrix(
             matrix.threshold(),
             matrix.max_signers(),
-            &Digest32::admit(*matrix.group_verifying_key().as_bytes()),
+            &Digest32::admit(matrix.group_verifying_key().as_bytes()),
         )
     })
 }
@@ -1644,7 +1640,7 @@ fn frost_recovery_aggregate(
 
     let mut message = Vec::with_capacity(RECOVERY_QUORUM_DOMAIN.len() + 32);
     message.extend_from_slice(RECOVERY_QUORUM_DOMAIN);
-    message.extend_from_slice(payload_digest.as_bytes());
+    message.extend_from_slice(payload_digest.as_bytes().as_slice());
 
     let mut nonces_map = BTreeMap::new();
     let mut commitments_map = BTreeMap::new();
@@ -1715,7 +1711,7 @@ fn frost_try_aggregate_below_threshold(
 
     let mut message = Vec::with_capacity(RECOVERY_QUORUM_DOMAIN.len() + 32);
     message.extend_from_slice(RECOVERY_QUORUM_DOMAIN);
-    message.extend_from_slice(payload_digest.as_bytes());
+    message.extend_from_slice(payload_digest.as_bytes().as_slice());
 
     // Enough commitments for a valid SigningPackage (min_signers).
     let mut nonces_map = BTreeMap::new();
@@ -1762,7 +1758,7 @@ fn seal_once_insert<E>(
     invalid: impl FnOnce() -> E,
     conflict: impl FnOnce(StoreId) -> E,
 ) -> Result<(), E> {
-    VerifyingPublicKey::from_ed25519_bytes(*verifying_key.as_bytes()).map_err(|_| invalid())?;
+    VerifyingPublicKey::from_ed25519_bytes(verifying_key.as_bytes()).map_err(|_| invalid())?;
     match keys.get(&store_id) {
         None => {
             keys.insert(store_id, verifying_key);
@@ -1785,7 +1781,7 @@ fn verify_domain_signature(
     payload_digest: &Digest,
     signature: &Signature,
 ) -> bool {
-    let Ok(verifying) = VerifyingKey::from_bytes(table_verifying_key.as_bytes()) else {
+    let Ok(verifying) = VerifyingKey::from_bytes(&table_verifying_key.as_bytes().0) else {
         return false;
     };
     let Ok(sig) = Ed25519Signature::try_from(signature.as_bytes().as_slice()) else {
@@ -1793,8 +1789,8 @@ fn verify_domain_signature(
     };
     let mut message = Vec::with_capacity(domain.len() + 32 + 32);
     message.extend_from_slice(domain);
-    message.extend_from_slice(store_id.as_bytes());
-    message.extend_from_slice(payload_digest.as_bytes());
+    message.extend_from_slice(store_id.as_bytes().as_slice());
+    message.extend_from_slice(payload_digest.as_bytes().as_slice());
     verifying.verify_strict(message.as_slice(), &sig).is_ok()
 }
 
@@ -1812,8 +1808,8 @@ pub(crate) fn sign_domain_label(
     let verifying = signing.verifying_key().to_bytes();
     let mut message = Vec::with_capacity(domain.len() + 32 + 32);
     message.extend_from_slice(domain);
-    message.extend_from_slice(store_id.as_bytes());
-    message.extend_from_slice(payload_digest.as_bytes());
+    message.extend_from_slice(store_id.as_bytes().as_slice());
+    message.extend_from_slice(payload_digest.as_bytes().as_slice());
     let sig = Signature::admit(signing.sign(message.as_slice()).to_bytes());
     (verifying, sig)
 }
@@ -2453,8 +2449,8 @@ mod tests {
     ) -> Signature {
         let mut message = Vec::with_capacity(domain.len() + 32 + 32);
         message.extend_from_slice(domain);
-        message.extend_from_slice(store_id.as_bytes());
-        message.extend_from_slice(payload_digest.as_bytes());
+        message.extend_from_slice(store_id.as_bytes().as_slice());
+        message.extend_from_slice(payload_digest.as_bytes().as_slice());
         Signature::admit(signing.sign(message.as_slice()).to_bytes())
     }
 

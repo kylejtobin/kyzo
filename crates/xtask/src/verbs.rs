@@ -301,10 +301,6 @@ impl PartialEq<&str> for GraphName {
 pub struct Sha256([u8; 32]);
 
 impl Sha256 {
-    pub fn admit(bytes: [u8; 32]) -> Self {
-        Self(bytes)
-    }
-
     /// FIPS 180-4 SHA-256 (in-process; no filename/length shortcut).
     pub fn hash(data: &[u8]) -> Self {
         // Initial hash values (first 32 bits of the fractional parts of the
@@ -420,10 +416,6 @@ impl Sha256 {
             *slot = (hi << 4) | lo;
         }
         Some(Self(out))
-    }
-
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
     }
 
     pub fn to_hex(&self) -> String {
@@ -922,10 +914,8 @@ pub fn sha256_hex(data: &[u8]) -> String {
     Sha256::hash(data).to_hex()
 }
 
-/// Spawn failure on `git status` cannot prove a clean tree — Dirty, not a costume Ok.
-fn git_status_unprovable_is_dirty() -> bool {
-    true
-}
+/// Spawn failure on `git status` cannot prove a clean tree.
+const GIT_STATUS_UNPROVABLE_IS_DIRTY: bool = true;
 
 /// Best-effort live commit probe for the verb path. Failure to spawn git or
 /// a dirty/untagged tree is [`CommitState::Dirty`] / [`CommitState::Untagged`]
@@ -937,7 +927,7 @@ fn probe_commit_state() -> CommitState {
     {
         Ok(o) => !o.stdout.is_empty(),
         // Cannot prove clean — treat as dirty (never silent clean-tagged).
-        Err(_) => true,
+        Err(_spawn_failed) => GIT_STATUS_UNPROVABLE_IS_DIRTY,
     };
     if dirty {
         return CommitState::Dirty;

@@ -17,13 +17,13 @@ pub struct RecordContentDigest([u8; 32]);
 
 impl RecordContentDigest {
     /// Wrap an already-proven record content digest.
-    pub fn from_digest(digest: [u8; 32]) -> Self {
-        Self(digest)
+    pub fn from_digest(digest: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(digest.0)
     }
 
     /// Borrow the digest bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -33,13 +33,13 @@ pub struct ContentHash([u8; 32]);
 
 impl ContentHash {
     /// Wrap an already-proven evidence content hash.
-    pub fn from_digest(digest: [u8; 32]) -> Self {
-        Self(digest)
+    pub fn from_digest(digest: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(digest.0)
     }
 
     /// Borrow the hash bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -49,13 +49,13 @@ pub struct ProvenanceDigest([u8; 32]);
 
 impl ProvenanceDigest {
     /// Wrap an already-proven provenance digest.
-    pub fn from_digest(digest: [u8; 32]) -> Self {
-        Self(digest)
+    pub fn from_digest(digest: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(digest.0)
     }
 
     /// Borrow the digest bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -65,13 +65,13 @@ pub struct ValidTimeDigest([u8; 32]);
 
 impl ValidTimeDigest {
     /// Wrap an already-proven validity-time digest.
-    pub fn from_digest(digest: [u8; 32]) -> Self {
-        Self(digest)
+    pub fn from_digest(digest: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(digest.0)
     }
 
     /// Borrow the digest bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 

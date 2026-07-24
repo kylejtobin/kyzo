@@ -139,13 +139,13 @@ pub struct ContextId([u8; 32]);
 
 impl ContextId {
     /// Wrap an already-proven context digest.
-    pub fn from_digest(digest: [u8; 32]) -> Self {
-        Self(digest)
+    pub fn from_digest(digest: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(digest.0)
     }
 
     /// Borrow the digest bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -166,13 +166,13 @@ pub struct SourceArtifactId([u8; 32]);
 
 impl SourceArtifactId {
     /// Wrap an already-proven source-artifact digest.
-    pub fn from_digest(digest: [u8; 32]) -> Self {
-        Self(digest)
+    pub fn from_digest(digest: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(digest.0)
     }
 
     /// Borrow the digest bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 

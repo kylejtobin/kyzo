@@ -113,10 +113,10 @@ fn encode_commit_body(
 ) -> Result<Vec<u8>, SweepRefuse> {
     let mut body = Vec::new();
     body.extend_from_slice(COMMIT_BODY_V1);
-    body.extend_from_slice(key.as_bytes());
-    body.extend_from_slice(request_digest.as_bytes());
+    body.extend_from_slice(key.as_bytes().as_slice());
+    body.extend_from_slice(request_digest.as_bytes().as_slice());
     body.push(1); // terminal outcome: Committed
-    body.extend_from_slice(meaning_root.as_bytes());
+    body.extend_from_slice(meaning_root.as_bytes().as_slice());
     match preimage {
         None => body.push(0),
         Some(p) => {
@@ -204,8 +204,8 @@ pub fn decode_commit_body(body: &[u8]) -> Option<DecodedCommitBody> {
     };
     Some(DecodedCommitBody {
         key_bytes,
-        request_digest: RequestDigest::from_digest(digest_bytes),
-        meaning_root: StateRoot::from_digest(meaning),
+        request_digest: RequestDigest::from_digest(crate::data::fixed_bytes::Bytes32(digest_bytes)),
+        meaning_root: StateRoot::from_digest(crate::data::fixed_bytes::Bytes32(meaning)),
         preimage,
     })
 }
@@ -266,7 +266,7 @@ impl LiveSweepHandle {
             let mut h = Sha256::new();
             DigestDomain::LiveSweepWriteToken.absorb(&mut h);
             h.update(store_id.as_bytes());
-            WriteTokenId::from_digest(h.finalize().into())
+            WriteTokenId::from_digest(crate::data::fixed_bytes::Bytes32(h.finalize().into()))
         };
         let auth = WriteAuthority::mint(store_id, token);
         let entropy: [u8; 32] = {
@@ -277,7 +277,7 @@ impl LiveSweepHandle {
         };
         let incarnation = auth
             .incarnation_mint_cap(OpenOrdinal::ZERO)
-            .mint(Entropy::admit(entropy))
+            .mint(Entropy::admit(crate::data::fixed_bytes::Bytes32(entropy)))
             .map_err(|_| SweepRefuse::WriteSessionDead)?;
         let session = SweepSession::new(store_id, fence_epoch, incarnation);
         let cap = StableCommitCap::NativeFsyncProof {
@@ -753,7 +753,7 @@ impl SweepDoor {
         tx: W,
     ) -> Result<(), SweepSealFailure> {
         // Crash-restored digest map (bodies without preimage).
-        if let Some(prior) = self.wal_restored_digests.get(key.as_bytes()) {
+        if let Some(prior) = self.wal_restored_digests.get(&key.as_bytes().0) {
             if *prior != request_digest {
                 let Aborted = tx.abort();
                 return Err(SweepSealFailure::Sweep(SweepRefuse::OperationKeyReuse));
@@ -798,7 +798,7 @@ impl SweepDoor {
             DigestDomain::CommitWriteContent.absorb(&mut h);
             h.update(key.as_bytes());
             h.update(request_digest.as_bytes());
-            StateRoot::from_digest(h.finalize().into())
+            StateRoot::from_digest(crate::data::fixed_bytes::Bytes32(h.finalize().into()))
         };
         let committed = self.seal_durable(intent, tx, content_root, current)?;
         let Committed { .. } = committed;
@@ -991,7 +991,7 @@ impl SweepDoor {
                 // Sealed terminal under this key+digest — replay prior intent.
                 return self
                     .op_intents
-                    .get(key.as_bytes())
+                    .get(&key.as_bytes().0)
                     .cloned()
                     .ok_or(SweepRefuse::OperationKeyReuse);
             }
@@ -999,7 +999,7 @@ impl SweepDoor {
         }
 
         // Admitted but not yet sealed under this key — replay or refuse reuse.
-        if let Some(prior) = self.op_intents.get(key.as_bytes()) {
+        if let Some(prior) = self.op_intents.get(&key.as_bytes().0) {
             if prior.request_digest() != request_digest {
                 return Err(SweepRefuse::OperationKeyReuse);
             }
@@ -1017,7 +1017,7 @@ impl SweepDoor {
             request_digest,
             single_store_preimage: preimage,
         };
-        self.op_intents.insert(*key.as_bytes(), intent.clone());
+        self.op_intents.insert(key.as_bytes().0, intent.clone());
         match self.fsync_window {
             FsyncWindow::Open => self.overlap_cohort.push(intent.clone()),
             FsyncWindow::Closed => self.queue.push(intent.clone()),
@@ -1536,7 +1536,7 @@ mod composition_tests {
         let (_view, auth) = sealed.take_write_authority();
         let incarnation = auth
             .incarnation_mint_cap(OpenOrdinal::ZERO)
-            .mint(Entropy::admit([0x56; 32]))?;
+            .mint(Entropy::admit(crate::data::fixed_bytes::Bytes32([0x56; 32])))?;
         let session = SweepSession::new(store_id, fence_epoch, incarnation);
         let cap = StableCommitCap::NativeFsyncProof {
             snapshot_fork: SnapshotFork::No,
@@ -1546,7 +1546,7 @@ mod composition_tests {
     }
 
     fn content_root(tag: u8) -> StateRoot {
-        let mut bytes = *GENESIS_ROOT.as_bytes();
+        let mut bytes = GENESIS_ROOT.as_bytes().0;
         bytes[0] = tag;
         StateRoot::from_digest(bytes)
     }
@@ -1634,7 +1634,7 @@ mod composition_tests {
             cut.meaning_root(),
             "WAL Commit body binds the meaning tip"
         );
-        assert_eq!(decoded.key_bytes, *key1.as_bytes());
+        assert_eq!(decoded.key_bytes, key1.as_bytes().0);
         assert_eq!(decoded.request_digest, dig1);
 
         // Recompose from observed tips — equals the door's cut.
@@ -1811,16 +1811,16 @@ mod composition_tests {
         let recovered = replay(store_id, std::slice::from_ref(door.wal_segment()))?;
         assert_eq!(recovered.commit_bodies.len(), 1);
         let decoded = decode_commit_body(&recovered.commit_bodies[0].1).ok_or_else(|| miette!("decode body"))?;
-        assert_eq!(decoded.key_bytes, *key.as_bytes());
+        assert_eq!(decoded.key_bytes, key.as_bytes().0);
         assert_eq!(decoded.request_digest, digest);
         assert_eq!(decoded.preimage.as_ref(), Some(&preimage));
 
         // Simulated crash: fresh door under the same StoreId + restore memo.
         let fence = session.fence_epoch();
-        let auth = WriteAuthority::mint(store_id, WriteTokenId::from_digest([0xAC; 32]));
+        let auth = WriteAuthority::mint(store_id, WriteTokenId::from_digest(crate::data::fixed_bytes::Bytes32([0xAC; 32])));
         let incarnation2 = auth
             .incarnation_mint_cap(OpenOrdinal::ZERO)
-            .mint(Entropy::admit([0xAD; 32]))?;
+            .mint(Entropy::admit(crate::data::fixed_bytes::Bytes32([0xAD; 32])))?;
         let session2 = SweepSession::new(store_id, fence, incarnation2);
         let cap = StableCommitCap::NativeFsyncProof {
             snapshot_fork: SnapshotFork::No,
@@ -1857,7 +1857,7 @@ mod composition_tests {
     /// (typed Err), never into_inner and proceed.
     #[test]
     fn poisoned_live_sweep_mutex_refuses_silent_continue() -> Result<()> {
-        let handle = LiveSweepHandle::open_for_store(StoreId::from_digest([0x15; 32]))
+        let handle = LiveSweepHandle::open_for_store(StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0x15; 32])))
             .map_err(|e| miette!("open live sweep: {e}"))?;
         let poison = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let Ok(guard) = handle.inner.lock() else {

@@ -264,13 +264,13 @@ pub struct SnapshotDigest([u8; 32]);
 
 impl SnapshotDigest {
     /// Wrap an already-proven snapshot digest.
-    pub fn from_digest(digest: [u8; 32]) -> Self {
-        Self(digest)
+    pub fn from_digest(digest: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(digest.0)
     }
 
     /// Borrow the digest bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -345,7 +345,7 @@ impl Ord for FootprintIndexKey {
                 self.incarnation_id
                     .entropy()
                     .as_bytes()
-                    .cmp(other.incarnation_id.entropy().as_bytes())
+                    .cmp(&other.incarnation_id.entropy().as_bytes())
             })
     }
 }

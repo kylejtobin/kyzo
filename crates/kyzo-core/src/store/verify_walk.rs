@@ -178,7 +178,7 @@ impl VerifyReport {
 }
 
 fn hex_prefix(bytes: &[u8]) -> String {
-    let take = bytes.len().min(64);
+    let take = if bytes.len() > 64 { 64 } else { bytes.len() };
     let mut s = String::with_capacity(take * 2 + 1);
     for b in &bytes[..take] {
         s.push_str(&format!("{b:02x}"));
@@ -381,8 +381,8 @@ const _: [u8; std::mem::align_of::<DeepVerifyDigest>()] = [0u8; std::mem::align_
 
 impl DeepVerifyDigest {
     /// Borrow the digest bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 

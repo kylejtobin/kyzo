@@ -17,21 +17,18 @@
 //! text — the real production evaluator, not a second incremental
 //! registration — plus an explicit no-duplicate-key check.
 
-// `DataValue` (inside `Tuple = Vec<DataValue>`) is used as a `BTreeSet`
-// element throughout this file, exactly as `crates/kyzo-core/src/lib.rs` itself
-// notes for its own crate-wide allow: clippy's interior-mutability check
-// is a false positive here (the `Regex`/cache internals it flags are
-// never mutated through a shared reference), and that crate-level allow
-// does not reach across the crate boundary into this external test
-// binary, so it is repeated here.
-#![allow(clippy::mutable_key_type)]
-
 mod common;
 use common::*;
 
-use std::collections::BTreeSet;
-
 use kyzo::{DataValue, Tuple};
+
+/// Sorted row bag for equality — avoids `BTreeSet<Tuple>` (clippy
+/// `mutable_key_type` false positive on DataValue) without silencing the lint.
+fn sorted_rows(rows: impl IntoIterator<Item = Tuple>) -> Vec<Tuple> {
+    let mut v: Vec<Tuple> = rows.into_iter().collect();
+    v.sort();
+    v
+}
 
 /// A key-value relation behind a plain (non-aggregating) standing query:
 /// between ONE poll, one key gets corrected (put twice with different
@@ -67,14 +64,14 @@ fn multiple_commits_between_one_poll_match_a_fresh_recompute() {
         "five real commits must produce a non-empty delta"
     );
 
-    let maintained: BTreeSet<Tuple> = sq.current_answer().clone();
-    let fresh: BTreeSet<Tuple> = db
-        .run_script(query, no_params())
-        .expect("fresh recompute")
-        .rows()
-        .iter()
-        .cloned()
-        .collect();
+    let maintained = sorted_rows(sq.current_answer().iter().cloned());
+    let fresh = sorted_rows(
+        db.run_script(query, no_params())
+            .expect("fresh recompute")
+            .rows()
+            .iter()
+            .cloned(),
+    );
     assert_eq!(
         maintained, fresh,
         "the maintained answer after one multi-commit drain must equal a fresh recompute"
@@ -124,12 +121,12 @@ fn standing_query_recomputes_min_after_retracting_it_mid_batch() {
 
     let query = "?[x, min(y)] := *p[x, y]";
     let mut sq = db.register_standing(query, no_params()).expect("register");
-    let expected_initial: BTreeSet<Tuple> = [vec![DataValue::from(1), DataValue::from(10)]]
-        .into_iter()
-        .map(Tuple::from_vec)
-        .collect();
+    let expected_initial = sorted_rows([Tuple::from_vec(vec![
+        DataValue::from(1),
+        DataValue::from(10),
+    ])]);
     assert_eq!(
-        sq.current_answer().clone(),
+        sorted_rows(sq.current_answer().iter().cloned()),
         expected_initial,
         "initial min for x=1 is 10"
     );
@@ -143,14 +140,14 @@ fn standing_query_recomputes_min_after_retracting_it_mid_batch() {
 
     sq.apply_pending().expect("apply_pending");
 
-    let maintained: BTreeSet<Tuple> = sq.current_answer().clone();
-    let fresh: BTreeSet<Tuple> = db
-        .run_script(query, no_params())
-        .expect("fresh recompute")
-        .rows()
-        .iter()
-        .cloned()
-        .collect();
+    let maintained = sorted_rows(sq.current_answer().iter().cloned());
+    let fresh = sorted_rows(
+        db.run_script(query, no_params())
+            .expect("fresh recompute")
+            .rows()
+            .iter()
+            .cloned(),
+    );
     assert_eq!(
         maintained, fresh,
         "maintained min-aggregation must equal a fresh recompute after the retract-plus-new-group batch"

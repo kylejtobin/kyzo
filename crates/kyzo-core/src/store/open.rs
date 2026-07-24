@@ -35,13 +35,13 @@ pub struct StoreId([u8; 32]);
 
 impl StoreId {
     /// Wrap an already-proven identity digest (genesis / materialize / decode).
-    pub(crate) fn from_digest(digest: [u8; 32]) -> Self {
-        Self(digest)
+    pub(crate) fn from_digest(digest: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(digest.0)
     }
 
     /// Borrow the identity digest bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -388,7 +388,7 @@ fn mint_store_id(params: &GenesisParams) -> StoreId {
     } else {
         DigestDomain::RecoveryMatrixAbsent.absorb(&mut h);
     }
-    StoreId::from_digest(h.finalize().into())
+    StoreId::from_digest(crate::data::fixed_bytes::Bytes32(h.finalize().into()))
 }
 
 fn mint_write_authority_token(
@@ -399,7 +399,7 @@ fn mint_write_authority_token(
     DigestDomain::WriteAuthorityGenesis.absorb(&mut h);
     h.update(store_id.as_bytes());
     h.update(params.identity_seed);
-    super::authority::WriteTokenId::from_digest(h.finalize().into())
+    super::authority::WriteTokenId::from_digest(crate::data::fixed_bytes::Bytes32(h.finalize().into()))
 }
 
 fn size_class_tag(class: SizeClass) -> u8 {

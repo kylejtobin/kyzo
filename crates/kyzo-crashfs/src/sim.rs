@@ -182,12 +182,6 @@ impl FaultConfig {
     }
 }
 
-impl Default for FaultConfig {
-    fn default() -> Self {
-        Self::none()
-    }
-}
-
 /// Salts keep the read/conflict/sync fault streams independent.
 const SALT_READ: u64 = 0x5EED_0001;
 const SALT_CONFLICT: u64 = 0x5EED_0002;

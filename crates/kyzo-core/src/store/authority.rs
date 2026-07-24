@@ -62,13 +62,13 @@ pub struct Entropy([u8; 32]);
 
 impl Entropy {
     /// Wrap already-drawn entropy bytes (arm sites that already hold the proof).
-    pub fn admit(bytes: [u8; 32]) -> Self {
-        Self(bytes)
+    pub fn admit(bytes: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(bytes.0)
     }
 
     /// Borrow the entropy bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -152,13 +152,13 @@ pub struct WriteTokenId([u8; 32]);
 
 impl WriteTokenId {
     /// Wrap an already-proven token identity digest.
-    pub fn from_digest(digest: [u8; 32]) -> Self {
-        Self(digest)
+    pub fn from_digest(digest: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(digest.0)
     }
 
     /// Borrow the token identity bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -217,13 +217,13 @@ pub struct RecoveryPublicKey([u8; 32]);
 
 impl RecoveryPublicKey {
     /// Wrap already-proven FROST group verifying-key bytes (32-byte compressed).
-    pub fn admit(bytes: [u8; 32]) -> Self {
-        Self(bytes)
+    pub fn admit(bytes: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(bytes.0)
     }
 
     /// Borrow the group verifying-key bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -331,8 +331,8 @@ pub enum AddressFenceRefuse {
 struct AddressFenceKey([u8; 32]);
 
 impl AddressFenceKey {
-    fn from_digest(digest: [u8; 32]) -> Self {
-        Self(digest)
+    fn from_digest(digest: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(digest.0)
     }
 }
 
@@ -397,5 +397,5 @@ fn fence_key(store_id: StoreId, token_id: &WriteTokenId) -> AddressFenceKey {
     DigestDomain::AddressFence.absorb(&mut h);
     h.update(store_id.as_bytes());
     h.update(token_id.as_bytes());
-    AddressFenceKey::from_digest(h.finalize().into())
+    AddressFenceKey::from_digest(crate::data::fixed_bytes::Bytes32(h.finalize().into()))
 }

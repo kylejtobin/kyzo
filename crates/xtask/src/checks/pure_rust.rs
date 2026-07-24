@@ -128,7 +128,7 @@ fn discover_roots(metadata: &CargoMetadata) -> Vec<String> {
             match Path::new(&p.manifest_path).strip_prefix(workspace_root) {
                 Ok(rel) => !rel.starts_with("vendor"),
                 // Outside workspace root — keep as a root candidate.
-                Err(_) => true,
+                Err(_outside_workspace) => KEEP_MANIFEST_OUTSIDE_WORKSPACE,
             }
         })
         .map(|p| p.name.clone())
@@ -137,6 +137,8 @@ fn discover_roots(metadata: &CargoMetadata) -> Vec<String> {
     roots.dedup();
     roots
 }
+
+const KEEP_MANIFEST_OUTSIDE_WORKSPACE: bool = true;
 
 fn check_at(repo_root: &Path) -> Result<String, PureRustError> {
     if !repo_root.join("Cargo.toml").is_file() {

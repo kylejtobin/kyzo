@@ -41,13 +41,13 @@ pub struct Nonce([u8; 12]);
 
 impl Nonce {
     /// Wrap already-proven nonce bytes (mint / wrap-derive sites).
-    pub fn admit(bytes: [u8; 12]) -> Self {
-        Self(bytes)
+    pub fn admit(bytes: crate::data::fixed_bytes::Bytes12) -> Self {
+        Self(bytes.0)
     }
 
     /// Borrow nonce bytes at the RustCrypto / wire edge only.
-    pub fn as_bytes(&self) -> &[u8; 12] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes12 {
+        crate::data::fixed_bytes::Bytes12(self.0)
     }
 }
 
@@ -57,13 +57,13 @@ pub struct Digest([u8; 32]);
 
 impl Digest {
     /// Wrap already-proven digest bytes (hash finalize / decode sites).
-    pub fn admit(bytes: [u8; 32]) -> Self {
-        Self(bytes)
+    pub fn admit(bytes: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(bytes.0)
     }
 
     /// Borrow digest bytes at transcript / compare edges only.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -73,13 +73,13 @@ pub struct Mac([u8; 32]);
 
 impl Mac {
     /// Wrap already-proven MAC bytes (leaf-MAC finalize).
-    pub(crate) fn admit(bytes: [u8; 32]) -> Self {
-        Self(bytes)
+    pub(crate) fn admit(bytes: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(bytes.0)
     }
 
     /// Borrow MAC bytes at compare / pack edges only.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -89,13 +89,13 @@ pub struct Signature([u8; 64]);
 
 impl Signature {
     /// Wrap already-proven signature bytes (sign / decode sites).
-    pub fn admit(bytes: [u8; 64]) -> Self {
-        Self(bytes)
+    pub fn admit(bytes: crate::data::fixed_bytes::Bytes64) -> Self {
+        Self(bytes.0)
     }
 
     /// Borrow signature bytes at the RustCrypto verify edge only.
-    pub fn as_bytes(&self) -> &[u8; 64] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes64 {
+        crate::data::fixed_bytes::Bytes64(self.0)
     }
 }
 
@@ -158,13 +158,13 @@ pub struct Kek([u8; 32]);
 
 impl Kek {
     /// Wrap already-proven KEK bytes (HSM / genesis sites).
-    pub(crate) fn admit(bytes: [u8; 32]) -> Self {
-        Self(bytes)
+    pub(crate) fn admit(bytes: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(bytes.0)
     }
 
     /// Borrow KEK bytes at the RustCrypto edge only.
-    pub(crate) fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub(crate) fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -179,16 +179,16 @@ pub struct Dek {
 }
 
 impl Dek {
-    fn from_derived(bytes: [u8; 32], crypto_domain: CryptoDomain) -> Self {
+    fn from_derived(bytes: crate::data::fixed_bytes::Bytes32, crypto_domain: CryptoDomain) -> Self {
         Self {
-            bytes,
+            bytes: bytes.0,
             crypto_domain,
         }
     }
 
     /// Borrow DEK bytes at the RustCrypto edge only.
-    pub(crate) fn as_bytes(&self) -> &[u8; 32] {
-        &self.bytes
+    pub(crate) fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.bytes)
     }
 
     /// CryptoDomain this DEK was derived under (CMT-1 bind).
@@ -206,13 +206,13 @@ pub struct ShredSalt([u8; 32]);
 
 impl ShredSalt {
     /// Draw / wrap plaintext salt bytes at the derivation moment only.
-    pub(crate) fn admit(bytes: [u8; 32]) -> Self {
-        Self(bytes)
+    pub(crate) fn admit(bytes: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(bytes.0)
     }
 
     /// Borrow salt bytes at the RustCrypto / residual-scrub edge only.
-    pub(crate) fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub(crate) fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -268,8 +268,8 @@ pub struct AuditKey([u8; 32]);
 
 impl AuditKey {
     /// Wrap already-proven audit key bytes.
-    pub(crate) fn admit(bytes: [u8; 32]) -> Self {
-        Self(bytes)
+    pub(crate) fn admit(bytes: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(bytes.0)
     }
 
     /// Leaf MAC over a sealed CanonicalTranscript (cipher-invariant roots).
@@ -281,7 +281,7 @@ impl AuditKey {
         let dig = h.finalize();
         let mut out = [0u8; 32];
         out.copy_from_slice(&dig);
-        Mac::admit(out)
+        Mac::admit(crate::data::fixed_bytes::Bytes32(out))
     }
 }
 
@@ -322,15 +322,15 @@ struct AeadRawKey([u8; 32]);
 
 impl AeadRawKey {
     fn from_dek(key: &Dek) -> Self {
-        Self(*key.as_bytes())
+        Self(key.as_bytes().0)
     }
 
     fn from_kek(key: &Kek) -> Self {
-        Self(*key.as_bytes())
+        Self(key.as_bytes().0)
     }
 
-    fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -342,7 +342,7 @@ fn key_commitment_bytes(
     crypto_domain: CryptoDomain,
 ) -> Result<Digest, CryptoRefuse> {
     let transcript = encode_key_commitment(
-        &super::transcript::Digest32::admit(*key.as_bytes()),
+        &super::transcript::Digest32::admit(key.as_bytes()),
         crypto_domain,
     )
     .map_err(|_| CryptoRefuse::AeadFailed)?;
@@ -351,7 +351,7 @@ fn key_commitment_bytes(
     let dig = h.finalize();
     let mut out = [0u8; 32];
     out.copy_from_slice(&dig);
-    Ok(Digest::admit(out))
+    Ok(Digest::admit(crate::data::fixed_bytes::Bytes32(out)))
 }
 
 /// CMT-1 key-commitment for the DEK encrypt door — [`Kek`] cannot satisfy this.
@@ -369,7 +369,7 @@ fn key_commitment_kek(key: &Kek, crypto_domain: CryptoDomain) -> Result<Digest, 
 
 /// Constant-time equality over typed digests.
 fn ct_eq_digest(a: &Digest, b: &Digest) -> bool {
-    let (a, b) = (a.as_bytes(), b.as_bytes());
+    let (a, b) = (a.as_bytes().0, b.as_bytes().0);
     let mut diff = 0u8;
     for i in 0..32 {
         diff |= a[i] ^ b[i];
@@ -396,7 +396,7 @@ fn wrap_nonce(transcript: &CanonicalTranscript) -> Nonce {
     let dig = h.finalize();
     let mut nonce = [0u8; 12];
     nonce.copy_from_slice(&dig[..12]);
-    Nonce::admit(nonce)
+    Nonce::admit(crate::data::fixed_bytes::Bytes12(nonce))
 }
 
 /// ONE RustCrypto AEAD primitive body — Siv vs Gcm arm, seal vs open (copy_detector).
@@ -415,9 +415,11 @@ fn run_aead_arm_primitive(
     match arm {
         AeadArm::Siv => {
             use aes_gcm_siv::{Aes256GcmSiv, Nonce as AeadNonce};
-            let cipher = Aes256GcmSiv::new_from_slice(key.as_bytes())
+            let key_bytes = key.as_bytes();
+            let cipher = Aes256GcmSiv::new_from_slice(key_bytes.as_slice())
                 .map_err(|_| CryptoRefuse::AeadFailed)?;
-            let nonce = AeadNonce::from_slice(nonce.as_bytes());
+            let nonce_bytes = nonce.as_bytes();
+            let nonce = AeadNonce::from_slice(nonce_bytes.as_slice());
             if seal {
                 cipher.encrypt(nonce, payload).map_err(|_| CryptoRefuse::AeadFailed)
             } else {
@@ -426,9 +428,11 @@ fn run_aead_arm_primitive(
         }
         AeadArm::Gcm => {
             use chacha20poly1305::{ChaCha20Poly1305, Nonce as AeadNonce};
-            let cipher = ChaCha20Poly1305::new_from_slice(key.as_bytes())
+            let key_bytes = key.as_bytes();
+            let cipher = ChaCha20Poly1305::new_from_slice(key_bytes.as_slice())
                 .map_err(|_| CryptoRefuse::AeadFailed)?;
-            let nonce = AeadNonce::from_slice(nonce.as_bytes());
+            let nonce_bytes = nonce.as_bytes();
+            let nonce = AeadNonce::from_slice(nonce_bytes.as_slice());
             let payload = chacha20poly1305::aead::Payload { msg, aad };
             if seal {
                 cipher.encrypt(nonce, payload).map_err(|_| CryptoRefuse::AeadFailed)
@@ -541,7 +545,7 @@ fn seal_arm_committed(
         return Err(CryptoRefuse::AeadFailed);
     }
     let c = key_commitment_bytes(key, crypto_domain)?;
-    sealed.extend_from_slice(c.as_bytes());
+    sealed.extend_from_slice(c.as_bytes().as_slice());
     Ok(sealed)
 }
 
@@ -609,7 +613,7 @@ fn open_arm_committed(
     let expected = key_commitment_bytes(key, crypto_domain)?;
     let mut presented = [0u8; KEY_COMMIT_LEN];
     presented.copy_from_slice(presented_c);
-    if !ct_eq_digest(&expected, &Digest::admit(presented)) {
+    if !ct_eq_digest(&expected, &Digest::admit(crate::data::fixed_bytes::Bytes32(presented))) {
         // never release plaintext on commitment mismatch
         let released_len = {
             let released = plaintext;
@@ -681,7 +685,7 @@ pub fn wrap_shred_salt(
         cap.kek(),
         &nonce,
         aad.as_bytes(),
-        salt.as_bytes(),
+        salt.as_bytes().as_slice(),
         crypto_domain,
     )?;
     Ok(WrappedShredSalt {
@@ -726,7 +730,7 @@ pub fn unwrap_shred_salt(
     }
     let mut salt = [0u8; 32];
     salt.copy_from_slice(&pt);
-    Ok(ShredSalt::admit(salt))
+    Ok(ShredSalt::admit(crate::data::fixed_bytes::Bytes32(salt)))
 }
 
 /// `DEK = derive(KEK, CryptoDomain, SegmentCounter, ShredSalt)`.
@@ -748,7 +752,7 @@ pub fn derive_dek(
     let dig = h.finalize();
     let mut out = [0u8; 32];
     out.copy_from_slice(&dig);
-    Dek::from_derived(out, crypto_domain)
+    Dek::from_derived(crate::data::fixed_bytes::Bytes32(out), crypto_domain)
 }
 
 /// Compressed plaintext — the only input the encrypt door accepts.
@@ -915,7 +919,7 @@ impl ShredLedger {
     /// Record a tombstone from [`shred`].
     pub fn record(&mut self, tombstone: ShredTombstone) {
         self.keys.insert((
-            *tombstone.crypto_domain.store_id().as_bytes(),
+            tombstone.crypto_domain.store_id().as_bytes().0,
             tombstone.crypto_domain.fence_epoch().get(),
             tombstone.segment.get(),
         ));
@@ -924,7 +928,7 @@ impl ShredLedger {
     /// True when unwrap / restore of this wrap must refuse Shredded.
     pub fn is_shredded(&self, wrapped: &WrappedShredSalt) -> bool {
         self.keys.contains(&(
-            *wrapped.crypto_domain.store_id().as_bytes(),
+            wrapped.crypto_domain.store_id().as_bytes().0,
             wrapped.crypto_domain.fence_epoch().get(),
             wrapped.segment.get(),
         ))
@@ -970,9 +974,9 @@ mod tests {
     /// AAD bytes below are collision-fixture constants — not the production wrap path.
     #[test]
     fn gcm_arm_is_not_key_committing() -> Result<()> {
-        let k1 = Kek::admit([0x11u8; 32]);
-        let k2 = Kek::admit([0x22u8; 32]);
-        let nonce = Nonce::admit([0x24u8; 12]);
+        let k1 = Kek::admit(crate::data::fixed_bytes::Bytes32([0x11u8; 32]));
+        let k2 = Kek::admit(crate::data::fixed_bytes::Bytes32([0x22u8; 32]));
+        let nonce = Nonce::admit(crate::data::fixed_bytes::Bytes12([0x24u8; 12]));
         let domain = test_domain();
         // Collision-fixture AAD (fixed historical bytes the Poly1305 collision targets).
         let mut aad = Vec::new();
@@ -1001,7 +1005,7 @@ mod tests {
         // Commit under K1 via CanonicalTranscript CMT-1; present (ct‖tag‖C_K1).
         let c_k1 = key_commitment_kek(&k1, domain)?;
         let mut msg = aead_body;
-        msg.extend_from_slice(c_k1.as_bytes());
+        msg.extend_from_slice(c_k1.as_bytes().as_slice());
         let o1 = open_arm_kek(AeadArm::Gcm, &k1, &nonce, &aad, &msg, domain);
         let o2 = open_arm_kek(AeadArm::Gcm, &k2, &nonce, &aad, &msg, domain);
         assert!(
@@ -1018,7 +1022,7 @@ mod tests {
     }
 
     fn test_domain() -> CryptoDomain {
-        let store = StoreId::from_digest([0xAB; 32]);
+        let store = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0xAB; 32]));
         CryptoDomain::new(FenceEpoch::genesis(store))
     }
 
@@ -1033,9 +1037,9 @@ mod tests {
 
     #[test]
     fn wrap_unwrap_round_trip_and_derive() -> Result<()> {
-        let kek = Kek::admit([0x11; 32]);
+        let kek = Kek::admit(crate::data::fixed_bytes::Bytes32([0x11; 32]));
         let cap = KekUnwrapCap::from_kek(kek);
-        let salt = ShredSalt::admit([0x22; 32]);
+        let salt = ShredSalt::admit(crate::data::fixed_bytes::Bytes32([0x22; 32]));
         let seg = SegmentCounter::of_u64(7);
         let domain = test_domain();
         let wrapped = wrap_shred_salt(&cap, &salt, seg, domain)?;
@@ -1052,9 +1056,9 @@ mod tests {
 
     #[test]
     fn post_shred_unwrap_refuses_shredded() -> Result<()> {
-        let kek = Kek::admit([0x11; 32]);
+        let kek = Kek::admit(crate::data::fixed_bytes::Bytes32([0x11; 32]));
         let cap = KekUnwrapCap::from_kek(kek);
-        let salt = ShredSalt::admit([0x22; 32]);
+        let salt = ShredSalt::admit(crate::data::fixed_bytes::Bytes32([0x22; 32]));
         let seg = SegmentCounter::of_u64(3);
         let domain = test_domain();
         let wrapped = wrap_shred_salt(&cap, &salt, seg, domain)?;
@@ -1081,13 +1085,13 @@ mod tests {
     /// separation). RED if `unwrap` ever returns the salt under a forged domain.
     #[test]
     fn cross_domain_wrapped_salt_reinterpretation_refuses() -> Result<()> {
-        let cap = KekUnwrapCap::from_kek(Kek::admit([0x77; 32])); // SAME KEK throughout
-        let salt = ShredSalt::admit([0x99; 32]);
+        let cap = KekUnwrapCap::from_kek(Kek::admit(crate::data::fixed_bytes::Bytes32([0x77; 32]))); // SAME KEK throughout
+        let salt = ShredSalt::admit(crate::data::fixed_bytes::Bytes32([0x99; 32]));
         let seg = SegmentCounter::of_u64(4);
         let ledger = ShredLedger::new();
 
-        let store_a = StoreId::from_digest([0xA1; 32]);
-        let store_b = StoreId::from_digest([0xB2; 32]);
+        let store_a = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0xA1; 32]));
+        let store_b = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0xB2; 32]));
         let domain_a = CryptoDomain::new(FenceEpoch::genesis(store_a));
 
         // Sanity: wrap+unwrap under the TRUE domain succeeds (not a blanket lockout).
@@ -1122,9 +1126,9 @@ mod tests {
 
     #[test]
     fn compress_then_encrypt_round_trips_siv_and_is_not_identity() -> Result<()> {
-        let kek = Kek::admit([0x33; 32]);
+        let kek = Kek::admit(crate::data::fixed_bytes::Bytes32([0x33; 32]));
         let cap = KekUnwrapCap::from_kek(kek);
-        let salt = ShredSalt::admit([0x44; 32]);
+        let salt = ShredSalt::admit(crate::data::fixed_bytes::Bytes32([0x44; 32]));
         let domain = test_domain();
         let dek = derive_dek(&cap, domain, SegmentCounter::ZERO, &salt);
         let aad = test_aad()?;
@@ -1136,7 +1140,7 @@ mod tests {
             "compress must not be a silent identity no-op"
         );
         let ct =
-            compress_then_encrypt(plaintext, &dek, Nonce::admit([9u8; 12]), AeadArm::Siv, &aad)?;
+            compress_then_encrypt(plaintext, &dek, Nonce::admit(crate::data::fixed_bytes::Bytes12([9u8; 12])), AeadArm::Siv, &aad)?;
         assert_eq!(ct.arm(), AeadArm::Siv);
         assert!(!ct.body().is_empty());
         let opened = decrypt(&ct, &dek, &aad)?;
@@ -1148,16 +1152,16 @@ mod tests {
 
     #[test]
     fn gcm_arm_uses_chacha20poly1305() -> Result<()> {
-        let kek = Kek::admit([0x55; 32]);
+        let kek = Kek::admit(crate::data::fixed_bytes::Bytes32([0x55; 32]));
         let cap = KekUnwrapCap::from_kek(kek);
-        let salt = ShredSalt::admit([0x66; 32]);
+        let salt = ShredSalt::admit(crate::data::fixed_bytes::Bytes32([0x66; 32]));
         let domain = test_domain();
         let dek = derive_dek(&cap, domain, SegmentCounter::ZERO, &salt);
         let aad = test_aad()?;
         let ct = compress_then_encrypt(
             b"gcm-arm",
             &dek,
-            Nonce::admit([1u8; 12]),
+            Nonce::admit(crate::data::fixed_bytes::Bytes12([1u8; 12])),
             AeadArm::Gcm,
             &aad,
         )?;
@@ -1176,11 +1180,11 @@ mod tests {
     fn wrong_kind_fixed_arrays_are_unconstructible_as_peer_kinds() -> Result<()> {
         let domain = test_domain();
         let aad = test_aad()?;
-        let audit = AuditKey::admit([0xABu8; 32]);
+        let audit = AuditKey::admit(crate::data::fixed_bytes::Bytes32([0xABu8; 32]));
         let mac: Mac = audit.leaf_mac(&aad);
         assert_eq!(std::mem::size_of_val(&mac), 32);
         // Digest from CMT-1 KEK door is not a Mac; Mac has no From/Into Digest bridge.
-        let kek = Kek::admit([0x11; 32]);
+        let kek = Kek::admit(crate::data::fixed_bytes::Bytes32([0x11; 32]));
         let digest: Digest = key_commitment_kek(&kek, domain)?;
         assert_eq!(std::mem::size_of_val(&digest), 32);
         assert_ne!(
@@ -1207,8 +1211,8 @@ mod tests {
         let wrap_aad = encode_wrapped_shred_salt_aad(domain, SegmentCounter::ZERO.get())?;
         let n: Nonce = wrap_nonce(&wrap_aad);
         // encrypt door takes &Dek + Nonce — naked [u8;12] / &Kek are type errors.
-        let salt = ShredSalt::admit([0x22; 32]);
-        let cap = KekUnwrapCap::from_kek(Kek::admit([0x33; 32]));
+        let salt = ShredSalt::admit(crate::data::fixed_bytes::Bytes32([0x22; 32]));
+        let cap = KekUnwrapCap::from_kek(Kek::admit(crate::data::fixed_bytes::Bytes32([0x33; 32])));
         let dek = derive_dek(&cap, domain, SegmentCounter::ZERO, &salt);
         let ct = compress_then_encrypt(b"typed-nonce", &dek, n, AeadArm::Siv, &aad)?;
         assert_eq!(ct.nonce(), &n);
@@ -1406,7 +1410,7 @@ pub fn ",
     /// `&CanonicalTranscript` only.
     #[test]
     fn t18_wrap_aad_is_sole_canonical_transcript_path() -> Result<()> {
-        let store = StoreId::from_digest([0x11; 32]);
+        let store = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0x11; 32]));
         let domain = CryptoDomain::new(FenceEpoch::genesis(store));
         let production = encode_wrapped_shred_salt_aad(domain, 0)?;
         let golden = parse_golden_hex(WRAPPED_SHRED_SALT_AAD_GOLDEN_VEC)?;
@@ -1438,9 +1442,9 @@ pub fn ",
             "main encrypt AAD must remain sole CanonicalTranscript path"
         );
 
-        let kek = Kek::admit([0x11; 32]);
+        let kek = Kek::admit(crate::data::fixed_bytes::Bytes32([0x11; 32]));
         let cap = KekUnwrapCap::from_kek(kek);
-        let salt = ShredSalt::admit([0x22; 32]);
+        let salt = ShredSalt::admit(crate::data::fixed_bytes::Bytes32([0x22; 32]));
         let seg = SegmentCounter::of_u64(7);
         let wrap_domain = test_domain();
         let wrapped = wrap_shred_salt(&cap, &salt, seg, wrap_domain)?;

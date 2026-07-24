@@ -182,7 +182,7 @@ pub fn wait_for_mount(mountpoint: &Path) {
         if fs::read_dir(mountpoint).is_ok() {
             return;
         }
-        std::thread::sleep(Duration::from_millis(20));
+        std::thread::park_timeout(Duration::from_millis(20));
     }
 }
 

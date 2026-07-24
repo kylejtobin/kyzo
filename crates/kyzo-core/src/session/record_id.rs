@@ -36,12 +36,12 @@ impl RecordId {
     /// Call site law: only [`crate::session::admit::admit_record`] (and
     /// readers of an already-admitted digest).
     pub(crate) fn view_of(digest: RecordContentDigest) -> Self {
-        Self(*digest.as_bytes())
+        Self(digest.as_bytes().0)
     }
 
     /// Borrow the identity digest bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 
     /// Federation-stable namespaced identity (#270 T2).
@@ -56,7 +56,7 @@ impl RecordId {
         content: RecordContentDigest,
     ) -> NamespacedRecordIdentity {
         NamespacedRecordIdentity::bind(
-            LocalRecordId::from_digest(self.0),
+            LocalRecordId::from_digest(crate::data::fixed_bytes::Bytes32(self.0)),
             origin_authority,
             tenant,
             content,

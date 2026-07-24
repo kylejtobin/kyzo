@@ -566,7 +566,7 @@ mod fuse_crash_matrix {
                     }
                 }
                 if round > 0 && round % 4 == 0 {
-                    std::thread::sleep(std::time::Duration::from_millis(200));
+                    std::thread::park_timeout(std::time::Duration::from_millis(200));
                 }
 
                 for name in journal_segment_basenames(backing_a.path()) {
@@ -678,6 +678,8 @@ mod fuse_crash_matrix {
     /// by the issue's design ruling.
     const SEGMENT_GLOB: &str = "*/tables/*";
     const PER_SEED_BUDGET: std::time::Duration = std::time::Duration::from_secs(25);
+    /// Poll-loop ceiling when the budget millis refuse `u64` — not Err→MAX costume.
+    const POLL_BUDGET_CEILING: u64 = u64::MAX;
 
     fn flood_key(i: u32) -> String {
         format!("flood{i:08}")
@@ -710,7 +712,8 @@ mod fuse_crash_matrix {
         // Poll budget — structural, not Instant. 50ms sleep × polls ≈ PER_SEED_BUDGET.
         let max_polls = match u64::try_from(PER_SEED_BUDGET.as_millis() / 50) {
             Ok(n) => n.saturating_add(1),
-            Err(_) => u64::MAX,
+            // Budget that cannot fit u64 still ends the poll loop (saturate).
+            Err(_budget_past_u64) => POLL_BUDGET_CEILING,
         };
         let mut polls = 0u64;
         while !handle.is_finished() {
@@ -724,7 +727,7 @@ mod fuse_crash_matrix {
                 std::process::exit(90);
             }
             polls = polls.saturating_add(1);
-            std::thread::sleep(std::time::Duration::from_millis(50));
+            std::thread::park_timeout(std::time::Duration::from_millis(50));
         }
         if let Err(panic_payload) = handle.join() {
             std::panic::resume_unwind(panic_payload);

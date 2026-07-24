@@ -39,13 +39,13 @@ pub struct Digest32([u8; 32]);
 
 impl Digest32 {
     /// Wrap already-proven digest / key-id / hash bytes.
-    pub fn admit(bytes: [u8; 32]) -> Self {
-        Self(bytes)
+    pub fn admit(bytes: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(bytes.0)
     }
 
     /// Borrow the field bytes at the wire / hash edge only.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -99,9 +99,23 @@ pub enum SealedArtifactKind {
 
 impl SealedArtifactKind {
     /// Stable discriminant written into golden / sealed transcripts.
-    /// `#[repr(u64)]` discriminant is sole authority (seat 59); second serialize Unconstructible.
+    /// Explicit variant table is sole authority (seat 59); second serialize Unconstructible.
     pub fn tag(self) -> u64 {
-        self as u64
+        match self {
+            Self::CheckpointSeal => 1,
+            Self::AdmissionCertificate => 2,
+            Self::ForkGrant => 3,
+            Self::RecoveryGrant => 4,
+            Self::MergeProofHeader => 5,
+            Self::AuditKeyLeaf => 6,
+            Self::WalHeader => 7,
+            Self::KeyCommit => 8,
+            Self::StateRootHead => 9,
+            Self::LeaveIsFreePack => 10,
+            Self::ChainedStateRoot => 11,
+            Self::AncestorReadGrant => 12,
+            Self::WrappedShredSalt => 13,
+        }
     }
 }
 
@@ -420,7 +434,7 @@ impl CanonicalTranscriptBuilder {
     ) -> Result<(), TranscriptRefuse> {
         self.begin_field(id)?;
         self.buf.push(FieldTag::Digest32.byte());
-        self.buf.extend_from_slice(digest.as_bytes());
+        self.buf.extend_from_slice(digest.as_bytes().as_slice());
         Ok(())
     }
 
@@ -1048,7 +1062,7 @@ pub fn encode_key_commitment(
     // CryptoDomain.store_id
     b.append_digest32(
         FieldId::SECONDARY_DIGEST,
-        &Digest32::admit(*crypto_domain.store_id().as_bytes()),
+        &Digest32::admit(crypto_domain.store_id().as_bytes()),
     )?;
     b.append_bytes(FieldId::DOMAIN_LABEL, KEY_COMMIT_DOMAIN_LABEL)?;
     b.append_u64(FieldId::FENCE_EPOCH, crypto_domain.fence_epoch().get())?;
@@ -1070,7 +1084,7 @@ pub fn encode_wrapped_shred_salt_aad(
     )?;
     b.append_digest32(
         FieldId::SALT_STORE_ID,
-        &Digest32::admit(*crypto_domain.store_id().as_bytes()),
+        &Digest32::admit(crypto_domain.store_id().as_bytes()),
     )?;
     b.append_u64(FieldId::SALT_FENCE_EPOCH, crypto_domain.fence_epoch().get())?;
     b.append_u64(FieldId::SEGMENT_COUNTER, segment)?;
@@ -1134,7 +1148,7 @@ pub fn encode_checkpoint_seal(
     b.append_digest32(FieldId::STORE_ID, &parts.store_id)?;
     b.append_digest32(
         FieldId::CRYPTO_DOMAIN_STORE_ID,
-        &Digest32::admit(*parts.crypto_domain.store_id().as_bytes()),
+        &Digest32::admit(parts.crypto_domain.store_id().as_bytes()),
     )?;
     b.append_u64(
         FieldId::CRYPTO_DOMAIN_FENCE_EPOCH,
@@ -1142,7 +1156,7 @@ pub fn encode_checkpoint_seal(
     )?;
     b.append_digest32(
         FieldId::CRYPTO_DOMAIN_FENCE_STORE_ID,
-        &Digest32::admit(*parts.crypto_domain.fence_epoch().store_id().as_bytes()),
+        &Digest32::admit(parts.crypto_domain.fence_epoch().store_id().as_bytes()),
     )?;
     b.append_u64(FieldId::CUT_FENCE_EPOCH, parts.fence_epoch)?;
     b.append_digest32(FieldId::CUT_FENCE_STORE_ID, &parts.fence_epoch_store_id)?;
@@ -1632,19 +1646,19 @@ pub fn encode_admission_certificate(
         Some(op) => b.append_digest32(FieldId::OPERATION_KEY, &op)?,
         None => b.append_optional_absent(FieldId::OPERATION_KEY)?,
     }
-    b.append_bytes(FieldId::SIGNATURE, parts.signature.as_bytes())?;
+    b.append_bytes(FieldId::SIGNATURE, parts.signature.as_bytes().as_slice())?;
     Ok(b.seal())
 }
 
 /// Normative StoreId for golden-vector / residual-scrub campaigns
 /// (hand-derived wire law — same pin as `store/golden/*.vec`).
 pub fn normative_golden_store() -> StoreId {
-    StoreId::from_digest([0x11; 32])
+    StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0x11; 32]))
 }
 
 /// Normative digest bytes shared by golden fixtures (hand-derived wire law).
 pub fn normative_golden_digest() -> Digest32 {
-    Digest32::admit([0x22u8; 32])
+    Digest32::admit(crate::data::fixed_bytes::Bytes32([0x22u8; 32]))
 }
 
 /// Normative CheckpointSeal parts for golden / scrub campaigns.
@@ -1654,10 +1668,10 @@ pub fn normative_checkpoint_seal_parts() -> CheckpointSealTranscriptParts {
     let dig = normative_golden_digest();
     CheckpointSealTranscriptParts {
         format_version: FormatVersion::CURRENT,
-        store_id: Digest32::admit(*store.as_bytes()),
+        store_id: Digest32::admit(store.as_bytes()),
         crypto_domain: domain,
         fence_epoch: domain.fence_epoch().get(),
-        fence_epoch_store_id: Digest32::admit(*domain.fence_epoch().store_id().as_bytes()),
+        fence_epoch_store_id: Digest32::admit(domain.fence_epoch().store_id().as_bytes()),
         cut: 1,
         state_root: dig,
         final_wal_hash: dig,
@@ -1682,9 +1696,9 @@ pub fn normative_admission_parts() -> AdmissionCertificateTranscriptParts {
     let dig = normative_golden_digest();
     AdmissionCertificateTranscriptParts {
         protocol_version: [0; 8],
-        origin_store: Digest32::admit(*store.as_bytes()),
+        origin_store: Digest32::admit(store.as_bytes()),
         origin_epoch: 0,
-        origin_epoch_store_id: Digest32::admit(*store.as_bytes()),
+        origin_epoch_store_id: Digest32::admit(store.as_bytes()),
         origin_commit: 1,
         schema_cut: dig,
         record_digest: dig,
@@ -1693,26 +1707,26 @@ pub fn normative_admission_parts() -> AdmissionCertificateTranscriptParts {
         authorizing_key_id: dig,
         scope_manifest_digest: dig,
         operation_key: None,
-        signature: super::crypto::Signature::admit([0u8; 64]),
+        signature: super::crypto::Signature::admit(crate::data::fixed_bytes::Bytes64([0u8; 64])),
     }
 }
 
 /// CMT-1 KeyCommit normative key-id (matches [`KEY_COMMIT_GOLDEN_VEC`]).
 pub fn normative_key_commit_key_id() -> Digest32 {
-    Digest32::admit([
+    Digest32::admit(crate::data::fixed_bytes::Bytes32([
         0x08u8, 0x01, 0x8b, 0x8c, 0x8d, 0x8e, 0x8f, 0x90, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97,
         0x98, 0x99, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f, 0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6,
         0xa7, 0xa8,
-    ])
+    ]))
 }
 
 /// CMT-1 KeyCommit normative CryptoDomain (matches [`KEY_COMMIT_GOLDEN_VEC`]).
 pub fn normative_key_commit_domain() -> CryptoDomain {
-    let key_store = StoreId::from_digest([
+    let key_store = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([
         0x08, 0x02, 0x8c, 0x8d, 0x8e, 0x8f, 0x90, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98,
         0x99, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f, 0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7,
         0xa8, 0xa9,
-    ]);
+    ]));
     CryptoDomain::new(FenceEpoch::genesis(key_store))
 }
 
@@ -1755,12 +1769,12 @@ pub fn encode_normative_production_transcript(
             &normative_key_commit_key_id(),
             normative_key_commit_domain(),
         ),
-        SealedArtifactKind::StateRootHead => encode_state_root_head(&Digest32::admit(*store.as_bytes()), 0, 1, &dig),
+        SealedArtifactKind::StateRootHead => encode_state_root_head(&Digest32::admit(store.as_bytes()), 0, 1, &dig),
         SealedArtifactKind::LeaveIsFreePack => encode_leave_is_free_pack(
             b"seal_and_suffix",
             FormatVersion::CURRENT,
             &[LeaveIsFreeSaltTranscriptPart {
-                store_id: Digest32::admit(*store.as_bytes()),
+                store_id: Digest32::admit(store.as_bytes()),
                 fence_epoch: 0,
                 segment: 0,
                 ciphertext: vec![1, 2, 3],
@@ -1897,7 +1911,7 @@ mod tests {
         fn digest32(&mut self, id: u16, digest: &Digest32) {
             self.begin(id);
             self.buf.push(TAG_DIGEST32);
-            self.buf.extend_from_slice(digest.as_bytes());
+            self.buf.extend_from_slice(digest.as_bytes().as_slice());
         }
 
         fn optional_absent(&mut self, id: u16) {
@@ -1926,8 +1940,8 @@ mod tests {
     /// Field order and tags come from the CanonicalTranscript wire schema / FieldId table —
     /// never from calling production `encode_*` and capturing output.
     fn independent_encode_normative(kind: SealedArtifactKind) -> Vec<u8> {
-        let store = Digest32::admit([0x11u8; 32]);
-        let dig = Digest32::admit([0x22u8; 32]);
+        let store = Digest32::admit(crate::data::fixed_bytes::Bytes32([0x11u8; 32]));
+        let dig = Digest32::admit(crate::data::fixed_bytes::Bytes32([0x22u8; 32]));
         match kind {
             SealedArtifactKind::CheckpointSeal => {
                 let mut w = indep_begin_sealed(1, b"kyzo.checkpoint_seal.v1");
@@ -2280,14 +2294,14 @@ mod tests {
             )
             .is_ok()
         );
-        assert!(encode_state_root_head(&Digest32::admit(*store.as_bytes()), 0, 1, &dig).is_ok());
+        assert!(encode_state_root_head(&Digest32::admit(store.as_bytes()), 0, 1, &dig).is_ok());
         assert!(encode_chained_state_root(&dig, &dig, 1, 1).is_ok());
         assert!(
             encode_leave_is_free_pack(
                 b"seal_and_suffix",
                 FormatVersion::CURRENT,
                 &[LeaveIsFreeSaltTranscriptPart {
-                    store_id: Digest32::admit(*store.as_bytes()),
+                    store_id: Digest32::admit(store.as_bytes()),
                     fence_epoch: 0,
                     segment: 0,
                     ciphertext: vec![1, 2, 3],

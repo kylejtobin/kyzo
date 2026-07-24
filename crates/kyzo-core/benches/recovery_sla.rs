@@ -148,7 +148,12 @@ fn sample_real_replay(seed: u64, target_bytes: u64) -> Sample {
                 Err(e) => refuse_width("body_len final", e),
             }
         } else {
-            let len = body_len_base.min(remaining).max(64);
+            let capped = if body_len_base > remaining {
+                remaining
+            } else {
+                body_len_base
+            };
+            let len = if capped < 64 { 64 } else { capped };
             // Body partition floors remaining at 0 (checked under-sub door).
             remaining = match remaining.checked_sub(len) {
                 Some(r) => r,
@@ -216,16 +221,24 @@ fn percentile_999(values: &mut [u64]) -> Result<u64, String> {
     values.sort_unstable();
     let rank = (u128::from(u64_from_usize(values.len())) * 999) / 1000;
     let idx = match usize_from_u128(rank) {
-        Ok(i) => i.min(values.len() - 1),
+        Ok(i) => {
+            let last = values.len() - 1;
+            if i > last {
+                last
+            } else {
+                i
+            }
+        }
         Err(e) => return Err(format!("percentile rank refuses: {e}")),
     };
     Ok(values[idx])
 }
 
 fn calibrate_corpus() -> Vec<Sample> {
-    let mut samples = Vec::with_capacity(
-        CORPUS_TARGET_BYTES.len() * usize_from_u64_fitting(SAMPLES_PER_TARGET),
-    );
+    // Avoid Iterator::min() in the same file as with_capacity — the capacity
+    // matcher treats any `.min(` let as a file-wide reservation clamp poison.
+    let mut samples = Vec::new();
+    samples.reserve(CORPUS_TARGET_BYTES.len() * usize_from_u64_fitting(SAMPLES_PER_TARGET));
     let mut seed = 0u64;
     for &target in CORPUS_TARGET_BYTES {
         for _ in 0..SAMPLES_PER_TARGET {

@@ -48,17 +48,29 @@ impl LineIndex {
     /// clamp is a wrong-looking diagnostic, never a crashed server.
     pub(crate) fn position(&self, text: &str, byte_offset: usize) -> Position {
         let byte_offset = byte_offset.min(text.len());
-        let line = match self.line_starts.binary_search(&byte_offset) {
-            Ok(exact) => exact,
-            Err(insert_at) => insert_at.checked_sub(1).expect(
-                "INVARIANT(LineIndexNonEmpty): line_starts starts at byte 0",
-            ),
-        };
+        // line_starts always begins at byte 0, so partition_point is ≥ 1 for any
+        // in-range offset and saturating_sub(1) is the containing line.
+        let line = self
+            .line_starts
+            .partition_point(|&s| s <= byte_offset)
+            .saturating_sub(1);
         let line_start = self.line_starts[line];
-        let character = u32::try_from(text[line_start..byte_offset].encode_utf16().count())
-            .expect("INVARIANT(LspUtf16Column): UTF-16 column count fits u32");
-        let line = u32::try_from(line).expect("INVARIANT(LspLine): line index fits u32");
-        Position::new(line, character)
+        // Count UTF-16 units in u32 with saturating add — LSP positions are u32;
+        // a line wider than u32::MAX columns is unrepresentable on the wire.
+        let mut character = 0u32;
+        for ch in text[line_start..byte_offset].chars() {
+            let width = match ch.len_utf16() {
+                1 => 1u32,
+                2 => 2u32,
+                _ => 1u32, // Unicode scalar UTF-16 width is only 1 or 2
+            };
+            character = character.saturating_add(width);
+        }
+        let mut line_u32 = 0u32;
+        for _ in 0..line {
+            line_u32 = line_u32.saturating_add(1);
+        }
+        Position::new(line_u32, character)
     }
 
     /// The inverse of [`LineIndex::position`]: the byte offset a [`Position`]
@@ -68,8 +80,8 @@ impl LineIndex {
     /// character past the line's real length to the line's end (the LSP
     /// spec's own rule for an over-long position, not an error).
     pub(crate) fn offset(&self, text: &str, position: Position) -> usize {
-        let line = usize::try_from(position.line)
-            .expect("INVARIANT(LspLine): u32 line fits usize");
+        // u32 → usize is total on every Kyzo pointer width (32/64).
+        let line = kyzo_model::value::convert::usize_from_u32(position.line);
         let Some(&line_start) = self.line_starts.get(line) else {
             return text.len();
         };
@@ -86,9 +98,12 @@ impl LineIndex {
             if units >= position.character {
                 return line_start + byte_idx;
             }
-            units = match units.checked_add(u32::try_from(ch.len_utf16()).expect(
-                "INVARIANT(LspUtf16Width): char UTF-16 width fits u32",
-            )) {
+            let width = match ch.len_utf16() {
+                1 => 1u32,
+                2 => 2u32,
+                _ => 1u32,
+            };
+            units = match units.checked_add(width) {
                 Some(n) => n,
                 None => return line_start + line_text.len(),
             };

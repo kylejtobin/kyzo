@@ -61,13 +61,13 @@ impl OperationKey {
         let mut h = Sha256::new();
         DigestDomain::CompositionIdDegenerate.absorb(&mut h);
         h.update(client_operation_id);
-        let degenerate = Digest32::admit(h.finalize().into());
+        let degenerate = Digest32::admit(crate::data::fixed_bytes::Bytes32(h.finalize().into()));
         Self::derive(domain_label, degenerate, store_id, step_id)
     }
 
     /// Borrow the key digest.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -77,13 +77,13 @@ pub struct RequestDigest([u8; 32]);
 
 impl RequestDigest {
     /// Wrap an already-proven request digest.
-    pub fn from_digest(digest: [u8; 32]) -> Self {
-        Self(digest)
+    pub fn from_digest(digest: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(digest.0)
     }
 
     /// Borrow the digest bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -154,12 +154,12 @@ impl IdempotencyMemo {
         let mut h = Sha256::new();
         DigestDomain::RequestDigest.absorb(&mut h);
         h.update(envelope);
-        RequestDigest::from_digest(h.finalize().into())
+        RequestDigest::from_digest(crate::data::fixed_bytes::Bytes32(h.finalize().into()))
     }
 
     /// Look up a key. Missing → [`OperationOutcome::Absent`].
     pub fn lookup(&self, key: &OperationKey) -> OperationOutcome {
-        match self.entries.get(key.as_bytes()) {
+        match self.entries.get(&key.as_bytes().0) {
             Some(e) => e.outcome.clone(),
             None => OperationOutcome::Absent,
         }
@@ -175,7 +175,7 @@ impl IdempotencyMemo {
         key: &OperationKey,
         request_digest: RequestDigest,
     ) -> Result<Option<&IdempotencyEntry>, StoreRefuse> {
-        match self.entries.get(key.as_bytes()) {
+        match self.entries.get(&key.as_bytes().0) {
             None => Ok(None),
             Some(existing) if existing.request_digest == request_digest => Ok(Some(existing)),
             Some(_) => Err(StoreRefuse::OperationKeyReuse),
@@ -208,7 +208,7 @@ impl IdempotencyMemo {
                     request_digest,
                     outcome: outcome.clone(),
                 };
-                self.entries.insert(*key.as_bytes(), entry);
+                self.entries.insert(key.as_bytes().0, entry);
                 Ok(outcome)
             }
         }

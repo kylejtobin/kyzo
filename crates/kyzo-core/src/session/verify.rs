@@ -516,7 +516,7 @@ mod tests {
             tx.commit()?;
         }
 
-        let store_id = StoreId::from_digest([0x29; 32]);
+        let store_id = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0x29; 32]));
         let fence = FenceEpoch::genesis(store_id);
         let cut = CommitOrdinal::ZERO.successor()?;
 
@@ -536,7 +536,7 @@ mod tests {
         chain.append(link)?;
 
         // A forged digest in scope — verify never takes it as input.
-        let forged_caller_root = StateRoot::from_digest([0xDE; 32]);
+        let forged_caller_root = StateRoot::from_digest(crate::data::fixed_bytes::Bytes32([0xDE; 32]));
         assert_ne!(forged_caller_root, as_of_root(&chain, cut)?);
 
         match verify(&tx, &chain, cut, merkle_budget()?).map_err(|e| miette!("verify runs: {e}"))? {
@@ -577,7 +577,7 @@ mod tests {
             tx.commit()?;
         }
 
-        let store_id = StoreId::from_digest([0xA4; 32]);
+        let store_id = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0xA4; 32]));
         let fence = FenceEpoch::genesis(store_id);
         let cut = CommitOrdinal::ZERO.successor()?;
 
@@ -639,7 +639,7 @@ mod tests {
         use crate::store::open::StoreId;
         use crate::store::{Storage, WriteTx};
 
-        let store_id = StoreId::from_digest([0x58; 32]);
+        let store_id = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0x58; 32]));
         let fence = FenceEpoch::genesis(store_id);
 
         let state_v1: Vec<(Vec<u8>, Vec<u8>)> = vec![

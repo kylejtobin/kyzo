@@ -194,5 +194,5 @@ pub fn nonce(
     let digest = h.finalize();
     let mut out = [0u8; 12];
     out.copy_from_slice(&digest[..12]);
-    Nonce::admit(out)
+    Nonce::admit(crate::data::fixed_bytes::Bytes12(out))
 }

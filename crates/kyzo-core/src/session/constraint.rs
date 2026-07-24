@@ -206,7 +206,7 @@ fn validate_constraint_purity(name: &str, opts: &QueryOutOptions) -> Result<()> 
             "its body uses :limit/:offset, which would truncate violation detection"
         ));
     }
-    if opts.timeout.is_some() || opts.sleep.is_some() {
+    if opts.timeout.is_some() || opts.sleep_secs.is_some() {
         // A constraint runs under the session's budget; a per-body :timeout is
         // meaningless AND a panic vector — the parser bounds :timeout only by
         // `> 0`, so a huge value overflows `Duration::from_secs_f64` in
@@ -335,7 +335,7 @@ impl<S: Storage> Engine<S> {
                 let total = witnesses.len();
                 let shown: Vec<Tuple> = witnesses.into_iter().take(WITNESS_CAP).collect();
                 let body = constraint.program().to_string();
-                let span = SourceSpan(0, body.len());
+                let span = SourceSpan::new(0, body.len());
                 return Err(ConstraintViolation {
                     name: name.to_string(),
                     total,
@@ -436,7 +436,7 @@ impl<S: Storage> Engine<S> {
                 total,
                 witnesses: shown,
                 body: source.to_string(),
-                span: SourceSpan(0, source.len()),
+                span: SourceSpan::new(0, source.len()),
             }));
         }
 

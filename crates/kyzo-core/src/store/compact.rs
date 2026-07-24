@@ -86,13 +86,13 @@ pub struct PacketContentHash([u8; 32]);
 
 impl PacketContentHash {
     /// Wrap an already-proven packet content hash.
-    pub fn from_digest(digest: [u8; 32]) -> Self {
-        Self(digest)
+    pub fn from_digest(digest: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(digest.0)
     }
 
     /// Borrow the hash bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -109,13 +109,13 @@ pub struct LineageHash([u8; 32]);
 
 impl LineageHash {
     /// Wrap an already-proven lineage hash.
-    pub fn from_digest(digest: [u8; 32]) -> Self {
-        Self(digest)
+    pub fn from_digest(digest: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(digest.0)
     }
 
     /// Borrow the hash bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -316,17 +316,17 @@ fn sealed_identity_from_transcript(parts: &MergeProofParts) -> Result<Digest32, 
     let inputs: Vec<Digest32> = parts
         .input_content_hashes
         .iter()
-        .map(|h| Digest32::admit(*h.as_bytes()))
+        .map(|h| Digest32::admit(h.as_bytes()))
         .collect();
     let transcript = encode_merge_proof_header(
         &inputs,
-        &Digest32::admit(*parts.lineage_hash.as_bytes()),
-        &Digest32::admit(*parts.state_root.as_bytes()),
+        &Digest32::admit(parts.lineage_hash.as_bytes()),
+        &Digest32::admit(parts.state_root.as_bytes()),
         parts.compact_counter.get(),
-        &Digest32::admit(*parts.output_content_hash.as_bytes()),
+        &Digest32::admit(parts.output_content_hash.as_bytes()),
     )
     .map_err(|_| CompactRefuse::TranscriptEncode)?;
     let mut h = Sha256::new();
     h.update(transcript.as_bytes());
-    Ok(Digest32::admit(h.finalize().into()))
+    Ok(Digest32::admit(crate::data::fixed_bytes::Bytes32(h.finalize().into())))
 }

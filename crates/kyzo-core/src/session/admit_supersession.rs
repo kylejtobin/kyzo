@@ -167,7 +167,7 @@ fn digest_semantic_deletion(
     });
     h.update(prior.as_bytes());
     h.update(encode_owned(subject).as_bytes());
-    RecordContentDigest::from_digest(h.finalize().into())
+    RecordContentDigest::from_digest(crate::data::fixed_bytes::Bytes32(h.finalize().into()))
 }
 
 /// Admit a correction: a **new** record that names `prior` as the identity

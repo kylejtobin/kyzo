@@ -9,6 +9,8 @@
 
 /// Typed digest / region identities for the private record model (#268 purity).
 pub(crate) mod digest;
+/// Proven fixed-width byte arrays — typed lengths for crypto/digest doors.
+pub(crate) mod fixed_bytes;
 pub(crate) mod json;
 /// Statement-body types + ONTOK constructions for the one private KyzoRecord.
 ///

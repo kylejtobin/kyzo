@@ -313,10 +313,10 @@ impl LiveAdmissionSeats {
         let mut signing_seed_bytes = [0u8; 32];
         let (origin_key, authorizing_key_id, signing_seed) = loop {
             rand::rng().fill_bytes(&mut signing_seed_bytes);
-            let signing_seed = Entropy::admit(signing_seed_bytes);
+            let signing_seed = Entropy::admit(crate::data::fixed_bytes::Bytes32(signing_seed_bytes));
             let origin_key = AuthorizingKey::mint_with_verifying_id(signing_seed);
             let authorizing_key_id = origin_key.id();
-            if *authorizing_key_id.as_bytes() != signing_seed_bytes {
+            if authorizing_key_id.as_bytes().0 != signing_seed_bytes {
                 break (origin_key, authorizing_key_id, signing_seed);
             }
         };
@@ -341,7 +341,7 @@ impl LiveAdmissionSeats {
             DigestDomain::AdmissionSeatsGenesisRoot.absorb(&mut h);
             h.update(store_id.as_bytes());
             h.update(authorizing_key_id.as_bytes());
-            StateRoot::from_digest(h.finalize().into())
+            StateRoot::from_digest(crate::data::fixed_bytes::Bytes32(h.finalize().into()))
         };
         let Ok(genesis_link) = ChainedStateRoot::mint(
             store_id,
@@ -501,10 +501,6 @@ impl LiveAdmissionSeats {
             None, // Gap: OriginContinuity → Queryable; PendingAnchor is honest here.
         )?;
         let verified_key = custody.key();
-        if verified_key.as_bytes().len() != 32 {
-            return Err(AdmitRefuse::Replica(ReplicaRefuse::AuthenticityFailed));
-        }
-
         let mut chain = self
             .chain
             .lock()
@@ -513,7 +509,7 @@ impl LiveAdmissionSeats {
             .origin_commit
             .successor()
             .map_err(|_| AdmitRefuse::MissingLiveAdmissionContext)?;
-        let content_root = StateRoot::from_digest(*record.digest().as_bytes());
+        let content_root = StateRoot::from_digest(record.digest().as_bytes());
         let predecessor = chain.root_chain.prior_root();
         let link = ChainedStateRoot::mint(
             self.store_id,
@@ -545,7 +541,7 @@ fn genesis_scope_manifest_digest(
     h.update(store_id.as_bytes());
     h.update(key_id.as_bytes());
     h.update(verifying_key.as_bytes());
-    ScopeManifestDigest::from_digest(h.finalize().into())
+    ScopeManifestDigest::from_digest(crate::data::fixed_bytes::Bytes32(h.finalize().into()))
 }
 
 /// Wired from Catalog generation, RootChain tip, and a receiver-resolvable
@@ -598,8 +594,8 @@ impl LiveCertificateInputs {
         let (predecessor_history_digest, post_state_root) = root_tip_digests(root_chain);
         Ok(Self {
             catalog_generation,
-            predecessor_history_digest: *predecessor_history_digest.as_bytes(),
-            post_state_root: *post_state_root.as_bytes(),
+            predecessor_history_digest: predecessor_history_digest.as_bytes().0,
+            post_state_root: post_state_root.as_bytes().0,
             authorizing_key: authorizing_key.clone(),
             origin_commit,
             scope_manifest_digest,
@@ -610,12 +606,12 @@ impl LiveCertificateInputs {
 fn root_tip_digests(root_chain: &RootChain) -> (Digest32, Digest32) {
     match root_chain.links().last() {
         Some(link) => (
-            Digest32::admit(*link.predecessor_root().as_bytes()),
-            Digest32::admit(*link.root().as_bytes()),
+            Digest32::admit(link.predecessor_root().as_bytes()),
+            Digest32::admit(link.root().as_bytes()),
         ),
         None => (
-            Digest32::admit(*GENESIS_ROOT.as_bytes()),
-            Digest32::admit(*GENESIS_ROOT.as_bytes()),
+            Digest32::admit(GENESIS_ROOT.as_bytes()),
+            Digest32::admit(GENESIS_ROOT.as_bytes()),
         ),
     }
 }
@@ -624,7 +620,7 @@ fn schema_cut_from_catalog(generation: CatalogGeneration) -> SchemaCutDigest {
     let mut h = Sha256::new();
     DigestDomain::CatalogGenerationSchemaCut.absorb(&mut h);
     h.update(generation.counter().to_be_bytes());
-    SchemaCutDigest::from_digest(h.finalize().into())
+    SchemaCutDigest::from_digest(crate::data::fixed_bytes::Bytes32(h.finalize().into()))
 }
 
 fn mint_certificate_from_live(
@@ -644,11 +640,11 @@ fn mint_certificate_from_live(
         // Single digest: certificate record_digest IS the core digest.
         record_digest: core.digest,
         predecessor_history_digest: live.predecessor_history_digest,
-        post_state_root: PostStateRoot::from_digest(live.post_state_root),
+        post_state_root: PostStateRoot::from_digest(crate::data::fixed_bytes::Bytes32(live.post_state_root)),
         authorizing_key_id: key.id(),
         scope_manifest_digest: live.scope_manifest_digest,
         operation_key: None,
-        signature: Signature::admit([0u8; 64]),
+        signature: Signature::admit(crate::data::fixed_bytes::Bytes64([0u8; 64])),
     };
     parts.signature = sign_admission_parts(&parts, key)?;
     Ok(mint_admission_certificate(parts)?)
@@ -1006,7 +1002,7 @@ pub(crate) fn digest_sugar_relation_row(
     for v in row {
         h.update(encode_owned(v).as_bytes());
     }
-    RecordContentDigest::from_digest(h.finalize().into())
+    RecordContentDigest::from_digest(crate::data::fixed_bytes::Bytes32(h.finalize().into()))
 }
 
 /// Digest a sugar relation row into a content-addressed record digest.
@@ -1027,11 +1023,15 @@ pub(crate) fn admit_relation_row_through_record(
     valid: ValidityTs,
     digest: RecordContentDigest,
 ) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
-    let keys_len = keys_len.min(row.len());
-    let subject = StatementSubject::new(DataValue::List(row[..keys_len].to_vec()));
+    let keys_fit = if keys_len > row.len() {
+        row.len()
+    } else {
+        keys_len
+    };
+    let subject = StatementSubject::new(DataValue::List(row[..keys_fit].to_vec()));
     let predicate =
         StatementPredicate::new(relation_name).map_err(|_| AdmitRefuse::SugarStatementRefuse)?;
-    let value = StatementValue::new(DataValue::List(row[keys_len..].to_vec()));
+    let value = StatementValue::new(DataValue::List(row[keys_fit..].to_vec()));
     let (kind, statement) = crate::data::statement::construct::relation(
         subject,
         predicate,
@@ -2262,12 +2262,16 @@ impl<T: WriteTx> SessionTx<T> {
         valid: ValidityTs,
     ) -> Result<()> {
         let live = db.live_certificate_inputs(&self.store, relation_store.id)?;
-        let keys_len = relation_store.metadata.keys.len().min(key_cols.len());
+        let keys_fit = if relation_store.metadata.keys.len() > key_cols.len() {
+            key_cols.len()
+        } else {
+            relation_store.metadata.keys.len()
+        };
         let (record, cert) = admit_sugar_retract(
             db.store_id(),
             &live,
             relation_store.name.as_str(),
-            &key_cols[..keys_len],
+            &key_cols[..keys_fit],
             valid,
         )?;
         let permit = record.durable_write_permit();
@@ -2896,7 +2900,7 @@ mod live_certificate_verifiability {
                 .map_err(|e| miette!("predicate: {e}"))?,
             StatementValue::new(DataValue::from("payload")),
             ValidityTime::instant(1),
-            StatementContext::Scoped(ContextId::from_digest([0xC4; 32])),
+            StatementContext::Scoped(ContextId::from_digest(crate::data::fixed_bytes::Bytes32([0xC4; 32]))),
             StatementSource::unbound(),
         );
         Ok(AdmitRecordParts::new(
@@ -2912,13 +2916,13 @@ mod live_certificate_verifiability {
     /// then verify the certificate against that same key table — must succeed.
     #[test]
     fn live_admission_certificate_verifies_against_registered_key_table() -> Result<()> {
-        let store = StoreId::from_digest([0x74; 32]);
-        let authority = WriteAuthority::mint(store, WriteTokenId::from_digest([0xD4; 32]));
+        let store = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0x74; 32]));
+        let authority = WriteAuthority::mint(store, WriteTokenId::from_digest(crate::data::fixed_bytes::Bytes32([0xD4; 32])));
         let chain = RootChain::empty();
-        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0xD4; 32]));
+        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit(crate::data::fixed_bytes::Bytes32([0xD4; 32])));
         let mut keys = AuthorizingKeyTable::new();
         keys.insert(key.clone());
-        let scope = ScopeManifestDigest::from_digest([0x54; 32]);
+        let scope = ScopeManifestDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x54; 32]));
         let mut scopes = ScopeManifestTable::new();
         scopes.set(scope, ScopeManifestStatus::Verified);
 
@@ -2976,12 +2980,12 @@ mod live_certificate_verifiability {
     /// Negative: unregistered / non-signing key — refuse, never mint ephemeral.
     #[test]
     fn from_live_refuses_without_registered_signing_key() -> Result<()> {
-        let store = StoreId::from_digest([0x75; 32]);
-        let authority = WriteAuthority::mint(store, WriteTokenId::from_digest([0xD5; 32]));
+        let store = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0x75; 32]));
+        let authority = WriteAuthority::mint(store, WriteTokenId::from_digest(crate::data::fixed_bytes::Bytes32([0xD5; 32])));
         let chain = RootChain::empty();
-        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0xD5; 32]));
+        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit(crate::data::fixed_bytes::Bytes32([0xD5; 32])));
         let empty = AuthorizingKeyTable::new();
-        let scope = ScopeManifestDigest::from_digest([0x55; 32]);
+        let scope = ScopeManifestDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x55; 32]));
 
         let err = LiveCertificateInputs::from_live(
             CatalogGeneration::from_relation(RelationGeneration::witness(1)),
@@ -3075,11 +3079,11 @@ mod live_certificate_verifiability {
             .links()
             .last()
             .ok_or_else(|| miette!("genesis seats carry a tip link"))?;
-        let predecessor_history_digest = *tip.predecessor_root().as_bytes();
+        let predecessor_history_digest = tip.predecessor_root().as_bytes();
         let (record, cert) =
             admit_record(claim_parts(seats.store_id(), live)?).map_err(|e| miette!("admit: {e}"))?;
 
-        let mut flipped = *cert.signature().as_bytes();
+        let mut flipped = cert.signature().as_bytes();
         flipped[0] ^= 0x01;
         let bad = mint_admission_certificate(AdmissionCertificateParts {
             protocol_version: *cert.protocol_version(),

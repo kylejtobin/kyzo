@@ -167,7 +167,7 @@ impl RecordLowering {
         let mut out = Vec::new();
         for row in self.rows() {
             out.push(row.dimension().tag());
-            out.extend_from_slice(row.source_record_id().as_bytes());
+            out.extend_from_slice(row.source_record_id().as_bytes().as_slice());
             let payload = row.as_bytes();
             let len = match u64::try_from(payload.len()) {
                 Ok(n) => n,

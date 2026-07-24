@@ -170,7 +170,7 @@ pub(crate) fn crossing_envelope_from_record(
         }
     };
     let evidence = match record.evidence() {
-        Some(coords) => CrossingEvidence::Present(*coords.hash().as_bytes()),
+        Some(coords) => CrossingEvidence::Present(coords.hash().as_bytes().0),
         None => CrossingEvidence::Absent,
     };
     let context = match record.context() {
@@ -261,7 +261,7 @@ impl OriginSealedLowering {
         h.update([self.kind.as_wire()]);
         h.update(self.custody_key.as_bytes());
         h.update(self.rows.concatenated_bytes());
-        Digest32::admit(h.finalize().into())
+        Digest32::admit(crate::data::fixed_bytes::Bytes32(h.finalize().into()))
     }
 }
 
@@ -302,7 +302,7 @@ pub(crate) fn promotion_valid_time_digest(record: &KyzoRecord) -> ValidTimeDiges
     let mut h = Sha256::new();
     DigestDomain::PromotionValidTime.absorb(&mut h);
     h.update(encoded.as_bytes());
-    ValidTimeDigest::from_digest(h.finalize().into())
+    ValidTimeDigest::from_digest(crate::data::fixed_bytes::Bytes32(h.finalize().into()))
 }
 
 /// Digest of provenance / source for [`PromotionMeaning`] (#270 T3).
@@ -313,7 +313,7 @@ pub(crate) fn promotion_provenance_digest(record: &KyzoRecord) -> ProvenanceDige
         StatementSource::Unbound => DigestDomain::ProvenanceUnbound.absorb(&mut h),
         StatementSource::Artifact(id) => h.update(id.as_bytes()),
     }
-    ProvenanceDigest::from_digest(h.finalize().into())
+    ProvenanceDigest::from_digest(crate::data::fixed_bytes::Bytes32(h.finalize().into()))
 }
 
 /// Bind promotion meaning seats from an admitted record + certificate (#270 T3).
@@ -323,7 +323,7 @@ pub(crate) fn promotion_meaning_from_record(
     tenant: TenantId,
 ) -> PromotionMeaning {
     let identity = NamespacedRecordIdentity::from_certificate(
-        LocalRecordId::from_digest(*record.record_id().as_bytes()),
+        LocalRecordId::from_digest(record.record_id().as_bytes()),
         certificate,
         tenant,
     );
@@ -402,9 +402,9 @@ mod tests {
     use miette::{Result, miette};
 
     fn live_cert(store: StoreId) -> Result<LiveCertificateInputs> {
-        let authority = WriteAuthority::mint(store, WriteTokenId::from_digest([0xA1; 32]));
+        let authority = WriteAuthority::mint(store, WriteTokenId::from_digest(crate::data::fixed_bytes::Bytes32([0xA1; 32])));
         let chain = RootChain::empty();
-        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0xA1; 32]));
+        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit(crate::data::fixed_bytes::Bytes32([0xA1; 32])));
         let mut keys = AuthorizingKeyTable::new();
         keys.insert(key.clone());
         Ok(LiveCertificateInputs::from_live(
@@ -414,21 +414,21 @@ mod tests {
             &key,
             &keys,
             CommitOrdinal::ZERO,
-            ScopeManifestDigest::from_digest([0x51; 32]),
+            ScopeManifestDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x51; 32])),
         )
         .map_err(|e| miette!("registered key must open the live door: {e}"))?)
     }
 
     fn admit_claim_record() -> Result<KyzoRecord> {
-        let store = StoreId::from_digest([0x26; 32]);
-        let digest = RecordContentDigest::from_digest([0xA1; 32]);
+        let store = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0x26; 32]));
+        let digest = RecordContentDigest::from_digest(crate::data::fixed_bytes::Bytes32([0xA1; 32]));
         let (kind, statement) = construct::claim(
             StatementSubject::new(DataValue::from("widget")),
             crate::data::statement::StatementPredicate::new("part_of")
                 .map_err(|e| miette!("predicate: {e}"))?,
             StatementValue::new(DataValue::from("assembly")),
             ValidityTime::instant(1_700_000_000_000_000),
-            StatementContext::Scoped(ContextId::from_digest([0xC0; 32])),
+            StatementContext::Scoped(ContextId::from_digest(crate::data::fixed_bytes::Bytes32([0xC0; 32]))),
             StatementSource::unbound(),
         );
         Ok(admit_record(AdmitRecordParts::new(
@@ -443,8 +443,8 @@ mod tests {
     }
 
     fn admit_kind(kind_body: (OntokKind, StatementBody)) -> Result<KyzoRecord> {
-        let store = StoreId::from_digest([0x27; 32]);
-        let digest = RecordContentDigest::from_digest([0xB2; 32]);
+        let store = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0x27; 32]));
+        let digest = RecordContentDigest::from_digest(crate::data::fixed_bytes::Bytes32([0xB2; 32]));
         let (kind, statement) = kind_body;
         Ok(admit_record(AdmitRecordParts::new(
             RecordCore::new(store, digest, SemanticSurface::None, None, kind, statement),
@@ -636,7 +636,7 @@ mod tests {
     #[test]
     fn sugar_relation_row_mints_through_admit_record() -> Result<()> {
         use kyzo_model::value::ValidityTs;
-        let store = StoreId::from_digest([0x28; 32]);
+        let store = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0x28; 32]));
         let live = live_cert(store)?;
         let (record, cert) = super::super::admit_sugar_relation_row(
             store,
@@ -661,7 +661,7 @@ mod tests {
     /// wire through the admit_construct door.
     #[test]
     fn construct_kinds_wire_through_admit_construct() -> Result<()> {
-        let store = StoreId::from_digest([0x29; 32]);
+        let store = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0x29; 32]));
         let live = live_cert(store)?;
         let subject = StatementSubject::new(DataValue::from("s"));
         let pred = crate::data::statement::StatementPredicate::new("p")
@@ -670,7 +670,7 @@ mod tests {
         let vt = ValidityTime::instant(1);
         let ctx = StatementContext::Unscoped;
         let src = StatementSource::unbound();
-        let digest = RecordContentDigest::from_digest([0xD1; 32]);
+        let digest = RecordContentDigest::from_digest(crate::data::fixed_bytes::Bytes32([0xD1; 32]));
 
         use super::super::admit_construct::{OntokCertSeats, OntokPredStmt, OntokValueStmt};
         let cert = || OntokCertSeats {
@@ -766,21 +766,21 @@ mod tests {
         use crate::store::sweep::CommitOrdinal;
 
         let record = admit_claim_record()?;
-        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0x27; 32]));
-        let scope = ScopeManifestDigest::from_digest([0x51; 32]);
+        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit(crate::data::fixed_bytes::Bytes32([0x27; 32])));
+        let scope = ScopeManifestDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x51; 32]));
         let mut parts = AdmissionCertificateParts {
             protocol_version: *b"kyzo.v01",
             origin_store: record.store_id(),
             origin_epoch: FenceEpoch::genesis(record.store_id()),
             origin_commit: CommitOrdinal::ZERO,
-            schema_cut: SchemaCutDigest::from_digest([0x51; 32]),
+            schema_cut: SchemaCutDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x51; 32])),
             record_digest: *record.digest(),
             predecessor_history_digest: [0x52; 32],
-            post_state_root: PostStateRoot::from_digest([0x53; 32]),
+            post_state_root: PostStateRoot::from_digest(crate::data::fixed_bytes::Bytes32([0x53; 32])),
             authorizing_key_id: key.id(),
             scope_manifest_digest: scope,
             operation_key: None,
-            signature: crate::store::crypto::Signature::admit([0u8; 64]),
+            signature: crate::store::crypto::Signature::admit(crate::data::fixed_bytes::Bytes64([0u8; 64])),
         };
         parts.signature = sign_admission_parts(&parts, &key).map_err(|e| miette!("sign: {e}"))?;
         let cert = mint_admission_certificate(parts).map_err(|e| miette!("mint: {e}"))?;
@@ -825,7 +825,7 @@ mod tests {
             &lower_record(&record)
         );
         assert_eq!(
-            sealed.under_local_cut(SchemaCutDigest::from_digest([0x99; 32])),
+            sealed.under_local_cut(SchemaCutDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x99; 32]))),
             Err(crate::store::replica::CrossingRefuse::LocalReinterpretationUnconstructible)
         );
         // Replay digest includes the cut — different cut would diverge.
@@ -835,9 +835,9 @@ mod tests {
         assert_eq!(sealed, again);
 
         // Key confinement: custody key authorizes only in its graph.
-        let tenant = TenantId::from_digest([0x7E; 32]);
+        let tenant = TenantId::from_digest(crate::data::fixed_bytes::Bytes32([0x7E; 32]));
         let home = GraphBoundary::from_tenant(tenant);
-        let foreign = GraphBoundary::from_tenant(TenantId::from_digest([0x7F; 32]));
+        let foreign = GraphBoundary::from_tenant(TenantId::from_digest(crate::data::fixed_bytes::Bytes32([0x7F; 32])));
         let bound = sealed.confine_to_graph(home);
         assert_eq!(bound.authorize(home), Ok(()));
         assert_eq!(
@@ -860,10 +860,10 @@ mod tests {
         };
         use crate::store::sweep::CommitOrdinal;
 
-        let tenant = TenantId::from_digest([0x7E; 32]);
-        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0x27; 32]));
-        let scope = ScopeManifestDigest::from_digest([0x51; 32]);
-        let schema_cut = SchemaCutDigest::from_digest([0x51; 32]);
+        let tenant = TenantId::from_digest(crate::data::fixed_bytes::Bytes32([0x7E; 32]));
+        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit(crate::data::fixed_bytes::Bytes32([0x27; 32])));
+        let scope = ScopeManifestDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x51; 32]));
+        let schema_cut = SchemaCutDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x51; 32]));
 
         let record_a = admit_claim_record()?;
         assert_eq!(
@@ -879,11 +879,11 @@ mod tests {
             schema_cut,
             record_digest: *record_a.digest(),
             predecessor_history_digest: [0x52; 32],
-            post_state_root: PostStateRoot::from_digest([0x53; 32]),
+            post_state_root: PostStateRoot::from_digest(crate::data::fixed_bytes::Bytes32([0x53; 32])),
             authorizing_key_id: key.id(),
             scope_manifest_digest: scope,
             operation_key: None,
-            signature: crate::store::crypto::Signature::admit([0u8; 64]),
+            signature: crate::store::crypto::Signature::admit(crate::data::fixed_bytes::Bytes64([0u8; 64])),
         };
         parts_a.signature =
             sign_admission_parts(&parts_a, &key).map_err(|e| miette!("sign A: {e}"))?;
@@ -896,7 +896,7 @@ mod tests {
                 .map_err(|e| miette!("pred: {e}"))?,
             StatementValue::new(DataValue::from("forged_assembly")),
             ValidityTime::instant(1_700_000_000_000_001),
-            StatementContext::Scoped(ContextId::from_digest([0xC1; 32])),
+            StatementContext::Scoped(ContextId::from_digest(crate::data::fixed_bytes::Bytes32([0xC1; 32]))),
             StatementSource::unbound(),
         ))?;
         assert_ne!(
@@ -912,11 +912,11 @@ mod tests {
             schema_cut,
             record_digest: *record_b.digest(),
             predecessor_history_digest: [0x52; 32],
-            post_state_root: PostStateRoot::from_digest([0x53; 32]),
+            post_state_root: PostStateRoot::from_digest(crate::data::fixed_bytes::Bytes32([0x53; 32])),
             authorizing_key_id: key.id(),
             scope_manifest_digest: scope,
             operation_key: None,
-            signature: crate::store::crypto::Signature::admit([0u8; 64]),
+            signature: crate::store::crypto::Signature::admit(crate::data::fixed_bytes::Bytes64([0u8; 64])),
         };
         parts_b.signature =
             sign_admission_parts(&parts_b, &key).map_err(|e| miette!("sign B: {e}"))?;
@@ -973,21 +973,21 @@ mod tests {
 
         // Validate record A, exactly as the legitimate path does.
         let record = admit_claim_record()?;
-        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0x27; 32]));
-        let scope = ScopeManifestDigest::from_digest([0x51; 32]);
+        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit(crate::data::fixed_bytes::Bytes32([0x27; 32])));
+        let scope = ScopeManifestDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x51; 32]));
         let mut parts = AdmissionCertificateParts {
             protocol_version: *b"kyzo.v01",
             origin_store: record.store_id(),
             origin_epoch: FenceEpoch::genesis(record.store_id()),
             origin_commit: CommitOrdinal::ZERO,
-            schema_cut: SchemaCutDigest::from_digest([0x51; 32]),
+            schema_cut: SchemaCutDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x51; 32])),
             record_digest: *record.digest(),
             predecessor_history_digest: [0x52; 32],
-            post_state_root: PostStateRoot::from_digest([0x53; 32]),
+            post_state_root: PostStateRoot::from_digest(crate::data::fixed_bytes::Bytes32([0x53; 32])),
             authorizing_key_id: key.id(),
             scope_manifest_digest: scope,
             operation_key: None,
-            signature: crate::store::crypto::Signature::admit([0u8; 64]),
+            signature: crate::store::crypto::Signature::admit(crate::data::fixed_bytes::Bytes64([0u8; 64])),
         };
         parts.signature = sign_admission_parts(&parts, &key).map_err(|e| miette!("sign: {e}"))?;
         let cert = mint_admission_certificate(parts).map_err(|e| miette!("mint: {e}"))?;
@@ -1025,7 +1025,7 @@ mod tests {
                 .map_err(|e| miette!("pred: {e}"))?,
             StatementValue::new(DataValue::from("forged_assembly")),
             ValidityTime::instant(1_700_000_000_000_001),
-            StatementContext::Scoped(ContextId::from_digest([0xC1; 32])),
+            StatementContext::Scoped(ContextId::from_digest(crate::data::fixed_bytes::Bytes32([0xC1; 32]))),
             StatementSource::unbound(),
         ))?;
         assert_ne!(
@@ -1067,21 +1067,21 @@ mod tests {
         use crate::store::sweep::CommitOrdinal;
 
         let record = admit_claim_record()?;
-        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0x28; 32]));
-        let scope = ScopeManifestDigest::from_digest([0x61; 32]);
+        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit(crate::data::fixed_bytes::Bytes32([0x28; 32])));
+        let scope = ScopeManifestDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x61; 32]));
         let mut parts = AdmissionCertificateParts {
             protocol_version: *b"kyzo.v01",
             origin_store: record.store_id(),
             origin_epoch: FenceEpoch::genesis(record.store_id()),
             origin_commit: CommitOrdinal::ZERO,
-            schema_cut: SchemaCutDigest::from_digest([0x51; 32]),
+            schema_cut: SchemaCutDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x51; 32])),
             record_digest: *record.digest(),
             predecessor_history_digest: [0x52; 32],
-            post_state_root: PostStateRoot::from_digest([0x53; 32]),
+            post_state_root: PostStateRoot::from_digest(crate::data::fixed_bytes::Bytes32([0x53; 32])),
             authorizing_key_id: key.id(),
             scope_manifest_digest: scope,
             operation_key: None,
-            signature: crate::store::crypto::Signature::admit([0u8; 64]),
+            signature: crate::store::crypto::Signature::admit(crate::data::fixed_bytes::Bytes64([0u8; 64])),
         };
         parts.signature = sign_admission_parts(&parts, &key).map_err(|e| miette!("sign: {e}"))?;
         let cert = mint_admission_certificate(parts).map_err(|e| miette!("mint: {e}"))?;

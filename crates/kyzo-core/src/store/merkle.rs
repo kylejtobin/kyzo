@@ -295,13 +295,13 @@ pub struct StateRoot([u8; 32]);
 
 impl StateRoot {
     /// Wrap an already-proven root digest.
-    pub fn from_digest(digest: [u8; 32]) -> Self {
-        Self(digest)
+    pub fn from_digest(digest: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(digest.0)
     }
 
     /// Borrow the digest bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 
     /// Lift a cold [`MerkleHash`] into Spec [`StateRoot`].
@@ -468,8 +468,8 @@ const _: [u8; std::mem::align_of::<DurableCutDigest>()] = [0u8; std::mem::align_
 
 impl DurableCutDigest {
     /// Borrow the digest bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -851,14 +851,14 @@ impl StateRootHead {
     /// transcript is the sole serializer; this digests its sealed bytes only.
     pub fn compact_digest(self) -> Result<Digest32, MerkleChainRefuse> {
         let transcript = encode_state_root_head(
-            &Digest32::admit(*self.store_id.as_bytes()),
+            &Digest32::admit(self.store_id.as_bytes()),
             self.fence_epoch.get(),
             self.commit_ordinal.get(),
-            &Digest32::admit(*self.root.as_bytes()),
+            &Digest32::admit(self.root.as_bytes()),
         )?;
         let mut h = Sha256::new();
         h.update(transcript.as_bytes());
-        Ok(Digest32::admit(h.finalize().into()))
+        Ok(Digest32::admit(crate::data::fixed_bytes::Bytes32(h.finalize().into())))
     }
 }
 
@@ -1029,8 +1029,8 @@ fn chain_bind(
     commit_ordinal: CommitOrdinal,
 ) -> Result<StateRoot, MerkleChainRefuse> {
     let transcript = encode_chained_state_root(
-        &Digest32::admit(*content_root.as_bytes()),
-        &Digest32::admit(*predecessor_root.as_bytes()),
+        &Digest32::admit(content_root.as_bytes()),
+        &Digest32::admit(predecessor_root.as_bytes()),
         link.transcript_tag(),
         commit_ordinal.get(),
     )?;
@@ -1237,11 +1237,11 @@ mod tests {
             decompress, decrypt, derive_dek,
         };
 
-        let store = StoreId::from_digest([0xC1; 32]);
+        let store = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0xC1; 32]));
         let domain = CryptoDomain::new(FenceEpoch::genesis(store));
-        let kek = Kek::admit([0x59; 32]);
+        let kek = Kek::admit(crate::data::fixed_bytes::Bytes32([0x59; 32]));
         let cap = KekUnwrapCap::from_kek(kek);
-        let salt = ShredSalt::admit([0xA5; 32]);
+        let salt = ShredSalt::admit(crate::data::fixed_bytes::Bytes32([0xA5; 32]));
         let dek = derive_dek(&cap, domain, SegmentCounter::ZERO, &salt);
 
         let mut aad_b = CanonicalTranscriptBuilder::new(FormatVersion::CURRENT)?;
@@ -1445,7 +1445,7 @@ mod tests {
             roots_equal_at_cut,
         };
 
-        let store_id = StoreId::from_digest([0x58; 32]);
+        let store_id = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0x58; 32]));
         assert_eq!(RootChain::empty().prior_root(), GENESIS_ROOT);
 
         let fx = three_cut_mint_append_chain(store_id)?;
@@ -1538,7 +1538,7 @@ mod tests {
             copy_dir_recursive(src, dst)
         }
 
-        let store_id = StoreId::from_digest([0x5D; 32]);
+        let store_id = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0x5D; 32]));
         let fence = FenceEpoch::genesis(store_id);
         let o1 = CommitOrdinal::ZERO.successor()?;
         let o2 = o1.successor()?;
@@ -1664,7 +1664,7 @@ mod tests {
             as_of_root, roots_equal_at_cut,
         };
 
-        let store_id = StoreId::from_digest([0xED; 32]);
+        let store_id = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0xED; 32]));
         let fence = FenceEpoch::genesis(store_id);
 
         let state_v1: Vec<(Vec<u8>, Vec<u8>)> = vec![
@@ -1800,7 +1800,7 @@ mod tests {
 
         use super::{as_of_root, roots_equal_at_cut};
 
-        let store_id = StoreId::from_digest([0x57; 32]);
+        let store_id = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0x57; 32]));
         let fx = three_cut_mint_append_chain(store_id)?;
 
         // Past cut: as_of_root equals the StateRoot minted at that cut.
@@ -1869,7 +1869,7 @@ mod tests {
             build_consistency_proof,
         };
 
-        let store_id = StoreId::from_digest([0xCF; 32]);
+        let store_id = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0xCF; 32]));
         let fence = FenceEpoch::genesis(store_id);
         let o1 = CommitOrdinal::ZERO.successor()?;
         let o2 = o1.successor()?;
@@ -1928,8 +1928,8 @@ mod tests {
 
         use super::{ForkPoint, fork_equivalence};
 
-        let store_a = StoreId::from_digest([0xF1; 32]);
-        let store_b = StoreId::from_digest([0xF2; 32]);
+        let store_a = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0xF1; 32]));
+        let store_b = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0xF2; 32]));
         let fence_a = FenceEpoch::genesis(store_a);
         let fence_a_later = FenceEpoch::of_u64(store_a, 1);
         let o1 = CommitOrdinal::ZERO.successor()?;
@@ -2208,7 +2208,7 @@ mod tests {
             roots_equal_at_cut,
         };
 
-        let store_id = StoreId::from_digest([0x58; 32]);
+        let store_id = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0x58; 32]));
         let fence = FenceEpoch::genesis(store_id);
         let ordinal = CommitOrdinal::ZERO.successor()?;
 
@@ -2316,7 +2316,7 @@ mod tests {
 
         use super::{ChainLinkKind, ChainedStateRoot, DurableCommitCut, GENESIS_ROOT, cuts_equal};
 
-        let store_id = StoreId::from_digest([0x24; 32]);
+        let store_id = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0x24; 32]));
         let fence = FenceEpoch::genesis(store_id);
         let ordinal = CommitOrdinal::ZERO.successor()?;
         let content = StateRoot::from_merkle(root_of_pairs(&[(b"k".to_vec(), b"v".to_vec())])?);
@@ -2443,7 +2443,7 @@ mod tests {
 
         use super::{ChainLinkKind, ChainedStateRoot, GENESIS_ROOT, RootChain};
 
-        let store_id = StoreId::from_digest([0xC7; 32]);
+        let store_id = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0xC7; 32]));
         let fence = FenceEpoch::genesis(store_id);
         let o1 = CommitOrdinal::ZERO.successor()?;
         let o2 = o1.successor()?;
@@ -2501,7 +2501,7 @@ mod tests {
             RootChain, StateRootHead, check_sth_gossip,
         };
 
-        let store_id = StoreId::from_digest([0xE1; 32]);
+        let store_id = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0xE1; 32]));
         let fence = FenceEpoch::genesis(store_id);
         let o1 = CommitOrdinal::ZERO.successor()?;
         let o2 = o1.successor()?;
@@ -2595,8 +2595,8 @@ mod tests {
             StateRootHead, build_consistency_proof, check_sth_gossip, verify_consistency_proof,
         };
 
-        let store_a = StoreId::from_digest([0xA1; 32]);
-        let store_b = StoreId::from_digest([0xB2; 32]);
+        let store_a = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0xA1; 32]));
+        let store_b = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0xB2; 32]));
         let fence_a = FenceEpoch::genesis(store_a);
         let fence_b = FenceEpoch::genesis(store_b);
         let o1 = CommitOrdinal::ZERO.successor()?;
@@ -2690,7 +2690,7 @@ mod tests {
             StateRootHead, build_consistency_proof, check_sth_gossip, verify_consistency_proof,
         };
 
-        let store_id = StoreId::from_digest([0xE2; 32]);
+        let store_id = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0xE2; 32]));
         let fence = FenceEpoch::genesis(store_id);
         let o1 = CommitOrdinal::ZERO.successor()?;
         let o2 = o1.successor()?;

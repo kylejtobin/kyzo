@@ -68,13 +68,13 @@ pub struct AuthorizingKeyId([u8; 32]);
 
 impl AuthorizingKeyId {
     /// Wrap an already-proven authorizing key id.
-    pub fn from_digest(digest: [u8; 32]) -> Self {
-        Self(digest)
+    pub fn from_digest(digest: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(digest.0)
     }
 
     /// Borrow the id bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -91,19 +91,19 @@ pub struct VerifyingPublicKey([u8; 32]);
 
 impl VerifyingPublicKey {
     /// Wrap already-proven verifying-key bytes (post ed25519 validation / table decode).
-    pub fn admit(bytes: [u8; 32]) -> Self {
-        Self(bytes)
+    pub fn admit(bytes: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(bytes.0)
     }
 
     /// Validate compressed ed25519 verifying-key bytes and wrap.
-    pub fn from_ed25519_bytes(bytes: [u8; 32]) -> Result<Self, ()> {
-        VerifyingKey::from_bytes(&bytes).map_err(|_| ())?;
-        Ok(Self(bytes))
+    pub fn from_ed25519_bytes(bytes: crate::data::fixed_bytes::Bytes32) -> Result<Self, ()> {
+        VerifyingKey::from_bytes(&bytes.0).map_err(|_| ())?;
+        Ok(Self(bytes.0))
     }
 
     /// Borrow the verifying-key bytes at the dalek / transcript edge only.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -113,13 +113,13 @@ pub struct ScopeManifestDigest([u8; 32]);
 
 impl ScopeManifestDigest {
     /// Wrap an already-proven scope manifest digest.
-    pub fn from_digest(digest: [u8; 32]) -> Self {
-        Self(digest)
+    pub fn from_digest(digest: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(digest.0)
     }
 
     /// Borrow the digest bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -136,13 +136,13 @@ pub struct PostStateRoot([u8; 32]);
 
 impl PostStateRoot {
     /// Wrap an already-proven post-state root digest.
-    pub fn from_digest(digest: [u8; 32]) -> Self {
-        Self(digest)
+    pub fn from_digest(digest: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(digest.0)
     }
 
     /// Borrow the digest bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -159,13 +159,13 @@ pub struct SchemaCutDigest([u8; 32]);
 
 impl SchemaCutDigest {
     /// Wrap an already-proven schema-cut digest.
-    pub fn from_digest(digest: [u8; 32]) -> Self {
-        Self(digest)
+    pub fn from_digest(digest: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(digest.0)
     }
 
     /// Borrow the digest bytes at transcript / hash edges only.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -181,13 +181,13 @@ pub struct LocalRecordId([u8; 32]);
 
 impl LocalRecordId {
     /// Wrap already-proven local record id bytes.
-    pub fn from_digest(digest: [u8; 32]) -> Self {
-        Self(digest)
+    pub fn from_digest(digest: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(digest.0)
     }
 
     /// Borrow the id bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -237,7 +237,7 @@ impl AuthorizingKey {
     /// `id` must be a **public** identifier — never equal to `seed`. Prefer
     /// [`Self::mint_with_verifying_id`] so the id is the verifying key bytes.
     pub(crate) fn mint(id: AuthorizingKeyId, seed: super::authority::Entropy) -> Self {
-        let signing = SigningKey::from_bytes(seed.as_bytes());
+        let signing = SigningKey::from_bytes(&seed.as_bytes().0);
         let verifying = signing.verifying_key();
         Self {
             id,
@@ -252,14 +252,14 @@ impl AuthorizingKey {
     /// seed is never derived from a public token id — callers supply fresh
     /// OS entropy.
     pub(crate) fn mint_with_verifying_id(seed: super::authority::Entropy) -> Self {
-        let mut seed_bytes = *seed.as_bytes();
+        let mut seed_bytes = seed.as_bytes().0;
         loop {
             let signing = SigningKey::from_bytes(&seed_bytes);
             let verifying = signing.verifying_key();
             let id_bytes = verifying.to_bytes();
             if id_bytes != seed_bytes {
                 return Self {
-                    id: AuthorizingKeyId::from_digest(id_bytes),
+                    id: AuthorizingKeyId::from_digest(crate::data::fixed_bytes::Bytes32(id_bytes)),
                     verifying,
                     signing: Some(signing),
                 };
@@ -279,7 +279,7 @@ impl AuthorizingKey {
         id: AuthorizingKeyId,
         verifying_key: VerifyingPublicKey,
     ) -> Result<Self, ReplicaRefuse> {
-        let verifying = VerifyingKey::from_bytes(verifying_key.as_bytes())
+        let verifying = VerifyingKey::from_bytes(&verifying_key.as_bytes().0)
             .map_err(|_| ReplicaRefuse::AuthenticityFailed)?;
         Ok(Self {
             id,
@@ -295,7 +295,7 @@ impl AuthorizingKey {
 
     /// Public verifying key — what the trust table stores.
     pub fn verifying_public_key(&self) -> VerifyingPublicKey {
-        VerifyingPublicKey::admit(self.verifying.to_bytes())
+        VerifyingPublicKey::admit(crate::data::fixed_bytes::Bytes32(self.verifying.to_bytes()))
     }
 
     /// Public verifying key bytes (32) — wire / table edge only.
@@ -314,9 +314,9 @@ impl AuthorizingKey {
             .signing
             .as_ref()
             .ok_or(ReplicaRefuse::AuthenticityFailed)?;
-        Ok(Signature::admit(
+        Ok(Signature::admit(crate::data::fixed_bytes::Bytes64(
             signing.sign(body.as_bytes().as_slice()).to_bytes(),
-        ))
+        )))
     }
 
     /// Verify a sealed ed25519 signature against this key's public material.
@@ -395,12 +395,12 @@ impl ScopeManifestTable {
     pub(crate) fn set(&mut self, digest: ScopeManifestDigest, status: ScopeManifestStatus) {
         // INVARIANT(scope_status_stored): callers never pass Unknown — it is
         // the absent-entry default from resolve(), not a table value.
-        self.entries.insert(*digest.as_bytes(), status);
+        self.entries.insert(digest.as_bytes().0, status);
     }
 
     /// Derive resolution for a sealed scope digest (§69).
     pub fn resolve(&self, digest: &ScopeManifestDigest) -> ScopeManifestStatus {
-        match self.entries.get(digest.as_bytes()).copied() {
+        match self.entries.get(&digest.as_bytes().0).copied() {
             Some(status) => status,
             None => ScopeManifestStatus::Unknown,
         }
@@ -536,7 +536,7 @@ impl AdmissionCertificate {
             origin_commit: self.origin_commit,
             schema_cut: self.schema_cut.as_bytes(),
             record_digest: self.record_digest.as_bytes(),
-            predecessor_history_digest: &self.predecessor_history_digest,
+            predecessor_history_digest: crate::data::fixed_bytes::Bytes32(self.predecessor_history_digest),
             post_state_root: self.post_state_root.as_bytes(),
             authorizing_key_id: &self.authorizing_key_id,
             scope_manifest_digest: &self.scope_manifest_digest,
@@ -571,8 +571,8 @@ impl ReplicaKey {
     }
 
     /// Borrow the key digest.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -585,13 +585,13 @@ pub struct TenantId([u8; 32]);
 
 impl TenantId {
     /// Wrap an already-proven tenant / graph-scope digest.
-    pub fn from_digest(digest: [u8; 32]) -> Self {
-        Self(digest)
+    pub fn from_digest(digest: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(digest.0)
     }
 
     /// Borrow the tenant digest bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -603,13 +603,16 @@ impl AsRef<[u8]> for TenantId {
 }
 
 /// Domain-separated SHA-256 digest over labeled seat bytes (copy_detector).
-fn domain_separated_digest(label: DigestDomain, seats: &[&[u8; 32]]) -> [u8; 32] {
+fn domain_separated_digest(
+    label: DigestDomain,
+    seats: &[crate::data::fixed_bytes::Bytes32],
+) -> crate::data::fixed_bytes::Bytes32 {
     let mut h = Sha256::new();
     label.absorb(&mut h);
     for seat in seats {
-        h.update(*seat);
+        h.update(seat);
     }
-    h.finalize().into()
+    crate::data::fixed_bytes::Bytes32::from_sha256(h.finalize())
 }
 
 /// Namespaced federation record identity (#270 T2 / seat 70).
@@ -757,13 +760,13 @@ impl ReplicaCustodyTable {
     /// Admit custody under its [`ReplicaKey`]. Duplicate key → existing entry
     /// (idempotent). Never reshapes a held custody into a second mint.
     pub fn admit(&mut self, custody: ReplicaCustody) -> &ReplicaCustody {
-        let key = *custody.key().as_bytes();
+        let key = custody.key().as_bytes().0;
         self.by_key.entry(key).or_insert(custody)
     }
 
     /// Lookup held custody by key, if any.
     pub fn get(&self, key: &ReplicaKey) -> Option<&ReplicaCustody> {
-        self.by_key.get(key.as_bytes())
+        self.by_key.get(&key.as_bytes().0)
     }
 
     /// Number of distinct custody keys held.
@@ -892,13 +895,13 @@ struct AdmissionSigningBody<'a> {
     origin_store: StoreId,
     origin_epoch: FenceEpoch,
     origin_commit: CommitOrdinal,
-    schema_cut: &'a [u8; 32],
-    record_digest: &'a [u8; 32],
-    predecessor_history_digest: &'a [u8; 32],
-    post_state_root: &'a [u8; 32],
+    schema_cut: crate::data::fixed_bytes::Bytes32,
+    record_digest: crate::data::fixed_bytes::Bytes32,
+    predecessor_history_digest: crate::data::fixed_bytes::Bytes32,
+    post_state_root: crate::data::fixed_bytes::Bytes32,
     authorizing_key_id: &'a AuthorizingKeyId,
     scope_manifest_digest: &'a ScopeManifestDigest,
-    operation_key: Option<&'a [u8; 32]>,
+    operation_key: Option<crate::data::fixed_bytes::Bytes32>,
 }
 
 fn signing_body_digest(body: AdmissionSigningBody<'_>) -> Digest {
@@ -936,7 +939,7 @@ fn signing_body_digest(body: AdmissionSigningBody<'_>) -> Digest {
         }
         None => h.update([0u8]),
     }
-    Digest::admit(h.finalize().into())
+    Digest::admit(crate::data::fixed_bytes::Bytes32(h.finalize().into()))
 }
 
 /// Mint an AdmissionCertificate — callable only from the admission seam.
@@ -962,23 +965,23 @@ pub(crate) fn mint_admission_certificate(
     builder
         .append_digest32(
             FieldId::PRIMARY_DIGEST,
-            &Digest32::admit(*parts.record_digest.as_bytes()),
+            &Digest32::admit(parts.record_digest.as_bytes()),
         )
         .map_err(|_| ReplicaRefuse::AuthenticityFailed)?;
     builder
         .append_digest32(
             FieldId::SECONDARY_DIGEST,
-            &Digest32::admit(parts.predecessor_history_digest),
+            &Digest32::admit(crate::data::fixed_bytes::Bytes32(parts.predecessor_history_digest)),
         )
         .map_err(|_| ReplicaRefuse::AuthenticityFailed)?;
     builder
-        .append_bytes(FieldId::DOMAIN_LABEL, parts.origin_store.as_bytes())
+        .append_bytes(FieldId::DOMAIN_LABEL, parts.origin_store.as_bytes().as_slice())
         .map_err(|_| ReplicaRefuse::AuthenticityFailed)?;
     // Map keys must be strictly ascending byte order.
     let mut bindings: Vec<(Vec<u8>, MapValue)> = vec![
         (
             b"authorizing_key_id".to_vec(),
-            MapValue::Digest32(*parts.authorizing_key_id.as_bytes()),
+            MapValue::Digest32(parts.authorizing_key_id.as_bytes().0),
         ),
         (
             b"origin_commit".to_vec(),
@@ -990,7 +993,7 @@ pub(crate) fn mint_admission_certificate(
         ),
         (
             b"post_state_root".to_vec(),
-            MapValue::Digest32(*parts.post_state_root.as_bytes()),
+            MapValue::Digest32(parts.post_state_root.as_bytes().0),
         ),
         (
             b"protocol_version".to_vec(),
@@ -998,11 +1001,11 @@ pub(crate) fn mint_admission_certificate(
         ),
         (
             b"schema_cut".to_vec(),
-            MapValue::Digest32(*parts.schema_cut.as_bytes()),
+            MapValue::Digest32(parts.schema_cut.as_bytes().0),
         ),
         (
             b"scope_manifest_digest".to_vec(),
-            MapValue::Digest32(*parts.scope_manifest_digest.as_bytes()),
+            MapValue::Digest32(parts.scope_manifest_digest.as_bytes().0),
         ),
         (
             b"signature".to_vec(),
@@ -1022,7 +1025,7 @@ pub(crate) fn mint_admission_certificate(
             idx,
             (
                 b"operation_key".to_vec(),
-                MapValue::Digest32(*op.as_bytes()),
+                MapValue::Digest32(op.as_bytes().0),
             ),
         );
     }
@@ -1068,7 +1071,7 @@ pub(crate) fn sign_admission_parts(
         origin_commit: parts.origin_commit,
         schema_cut: parts.schema_cut.as_bytes(),
         record_digest: parts.record_digest.as_bytes(),
-        predecessor_history_digest: &parts.predecessor_history_digest,
+        predecessor_history_digest: crate::data::fixed_bytes::Bytes32(parts.predecessor_history_digest),
         post_state_root: parts.post_state_root.as_bytes(),
         authorizing_key_id: &parts.authorizing_key_id,
         scope_manifest_digest: &parts.scope_manifest_digest,
@@ -1212,9 +1215,22 @@ impl CrossingKind {
         }
     }
 
-    /// Wire tag for this kind — `#[repr(u8)]` discriminant is sole authority (seat 59).
+    /// Wire tag for this kind — explicit variant table is sole authority (seat 59).
     pub fn as_wire(self) -> u8 {
-        self as u8
+        match self {
+            Self::Entity => 0,
+            Self::Event => 1,
+            Self::State => 2,
+            Self::Role => 3,
+            Self::Relation => 4,
+            Self::Claim => 5,
+            Self::Evidence => 6,
+            Self::Context => 7,
+            Self::Concept => 8,
+            Self::Rule => 9,
+            Self::Derivation => 10,
+            Self::Invalidation => 11,
+        }
     }
 }
 
@@ -1235,7 +1251,10 @@ pub enum CrossingContext {
 
 impl CrossingContext {
     /// Decode wire form: `0` → Unscoped, `1` + digest → Scoped; else ContextInvalid.
-    pub fn from_wire(tag: u8, digest: Option<[u8; 32]>) -> Result<Self, CrossingRefuse> {
+    pub fn from_wire(
+        tag: u8,
+        digest: Option<crate::data::fixed_bytes::Bytes32>,
+    ) -> Result<Self, CrossingRefuse> {
         match (tag, digest) {
             (0, None) => Ok(Self::Unscoped),
             (1, Some(d)) => Ok(Self::Scoped(crate::data::statement::ContextId::from_digest(d))),
@@ -1707,7 +1726,7 @@ impl GraphBoundKey {
     pub fn bind_digest(graph: GraphBoundary, key: Digest32) -> Self {
         Self {
             graph,
-            key: ReplicaKey(*key.as_bytes()),
+            key: ReplicaKey(key.as_bytes().0),
         }
     }
 
@@ -1868,7 +1887,7 @@ impl SthGossipSubject {
     /// Canonical JetStream subject string for compact root-digest gossip.
     pub fn jetstream_subject(self) -> String {
         let mut hex = String::with_capacity(64);
-        for b in self.store_id.as_bytes() {
+        for b in self.store_id.as_bytes().0 {
             const HEX: &[u8; 16] = b"0123456789abcdef";
             hex.push(char::from(HEX[usize::from(b >> 4)]));
             hex.push(char::from(HEX[usize::from(b & 0x0f)]));
@@ -1935,7 +1954,7 @@ impl SignedStateRootHead {
     /// head fields.
     pub(crate) fn sign(head: StateRootHead, key: &AuthorizingKey) -> Result<Self, ReplicaRefuse> {
         let body = Digest::admit(
-            *head
+            head
                 .compact_digest()
                 .map_err(|_| ReplicaRefuse::AuthenticityFailed)?
                 .as_bytes(),
@@ -1972,8 +1991,7 @@ impl SignedStateRootHead {
             Some(k) => k,
             None => return Err(ReplicaRefuse::AuthenticityFailed),
         };
-        let body = Digest::admit(
-            *self
+        let body = Digest::admit(self
                 .head
                 .compact_digest()
                 .map_err(|_| ReplicaRefuse::AuthenticityFailed)?
@@ -2042,11 +2060,11 @@ mod authorizing_key_ed25519_tests {
         let mut forged_sig = [0u8; 64];
         forged_sig[0] = 1;
         let weak = AuthorizingKey::mint_verifying(
-            AuthorizingKeyId::from_digest([0xAA; 32]),
+            AuthorizingKeyId::from_digest(crate::data::fixed_bytes::Bytes32([0xAA; 32])),
             VerifyingPublicKey::admit(identity_key),
         )?;
         assert!(
-            !weak.verify_signature(&Digest::admit([0x99u8; 32]), &Signature::admit(forged_sig),),
+            !weak.verify_signature(&Digest::admit(crate::data::fixed_bytes::Bytes32([0x99u8; 32])), &Signature::admit(forged_sig),),
             "FORGERY ACCEPTED: verify_signature admits a signature under a small-order \
              (identity) authorizing key over an arbitrary body -- the permissive \
              .verify() must become verify_strict"
@@ -2089,11 +2107,11 @@ mod authorizing_key_ed25519_tests {
             vk.verify(b"", &rfc_sig).is_ok(),
             "RFC 8032 TEST 1 signature must verify under RFC public key"
         );
-        let receiver = AuthorizingKey::mint_verifying(AuthorizingKeyId::from_digest([0xA1; 32]), VerifyingPublicKey::admit(expect_pk))?;
+        let receiver = AuthorizingKey::mint_verifying(AuthorizingKeyId::from_digest(crate::data::fixed_bytes::Bytes32([0xA1; 32])), VerifyingPublicKey::admit(expect_pk))?;
         assert!(!receiver.can_sign());
         assert!(
             matches!(
-                receiver.sign(&Digest::admit([0u8; 32])),
+                receiver.sign(&Digest::admit(crate::data::fixed_bytes::Bytes32([0u8; 32]))),
                 Err(ReplicaRefuse::AuthenticityFailed)
             ),
             "public-only key cannot forge"
@@ -2102,14 +2120,14 @@ mod authorizing_key_ed25519_tests {
         // Origin mint: dalek seed→SigningKey; AuthorizingKey must expose the
         // same verifying bytes and round-trip sign/verify on a body digest.
         let dalek_pk = SigningKey::from_bytes(&seed).verifying_key().to_bytes();
-        let origin = AuthorizingKey::mint(AuthorizingKeyId::from_digest([0xA1; 32]), Entropy::admit(seed));
-        assert_eq!(*origin.verifying_bytes().as_bytes(), dalek_pk);
+        let origin = AuthorizingKey::mint(AuthorizingKeyId::from_digest(crate::data::fixed_bytes::Bytes32([0xA1; 32])), Entropy::admit(seed));
+        assert_eq!(origin.verifying_bytes().as_bytes(), dalek_pk);
         assert!(origin.can_sign());
-        let body = Digest::admit([0x5eu8; 32]);
+        let body = Digest::admit(crate::data::fixed_bytes::Bytes32([0x5eu8; 32]));
         let sig = origin.sign(&body)?;
         assert!(origin.verify_signature(&body, &sig));
         assert!(
-            AuthorizingKey::mint_verifying(AuthorizingKeyId::from_digest([0xA1; 32]), VerifyingPublicKey::admit(dalek_pk))?.verify_signature(&body, &sig),
+            AuthorizingKey::mint_verifying(AuthorizingKeyId::from_digest(crate::data::fixed_bytes::Bytes32([0xA1; 32])), VerifyingPublicKey::admit(dalek_pk))?.verify_signature(&body, &sig),
             "receiver with public-only table material verifies origin sig"
         );
         // RFC public key must not verify a signature under the dalek-derived
@@ -2124,17 +2142,17 @@ mod authorizing_key_ed25519_tests {
         let seed = [0x42u8; 32];
         let origin = AuthorizingKey::mint_with_verifying_id(Entropy::admit(seed));
         assert_ne!(
-            *origin.id().as_bytes(),
+            origin.id().as_bytes(),
             seed,
             "public id must not equal secret seed"
         );
         assert_eq!(
-            *origin.id().as_bytes(),
-            *origin.verifying_bytes().as_bytes(),
+            origin.id().as_bytes(),
+            origin.verifying_bytes().as_bytes(),
             "id is the verifying key bytes"
         );
         assert!(origin.can_sign());
-        let body = Digest::admit([0xABu8; 32]);
+        let body = Digest::admit(crate::data::fixed_bytes::Bytes32([0xABu8; 32]));
         let sig = origin.sign(&body)?;
         let mut table = AuthorizingKeyTable::new();
         table.insert(origin.clone());
@@ -2148,9 +2166,9 @@ mod authorizing_key_ed25519_tests {
     #[test]
     fn sign_verify_round_trip_and_table_stores_public_only() -> Result<()> {
         let seed = [0x42u8; 32];
-        let id = AuthorizingKeyId::from_digest([0x11; 32]);
+        let id = AuthorizingKeyId::from_digest(crate::data::fixed_bytes::Bytes32([0x11; 32]));
         let origin = AuthorizingKey::mint(id, Entropy::admit(seed));
-        let body = Digest::admit([0xCAu8; 32]);
+        let body = Digest::admit(crate::data::fixed_bytes::Bytes32([0xCAu8; 32]));
         let sig = origin.sign(&body)?;
         assert_eq!(sig.as_bytes().len(), 64);
         assert!(origin.verify_signature(&body, &sig));
@@ -2177,26 +2195,26 @@ mod authorizing_key_ed25519_tests {
 
     #[test]
     fn wrong_key_and_flipped_byte_fail_verify() -> Result<()> {
-        let body = Digest::admit([0xEEu8; 32]);
-        let origin = AuthorizingKey::mint(AuthorizingKeyId::from_digest([0x01; 32]), Entropy::admit([0x7Au8; 32]));
+        let body = Digest::admit(crate::data::fixed_bytes::Bytes32([0xEEu8; 32]));
+        let origin = AuthorizingKey::mint(AuthorizingKeyId::from_digest(crate::data::fixed_bytes::Bytes32([0x01; 32])), Entropy::admit(crate::data::fixed_bytes::Bytes32([0x7Au8; 32])));
         let sig = origin.sign(&body)?;
         assert!(origin.verify_signature(&body, &sig));
 
         // Flipped signature byte → refuse.
-        let mut flipped = *sig.as_bytes();
+        let mut flipped = sig.as_bytes().0;
         flipped[0] ^= 0x01;
         let flipped_sig = Signature::admit(flipped);
         assert!(!origin.verify_signature(&body, &flipped_sig));
         assert!(origin.verify_signature(&body, &sig));
 
         // Wrong verifying key → refuse.
-        let other = AuthorizingKey::mint(AuthorizingKeyId::from_digest([0x02; 32]), Entropy::admit([0x7Bu8; 32]));
+        let other = AuthorizingKey::mint(AuthorizingKeyId::from_digest(crate::data::fixed_bytes::Bytes32([0x02; 32])), Entropy::admit(crate::data::fixed_bytes::Bytes32([0x7Bu8; 32])));
         assert!(!other.verify_signature(&body, &sig));
 
         // Table with wrong public key → verify fails.
         let mut table = AuthorizingKeyTable::new();
         table.insert(other.authorizing_public()?);
-        let looked = table.lookup(&AuthorizingKeyId::from_digest([0x02; 32]))?.ok_or_else(|| miette!("lookup"))?;
+        let looked = table.lookup(&AuthorizingKeyId::from_digest(crate::data::fixed_bytes::Bytes32([0x02; 32])))?.ok_or_else(|| miette!("lookup"))?;
         assert!(!looked.verify_signature(&body, &sig));
 
         Ok(())
@@ -2221,20 +2239,20 @@ mod crossing_contract_tests {
         scope: ScopeManifestDigest,
         schema_cut: SchemaCutDigest,
     ) -> Result<AdmissionCertificate> {
-        let store = StoreId::from_digest([0xC7; 32]);
+        let store = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0xC7; 32]));
         let mut parts = AdmissionCertificateParts {
             protocol_version: *b"kyzo.v01",
             origin_store: store,
             origin_epoch: FenceEpoch::genesis(store),
             origin_commit: CommitOrdinal::ZERO,
             schema_cut,
-            record_digest: RecordContentDigest::from_digest([0xE1; 32]),
+            record_digest: RecordContentDigest::from_digest(crate::data::fixed_bytes::Bytes32([0xE1; 32])),
             predecessor_history_digest: [0x52; 32],
-            post_state_root: PostStateRoot::from_digest([0x53; 32]),
+            post_state_root: PostStateRoot::from_digest(crate::data::fixed_bytes::Bytes32([0x53; 32])),
             authorizing_key_id: key.id(),
             scope_manifest_digest: scope,
             operation_key: None,
-            signature: Signature::admit([0u8; 64]),
+            signature: Signature::admit(crate::data::fixed_bytes::Bytes64([0u8; 64])),
         };
         parts.signature = sign_admission_parts(&parts, key).into_diagnostic()?;
         mint_admission_certificate(parts).into_diagnostic()
@@ -2256,14 +2274,14 @@ mod crossing_contract_tests {
 
     #[test]
     fn missing_declared_evidence_typed_refuse() -> Result<()> {
-        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0xC1; 32]));
-        let scope = ScopeManifestDigest::from_digest([0x5C; 32]);
+        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit(crate::data::fixed_bytes::Bytes32([0xC1; 32])));
+        let scope = ScopeManifestDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x5C; 32]));
         let mut keys = AuthorizingKeyTable::new();
         keys.insert(key.clone());
         let mut scopes = ScopeManifestTable::new();
         scopes.set(scope, ScopeManifestStatus::Verified);
-        let cert = mint_signed(&key, scope, SchemaCutDigest::from_digest([0x51; 32]))?;
-        let local = StoreId::from_digest([0xD1; 32]);
+        let cert = mint_signed(&key, scope, SchemaCutDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x51; 32])))?;
+        let local = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0xD1; 32]));
 
         let envelope = CrossingEnvelope::new(CrossingEnvelopeParts {
             kind: CrossingKind::Claim,
@@ -2297,12 +2315,12 @@ mod crossing_contract_tests {
 
     #[test]
     fn scope_unknown_revoked_denied_distinct_from_retention_declined() -> Result<()> {
-        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0xC2; 32]));
-        let scope = ScopeManifestDigest::from_digest([0x5D; 32]);
+        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit(crate::data::fixed_bytes::Bytes32([0xC2; 32])));
+        let scope = ScopeManifestDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x5D; 32]));
         let mut keys = AuthorizingKeyTable::new();
         keys.insert(key.clone());
-        let cert = mint_signed(&key, scope, SchemaCutDigest::from_digest([0x51; 32]))?;
-        let local = StoreId::from_digest([0xD2; 32]);
+        let cert = mint_signed(&key, scope, SchemaCutDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x51; 32])))?;
+        let local = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0xD2; 32]));
         let envelope = matching_envelope(&cert);
         let held = CrossingCapabilitySet::new();
 
@@ -2372,29 +2390,29 @@ mod crossing_contract_tests {
 
     #[test]
     fn full_contract_validates_before_lower_token() -> Result<()> {
-        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0xC3; 32]));
-        let scope = ScopeManifestDigest::from_digest([0x5E; 32]);
+        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit(crate::data::fixed_bytes::Bytes32([0xC3; 32])));
+        let scope = ScopeManifestDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x5E; 32]));
         let mut keys = AuthorizingKeyTable::new();
         keys.insert(key.clone());
         let mut scopes = ScopeManifestTable::new();
         scopes.set(scope, ScopeManifestStatus::Verified);
-        let cert = mint_signed(&key, scope, SchemaCutDigest::from_digest([0x51; 32]))?;
-        let local = StoreId::from_digest([0xD3; 32]);
+        let cert = mint_signed(&key, scope, SchemaCutDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x51; 32])))?;
+        let local = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0xD3; 32]));
         let mut claimed = CrossingCapabilitySet::new();
-        claimed.insert(Digest32::admit([0xCA; 32]));
+        claimed.insert(Digest32::admit(crate::data::fixed_bytes::Bytes32([0xCA; 32])));
         let envelope = CrossingEnvelope::new(CrossingEnvelopeParts {
             kind: CrossingKind::Claim,
             schema_version: *cert.protocol_version(),
             schema_cut: cert.schema_cut(),
             issuing_authority: cert.authorizing_key_id(),
-            context: CrossingContext::Scoped(crate::data::statement::ContextId::from_digest([0xC0; 32])),
+            context: CrossingContext::Scoped(crate::data::statement::ContextId::from_digest(crate::data::fixed_bytes::Bytes32([0xC0; 32]))),
             evidence_demand: CrossingEvidenceDemand::DeclaredRequired,
             evidence: CrossingEvidence::Present([0xEE; 32]),
             status: CrossingStatus::Active,
             shared_capabilities: claimed.clone(),
         });
         let mut held = CrossingCapabilitySet::new();
-        held.insert(Digest32::admit([0xCA; 32]));
+        held.insert(Digest32::admit(crate::data::fixed_bytes::Bytes32([0xCA; 32])));
 
         let validated = validate_crossing_before_lower(CrossingValidationSeats {
             certificate: &cert,
@@ -2462,14 +2480,14 @@ mod crossing_contract_tests {
 
     #[test]
     fn schema_authority_mismatch_refuse() -> Result<()> {
-        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0xC4; 32]));
-        let scope = ScopeManifestDigest::from_digest([0x5F; 32]);
+        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit(crate::data::fixed_bytes::Bytes32([0xC4; 32])));
+        let scope = ScopeManifestDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x5F; 32]));
         let mut keys = AuthorizingKeyTable::new();
         keys.insert(key.clone());
         let mut scopes = ScopeManifestTable::new();
         scopes.set(scope, ScopeManifestStatus::Verified);
-        let cert = mint_signed(&key, scope, SchemaCutDigest::from_digest([0x51; 32]))?;
-        let local = StoreId::from_digest([0xD4; 32]);
+        let cert = mint_signed(&key, scope, SchemaCutDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x51; 32])))?;
+        let local = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0xD4; 32]));
 
         let bad_schema = CrossingEnvelope::new(CrossingEnvelopeParts {
             kind: CrossingKind::Entity,
@@ -2499,7 +2517,7 @@ mod crossing_contract_tests {
         let bad_cut = CrossingEnvelope::new(CrossingEnvelopeParts {
             kind: CrossingKind::Entity,
             schema_version: *cert.protocol_version(),
-            schema_cut: SchemaCutDigest::from_digest([0xFF; 32]),
+            schema_cut: SchemaCutDigest::from_digest(crate::data::fixed_bytes::Bytes32([0xFF; 32])),
             issuing_authority: cert.authorizing_key_id(),
             context: CrossingContext::Unscoped,
             evidence_demand: CrossingEvidenceDemand::NotRequired,
@@ -2525,7 +2543,7 @@ mod crossing_contract_tests {
             kind: CrossingKind::Entity,
             schema_version: *cert.protocol_version(),
             schema_cut: cert.schema_cut(),
-            issuing_authority: AuthorizingKeyId::from_digest([0x00; 32]),
+            issuing_authority: AuthorizingKeyId::from_digest(crate::data::fixed_bytes::Bytes32([0x00; 32])),
             context: CrossingContext::Unscoped,
             evidence_demand: CrossingEvidenceDemand::NotRequired,
             evidence: CrossingEvidence::Absent,
@@ -2581,14 +2599,14 @@ mod identity {
             origin_store,
             origin_epoch,
             origin_commit,
-            schema_cut: SchemaCutDigest::from_digest([0x51; 32]),
+            schema_cut: SchemaCutDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x51; 32])),
             record_digest,
             predecessor_history_digest: [0x52; 32],
-            post_state_root: PostStateRoot::from_digest([0x53; 32]),
+            post_state_root: PostStateRoot::from_digest(crate::data::fixed_bytes::Bytes32([0x53; 32])),
             authorizing_key_id: key.id(),
             scope_manifest_digest: scope,
             operation_key: None,
-            signature: Signature::admit([0u8; 64]),
+            signature: Signature::admit(crate::data::fixed_bytes::Bytes64([0u8; 64])),
         };
         parts.signature = sign_admission_parts(&parts, key).into_diagnostic()?;
         mint_admission_certificate(parts).into_diagnostic()
@@ -2606,10 +2624,10 @@ mod identity {
 
     /// Positive control: rebinding the same four-tuple is equal and digest-stable.
     fn assert_same_namespace_tuple_is_equal_and_stable() {
-        let content = RecordContentDigest::from_digest([0xE1; 32]);
-        let auth = AuthorizingKeyId::from_digest([0xA1; 32]);
-        let tenant = TenantId::from_digest([0x7E; 32]);
-        let local = LocalRecordId::from_digest(*content.as_bytes());
+        let content = RecordContentDigest::from_digest(crate::data::fixed_bytes::Bytes32([0xE1; 32]));
+        let auth = AuthorizingKeyId::from_digest(crate::data::fixed_bytes::Bytes32([0xA1; 32]));
+        let tenant = TenantId::from_digest(crate::data::fixed_bytes::Bytes32([0x7E; 32]));
+        let local = LocalRecordId::from_digest(content.as_bytes());
         let a = NamespacedRecordIdentity::bind(local, auth, tenant, content);
         let b = NamespacedRecordIdentity::bind(local, auth, tenant, content);
         assert_eq!(a, b);
@@ -2626,11 +2644,11 @@ mod identity {
         TenantId,
     ) {
         // Same local id + content; only origin authority differs → identities diverge.
-        let content = RecordContentDigest::from_digest([0xE1; 32]);
-        let local_id = LocalRecordId::from_digest(*content.as_bytes()); // admission law: RecordId is a view of content
-        let tenant = TenantId::from_digest([0x7E; 32]);
-        let auth_a = AuthorizingKeyId::from_digest([0xA1; 32]);
-        let auth_b = AuthorizingKeyId::from_digest([0xB2; 32]);
+        let content = RecordContentDigest::from_digest(crate::data::fixed_bytes::Bytes32([0xE1; 32]));
+        let local_id = LocalRecordId::from_digest(content.as_bytes()); // admission law: RecordId is a view of content
+        let tenant = TenantId::from_digest(crate::data::fixed_bytes::Bytes32([0x7E; 32]));
+        let auth_a = AuthorizingKeyId::from_digest(crate::data::fixed_bytes::Bytes32([0xA1; 32]));
+        let auth_b = AuthorizingKeyId::from_digest(crate::data::fixed_bytes::Bytes32([0xB2; 32]));
         let a = NamespacedRecordIdentity::bind(local_id, auth_a, tenant, content);
         let b = NamespacedRecordIdentity::bind(local_id, auth_b, tenant, content);
         (a, b, content, local_id, tenant)
@@ -2651,11 +2669,11 @@ mod identity {
 
     #[test]
     fn distinct_tenants_never_collapse_on_same_content() {
-        let content = RecordContentDigest::from_digest([0xE1; 32]);
-        let local_id = LocalRecordId::from_digest(*content.as_bytes());
-        let auth = AuthorizingKeyId::from_digest([0xA1; 32]);
-        let tenant_a = TenantId::from_digest([0x71; 32]);
-        let tenant_b = TenantId::from_digest([0x72; 32]);
+        let content = RecordContentDigest::from_digest(crate::data::fixed_bytes::Bytes32([0xE1; 32]));
+        let local_id = LocalRecordId::from_digest(content.as_bytes());
+        let auth = AuthorizingKeyId::from_digest(crate::data::fixed_bytes::Bytes32([0xA1; 32]));
+        let tenant_a = TenantId::from_digest(crate::data::fixed_bytes::Bytes32([0x71; 32]));
+        let tenant_b = TenantId::from_digest(crate::data::fixed_bytes::Bytes32([0x72; 32]));
 
         let a = NamespacedRecordIdentity::bind(local_id, auth, tenant_a, content);
         let b = NamespacedRecordIdentity::bind(local_id, auth, tenant_b, content);
@@ -2665,18 +2683,18 @@ mod identity {
 
     #[test]
     fn distinct_local_ids_never_collapse_on_same_content() {
-        let content = RecordContentDigest::from_digest([0xE1; 32]);
-        let auth = AuthorizingKeyId::from_digest([0xA1; 32]);
-        let tenant = TenantId::from_digest([0x7E; 32]);
+        let content = RecordContentDigest::from_digest(crate::data::fixed_bytes::Bytes32([0xE1; 32]));
+        let auth = AuthorizingKeyId::from_digest(crate::data::fixed_bytes::Bytes32([0xA1; 32]));
+        let tenant = TenantId::from_digest(crate::data::fixed_bytes::Bytes32([0x7E; 32]));
 
         let a = NamespacedRecordIdentity::bind(
-            LocalRecordId::from_digest([0x01; 32]),
+            LocalRecordId::from_digest(crate::data::fixed_bytes::Bytes32([0x01; 32])),
             auth,
             tenant,
             content,
         );
         let b = NamespacedRecordIdentity::bind(
-            LocalRecordId::from_digest([0x02; 32]),
+            LocalRecordId::from_digest(crate::data::fixed_bytes::Bytes32([0x02; 32])),
             auth,
             tenant,
             content,
@@ -2696,10 +2714,10 @@ mod identity {
 
     #[test]
     fn certificate_bind_carries_authority_and_content() -> Result<()> {
-        let store = StoreId::from_digest([0xC7; 32]);
-        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0xC1; 32]));
-        let scope = ScopeManifestDigest::from_digest([0x5C; 32]);
-        let content = RecordContentDigest::from_digest([0xE1; 32]);
+        let store = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0xC7; 32]));
+        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit(crate::data::fixed_bytes::Bytes32([0xC1; 32])));
+        let scope = ScopeManifestDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x5C; 32]));
+        let content = RecordContentDigest::from_digest(crate::data::fixed_bytes::Bytes32([0xE1; 32]));
         let cert = mint_signed(
             store,
             FenceEpoch::genesis(store),
@@ -2708,8 +2726,8 @@ mod identity {
             &key,
             scope,
         )?;
-        let tenant = TenantId::from_digest([0x7E; 32]);
-        let local = LocalRecordId::from_digest(*content.as_bytes());
+        let tenant = TenantId::from_digest(crate::data::fixed_bytes::Bytes32([0x7E; 32]));
+        let local = LocalRecordId::from_digest(content.as_bytes());
         let id = NamespacedRecordIdentity::from_certificate(local, &cert, tenant);
         assert_eq!(id.origin_authority(), key.id());
         assert_eq!(id.content(), content);
@@ -2720,9 +2738,9 @@ mod identity {
 
     #[test]
     fn distinct_origin_stores_yield_distinct_replica_keys() {
-        let content = RecordContentDigest::from_digest([0xE1; 32]);
-        let store_a = StoreId::from_digest([0x01; 32]);
-        let store_b = StoreId::from_digest([0x02; 32]);
+        let content = RecordContentDigest::from_digest(crate::data::fixed_bytes::Bytes32([0xE1; 32]));
+        let store_a = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0x01; 32]));
+        let store_b = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0x02; 32]));
         let epoch_a = FenceEpoch::genesis(store_a);
         let epoch_b = FenceEpoch::genesis(store_b);
         let key_a = ReplicaKey::derive(store_a, epoch_a, CommitOrdinal::ZERO, content);
@@ -2735,13 +2753,13 @@ mod identity {
 
     #[test]
     fn custody_key_delegates_to_replica_key_authority() {
-        let content = RecordContentDigest::from_digest([0xE1; 32]);
-        let store = StoreId::from_digest([0xC7; 32]);
+        let content = RecordContentDigest::from_digest(crate::data::fixed_bytes::Bytes32([0xE1; 32]));
+        let store = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0xC7; 32]));
         let epoch = FenceEpoch::genesis(store);
         let id = NamespacedRecordIdentity::bind(
-            LocalRecordId::from_digest(*content.as_bytes()),
-            AuthorizingKeyId::from_digest([0xA1; 32]),
-            TenantId::from_digest([0x7E; 32]),
+            LocalRecordId::from_digest(content.as_bytes()),
+            AuthorizingKeyId::from_digest(crate::data::fixed_bytes::Bytes32([0xA1; 32])),
+            TenantId::from_digest(crate::data::fixed_bytes::Bytes32([0x7E; 32])),
             content,
         );
         assert_eq!(
@@ -2753,13 +2771,13 @@ mod identity {
 
     #[test]
     fn replica_key_custody_idempotent_under_duplicate_delivery() -> Result<()> {
-        let origin = StoreId::from_digest([0x69; 32]);
-        let local = StoreId::from_digest([0x70; 32]);
+        let origin = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0x69; 32]));
+        let local = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0x70; 32]));
         let origin_epoch = FenceEpoch::genesis(origin);
         let origin_commit = CommitOrdinal::ZERO;
-        let record_digest = RecordContentDigest::from_digest([0xE1; 32]);
-        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0x69; 32]));
-        let scope = ScopeManifestDigest::from_digest([0x5C; 32]);
+        let record_digest = RecordContentDigest::from_digest(crate::data::fixed_bytes::Bytes32([0xE1; 32]));
+        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit(crate::data::fixed_bytes::Bytes32([0x69; 32])));
+        let scope = ScopeManifestDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x5C; 32]));
         let mut keys = AuthorizingKeyTable::new();
         keys.insert(key.clone());
         let mut scopes = ScopeManifestTable::new();
@@ -2774,9 +2792,9 @@ mod identity {
             scope,
         )?;
         let expected = ReplicaKey::derive(origin, origin_epoch, origin_commit, record_digest);
-        let tenant = TenantId::from_digest([0x7E; 32]);
+        let tenant = TenantId::from_digest(crate::data::fixed_bytes::Bytes32([0x7E; 32]));
         let namespaced = NamespacedRecordIdentity::from_certificate(
-            LocalRecordId::from_digest(*record_digest.as_bytes()),
+            LocalRecordId::from_digest(record_digest.as_bytes()),
             &cert,
             tenant,
         );
@@ -2825,18 +2843,18 @@ mod identity {
     #[test]
     fn content_only_id_is_not_federation_identity() {
         // Two origins, identical content: content digests equal, namespaced ids do not.
-        let content = RecordContentDigest::from_digest([0xAA; 32]);
-        let local = LocalRecordId::from_digest(*content.as_bytes());
+        let content = RecordContentDigest::from_digest(crate::data::fixed_bytes::Bytes32([0xAA; 32]));
+        let local = LocalRecordId::from_digest(content.as_bytes());
         let a = NamespacedRecordIdentity::bind(
             local,
-            AuthorizingKeyId::from_digest([0x01; 32]),
-            TenantId::from_digest([0x10; 32]),
+            AuthorizingKeyId::from_digest(crate::data::fixed_bytes::Bytes32([0x01; 32])),
+            TenantId::from_digest(crate::data::fixed_bytes::Bytes32([0x10; 32])),
             content,
         );
         let b = NamespacedRecordIdentity::bind(
             local,
-            AuthorizingKeyId::from_digest([0x02; 32]),
-            TenantId::from_digest([0x10; 32]),
+            AuthorizingKeyId::from_digest(crate::data::fixed_bytes::Bytes32([0x02; 32])),
+            TenantId::from_digest(crate::data::fixed_bytes::Bytes32([0x10; 32])),
             content,
         );
         assert_eq!(a.content(), b.content());
@@ -2854,14 +2872,14 @@ mod promotion {
 
     fn sample_meaning(schema_cut: SchemaCutDigest, provenance: ProvenanceDigest) -> PromotionMeaning {
         let identity = NamespacedRecordIdentity::bind(
-            LocalRecordId::from_digest([0x11; 32]),
-            AuthorizingKeyId::from_digest([0xA1; 32]),
-            TenantId::from_digest([0x7E; 32]),
-            RecordContentDigest::from_digest([0xC0; 32]),
+            LocalRecordId::from_digest(crate::data::fixed_bytes::Bytes32([0x11; 32])),
+            AuthorizingKeyId::from_digest(crate::data::fixed_bytes::Bytes32([0xA1; 32])),
+            TenantId::from_digest(crate::data::fixed_bytes::Bytes32([0x7E; 32])),
+            RecordContentDigest::from_digest(crate::data::fixed_bytes::Bytes32([0xC0; 32])),
         );
         PromotionMeaning::bind(
             identity,
-            ValidTimeDigest::from_digest([0x71; 32]),
+            ValidTimeDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x71; 32])),
             provenance,
             schema_cut,
         )
@@ -2870,13 +2888,13 @@ mod promotion {
     #[test]
     fn promotion_replay_equality_preserves_four_seats() -> Result<()> {
         let before = sample_meaning(
-            SchemaCutDigest::from_digest([0x51; 32]),
-            ProvenanceDigest::from_digest([0xB1; 32]),
+            SchemaCutDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x51; 32])),
+            ProvenanceDigest::from_digest(crate::data::fixed_bytes::Bytes32([0xB1; 32])),
         );
         // Local-to-hosted: same meaning seats, different host — equality holds.
         let after = sample_meaning(
-            SchemaCutDigest::from_digest([0x51; 32]),
-            ProvenanceDigest::from_digest([0xB1; 32]),
+            SchemaCutDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x51; 32])),
+            ProvenanceDigest::from_digest(crate::data::fixed_bytes::Bytes32([0xB1; 32])),
         );
         assert!(before.replay_equal(&after));
         assert_eq!(before.digest(), after.digest());
@@ -2892,19 +2910,19 @@ mod promotion {
         let cases = [
             (
                 "schema",
-                SchemaCutDigest::from_digest([0x99; 32]),
-                ProvenanceDigest::from_digest([0xB1; 32]),
+                SchemaCutDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x99; 32])),
+                ProvenanceDigest::from_digest(crate::data::fixed_bytes::Bytes32([0xB1; 32])),
             ),
             (
                 "provenance",
-                SchemaCutDigest::from_digest([0x51; 32]),
-                ProvenanceDigest::from_digest([0xB2; 32]),
+                SchemaCutDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x51; 32])),
+                ProvenanceDigest::from_digest(crate::data::fixed_bytes::Bytes32([0xB2; 32])),
             ),
         ];
         for (seat, after_schema, after_provenance) in cases {
             let before = sample_meaning(
-                SchemaCutDigest::from_digest([0x51; 32]),
-                ProvenanceDigest::from_digest([0xB1; 32]),
+                SchemaCutDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x51; 32])),
+                ProvenanceDigest::from_digest(crate::data::fixed_bytes::Bytes32([0xB1; 32])),
             );
             let after = sample_meaning(after_schema, after_provenance);
             assert!(!before.replay_equal(&after), "{seat} divergence must not replay-equal");
@@ -2920,34 +2938,34 @@ mod promotion {
 
     #[test]
     fn view_under_schema_cut_consumes_origin_cut() -> Result<()> {
-        let origin = SchemaCutDigest::from_digest([0x51u8; 32]);
+        let origin = SchemaCutDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x51u8; 32]));
         assert_eq!(view_under_schema_cut(origin, origin), Ok(()));
         assert_eq!(
-            view_under_schema_cut(origin, SchemaCutDigest::from_digest([0x99; 32])),
+            view_under_schema_cut(origin, SchemaCutDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x99; 32]))),
             Err(CrossingRefuse::LocalReinterpretationUnconstructible)
         );
         // LocalProjection is the lawful different-cut path — not in-place reshape.
-        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0xC3; 32]));
-        let scope = ScopeManifestDigest::from_digest([0x5E; 32]);
+        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit(crate::data::fixed_bytes::Bytes32([0xC3; 32])));
+        let scope = ScopeManifestDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x5E; 32]));
         let mut parts = AdmissionCertificateParts {
             protocol_version: *b"kyzo.v01",
-            origin_store: StoreId::from_digest([0x01; 32]),
-            origin_epoch: FenceEpoch::genesis(StoreId::from_digest([0x01; 32])),
+            origin_store: StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0x01; 32])),
+            origin_epoch: FenceEpoch::genesis(StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0x01; 32]))),
             origin_commit: CommitOrdinal::ZERO,
             schema_cut: origin,
-            record_digest: RecordContentDigest::from_digest([0xAA; 32]),
+            record_digest: RecordContentDigest::from_digest(crate::data::fixed_bytes::Bytes32([0xAA; 32])),
             predecessor_history_digest: [0x52; 32],
-            post_state_root: PostStateRoot::from_digest([0x53; 32]),
+            post_state_root: PostStateRoot::from_digest(crate::data::fixed_bytes::Bytes32([0x53; 32])),
             authorizing_key_id: key.id(),
             scope_manifest_digest: scope,
             operation_key: None,
-            signature: Signature::admit([0u8; 64]),
+            signature: Signature::admit(crate::data::fixed_bytes::Bytes64([0u8; 64])),
         };
         parts.signature = sign_admission_parts(&parts, &key)?;
         let cert = mint_admission_certificate(parts)?;
         let projection = LocalProjection::from_certificate(
             cert,
-            SchemaCutDigest::from_digest([0x99; 32]),
+            SchemaCutDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x99; 32])),
         );
         assert_ne!(
             projection.local_schema_cut(),
@@ -2959,13 +2977,13 @@ mod promotion {
 
     #[test]
     fn graph_bound_key_never_crosses_boundary() -> Result<()> {
-        let home = GraphBoundary::from_tenant(TenantId::from_digest([0x7E; 32]));
-        let foreign = GraphBoundary::from_tenant(TenantId::from_digest([0x7F; 32]));
+        let home = GraphBoundary::from_tenant(TenantId::from_digest(crate::data::fixed_bytes::Bytes32([0x7E; 32])));
+        let foreign = GraphBoundary::from_tenant(TenantId::from_digest(crate::data::fixed_bytes::Bytes32([0x7F; 32])));
         let key = ReplicaKey::derive(
-            StoreId::from_digest([0x01; 32]),
-            FenceEpoch::genesis(StoreId::from_digest([0x01; 32])),
+            StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0x01; 32])),
+            FenceEpoch::genesis(StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0x01; 32]))),
             CommitOrdinal::ZERO,
-            RecordContentDigest::from_digest([0xC0; 32]),
+            RecordContentDigest::from_digest(crate::data::fixed_bytes::Bytes32([0xC0; 32])),
         );
         let bound = GraphBoundKey::bind(home, &key);
         assert_eq!(bound.authorize(home), Ok(()));
@@ -2998,7 +3016,7 @@ mod sth_gossip_obligation_tests {
     /// Fabric carriage is JetStream-only — subject names the Store; no peer-dial.
     #[test]
     fn sth_gossip_obligation_seats_on_jetstream_not_peer_dial() -> Result<()> {
-        let store = StoreId::from_digest([0x92; 32]);
+        let store = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0x92; 32]));
         let obligation = SthGossipObligation::on_jetstream(store);
         assert!(matches!(
             obligation.carriage(),
@@ -3014,15 +3032,15 @@ mod sth_gossip_obligation_tests {
     /// Signed STH gossip detects split-view before chains meet.
     #[test]
     fn enforce_sth_gossip_detects_equivocating_signed_heads() -> Result<()> {
-        let store = StoreId::from_digest([0x69; 32]);
+        let store = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0x69; 32]));
         let fence = FenceEpoch::genesis(store);
         let o1 = CommitOrdinal::ZERO.successor()?;
-        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0x51; 32]));
+        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit(crate::data::fixed_bytes::Bytes32([0x51; 32])));
         let mut keys = AuthorizingKeyTable::new();
         keys.insert(key.clone());
 
-        let content_a = StateRoot::from_digest([0xA1; 32]);
-        let content_b = StateRoot::from_digest([0xB2; 32]);
+        let content_a = StateRoot::from_digest(crate::data::fixed_bytes::Bytes32([0xA1; 32]));
+        let content_b = StateRoot::from_digest(crate::data::fixed_bytes::Bytes32([0xB2; 32]));
         let mut chain_a = RootChain::empty();
         chain_a.append(ChainedStateRoot::mint(
             store,
@@ -3064,11 +3082,11 @@ mod sth_gossip_obligation_tests {
     /// Honest extension under consistency proof is Detected-consistent on gossip.
     #[test]
     fn enforce_sth_gossip_honest_extension_with_proof() -> Result<()> {
-        let store = StoreId::from_digest([0x58; 32]);
+        let store = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0x58; 32]));
         let fence = FenceEpoch::genesis(store);
         let o1 = CommitOrdinal::ZERO.successor()?;
         let o2 = o1.successor()?;
-        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0x58; 32]));
+        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit(crate::data::fixed_bytes::Bytes32([0x58; 32])));
         let mut keys = AuthorizingKeyTable::new();
         keys.insert(key.clone());
 
@@ -3077,7 +3095,7 @@ mod sth_gossip_obligation_tests {
             store,
             fence,
             o1,
-            StateRoot::from_digest([0x01; 32]),
+            StateRoot::from_digest(crate::data::fixed_bytes::Bytes32([0x01; 32])),
             GENESIS_ROOT,
             ChainLinkKind::Ordinary,
         )?)?;
@@ -3085,7 +3103,7 @@ mod sth_gossip_obligation_tests {
             store,
             fence,
             o2,
-            StateRoot::from_digest([0x02; 32]),
+            StateRoot::from_digest(crate::data::fixed_bytes::Bytes32([0x02; 32])),
             chain.prior_root(),
             ChainLinkKind::Ordinary,
         )?)?;

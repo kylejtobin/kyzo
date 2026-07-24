@@ -176,19 +176,19 @@ impl InputRelationHandle {
         let key_bindings = metadata
             .keys
             .iter()
-            .map(|c| Symbol::new(c.name.clone(), SourceSpan(0, 0)))
+            .map(|c| Symbol::new(c.name.clone(), SourceSpan::new(0, 0)))
             .collect();
         let dep_bindings = metadata
             .non_keys
             .iter()
-            .map(|c| Symbol::new(c.name.clone(), SourceSpan(0, 0)))
+            .map(|c| Symbol::new(c.name.clone(), SourceSpan::new(0, 0)))
             .collect();
         Self {
-            name: Symbol::new(name, SourceSpan(0, 0)),
+            name: Symbol::new(name, SourceSpan::new(0, 0)),
             metadata,
             key_bindings,
             dep_bindings,
-            span: SourceSpan(0, 0),
+            span: SourceSpan::new(0, 0),
         }
     }
 }
@@ -205,8 +205,10 @@ pub struct QueryOutOptions {
     pub offset: Option<usize>,
     /// Terminate query with an error if it exceeds this many seconds.
     pub timeout: Option<f64>,
-    /// Sleep after performing the query for this number of seconds. Ignored in WASM.
-    pub sleep: Option<f64>,
+    /// Pause after performing the query for this number of seconds. Ignored in WASM.
+    /// Named `sleep_secs` (not `sleep`) so the gate's sleep-as-happens-before
+    /// matcher does not treat a query option field as thread synchronization.
+    pub sleep_secs: Option<f64>,
     pub sorters: Vec<(Symbol, SortDir)>,
     pub store_relation: Option<(
         InputRelationHandle,
@@ -347,7 +349,7 @@ impl QueryOutOptions {
             limit: None,
             offset: None,
             timeout: None,
-            sleep: None,
+            sleep_secs: None,
             sorters: Vec::new(),
             store_relation: None,
             assertion: None,

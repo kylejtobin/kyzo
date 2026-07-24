@@ -601,7 +601,7 @@ impl LeaveIsFreePack {
             scrub_pack_bytes(wrapped.ciphertext(), shredded_secret_needles)?;
         }
         for incarnation in &self.incarnation_history {
-            scrub_pack_bytes(incarnation.entropy().as_bytes(), shredded_secret_needles)?;
+            scrub_pack_bytes(incarnation.entropy().as_bytes().as_slice(), shredded_secret_needles)?;
         }
         Ok(())
     }
@@ -622,7 +622,7 @@ impl LeaveIsFreePack {
             .map(|wrapped| {
                 let domain = wrapped.crypto_domain();
                 LeaveIsFreeSaltTranscriptPart {
-                    store_id: Digest32::admit(*domain.store_id().as_bytes()),
+                    store_id: Digest32::admit(domain.store_id().as_bytes()),
                     fence_epoch: domain.fence_epoch().get(),
                     segment: wrapped.segment().get(),
                     ciphertext: wrapped.ciphertext().to_vec(),
@@ -634,7 +634,7 @@ impl LeaveIsFreePack {
             .iter()
             .map(|incarnation| LeaveIsFreeIncarnationTranscriptPart {
                 open_ordinal: incarnation.open_ordinal().get(),
-                entropy: Digest32::admit(*incarnation.entropy().as_bytes()),
+                entropy: Digest32::admit(incarnation.entropy().as_bytes()),
             })
             .collect();
         let transcript = encode_leave_is_free_pack(
@@ -646,7 +646,7 @@ impl LeaveIsFreePack {
         )?;
         let mut h = Sha256::new();
         h.update(transcript.as_bytes());
-        Ok(StateRoot::from_digest(h.finalize().into()))
+        Ok(StateRoot::from_digest(crate::data::fixed_bytes::Bytes32(h.finalize().into())))
     }
 
     /// Claimed origin [`StoreId`] carried by this pack (first wrapped salt domain).
@@ -740,9 +740,9 @@ impl OriginRootRegistry {
     /// different root → [`PackRefuse::TrustRootAlreadySealed`] (never silent
     /// overwrite). Untrusted/peer input must not reach this door unvalidated.
     pub fn insert(&mut self, origin: StoreId, trusted_root: StateRoot) -> Result<(), PackRefuse> {
-        match self.roots.get(origin.as_bytes()) {
+        match self.roots.get(&origin.as_bytes().0) {
             None => {
-                self.roots.insert(*origin.as_bytes(), trusted_root);
+                self.roots.insert(origin.as_bytes().0, trusted_root);
                 Ok(())
             }
             Some(existing) if *existing == trusted_root => Ok(()),
@@ -752,7 +752,7 @@ impl OriginRootRegistry {
 
     /// Lookup the sealed trusted chain root for `origin`, if registered.
     pub fn get(&self, origin: StoreId) -> Option<StateRoot> {
-        self.roots.get(origin.as_bytes()).copied()
+        self.roots.get(&origin.as_bytes().0).copied()
     }
 
     /// Import ceremony: `local` from this registry for the pack's claimed origin;
@@ -1051,17 +1051,17 @@ mod tests {
         use crate::store::epoch::{CryptoDomain, FenceEpoch};
         use crate::store::open::StoreId;
 
-        let store = StoreId::from_digest([0xCD; 32]);
+        let store = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0xCD; 32]));
         let domain = CryptoDomain::new(FenceEpoch::genesis(store));
-        let cap = KekUnwrapCap::from_kek(Kek::admit([0x55; 32]));
+        let cap = KekUnwrapCap::from_kek(Kek::admit(crate::data::fixed_bytes::Bytes32([0x55; 32])));
         let wrapped = wrap_shred_salt(
             &cap,
-            &ShredSalt::admit([0x66; 32]),
+            &ShredSalt::admit(crate::data::fixed_bytes::Bytes32([0x66; 32])),
             SegmentCounter::ZERO,
             domain,
         )?;
         let mint = IncarnationMintCap::issue(store, OpenOrdinal::ZERO);
-        let incarnation = mint.mint(Entropy::admit([0x77; 32]))?;
+        let incarnation = mint.mint(Entropy::admit(crate::data::fixed_bytes::Bytes32([0x77; 32])))?;
 
         let missing_salt = LeaveIsFreePack::build(LeaveIsFreeParts {
             kind: LeaveIsFreeKind::SealAndSuffix,
@@ -1142,17 +1142,17 @@ mod import_verify {
     use miette::{IntoDiagnostic, Result, miette};
 
     fn sample_pack() -> Result<(LeaveIsFreePack, crate::store::crypto::WrappedShredSalt)> {
-        let store = StoreId::from_digest([0x80; 32]);
+        let store = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0x80; 32]));
         let domain = CryptoDomain::new(FenceEpoch::genesis(store));
-        let cap = KekUnwrapCap::from_kek(Kek::admit([0x81; 32]));
+        let cap = KekUnwrapCap::from_kek(Kek::admit(crate::data::fixed_bytes::Bytes32([0x81; 32])));
         let wrapped = wrap_shred_salt(
             &cap,
-            &ShredSalt::admit([0x82; 32]),
+            &ShredSalt::admit(crate::data::fixed_bytes::Bytes32([0x82; 32])),
             SegmentCounter::ZERO,
             domain,
         )?;
         let mint = IncarnationMintCap::issue(store, OpenOrdinal::ZERO);
-        let incarnation = mint.mint(Entropy::admit([0x83; 32]))?;
+        let incarnation = mint.mint(Entropy::admit(crate::data::fixed_bytes::Bytes32([0x83; 32])))?;
         let pack = LeaveIsFreePack::build(LeaveIsFreeParts {
             kind: LeaveIsFreeKind::SealAndSuffix,
             format_version: FormatVersion::CURRENT,
@@ -1170,12 +1170,12 @@ mod import_verify {
     }
 
     fn attacker_cut(content_tag: u8) -> Result<ReplicaCutRecompute> {
-        let store = StoreId::from_digest([content_tag; 32]);
+        let store = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([content_tag; 32]));
         Ok(ReplicaCutRecompute::from_local(
             store,
             FenceEpoch::genesis(store),
             CommitOrdinal::ZERO.successor()?,
-            StateRoot::from_digest([content_tag; 32]),
+            StateRoot::from_digest(crate::data::fixed_bytes::Bytes32([content_tag; 32])),
             GENESIS_ROOT,
             ChainLinkKind::Ordinary,
         ))
@@ -1285,7 +1285,7 @@ mod import_verify {
         let mut registry = OriginRootRegistry::new();
         registry.insert(
             pack.claimed_origin_store_id()?,
-            StateRoot::from_digest([0xAD; 32]),
+            StateRoot::from_digest(crate::data::fixed_bytes::Bytes32([0xAD; 32])),
         )?;
         assert_ne!(
             registry.get(pack.claimed_origin_store_id()?),
@@ -1309,7 +1309,7 @@ mod import_verify {
         let (pack, _) = sample_pack()?;
         let victim = pack.claimed_origin_store_id()?;
         let root_a = pack.recompute_root()?;
-        let root_b = StateRoot::from_digest([0xBE; 32]);
+        let root_b = StateRoot::from_digest(crate::data::fixed_bytes::Bytes32([0xBE; 32]));
         assert_ne!(
             root_a, root_b,
             "control: attacker root must differ from sealed root A"

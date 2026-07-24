@@ -305,11 +305,11 @@ mod tests {
     /// bare-arg attest is Unconstructible; the forge path is TOCTOU after attest.
     #[test]
     fn intent_clear_attest_while_live_fenced_blocks_epoch_advance() -> Result<()> {
-        let store_id = StoreId::from_digest([0xE6; 32]);
+        let store_id = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0xE6; 32]));
         let fence_epoch = FenceEpoch::genesis(store_id);
         let current = CryptoDomain::new(fence_epoch);
         let grant = EpochGrant::new(store_id, fence_epoch);
-        let authority = WriteAuthority::mint(store_id, WriteTokenId::from_digest([0xA7; 32]));
+        let authority = WriteAuthority::mint(store_id, WriteTokenId::from_digest(crate::data::fixed_bytes::Bytes32([0xA7; 32])));
 
         // Attest clear against an empty live table (honest at attest time).
         let mut footprints = LiveFootprintTable::new();
@@ -319,7 +319,7 @@ mod tests {
         // Live Fenced footprint appears after attest — advance must still refuse.
         let incarnation = authority
             .incarnation_mint_cap(OpenOrdinal::ZERO)
-            .mint(Entropy::admit([0xF6; 32]))?;
+            .mint(Entropy::admit(crate::data::fixed_bytes::Bytes32([0xF6; 32])))?;
         let fenced = FencedFootprint::seal(
             Footprint::Exact(vec![ByteRange {
                 start: b"a".to_vec(),

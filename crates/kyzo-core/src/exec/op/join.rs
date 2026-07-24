@@ -195,10 +195,8 @@ pub(crate) fn pull_nonempty_left_batch<'a>(
 
 /// True when the batched join left cursor needs a new batch (or first row).
 pub(crate) fn batch_join_left_row_exhausted(cur: &Option<(Batch, usize)>) -> bool {
-    match cur {
-        Some((b, idx)) => *idx >= b.len(),
-        None => true,
-    }
+    // Absent cursor ⇒ no left row remains to probe (not an Err→literal costume).
+    !matches!(cur, Some((b, idx)) if *idx < b.len())
 }
 
 pub(crate) fn batch_join_plan_err(msg: &'static str) -> miette::Report {

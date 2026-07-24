@@ -50,9 +50,11 @@ fn db() -> Result<Engine<FjallStorage>> {
 /// Fixed-seed FNV-1a — process-stable and cross-run stable (unlike DefaultHasher).
 struct FnvHasher(u64);
 
-impl Default for FnvHasher {
-    fn default() -> Self {
-        Self(0xcbf29ce484222325)
+impl FnvHasher {
+    const SEED: u64 = 0xcbf29ce484222325;
+
+    fn new() -> Self {
+        Self(Self::SEED)
     }
 }
 
@@ -72,7 +74,7 @@ impl Hasher for FnvHasher {
 
 /// Rows in RETURNED order — no sorting. Order itself is part of the claim.
 fn hash_named_rows(rows: &NamedRows) -> u64 {
-    let mut h = FnvHasher::default();
+    let mut h = FnvHasher::new();
     rows.headers().hash(&mut h);
     rows.rows().len().hash(&mut h);
     for row in rows.rows() {
@@ -105,7 +107,7 @@ fn main() -> Result<()> {
         None => String::from("default"),
     };
     let db = db()?;
-    let mut combined = FnvHasher::default();
+    let mut combined = FnvHasher::new();
 
     // Composite key `{a, b}` — multi-edge graph (museum probe used `{a => b}`,
     // which collapses duplicate sources; that was a workload defect, not a

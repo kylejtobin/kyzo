@@ -39,13 +39,13 @@ pub struct SealDigest([u8; 32]);
 
 impl SealDigest {
     /// Wrap an already-proven seal digest.
-    pub fn from_digest(digest: [u8; 32]) -> Self {
-        Self(digest)
+    pub fn from_digest(digest: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(digest.0)
     }
 
     /// Borrow the digest bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -475,25 +475,25 @@ impl SealRefuse {
 fn checkpoint_seal_transcript_parts(parts: &CheckpointSealParts) -> CheckpointSealTranscriptParts {
     CheckpointSealTranscriptParts {
         format_version: parts.format_version,
-        store_id: Digest32::admit(*parts.store_id.as_bytes()),
+        store_id: Digest32::admit(parts.store_id.as_bytes()),
         crypto_domain: parts.crypto_domain,
         fence_epoch: parts.fence_epoch.get(),
-        fence_epoch_store_id: Digest32::admit(*parts.fence_epoch.store_id().as_bytes()),
+        fence_epoch_store_id: Digest32::admit(parts.fence_epoch.store_id().as_bytes()),
         cut: parts.cut.get(),
-        state_root: Digest32::admit(*parts.state_root.as_bytes()),
-        final_wal_hash: Digest32::admit(*parts.final_wal_hash.as_bytes()),
-        checkpoint_manifest: Digest32::admit(*parts.checkpoint_manifest.as_bytes()),
+        state_root: Digest32::admit(parts.state_root.as_bytes()),
+        final_wal_hash: Digest32::admit(parts.final_wal_hash.as_bytes()),
+        checkpoint_manifest: Digest32::admit(parts.checkpoint_manifest.as_bytes()),
         catalog_generation: parts.catalog_generation.get(),
-        retained_object_manifest: Digest32::admit(*parts.retained_object_manifest.as_bytes()),
-        permanence_candidate_manifest: Digest32::admit(*parts.permanence_candidate_manifest.as_bytes()),
-        replica_custody_manifest: Digest32::admit(*parts.replica_custody_manifest.as_bytes()),
+        retained_object_manifest: Digest32::admit(parts.retained_object_manifest.as_bytes()),
+        permanence_candidate_manifest: Digest32::admit(parts.permanence_candidate_manifest.as_bytes()),
+        replica_custody_manifest: Digest32::admit(parts.replica_custody_manifest.as_bytes()),
         nonce_floor_commit: parts.nonce_floors.commit.get(),
         nonce_floor_compact: parts.nonce_floors.compact.get(),
         nonce_floor_rotate: parts.nonce_floors.rotate.get(),
         incarnation_open_ordinal: parts.incarnation_boundary.open_ordinal().get(),
-        incarnation_entropy: Digest32::admit(*parts.incarnation_boundary.entropy().as_bytes()),
-        prior_seal_digest: Digest32::admit(*parts.prior_seal_digest.as_bytes()),
-        retention_certificate_digest: Digest32::admit(*parts.retention_certificate_digest.as_bytes()),
+        incarnation_entropy: Digest32::admit(parts.incarnation_boundary.entropy().as_bytes()),
+        prior_seal_digest: Digest32::admit(parts.prior_seal_digest.as_bytes()),
+        retention_certificate_digest: Digest32::admit(parts.retention_certificate_digest.as_bytes()),
     }
 }
 
@@ -509,5 +509,5 @@ fn seal_digest_from_parts(parts: &CheckpointSealParts) -> Result<SealDigest, Sea
     let dig = h.finalize();
     let mut out = [0u8; 32];
     out.copy_from_slice(&dig);
-    Ok(SealDigest::from_digest(out))
+    Ok(SealDigest::from_digest(crate::data::fixed_bytes::Bytes32(out)))
 }

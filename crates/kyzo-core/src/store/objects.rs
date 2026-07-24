@@ -32,13 +32,13 @@ pub struct ObjectId([u8; 32]);
 
 impl ObjectId {
     /// Wrap an already-proven object identity digest.
-    pub fn from_digest(digest: [u8; 32]) -> Self {
-        Self(digest)
+    pub fn from_digest(digest: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(digest.0)
     }
 
     /// Borrow the identity bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -49,13 +49,13 @@ pub struct ContentHash([u8; 32]);
 
 impl ContentHash {
     /// Wrap an already-proven content hash.
-    pub fn from_digest(digest: [u8; 32]) -> Self {
-        Self(digest)
+    pub fn from_digest(digest: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(digest.0)
     }
 
     /// Borrow the hash bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -242,7 +242,7 @@ impl ObjectRef {
     /// Backend contract arm identity for durability product sealing.
     pub fn backend_contract(self, digest: Digest32) -> BackendContract {
         let ObjectRef { .. } = self;
-        BackendContract::from_digest(*digest.as_bytes())
+        BackendContract::from_digest(digest.as_bytes())
     }
 
     /// Closed unit refuse arms (DST / delete_meter enumeration).
@@ -545,13 +545,13 @@ pub struct BackendContract([u8; 32]);
 
 impl BackendContract {
     /// Bind an arm identity digest.
-    pub fn from_digest(digest: [u8; 32]) -> Self {
-        Self(digest)
+    pub fn from_digest(digest: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(digest.0)
     }
 
     /// Arm digest bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -961,7 +961,7 @@ mod durability_dominance_tests {
 
     #[test]
     fn incomparable_repair_is_typed_refuse_carrying_both_classes() -> miette::Result<()> {
-        let backend = BackendContract::from_digest([0xBC; 32]);
+        let backend = BackendContract::from_digest(crate::data::fixed_bytes::Bytes32([0xBC; 32]));
         // True seat-22 incomparable pair: more copies vs more failure domains.
         let more_copies = ObjectDurabilityClass::new(
             ConfirmedCopies::MultiSite,
@@ -981,9 +981,9 @@ mod durability_dominance_tests {
         );
         assert!(more_copies.incomparable(more_domains));
 
-        let hash = ContentHash::from_digest([0xCC; 32]);
+        let hash = ContentHash::from_digest(crate::data::fixed_bytes::Bytes32([0xCC; 32]));
         let witness = PermanenceWitness::from_sealed(
-            ObjectRef::mint(sample_store(), ObjectId::from_digest([0x0B; 32])),
+            ObjectRef::mint(sample_store(), ObjectId::from_digest(crate::data::fixed_bytes::Bytes32([0x0B; 32]))),
             hash,
             more_copies,
             CommitOrdinal::ZERO,
@@ -1004,7 +1004,7 @@ mod durability_dominance_tests {
 
     #[test]
     fn copies_only_lift_is_dominance_not_incomparable() {
-        let backend = BackendContract::from_digest([0xBC; 32]);
+        let backend = BackendContract::from_digest(crate::data::fixed_bytes::Bytes32([0xBC; 32]));
         let base = ObjectDurabilityClass::new(
             ConfirmedCopies::One,
             FailureDomains::Single,

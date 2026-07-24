@@ -96,20 +96,20 @@ mod tests {
     use kyzo_model::value::DataValue;
 
     fn admit_one_record_id() -> Result<RecordId> {
-        let store = StoreId::from_digest([0x52; 32]);
-        let digest = RecordContentDigest::from_digest([0xE1; 32]);
+        let store = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0x52; 32]));
+        let digest = RecordContentDigest::from_digest(crate::data::fixed_bytes::Bytes32([0xE1; 32]));
         let (kind, statement) = construct::claim(
             StatementSubject::new(DataValue::from("span-subject")),
             crate::data::statement::StatementPredicate::new("about")
                 .map_err(|e| miette!("predicate: {e}"))?,
             StatementValue::new(DataValue::from("payload")),
             ValidityTime::instant(1),
-            StatementContext::Scoped(ContextId::from_digest([0xC1; 32])),
+            StatementContext::Scoped(ContextId::from_digest(crate::data::fixed_bytes::Bytes32([0xC1; 32]))),
             StatementSource::unbound(),
         );
-        let authority = WriteAuthority::mint(store, WriteTokenId::from_digest([0xB2; 32]));
+        let authority = WriteAuthority::mint(store, WriteTokenId::from_digest(crate::data::fixed_bytes::Bytes32([0xB2; 32])));
         let chain = RootChain::empty();
-        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit([0xB2; 32]));
+        let key = AuthorizingKey::mint_with_verifying_id(Entropy::admit(crate::data::fixed_bytes::Bytes32([0xB2; 32])));
         let mut keys = AuthorizingKeyTable::new();
         keys.insert(key.clone());
         let live = LiveCertificateInputs::from_live(
@@ -119,7 +119,7 @@ mod tests {
             &key,
             &keys,
             CommitOrdinal::ZERO,
-            ScopeManifestDigest::from_digest([0x61; 32]),
+            ScopeManifestDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x61; 32])),
         )
         .into_diagnostic()?;
         Ok(admit_record(AdmitRecordParts::new(

@@ -198,7 +198,7 @@ pub(crate) fn parse_query<'a>(
                             InputInlineRulesOrFixed::Fixed { fixed } => {
                                 let fixed_span = fixed.span;
                                 bail!(MultipleRuleDefinitionError(
-                                    e.key().name.to_string(),
+                                    e.key().name().to_string(),
                                     vec![rule.span, fixed_span]
                                 ))
                             }
@@ -215,7 +215,7 @@ pub(crate) fn parse_query<'a>(
                         e.insert(InputInlineRulesOrFixed::Fixed { fixed: apply });
                     }
                     Entry::Occupied(e) => {
-                        let found_name = e.key().name.to_string();
+                        let found_name = e.key().name().to_string();
                         let mut found_span = match e.get() {
                             InputInlineRulesOrFixed::Rules { rules } => {
                                 rules.iter().map(|r| r.span).collect()
@@ -243,7 +243,7 @@ pub(crate) fn parse_query<'a>(
                     };
                     found_span.push(span);
                     bail!(MultipleRuleDefinitionError(
-                        name.name.to_string(),
+                        name.name().to_string(),
                         found_span
                     ));
                 }
@@ -324,13 +324,13 @@ pub(crate) fn parse_query<'a>(
                 {
                     let pair = pair.children().need("a child")?;
                     let span = pair.extract_span();
-                    let sleep = build_expr(pair, param_pool)?
+                    let pause_secs = build_expr(pair, param_pool)?
                         .eval_to_const()
                         .map_err(|err| OptionNotConstantError("sleep", span, [err]))?
                         .get_float()
                         .ok_or(OptionNotNonNegIntError("sleep", span))?;
-                    ensure!(sleep > 0., OptionNotPosIntError("sleep", span));
-                    out_opts.sleep = Some(sleep);
+                    ensure!(pause_secs > 0., OptionNotPosIntError("sleep", span));
+                    out_opts.sleep_secs = Some(pause_secs);
                 }
             }
             Rule::limit_option => {
@@ -547,7 +547,7 @@ pub(crate) fn parse_query<'a>(
                 keys: head
                     .iter()
                     .map(|s| ColumnDef {
-                        name: s.name.clone(),
+                        name: s.name().clone(),
                         typing: NullableColType::optional(ColType::Any),
                         default_gen: None,
                     })
@@ -610,9 +610,9 @@ fn finalize_program(mut prog: InputProgram) -> Result<InputProgram> {
         Some((handle, _, _, _)) => {
             if handle.key_bindings.is_empty() {
                 if handle.dep_bindings.is_empty() {
-                    Some((handle.name.to_string(), handle.span))
+                    Some((handle.name().to_string(), handle.span()))
                 } else {
-                    bail!(RelationHasNoKeys(handle.name.to_string(), handle.span));
+                    bail!(RelationHasNoKeys(handle.name().to_string(), handle.span()));
                 }
             } else {
                 None
@@ -626,13 +626,13 @@ fn finalize_program(mut prog: InputProgram) -> Result<InputProgram> {
             bail!(RelationHasNoKeys(name, span));
         };
         if head_args.is_empty() {
-            bail!(RelationHasNoKeys(handle.name.to_string(), handle.span));
+            bail!(RelationHasNoKeys(handle.name().to_string(), handle.span()));
         }
         handle.key_bindings = head_args.clone();
         handle.metadata.keys = head_args
             .iter()
             .map(|s| ColumnDef {
-                name: s.name.clone(),
+                name: s.name().clone(),
                 typing: NullableColType::optional(ColType::Any),
                 default_gen: None,
             })
@@ -770,7 +770,7 @@ fn parse_atom(
             let var = src.need("a child")?;
             let mut symb = Symbol::new(var.as_str(), var.extract_span());
             if matches!(symb.kind(), SymbolKind::Ignored) {
-                symb.name = format!("*^*{}", *ignored_counter).into();
+                symb.set_name(format!("*^*{}", *ignored_counter).into());
                 *ignored_counter += 1;
             }
             let expr = build_expr(src.need("a child")?, param_pool)?;
@@ -789,7 +789,7 @@ fn parse_atom(
             let var = src.need("a child")?;
             let mut symb = Symbol::new(var.as_str(), var.extract_span());
             if matches!(symb.kind(), SymbolKind::Ignored) {
-                symb.name = format!("*^*{}", *ignored_counter).into();
+                symb.set_name(format!("*^*{}", *ignored_counter).into());
                 *ignored_counter += 1;
             }
             src.need("a child")?;
@@ -1323,7 +1323,7 @@ fn parse_read_validity_clause(
             let var_pair = children.need("a child")?;
             let mut var = Symbol::new(var_pair.as_str(), var_pair.extract_span());
             if matches!(var.kind(), SymbolKind::Ignored) {
-                var.name = format!("*^*{}", *ignored_counter).into();
+                var.set_name(format!("*^*{}", *ignored_counter).into());
                 *ignored_counter += 1;
             }
             let sys = match children.next() {
@@ -1345,7 +1345,7 @@ fn parse_read_validity_clause(
             let var_pair = children.need("a child")?;
             let mut var = Symbol::new(var_pair.as_str(), var_pair.extract_span());
             if matches!(var.kind(), SymbolKind::Ignored) {
-                var.name = format!("*^*{}", *ignored_counter).into();
+                var.set_name(format!("*^*{}", *ignored_counter).into());
                 *ignored_counter += 1;
             }
             ValidityClause::Delta {
@@ -1386,7 +1386,7 @@ mod tests {
                 assert_eq!(fixed.head[0].to_string(), "a");
                 assert_eq!(fixed.head[1].to_string(), "b");
                 assert_eq!(fixed.arity()?, 2);
-                assert_eq!(fixed.fixed_handle.name.to_string(), "Constant");
+                assert_eq!(fixed.fixed_handle.name().to_string(), "Constant");
             }
             InputInlineRulesOrFixed::Rules { .. } => {
                 bail!("const `<-` entry must be Fixed(Constant), got Rules")

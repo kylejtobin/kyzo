@@ -35,13 +35,13 @@ pub struct WalHash([u8; 32]);
 
 impl WalHash {
     /// Wrap an already-proven WAL hash digest.
-    pub fn from_digest(digest: [u8; 32]) -> Self {
-        Self(digest)
+    pub fn from_digest(digest: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self(digest.0)
     }
 
     /// Borrow the digest bytes.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 }
 
@@ -378,13 +378,13 @@ fn apply_payload(
 /// [`encode_wal_record`] constructor (former `kyzo.wal.record.v1` digester).
 fn hash_record(predecessor_hash: WalHash, payload: &WalPayload) -> Result<WalHash, WalRefuse> {
     // Owned scratch: `IncarnationId::entropy()` returns by value; parts need `&Digest32`.
-    let mut incarnation_entropy = Digest32::admit([0u8; 32]);
+    let mut incarnation_entropy = Digest32::admit(crate::data::fixed_bytes::Bytes32([0u8; 32]));
     let parts = wal_payload_parts(payload, &mut incarnation_entropy);
-    let transcript = encode_wal_record(&Digest32::admit(*predecessor_hash.as_bytes()), parts)
+    let transcript = encode_wal_record(&Digest32::admit(predecessor_hash.as_bytes()), parts)
         .map_err(|_| WalRefuse::TranscriptEncode)?;
     let mut h = Sha256::new();
     h.update(transcript.as_bytes());
-    Ok(WalHash::from_digest(h.finalize().into()))
+    Ok(WalHash::from_digest(crate::data::fixed_bytes::Bytes32(h.finalize().into())))
 }
 
 fn wal_payload_parts<'a>(
@@ -404,7 +404,7 @@ fn wal_payload_parts<'a>(
             ceiling: ceiling.get(),
         },
         WalPayload::IncarnationSealed { incarnation_id } => {
-            *incarnation_entropy = Digest32::admit(*incarnation_id.entropy().as_bytes());
+            *incarnation_entropy = Digest32::admit(incarnation_id.entropy().as_bytes());
             WalRecordPayloadParts::IncarnationSealed {
                 open_ordinal: incarnation_id.open_ordinal().get(),
                 entropy: incarnation_entropy,
@@ -448,7 +448,7 @@ mod tests {
     /// Tampered predecessor at append: seal covers the wrong tip → ChainBreak.
     #[test]
     fn append_refuses_chain_break_on_tampered_predecessor() -> Result<()> {
-        let store_id = StoreId::from_digest([0xA1; 32]);
+        let store_id = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0xA1; 32]));
         let fence = FenceEpoch::genesis(store_id);
         let mut segment = WalSegment::open(store_id, fence, 0);
 
@@ -456,7 +456,7 @@ mod tests {
         segment.append(first)?;
 
         let expected = segment.terminal_hash();
-        let got = WalHash::from_digest([0xDE; 32]);
+        let got = WalHash::from_digest(crate::data::fixed_bytes::Bytes32([0xDE; 32]));
         let forged = WalRecord::seal(got, commit_payload(0x02)?)?;
         assert_eq!(
             segment.append(forged),
@@ -470,7 +470,7 @@ mod tests {
     /// terminal — append accepts (per-segment tip), replay refuses ChainBreak.
     #[test]
     fn replay_refuses_chain_break_across_segment_boundary() -> Result<()> {
-        let store_id = StoreId::from_digest([0xA2; 32]);
+        let store_id = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0xA2; 32]));
         let fence = FenceEpoch::genesis(store_id);
 
         let mut seg0 = WalSegment::open(store_id, fence, 0);
@@ -499,7 +499,7 @@ mod tests {
     /// Index 2 skips 1 — `open` accepts any index; replay refuses before records.
     #[test]
     fn replay_refuses_segment_gap() -> Result<()> {
-        let store_id = StoreId::from_digest([0xA3; 32]);
+        let store_id = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0xA3; 32]));
         let fence = FenceEpoch::genesis(store_id);
 
         let mut seg0 = WalSegment::open(store_id, fence, 0);
@@ -521,8 +521,8 @@ mod tests {
     /// Foreign-store segment under replay → StoreIdMismatch.
     #[test]
     fn replay_refuses_store_id_mismatch() -> Result<()> {
-        let store_id = StoreId::from_digest([0xA4; 32]);
-        let foreign = StoreId::from_digest([0xA5; 32]);
+        let store_id = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0xA4; 32]));
+        let foreign = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0xA5; 32]));
         let fence = FenceEpoch::genesis(foreign);
 
         let mut foreign_seg = WalSegment::open(foreign, fence, 0);
@@ -541,13 +541,13 @@ mod tests {
     /// recomputes from payload and refuses RecordHashMismatch.
     #[test]
     fn replay_refuses_record_hash_mismatch() -> Result<()> {
-        let store_id = StoreId::from_digest([0xA6; 32]);
+        let store_id = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0xA6; 32]));
         let fence = FenceEpoch::genesis(store_id);
         let mut segment = WalSegment::open(store_id, fence, 0);
 
         let mut record = WalRecord::seal(GENESIS_PREDECESSOR, commit_payload(0x40)?)?;
         // Adversarial durable corruption — flip a digest byte after seal.
-        let mut digest = *record.record_hash().as_bytes();
+        let mut digest = record.record_hash().as_bytes();
         digest[0] ^= 0xFF;
         record.record_hash = WalHash::from_digest(digest);
 

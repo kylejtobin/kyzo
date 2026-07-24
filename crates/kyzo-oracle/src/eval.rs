@@ -1020,9 +1020,8 @@ fn check_oracle_budget(
         .check_interrupt()
         .map_err(Rejection::BudgetExceeded)?;
 
-    // INVARIANT(u32_fits_usize): NonZeroU32::get always fits usize.
-    let epoch_ceiling = usize::try_from(budget.epoch_ceiling().get())
-        .expect("INVARIANT(u32_fits_usize): u32 fits usize");
+    // INVARIANT(u32_fits_usize): NonZeroU32::get always fits usize on Kyzo targets.
+    let epoch_ceiling = kyzo_model::value::convert::usize_from_u32(budget.epoch_ceiling().get());
     if rounds > epoch_ceiling {
         return Err(Rejection::BudgetExceeded(format!(
             "query budget exceeded: epochs spent {rounds} of ceiling {epoch_ceiling}"
@@ -1032,8 +1031,8 @@ fn check_oracle_budget(
         let spent: u64 = db
             .values()
             .map(|rows| {
-                // INVARIANT(len_fits_u64): Vec/BTreeSet::len fits u64.
-                u64::try_from(rows.len()).expect("INVARIANT(len_fits_u64): len fits u64")
+                // INVARIANT(len_fits_u64): Vec/BTreeSet::len fits u64 on Kyzo targets.
+                kyzo_model::value::convert::u64_from_usize(rows.len())
             })
             .sum();
         if spent > ceiling {

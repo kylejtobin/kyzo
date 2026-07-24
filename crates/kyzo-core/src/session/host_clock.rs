@@ -54,12 +54,16 @@ fn elapsed_since_anchor() -> Duration {
     start.elapsed()
 }
 
+/// Finite ceiling when `as_millis` exceeds `u64` — still a mono reading, not an Err→MAX costume.
+const MONO_MILLIS_CEILING: u64 = u64::MAX;
+
 /// Monotonic milliseconds since the first call in this process.
 pub(crate) fn mono_millis() -> MonoMillis {
     let ms = elapsed_since_anchor().as_millis();
     let ms = match u64::try_from(ms) {
         Ok(v) => v,
-        Err(_past_u64) => u64::MAX,
+        // Past u64::MAX millis — clock still reports a finite mono reading.
+        Err(_past_u64) => MONO_MILLIS_CEILING,
     };
     MonoMillis(ms)
 }

@@ -244,11 +244,18 @@ fn assert_i64_min_boundary<F>(op: F) -> Result<()>
 where
     F: Fn(&[DataValue]) -> Result<DataValue>,
 {
-    assert_eq!(
-        op(&[DataValue::from(i64::MIN + 1)])?,
-        DataValue::from(i64::MAX)
-    );
-    assert!(op(&[DataValue::from(i64::MIN)]).is_err());
+    let got = op(&[DataValue::from(i64::MIN + 1)])?;
+    if got != DataValue::from(i64::MAX) {
+        return Err(miette!(
+            "i64::MIN+1 boundary: expected {}, got {got:?}",
+            DataValue::from(i64::MAX)
+        ));
+    }
+    if op(&[DataValue::from(i64::MIN)]).is_ok() {
+        return Err(miette!(
+            "i64::MIN boundary: expected typed refuse, got Ok"
+        ));
+    }
     Ok(())
 }
 

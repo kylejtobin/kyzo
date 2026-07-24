@@ -50,13 +50,13 @@ impl CompositionId {
     }
 
     /// Borrow the identity digest (Store idempotency organ consumes these bytes).
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+    pub fn as_bytes(&self) -> crate::data::fixed_bytes::Bytes32 {
+        crate::data::fixed_bytes::Bytes32(self.0)
     }
 
     /// Sealed digest carrier for the store idempotency organ (one-way layering).
     pub fn digest32(self) -> Digest32 {
-        Digest32::admit(self.0)
+        Digest32::admit(crate::data::fixed_bytes::Bytes32(self.0))
     }
 }
 
@@ -78,7 +78,7 @@ pub fn canonical_composition_digest(
         h.update(store.as_bytes());
         h.update(comp);
     }
-    Digest32::admit(h.finalize().into())
+    Digest32::admit(crate::data::fixed_bytes::Bytes32(h.finalize().into()))
 }
 
 /// Closed composition sum (§38) — no TryAtomic / global snapshot arm.
