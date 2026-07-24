@@ -331,6 +331,20 @@ impl WaiverFile {
                     s.check
                 );
             }
+            for p in &s.scope {
+                if p.trim().is_empty() {
+                    bail!(
+                        "scope_waiver for `{}` has an empty path — that matches nothing",
+                        s.check
+                    );
+                }
+                if !p.ends_with('/') {
+                    bail!(
+                        "scope_waiver for `{}` path `{p}` must end in `/` — a prefix without a slash silently overlaps neighbors",
+                        s.check
+                    );
+                }
+            }
         }
         Ok(parsed)
     }
@@ -602,6 +616,20 @@ why_not_sabotage = {why}
         assert!(
             load_str("waiver = []\n").is_err(),
             "an undeclared ledger key must refuse — zero is stated, never defaulted"
+        );
+    }
+
+    /// Scope prefixes without a trailing `/` silently overlap neighbors
+    /// (`crates/foo` matches `crates/foobar`). Same law as [seats].hosts.
+    #[test]
+    fn scope_waiver_path_without_trailing_slash_is_a_load_error() {
+        let err = load_str(
+            "waiver = []\n[[scope_waiver]]\ncheck='expect'\nscope=['crates/bs-detector']\nwhy_full_scope_breaks='long enough argument text here'\n",
+        )
+        .expect_err("scope path without trailing slash must refuse");
+        assert_eq!(
+            format!("{err}"),
+            "scope_waiver for `expect` path `crates/bs-detector` must end in `/` — a prefix without a slash silently overlaps neighbors"
         );
     }
 

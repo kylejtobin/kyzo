@@ -543,7 +543,14 @@ impl Grammar {
             if shape::matcher_by_name(name).is_none() {
                 bail!("ban `{name}` has no registered matcher — a law that cannot fire");
             }
-            if !bite_src.contains(&format!("fn bite_{name}")) {
+            // Exact door: `fn bite_{name}(` on a trimmed line. Soft
+            // `contains("fn bite_unwrap")` matched `fn bite_unwrap_or` and
+            // let a deleted bite ride on a prefix neighbor (tip 686 drain).
+            let bite_fn = format!("fn bite_{name}(");
+            if !bite_src
+                .lines()
+                .any(|line| line.trim_start().starts_with(bite_fn.as_str()))
+            {
                 bail!("ban `{name}` has no bite proof — an unproven law may not run");
             }
         }
@@ -779,7 +786,24 @@ impl Grammar {
         let mut present: BTreeSet<String> = BTreeSet::new();
         for entry in entries {
             let entry = entry.with_context(|| "walking fixtures dir")?;
-            present.insert(entry.file_name().to_string_lossy().to_string());
+            let name = entry.file_name().to_string_lossy().to_string();
+            let ft = entry
+                .file_type()
+                .with_context(|| format!("fixtures/ entry `{name}` file_type"))?;
+            // Refuse, do not skip: a directory/symlink named like a fixture
+            // would satisfy presence and silent-green an unproven rule.
+            if !ft.is_file() {
+                bail!(
+                    "fixtures/ entry `{name}` is not a regular file — a directory or symlink cannot prove a rule"
+                );
+            }
+            let meta = entry
+                .metadata()
+                .with_context(|| format!("fixtures/ entry `{name}` metadata"))?;
+            if meta.len() == 0 {
+                bail!("fixtures/ `{name}` is empty — an empty specimen proves nothing");
+            }
+            present.insert(name);
         }
         for want in &expected {
             if !present.contains(want) {
@@ -1123,6 +1147,53 @@ mod tests {
         f.write_all(real_grammar_text().as_bytes()).expect("write");
         let e = Grammar::load(f.path(), "fn bite_nothing() {}", &crate_dir().join("fixtures"));
         assert!(e.is_err(), "ban without bite proof must refuse");
+    }
+
+    /// Soft `contains("fn bite_unwrap")` matched `fn bite_unwrap_or`. Exact
+    /// proof demands `fn bite_{name}(` on a trimmed line (tip 686).
+    #[test]
+    fn soft_contains_bite_prefix_is_not_a_proof() {
+        let mut bite = real_bite_src();
+        let start = bite
+            .find("fn bite_unwrap()")
+            .expect("live bite_proofs must define bite_unwrap");
+        let rest = &bite[start + 1..];
+        let rel_end = rest
+            .find("\nfn bite_")
+            .expect("bite_unwrap must be followed by another bite_ fn");
+        bite.replace_range(start..start + 1 + rel_end, "");
+        assert!(
+            bite.lines().any(|l| l.trim_start().starts_with("fn bite_unwrap_or(")),
+            "adversary keeps unwrap_or so soft-contains would still pass"
+        );
+        assert!(
+            !bite.lines().any(|l| l.trim_start().starts_with("fn bite_unwrap(")),
+            "exact unwrap bite must be gone"
+        );
+        let mut f = tempfile::NamedTempFile::new().expect("tempfile");
+        f.write_all(real_grammar_text().as_bytes()).expect("write");
+        let Err(err) = Grammar::load(f.path(), &bite, &crate_dir().join("fixtures")) else {
+            panic!("prefix-only bite must refuse load");
+        };
+        assert_eq!(
+            format!("{err}"),
+            "ban `unwrap` has no bite proof — an unproven law may not run"
+        );
+    }
+
+    /// A directory named like an expected fixture must not count as present.
+    #[test]
+    fn fixture_directory_masquerade_is_a_load_error() {
+        let Err(err) = load_with_mutated_fixtures(|dir| {
+            std::fs::remove_file(dir.join("sealed-struct.deny.rs")).expect("remove file");
+            std::fs::create_dir(dir.join("sealed-struct.deny.rs")).expect("dir masquerade");
+        }) else {
+            panic!("directory masquerading as a fixture must refuse");
+        };
+        assert_eq!(
+            format!("{err}"),
+            "fixtures/ entry `sealed-struct.deny.rs` is not a regular file — a directory or symlink cannot prove a rule"
+        );
     }
 
     #[test]
