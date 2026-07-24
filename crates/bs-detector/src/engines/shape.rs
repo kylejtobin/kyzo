@@ -33,22 +33,58 @@ pub enum ScanClass {
     ProductionOnly,
 }
 
+/// Named shape matcher — sealed-struct (TRUTH item 9).
+///
+/// Fields private; sole admission is [`Matcher::admit`]. Name identity is
+/// UTF-8 bytes (`&'static [u8]`), never a `str`/`String` field terminal.
+/// [`ScanClass`] is retained as historical family metadata and does **not**
+/// gate the scan (tip 650/659).
 pub struct Matcher {
-    pub name: &'static str,
-    pub class: ScanClass,
-    pub run: fn(&SourceFile) -> Vec<Hit>,
+    name: &'static [u8],
+    class: ScanClass,
+    detect: fn(&SourceFile) -> Vec<Hit>,
+}
+
+impl Matcher {
+    /// Sole admission for registry rows.
+    pub const fn admit(
+        name: &'static [u8],
+        class: ScanClass,
+        detect: fn(&SourceFile) -> Vec<Hit>,
+    ) -> Self {
+        Self {
+            name,
+            class,
+            detect,
+        }
+    }
+
+    /// UTF-8 view of the matcher name. Corrupt bytes → U+FFFD, never panic.
+    pub fn name(&self) -> &str {
+        match std::str::from_utf8(self.name) {
+            Ok(s) => s,
+            Err(_not_utf8) => "\u{FFFD}",
+        }
+    }
+
+    /// Historical scan-class label (does not gate — tip 650/659).
+    pub fn class(&self) -> ScanClass {
+        self.class
+    }
 }
 
 /// Look a matcher up by its checks.toml name.
 pub fn matcher_by_name(name: &str) -> Option<&'static Matcher> {
-    MATCHERS.iter().find(|m| m.name == name)
+    MATCHERS.iter().find(|m| m.name() == name)
 }
 
 /// Run one matcher over one file. Tip 650/659: no scan-class strip — test
-/// code is scanned the same as production code.
+/// code is scanned the same as production code. `ScanClass` is read and
+/// discarded so it cannot silently gate a strip (the tip-659 lock).
 pub fn run_matcher(m: &Matcher, file: &SourceFile) -> Vec<Hit> {
-    let _ = m.class;
-    (m.run)(file)
+    // Tip 659 lock — keep this form: `let _ = m.class` (accessor: class()).
+    let _ = m.class();
+    (m.detect)(file)
 }
 
 // ---------------------------------------------------------------------------
@@ -1281,50 +1317,50 @@ fn m_poison_continue(f: &SourceFile) -> Vec<Hit> {
 /// reports any table entry no check references (dead detection is a lie
 /// about coverage too).
 pub const MATCHERS: &[Matcher] = &[
-    Matcher { name: "unwrap", class: ScanClass::ProductionOnly, run: m_unwrap },
-    Matcher { name: "expect", class: ScanClass::ProductionOnly, run: m_expect },
-    Matcher { name: "unwrap_or", class: ScanClass::Everything, run: m_unwrap_or },
-    Matcher { name: "unwrap_or_else", class: ScanClass::Everything, run: m_unwrap_or_else },
-    Matcher { name: "unwrap_or_default", class: ScanClass::Everything, run: m_unwrap_or_default },
-    Matcher { name: "unwrap_unchecked", class: ScanClass::Everything, run: m_unchecked_unwrap },
-    Matcher { name: "panic_bang", class: ScanClass::ProductionOnly, run: m_panic_bang },
-    Matcher { name: "unreachable_bang", class: ScanClass::ProductionOnly, run: m_unreachable_bang },
-    Matcher { name: "todo_bang", class: ScanClass::Everything, run: m_todo_bang },
-    Matcher { name: "debug_assert", class: ScanClass::Everything, run: m_debug_assert },
-    Matcher { name: "let_underscore", class: ScanClass::Everything, run: m_let_underscore },
-    Matcher { name: "ok_drop", class: ScanClass::Everything, run: m_ok_drop },
-    Matcher { name: "as_cast", class: ScanClass::Everything, run: m_as_cast },
-    Matcher { name: "unchecked_arith", class: ScanClass::Everything, run: m_unchecked_arith },
-    Matcher { name: "capacity_min_cap", class: ScanClass::Everything, run: m_capacity_min_cap },
-    Matcher { name: "allow_dead_code", class: ScanClass::Everything, run: m_allow_dead_code },
-    Matcher { name: "allow_unused", class: ScanClass::Everything, run: m_allow_unused },
-    Matcher { name: "allow_clippy", class: ScanClass::Everything, run: m_allow_clippy },
-    Matcher { name: "allow_missing_docs", class: ScanClass::Everything, run: m_allow_missing_docs },
-    Matcher { name: "allow_private", class: ScanClass::Everything, run: m_allow_private },
-    Matcher { name: "allow_unsafe", class: ScanClass::Everything, run: m_allow_unsafe },
-    Matcher { name: "catchall_arm", class: ScanClass::Everything, run: m_catchall_arm },
-    Matcher { name: "default_derive", class: ScanClass::Everything, run: m_default_derive },
-    Matcher { name: "default_impl", class: ScanClass::Everything, run: m_default_impl },
-    Matcher { name: "construction_door", class: ScanClass::Everything, run: m_construction_door },
-    Matcher { name: "test_err_early_return", class: ScanClass::Everything, run: m_test_err_early_return },
-    Matcher { name: "ignore_test", class: ScanClass::Everything, run: m_ignore_test },
-    Matcher { name: "should_panic", class: ScanClass::Everything, run: m_should_panic },
-    Matcher { name: "path", class: ScanClass::Everything, run: m_path },
-    Matcher { name: "nested_place_assign", class: ScanClass::Everything, run: m_nested_place_assign },
-    Matcher { name: "assignment", class: ScanClass::Everything, run: m_assignment },
-    Matcher { name: "await", class: ScanClass::Everything, run: m_await },
-    Matcher { name: "err_costume", class: ScanClass::Everything, run: m_err_costume },
-    Matcher { name: "process_exit", class: ScanClass::Everything, run: m_process_exit },
-    Matcher { name: "sleep_sync", class: ScanClass::Everything, run: m_sleep_sync },
-    Matcher { name: "serde_default_skip", class: ScanClass::Everything, run: m_serde_default_skip },
-    Matcher { name: "poison_continue", class: ScanClass::Everything, run: m_poison_continue },
-    Matcher { name: "nondeterminism", class: ScanClass::ProductionOnly, run: m_nondeterminism },
-    Matcher { name: "peer_dial", class: ScanClass::ProductionOnly, run: m_peer_dial },
-    Matcher { name: "naked_array_sig", class: ScanClass::ProductionOnly, run: m_naked_array_sig },
-    Matcher { name: "unsafe_token", class: ScanClass::Everything, run: m_unsafe_token },
-    Matcher { name: "assert_bang", class: ScanClass::ProductionOnly, run: m_assert_bang },
-    Matcher { name: "condemned_boundary", class: ScanClass::ProductionOnly, run: m_condemned_boundary },
-    Matcher { name: "hand_layout", class: ScanClass::ProductionOnly, run: m_hand_layout },
+    Matcher::admit(b"unwrap", ScanClass::ProductionOnly, m_unwrap),
+    Matcher::admit(b"expect", ScanClass::ProductionOnly, m_expect),
+    Matcher::admit(b"unwrap_or", ScanClass::Everything, m_unwrap_or),
+    Matcher::admit(b"unwrap_or_else", ScanClass::Everything, m_unwrap_or_else),
+    Matcher::admit(b"unwrap_or_default", ScanClass::Everything, m_unwrap_or_default),
+    Matcher::admit(b"unwrap_unchecked", ScanClass::Everything, m_unchecked_unwrap),
+    Matcher::admit(b"panic_bang", ScanClass::ProductionOnly, m_panic_bang),
+    Matcher::admit(b"unreachable_bang", ScanClass::ProductionOnly, m_unreachable_bang),
+    Matcher::admit(b"todo_bang", ScanClass::Everything, m_todo_bang),
+    Matcher::admit(b"debug_assert", ScanClass::Everything, m_debug_assert),
+    Matcher::admit(b"let_underscore", ScanClass::Everything, m_let_underscore),
+    Matcher::admit(b"ok_drop", ScanClass::Everything, m_ok_drop),
+    Matcher::admit(b"as_cast", ScanClass::Everything, m_as_cast),
+    Matcher::admit(b"unchecked_arith", ScanClass::Everything, m_unchecked_arith),
+    Matcher::admit(b"capacity_min_cap", ScanClass::Everything, m_capacity_min_cap),
+    Matcher::admit(b"allow_dead_code", ScanClass::Everything, m_allow_dead_code),
+    Matcher::admit(b"allow_unused", ScanClass::Everything, m_allow_unused),
+    Matcher::admit(b"allow_clippy", ScanClass::Everything, m_allow_clippy),
+    Matcher::admit(b"allow_missing_docs", ScanClass::Everything, m_allow_missing_docs),
+    Matcher::admit(b"allow_private", ScanClass::Everything, m_allow_private),
+    Matcher::admit(b"allow_unsafe", ScanClass::Everything, m_allow_unsafe),
+    Matcher::admit(b"catchall_arm", ScanClass::Everything, m_catchall_arm),
+    Matcher::admit(b"default_derive", ScanClass::Everything, m_default_derive),
+    Matcher::admit(b"default_impl", ScanClass::Everything, m_default_impl),
+    Matcher::admit(b"construction_door", ScanClass::Everything, m_construction_door),
+    Matcher::admit(b"test_err_early_return", ScanClass::Everything, m_test_err_early_return),
+    Matcher::admit(b"ignore_test", ScanClass::Everything, m_ignore_test),
+    Matcher::admit(b"should_panic", ScanClass::Everything, m_should_panic),
+    Matcher::admit(b"path", ScanClass::Everything, m_path),
+    Matcher::admit(b"nested_place_assign", ScanClass::Everything, m_nested_place_assign),
+    Matcher::admit(b"assignment", ScanClass::Everything, m_assignment),
+    Matcher::admit(b"await", ScanClass::Everything, m_await),
+    Matcher::admit(b"err_costume", ScanClass::Everything, m_err_costume),
+    Matcher::admit(b"process_exit", ScanClass::Everything, m_process_exit),
+    Matcher::admit(b"sleep_sync", ScanClass::Everything, m_sleep_sync),
+    Matcher::admit(b"serde_default_skip", ScanClass::Everything, m_serde_default_skip),
+    Matcher::admit(b"poison_continue", ScanClass::Everything, m_poison_continue),
+    Matcher::admit(b"nondeterminism", ScanClass::ProductionOnly, m_nondeterminism),
+    Matcher::admit(b"peer_dial", ScanClass::ProductionOnly, m_peer_dial),
+    Matcher::admit(b"naked_array_sig", ScanClass::ProductionOnly, m_naked_array_sig),
+    Matcher::admit(b"unsafe_token", ScanClass::Everything, m_unsafe_token),
+    Matcher::admit(b"assert_bang", ScanClass::ProductionOnly, m_assert_bang),
+    Matcher::admit(b"condemned_boundary", ScanClass::ProductionOnly, m_condemned_boundary),
+    Matcher::admit(b"hand_layout", ScanClass::ProductionOnly, m_hand_layout),
 ];
 
 #[cfg(test)]
@@ -1342,7 +1378,7 @@ mod tests {
 
     #[test]
     fn every_matcher_has_a_unique_name() {
-        let mut names: Vec<&str> = MATCHERS.iter().map(|m| m.name).collect();
+        let mut names: Vec<&str> = MATCHERS.iter().map(|m| m.name()).collect();
         let before = names.len();
         names.sort_unstable();
         names.dedup();
@@ -1395,6 +1431,12 @@ mod tests {
 
     /// Tip 650/659: blanket cfg(test) strip is BLINDED — removed. Every
     /// site below must detonate; a silent empty is the soft drain returning.
+    /// Named `anti_fraud_tip_659` so sabotage_audit can lock the seat.
+    #[test]
+    fn anti_fraud_tip_659() {
+        anti_fraud_cfg_test_unwrap_must_be_counted();
+    }
+
     #[test]
     fn anti_fraud_cfg_test_unwrap_must_be_counted() {
         assert_eq!(
