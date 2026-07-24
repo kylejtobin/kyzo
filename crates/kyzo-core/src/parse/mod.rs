@@ -23,6 +23,11 @@
 //! syntax (names, constants, extractor `Expr`s, tokenizer name+args); this
 //! module's [`sys`] admits that syntax into the sealed engine `SysOp`.
 
-pub(crate) use kyzo_model::parse::*;
+pub(crate) use kyzo_model::parse::{
+    FtsBooster, FtsExpr, FtsLiteral, FtsNear, ImperativeCondition, ImperativeProgram,
+    ImperativeStmt, ImperativeStmtClause, ImperativeSysop, NonEmptyFtsExprs, NonEmptyFtsLiterals,
+    ParseError, QueryOrRelation, Script, parse_expressions, parse_fts_query, parse_script,
+    parse_sys, parse_type,
+};
 
 pub(crate) mod sys;

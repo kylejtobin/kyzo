@@ -247,7 +247,10 @@ impl EngineRefusal {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        EngineRefusal, ExecRefuse, HostRefuse, ModelRefuse, OracleRejectionKind, RefusalLocus,
+        SessionRefuse, SpanExempt,
+    };
 
     #[test]
     fn layer_enums_lower_into_four_way_only() {

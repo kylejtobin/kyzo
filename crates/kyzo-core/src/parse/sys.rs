@@ -160,22 +160,31 @@ impl FtsConfigBuilder<Unset> {
 }
 
 impl<Ex> FtsConfigBuilder<Ex> {
-    pub(crate) fn tokenizer(mut self, tokenizer: TokenizerConfig) -> Self {
-        self.fields.tokenizer = tokenizer;
-        self
+    pub(crate) fn tokenizer(self, tokenizer: TokenizerConfig) -> Self {
+        Self {
+            fields: FtsConfigFields {
+                tokenizer,
+                ..self.fields
+            },
+            _required: self._required,
+        }
     }
-    pub(crate) fn filters(mut self, filters: Vec<TokenizerConfig>) -> Self {
-        self.fields.filters = filters;
-        self
+    pub(crate) fn filters(self, filters: Vec<TokenizerConfig>) -> Self {
+        Self {
+            fields: FtsConfigFields { filters, ..self.fields },
+            _required: self._required,
+        }
     }
 }
 
 impl FtsConfigBuilder<Unset> {
     /// Supply the required row extractor, flipping its marker to `Set`.
-    pub(crate) fn extractor(mut self, extractor: Expr) -> FtsConfigBuilder<Set> {
-        self.fields.extractor = extractor;
+    pub(crate) fn extractor(self, extractor: Expr) -> FtsConfigBuilder<Set> {
         FtsConfigBuilder {
-            fields: self.fields,
+            fields: FtsConfigFields {
+                extractor,
+                ..self.fields
+            },
             _required: PhantomData,
         }
     }
@@ -275,39 +284,68 @@ impl MinHashLshConfigBuilder<Unset> {
 }
 
 impl<Ex> MinHashLshConfigBuilder<Ex> {
-    pub(crate) fn tokenizer(mut self, tokenizer: TokenizerConfig) -> Self {
-        self.fields.tokenizer = tokenizer;
-        self
+    pub(crate) fn tokenizer(self, tokenizer: TokenizerConfig) -> Self {
+        Self {
+            fields: MinHashLshConfigFields {
+                tokenizer,
+                ..self.fields
+            },
+            _required: self._required,
+        }
     }
-    pub(crate) fn filters(mut self, filters: Vec<TokenizerConfig>) -> Self {
-        self.fields.filters = filters;
-        self
+    pub(crate) fn filters(self, filters: Vec<TokenizerConfig>) -> Self {
+        Self {
+            fields: MinHashLshConfigFields { filters, ..self.fields },
+            _required: self._required,
+        }
     }
-    pub(crate) fn n_gram(mut self, n_gram: usize) -> Self {
-        self.fields.n_gram = n_gram;
-        self
+    pub(crate) fn n_gram(self, n_gram: usize) -> Self {
+        Self {
+            fields: MinHashLshConfigFields {
+                n_gram,
+                ..self.fields
+            },
+            _required: self._required,
+        }
     }
-    pub(crate) fn n_perm(mut self, n_perm: usize) -> Self {
-        self.fields.n_perm = n_perm;
-        self
+    pub(crate) fn n_perm(self, n_perm: usize) -> Self {
+        Self {
+            fields: MinHashLshConfigFields {
+                n_perm,
+                ..self.fields
+            },
+            _required: self._required,
+        }
     }
-    pub(crate) fn weights(mut self, false_positive: f64, false_negative: f64) -> Self {
-        self.fields.false_positive_weight = OrderedFloat(false_positive);
-        self.fields.false_negative_weight = OrderedFloat(false_negative);
-        self
+    pub(crate) fn weights(self, false_positive: f64, false_negative: f64) -> Self {
+        Self {
+            fields: MinHashLshConfigFields {
+                false_positive_weight: OrderedFloat(false_positive),
+                false_negative_weight: OrderedFloat(false_negative),
+                ..self.fields
+            },
+            _required: self._required,
+        }
     }
-    pub(crate) fn target_threshold(mut self, target_threshold: f64) -> Self {
-        self.fields.target_threshold = OrderedFloat(target_threshold);
-        self
+    pub(crate) fn target_threshold(self, target_threshold: f64) -> Self {
+        Self {
+            fields: MinHashLshConfigFields {
+                target_threshold: OrderedFloat(target_threshold),
+                ..self.fields
+            },
+            _required: self._required,
+        }
     }
 }
 
 impl MinHashLshConfigBuilder<Unset> {
     /// Supply the required row extractor, flipping its marker to `Set`.
-    pub(crate) fn extractor(mut self, extractor: Expr) -> MinHashLshConfigBuilder<Set> {
-        self.fields.extractor = extractor;
+    pub(crate) fn extractor(self, extractor: Expr) -> MinHashLshConfigBuilder<Set> {
         MinHashLshConfigBuilder {
-            fields: self.fields,
+            fields: MinHashLshConfigFields {
+                extractor,
+                ..self.fields
+            },
             _required: PhantomData,
         }
     }
@@ -421,37 +459,56 @@ impl HnswConfigBuilder<Unset, Unset, Unset> {
 }
 
 impl<Dim, Ef, M> HnswConfigBuilder<Dim, Ef, M> {
-    /// Retype the required-field markers without re-listing payload fields.
-    fn remark<D2, E2, M2>(self) -> HnswConfigBuilder<D2, E2, M2> {
-        HnswConfigBuilder {
-            fields: self.fields,
-            _required: PhantomData,
+    pub(crate) fn dtype(self, dtype: VecElementType) -> Self {
+        Self {
+            fields: HnswConfigFields { dtype, ..self.fields },
+            _required: self._required,
         }
     }
-
-    pub(crate) fn dtype(mut self, dtype: VecElementType) -> Self {
-        self.fields.dtype = dtype;
-        self
+    pub(crate) fn distance(self, distance: HnswDistance) -> Self {
+        Self {
+            fields: HnswConfigFields {
+                distance,
+                ..self.fields
+            },
+            _required: self._required,
+        }
     }
-    pub(crate) fn distance(mut self, distance: HnswDistance) -> Self {
-        self.fields.distance = distance;
-        self
+    pub(crate) fn fields(self, vec_fields: Vec<SmartString<LazyCompact>>) -> Self {
+        Self {
+            fields: HnswConfigFields {
+                vec_fields,
+                ..self.fields
+            },
+            _required: self._required,
+        }
     }
-    pub(crate) fn fields(mut self, vec_fields: Vec<SmartString<LazyCompact>>) -> Self {
-        self.fields.vec_fields = vec_fields;
-        self
+    pub(crate) fn filter(self, index_filter: Option<Expr>) -> Self {
+        Self {
+            fields: HnswConfigFields {
+                index_filter,
+                ..self.fields
+            },
+            _required: self._required,
+        }
     }
-    pub(crate) fn filter(mut self, index_filter: Option<Expr>) -> Self {
-        self.fields.index_filter = index_filter;
-        self
+    pub(crate) fn extend_candidates(self, extend_candidates: bool) -> Self {
+        Self {
+            fields: HnswConfigFields {
+                extend_candidates,
+                ..self.fields
+            },
+            _required: self._required,
+        }
     }
-    pub(crate) fn extend_candidates(mut self, extend_candidates: bool) -> Self {
-        self.fields.extend_candidates = extend_candidates;
-        self
-    }
-    pub(crate) fn keep_pruned_connections(mut self, keep_pruned_connections: bool) -> Self {
-        self.fields.keep_pruned_connections = keep_pruned_connections;
-        self
+    pub(crate) fn keep_pruned_connections(self, keep_pruned_connections: bool) -> Self {
+        Self {
+            fields: HnswConfigFields {
+                keep_pruned_connections,
+                ..self.fields
+            },
+            _required: self._required,
+        }
     }
 }
 
@@ -460,47 +517,66 @@ impl<Dim, Ef, M> HnswConfigBuilder<Dim, Ef, M> {
 impl<Ef, M> HnswConfigBuilder<Unset, Ef, M> {
     /// Set vector dimension. Same law as `::hnsw` parse: `dim >= 1` (P092).
     pub(crate) fn dim(
-        mut self,
+        self,
         vec_dim: usize,
-    ) -> std::result::Result<HnswConfigBuilder<Set, Ef, M>, HnswDimLawError> {
+    ) -> std::result::Result<HnswConfigBuilder<Set, Ef, M>, HnswConfigLawError> {
         if vec_dim < 1 {
-            return Err(HnswDimLawError(vec_dim));
+            return Err(HnswConfigLawError::DimNonPositive(vec_dim));
         }
-        self.fields.vec_dim = vec_dim;
-        Ok(self.remark())
+        let HnswConfigBuilder { fields, _required } = self;
+        Ok(HnswConfigBuilder {
+            fields: HnswConfigFields {
+                vec_dim,
+                ..fields
+            },
+            _required: PhantomData,
+        })
     }
 }
 impl<Dim, M> HnswConfigBuilder<Dim, Unset, M> {
-    pub(crate) fn ef(mut self, ef_construction: usize) -> HnswConfigBuilder<Dim, Set, M> {
-        self.fields.ef_construction = ef_construction;
-        self.remark()
+    pub(crate) fn ef(self, ef_construction: usize) -> HnswConfigBuilder<Dim, Set, M> {
+        let HnswConfigBuilder { fields, _required } = self;
+        HnswConfigBuilder {
+            fields: HnswConfigFields {
+                ef_construction,
+                ..fields
+            },
+            _required: PhantomData,
+        }
     }
 }
 impl<Dim, Ef> HnswConfigBuilder<Dim, Ef, Unset> {
     /// Set `m` neighbours. Same law as `::hnsw` parse: `m >= 2` (P092).
     pub(crate) fn m(
-        mut self,
+        self,
         m_neighbours: usize,
-    ) -> std::result::Result<HnswConfigBuilder<Dim, Ef, Set>, HnswMLawError> {
+    ) -> std::result::Result<HnswConfigBuilder<Dim, Ef, Set>, HnswConfigLawError> {
         if m_neighbours < 2 {
-            return Err(HnswMLawError(m_neighbours));
+            return Err(HnswConfigLawError::MTooSmall(m_neighbours));
         }
-        self.fields.m_neighbours = m_neighbours;
-        Ok(self.remark())
+        let HnswConfigBuilder { fields, _required } = self;
+        Ok(HnswConfigBuilder {
+            fields: HnswConfigFields {
+                m_neighbours,
+                ..fields
+            },
+            _required: PhantomData,
+        })
     }
 }
 
-/// `HnswConfigBuilder::dim` refused a non-positive dimension (P092).
+/// HNSW staged-builder numeric laws (`dim >= 1`, `m >= 2`, P092).
 #[derive(Debug, Error, Diagnostic)]
-#[error("HNSW dim must be >= 1, got {0}")]
-#[diagnostic(code(parser::hnsw_dim_law))]
-pub(crate) struct HnswDimLawError(pub(crate) usize);
-
-/// `HnswConfigBuilder::m` refused `m < 2` (P092).
-#[derive(Debug, Error, Diagnostic)]
-#[error("HNSW m must be >= 2, got {0}")]
-#[diagnostic(code(parser::hnsw_m_law))]
-pub(crate) struct HnswMLawError(pub(crate) usize);
+pub(crate) enum HnswConfigLawError {
+    /// `HnswConfigBuilder::dim` refused a non-positive dimension.
+    #[error("HNSW dim must be >= 1, got {0}")]
+    #[diagnostic(code(parser::hnsw_dim_law))]
+    DimNonPositive(usize),
+    /// `HnswConfigBuilder::m` refused `m < 2`.
+    #[error("HNSW m must be >= 2, got {0}")]
+    #[diagnostic(code(parser::hnsw_m_law))]
+    MTooSmall(usize),
+}
 
 /// The build door for an HNSW configuration: implemented ONLY for the
 /// fully-set builder, so a config missing `dim`, `ef`, or `m` cannot be built.
@@ -569,102 +645,114 @@ assert_not_impl!(MinHashLshConfigBuilder<Unset>: BuildMinHashLshConfig);
 #[diagnostic(code(parser::index_option))]
 struct UnknownTokenizerStage(String, #[label("no such tokenizer stage")] SourceSpan);
 
-/// Admit one parsed [`TokenizerSpec`] into an analyzer [`TokenizerConfig`],
-/// carrying the option span onto an unknown-stage refusal.
-fn admit_tokenizer(spec: TokenizerSpec) -> Result<TokenizerConfig> {
-    let span = spec.span;
-    TokenizerConfig::admit(spec.name, spec.args)
-        .map_err(|e| UnknownTokenizerStage(e.to_string(), span).into())
-}
+/// Engine-side lift of pure-data [`SysScript`] syntax into [`SysOp`].
+struct SysOpLift;
 
-/// Admit a list of tokenizer specs (an index's `filters:`).
-fn admit_tokenizers(specs: Vec<TokenizerSpec>) -> Result<Vec<TokenizerConfig>> {
-    specs.into_iter().map(admit_tokenizer).collect()
-}
+impl SysOpLift {
+    /// Admit one parsed [`TokenizerSpec`] into an analyzer [`TokenizerConfig`],
+    /// carrying the option span onto an unknown-stage refusal.
+    fn admit_tokenizer(&self, spec: TokenizerSpec) -> Result<TokenizerConfig> {
+        let span = spec.span;
+        TokenizerConfig::admit(spec.name, spec.args)
+            .map_err(|e| UnknownTokenizerStage(e.to_string(), span).into())
+    }
 
-/// Seal a parsed [`HnswConfigSpec`] into a proven [`HnswIndexConfig`]. The
-/// numeric laws (`dim >= 1`, `m >= 2`) the model zone already checked are
-/// re-proven by the staged builder — a redundant proof, not a second policy.
-fn lift_hnsw(spec: HnswConfigSpec) -> Result<HnswIndexConfig> {
-    Ok(HnswConfigBuilder::new(spec.base_relation, spec.index_name)
-        .dtype(spec.dtype)
-        .fields(spec.vec_fields)
-        .distance(spec.distance)
-        .filter(spec.index_filter)
-        .extend_candidates(spec.extend_candidates)
-        .keep_pruned_connections(spec.keep_pruned_connections)
-        .dim(spec.vec_dim)?
-        .ef(spec.ef_construction)
-        .m(spec.m_neighbours)?
-        .build())
-}
+    /// Admit a list of tokenizer specs (an index's `filters:`).
+    fn admit_tokenizers(&self, specs: Vec<TokenizerSpec>) -> Result<Vec<TokenizerConfig>> {
+        specs.into_iter().map(|spec| self.admit_tokenizer(spec)).collect()
+    }
 
-/// Admit tokenizer + filters once for text-index lifts (copy_detector).
-fn admit_text_stages(
-    tokenizer: TokenizerSpec,
-    filters: Vec<TokenizerSpec>,
-) -> Result<(TokenizerConfig, Vec<TokenizerConfig>)> {
-    Ok((admit_tokenizer(tokenizer)?, admit_tokenizers(filters)?))
-}
+    /// Seal a parsed [`HnswConfigSpec`] into a proven [`HnswIndexConfig`]. The
+    /// numeric laws (`dim >= 1`, `m >= 2`) the model zone already checked are
+    /// re-proven by the staged builder — a redundant proof, not a second policy.
+    fn lift_hnsw(&self, spec: HnswConfigSpec) -> Result<HnswIndexConfig> {
+        Ok(HnswConfigBuilder::new(spec.base_relation, spec.index_name)
+            .dtype(spec.dtype)
+            .fields(spec.vec_fields)
+            .distance(spec.distance)
+            .filter(spec.index_filter)
+            .extend_candidates(spec.extend_candidates)
+            .keep_pruned_connections(spec.keep_pruned_connections)
+            .dim(spec.vec_dim)?
+            .ef(spec.ef_construction)
+            .m(spec.m_neighbours)?
+            .build())
+    }
 
-/// Seal a parsed [`FtsConfigSpec`] into a proven [`FtsIndexConfig`].
-fn lift_fts(spec: FtsConfigSpec) -> Result<FtsIndexConfig> {
-    let (tokenizer, filters) = admit_text_stages(spec.tokenizer, spec.filters)?;
-    Ok(FtsConfigBuilder::new(spec.base_relation, spec.index_name)
-        .tokenizer(tokenizer)
-        .filters(filters)
-        .extractor(spec.extractor)
-        .build())
-}
+    /// Admit tokenizer + filters once for text-index lifts (copy_detector).
+    fn admit_text_stages(
+        &self,
+        tokenizer: TokenizerSpec,
+        filters: Vec<TokenizerSpec>,
+    ) -> Result<(TokenizerConfig, Vec<TokenizerConfig>)> {
+        Ok((
+            self.admit_tokenizer(tokenizer)?,
+            self.admit_tokenizers(filters)?,
+        ))
+    }
 
-/// Seal a parsed [`LshConfigSpec`] into a proven [`MinHashLshConfig`].
-fn lift_lsh(spec: LshConfigSpec) -> Result<MinHashLshConfig> {
-    let (tokenizer, filters) = admit_text_stages(spec.tokenizer, spec.filters)?;
-    Ok(
-        MinHashLshConfigBuilder::new(spec.base_relation, spec.index_name)
-            .tokenizer(tokenizer)
-            .filters(filters)
-            .n_gram(spec.n_gram)
-            .n_perm(spec.n_perm)
-            .weights(spec.false_positive_weight, spec.false_negative_weight)
-            .target_threshold(spec.target_threshold)
-            .extractor(spec.extractor)
-            .build(),
-    )
+    /// Lift a pure-data [`SysScript`] into an engine-shaped [`SysOp`].
+    fn lift(&self, script: SysScript) -> Result<SysOp> {
+        Ok(match script {
+            SysScript::Compact => SysOp::Compact,
+            SysScript::MerkleRoot(rel) => SysOp::MerkleRoot(rel),
+            SysScript::ListColumns(rel) => SysOp::ListColumns(rel),
+            SysScript::ListIndices(rel) => SysOp::ListIndices(rel),
+            SysScript::ListRelations => SysOp::ListRelations,
+            SysScript::ListRunning => SysOp::ListRunning,
+            SysScript::ListFixedRules => SysOp::ListFixedRules,
+            SysScript::KillRunning(pid) => SysOp::KillRunning(pid),
+            SysScript::Explain(prog) => SysOp::Explain(prog),
+            SysScript::Verify(prog) => SysOp::Verify(prog),
+            SysScript::RemoveRelation(rels) => SysOp::RemoveRelation(rels),
+            SysScript::RenameRelation(pairs) => SysOp::RenameRelation(pairs),
+            SysScript::ShowTrigger(rel) => SysOp::ShowTrigger(rel),
+            SysScript::SetTriggers(rel, puts, rms, replaces) => {
+                SysOp::SetTriggers(rel, puts, rms, replaces)
+            }
+            SysScript::CreateConstraint(name, source) => SysOp::CreateConstraint(name, source),
+            SysScript::RemoveConstraint(name) => SysOp::RemoveConstraint(name),
+            SysScript::ListConstraints => SysOp::ListConstraints,
+            SysScript::SetAccessLevel(rels, level) => SysOp::SetAccessLevel(rels, level),
+            SysScript::CreateIndex(rel, name, cols) => SysOp::CreateIndex(rel, name, cols),
+            SysScript::CreateVectorIndex(spec) => SysOp::CreateVectorIndex(self.lift_hnsw(spec)?),
+            SysScript::CreateFtsIndex(spec) => {
+                let (tokenizer, filters) =
+                    self.admit_text_stages(spec.tokenizer, spec.filters)?;
+                SysOp::CreateFtsIndex(
+                    FtsConfigBuilder::new(spec.base_relation, spec.index_name)
+                        .tokenizer(tokenizer)
+                        .filters(filters)
+                        .extractor(spec.extractor)
+                        .build(),
+                )
+            }
+            SysScript::CreateMinHashLshIndex(spec) => {
+                let (tokenizer, filters) =
+                    self.admit_text_stages(spec.tokenizer, spec.filters)?;
+                SysOp::CreateMinHashLshIndex(
+                    MinHashLshConfigBuilder::new(spec.base_relation, spec.index_name)
+                        .tokenizer(tokenizer)
+                        .filters(filters)
+                        .n_gram(spec.n_gram)
+                        .n_perm(spec.n_perm)
+                        .weights(spec.false_positive_weight, spec.false_negative_weight)
+                        .target_threshold(spec.target_threshold)
+                        .extractor(spec.extractor)
+                        .build(),
+                )
+            }
+            SysScript::RemoveIndex(rel, idx) => SysOp::RemoveIndex(rel, idx),
+            SysScript::DescribeRelation(rel, desc) => SysOp::DescribeRelation(rel, desc),
+        })
+    }
 }
 
 /// Lift a pure-data [`SysScript`] into an engine-shaped [`SysOp`]: seal the
 /// index-declaration configs and admit their tokenizers; every other variant
 /// is a direct one-to-one carry of already-proven pure data.
 pub(crate) fn lift(script: SysScript) -> Result<SysOp> {
-    Ok(match script {
-        SysScript::Compact => SysOp::Compact,
-        SysScript::MerkleRoot(rel) => SysOp::MerkleRoot(rel),
-        SysScript::ListColumns(rel) => SysOp::ListColumns(rel),
-        SysScript::ListIndices(rel) => SysOp::ListIndices(rel),
-        SysScript::ListRelations => SysOp::ListRelations,
-        SysScript::ListRunning => SysOp::ListRunning,
-        SysScript::ListFixedRules => SysOp::ListFixedRules,
-        SysScript::KillRunning(pid) => SysOp::KillRunning(pid),
-        SysScript::Explain(prog) => SysOp::Explain(prog),
-        SysScript::Verify(prog) => SysOp::Verify(prog),
-        SysScript::RemoveRelation(rels) => SysOp::RemoveRelation(rels),
-        SysScript::RenameRelation(pairs) => SysOp::RenameRelation(pairs),
-        SysScript::ShowTrigger(rel) => SysOp::ShowTrigger(rel),
-        SysScript::SetTriggers(rel, puts, rms, replaces) => {
-            SysOp::SetTriggers(rel, puts, rms, replaces)
-        }
-        SysScript::CreateConstraint(name, source) => SysOp::CreateConstraint(name, source),
-        SysScript::RemoveConstraint(name) => SysOp::RemoveConstraint(name),
-        SysScript::ListConstraints => SysOp::ListConstraints,
-        SysScript::SetAccessLevel(rels, level) => SysOp::SetAccessLevel(rels, level),
-        SysScript::CreateIndex(rel, name, cols) => SysOp::CreateIndex(rel, name, cols),
-        SysScript::CreateVectorIndex(spec) => SysOp::CreateVectorIndex(lift_hnsw(spec)?),
-        SysScript::CreateFtsIndex(spec) => SysOp::CreateFtsIndex(lift_fts(spec)?),
-        SysScript::CreateMinHashLshIndex(spec) => SysOp::CreateMinHashLshIndex(lift_lsh(spec)?),
-        SysScript::RemoveIndex(rel, idx) => SysOp::RemoveIndex(rel, idx),
-        SysScript::DescribeRelation(rel, desc) => SysOp::DescribeRelation(rel, desc),
-    })
+    SysOpLift.lift(script)
 }
 
 #[cfg(test)]
