@@ -1127,65 +1127,75 @@ mod tests {
 
     type TestResult = std::result::Result<(), GrammarProofRefuse>;
 
-    fn real_grammar_text() -> std::result::Result<String, GrammarProofRefuse> {
-        std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("grammar.toml"))
-            .map_err(|_| GrammarProofRefuse::ReadGrammar)
-    }
+    /// Receiver for grammar test helpers (tip 806/896).
+    struct GrammarProofs;
 
-    fn real_bite_src() -> std::result::Result<String, GrammarProofRefuse> {
-        std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/bite_proofs.rs"))
+    impl GrammarProofs {
+        fn real_grammar_text(&self) -> std::result::Result<String, GrammarProofRefuse> {
+            std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("grammar.toml"))
+                .map_err(|_| GrammarProofRefuse::ReadGrammar)
+        }
+
+        fn real_bite_src(&self) -> std::result::Result<String, GrammarProofRefuse> {
+            std::fs::read_to_string(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/bite_proofs.rs"),
+            )
             .map_err(|_| GrammarProofRefuse::ReadBite)
-    }
+        }
 
-    /// Stage text to a tempfile and return the production `Grammar::load` Result
-    /// (error messages preserved for adversary proofs).
-    fn probe_text(text: &str) -> std::result::Result<Result<Grammar>, GrammarProofRefuse> {
-        let mut f = tempfile::NamedTempFile::new().map_err(|_| GrammarProofRefuse::Tempfile)?;
-        f.write_all(text.as_bytes())
-            .map_err(|_| GrammarProofRefuse::WriteFixture)?;
-        Ok(Grammar::load(
-            f.path(),
-            &real_bite_src()?,
-            &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures"),
-        ))
-    }
+        /// Stage text to a tempfile and return the production `Grammar::load` Result
+        /// (error messages preserved for adversary proofs).
+        fn probe_text(&self, text: &str) -> std::result::Result<Result<Grammar>, GrammarProofRefuse> {
+            let mut f = tempfile::NamedTempFile::new().map_err(|_| GrammarProofRefuse::Tempfile)?;
+            f.write_all(text.as_bytes())
+                .map_err(|_| GrammarProofRefuse::WriteFixture)?;
+            Ok(Grammar::load(
+                f.path(),
+                &self.real_bite_src()?,
+                &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures"),
+            ))
+        }
 
-    fn load_text(text: &str) -> std::result::Result<Grammar, GrammarProofRefuse> {
-        probe_text(text)?.map_err(|_| GrammarProofRefuse::Load)
-    }
+        fn load_text(&self, text: &str) -> std::result::Result<Grammar, GrammarProofRefuse> {
+            self.probe_text(text)?.map_err(|_| GrammarProofRefuse::Load)
+        }
 
-    /// Load that must fail — Ok maps to `silent`, production Err is success.
-    fn must_refuse_text(text: &str, silent: GrammarProofRefuse) -> TestResult {
-        match load_text(text) {
-            Ok(_) => Err(silent),
-            Err(GrammarProofRefuse::Load) => Ok(()),
-            Err(e) => Err(e),
+        /// Load that must fail — Ok maps to `silent`, production Err is success.
+        fn must_refuse_text(&self, text: &str, silent: GrammarProofRefuse) -> TestResult {
+            match self.load_text(text) {
+                Ok(_) => Err(silent),
+                Err(GrammarProofRefuse::Load) => Ok(()),
+                Err(e) => Err(e),
+            }
+        }
+
+        /// Clone the live fixture dir, apply one mutation, return production load Result.
+        fn probe_with_mutated_fixtures(
+            &self,
+            mutate: impl FnOnce(&Path) -> TestResult,
+        ) -> std::result::Result<Result<Grammar>, GrammarProofRefuse> {
+            let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            let dir = tempfile::tempdir().map_err(|_| GrammarProofRefuse::Tempdir)?;
+            for entry in std::fs::read_dir(manifest.join("fixtures"))
+                .map_err(|_| GrammarProofRefuse::FixturesDir)?
+            {
+                let entry = entry.map_err(|_| GrammarProofRefuse::FixtureEntry)?;
+                std::fs::copy(entry.path(), dir.path().join(entry.file_name()))
+                    .map_err(|_| GrammarProofRefuse::FixtureCopy)?;
+            }
+            mutate(dir.path())?;
+            let mut f = tempfile::NamedTempFile::new().map_err(|_| GrammarProofRefuse::Tempfile)?;
+            f.write_all(self.real_grammar_text()?.as_bytes())
+                .map_err(|_| GrammarProofRefuse::WriteFixture)?;
+            Ok(Grammar::load(f.path(), &self.real_bite_src()?, dir.path()))
         }
     }
 
-    /// Clone the live fixture dir, apply one mutation, return production load Result.
-    fn probe_with_mutated_fixtures(
-        mutate: impl FnOnce(&Path) -> TestResult,
-    ) -> std::result::Result<Result<Grammar>, GrammarProofRefuse> {
-        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let dir = tempfile::tempdir().map_err(|_| GrammarProofRefuse::Tempdir)?;
-        for entry in std::fs::read_dir(manifest.join("fixtures"))
-            .map_err(|_| GrammarProofRefuse::FixturesDir)?
-        {
-            let entry = entry.map_err(|_| GrammarProofRefuse::FixtureEntry)?;
-            std::fs::copy(entry.path(), dir.path().join(entry.file_name()))
-                .map_err(|_| GrammarProofRefuse::FixtureCopy)?;
-        }
-        mutate(dir.path())?;
-        let mut f = tempfile::NamedTempFile::new().map_err(|_| GrammarProofRefuse::Tempfile)?;
-        f.write_all(real_grammar_text()?.as_bytes())
-            .map_err(|_| GrammarProofRefuse::WriteFixture)?;
-        Ok(Grammar::load(f.path(), &real_bite_src()?, dir.path()))
-    }
+    const G: GrammarProofs = GrammarProofs;
 
     #[test]
     fn the_real_grammar_loads() -> TestResult {
-        let g = load_text(&real_grammar_text()?)?;
+        let g = G.load_text(&G.real_grammar_text()?)?;
         GrammarProofRefuse::CondemnedCount.require(g.condemned().len() == 8)
     }
 
@@ -1194,8 +1204,8 @@ mod tests {
         // TRUTH item 1 Proof fixture: `const` kind silent → load Err.
         // Anchor on the seated-table line break so `impl-const`/`trait-const`
         // are not mangled by a substring replace.
-        let text = real_grammar_text()?.replace("\nconst = [\"constant\"]\n", "\n");
-        let e = probe_text(&text)?;
+        let text = G.real_grammar_text()?.replace("\nconst = [\"constant\"]\n", "\n");
+        let e = G.probe_text(&text)?;
         GrammarProofRefuse::LoadSilent.require(e.is_err())?;
         let msg = format!("{:?}", e.err());
         GrammarProofRefuse::NeitherSeatedUnnamed.require(msg.contains("neither seated nor condemned"))
@@ -1206,11 +1216,11 @@ mod tests {
         // Seat a kind that is already condemned (and has a condemnation law).
         // Adding a seated-only kind to `condemned` fails earlier: seated kinds
         // have no registered condemnation law name.
-        let text = real_grammar_text()?.replace(
+        let text = G.real_grammar_text()?.replace(
             "[kinds.seated]\n",
             "[kinds.seated]\nunion = [\"sum-type\"]\n",
         );
-        let e = probe_text(&text)?;
+        let e = G.probe_text(&text)?;
         GrammarProofRefuse::LoadSilent.require(e.is_err())?;
         let msg = format!("{:?}", e.err());
         GrammarProofRefuse::BothSeatedUnnamed.require(msg.contains("both seated and condemned"))
@@ -1220,7 +1230,7 @@ mod tests {
     fn item_3_proof_two_named_all_private_struct_rules_is_a_load_error() -> TestResult {
         // Item 3 Proof: Grammar declaring two named-all-private struct rules
         // → load Err (identical parse facts — not disjoint).
-        let text = real_grammar_text()?
+        let text = G.real_grammar_text()?
             .replace(
                 "struct = [\"newtype-scalar\", \"sealed-struct\", \"unit-marker\"]\n",
                 "struct = [\"newtype-scalar\", \"sealed-struct\", \"unit-marker\", \"sealed-struct-twin\"]\n",
@@ -1251,7 +1261,7 @@ mod tests {
         let mut f = tempfile::NamedTempFile::new().map_err(|_| GrammarProofRefuse::Tempfile)?;
         f.write_all(text.as_bytes())
             .map_err(|_| GrammarProofRefuse::WriteFixture)?;
-        let err = Grammar::load(f.path(), &real_bite_src()?, dir.path());
+        let err = Grammar::load(f.path(), &G.real_bite_src()?, dir.path());
         GrammarProofRefuse::LoadSilent.require(err.is_err())?;
         let msg = format!("{:?}", err.err());
         GrammarProofRefuse::DisjointUnnamed.require(msg.contains("not proven disjoint") || msg.contains("identical rules"))
@@ -1260,7 +1270,7 @@ mod tests {
     #[test]
     fn a_missing_fixture_is_a_load_error() -> TestResult {
         // Copy the real fixtures, delete one deny, expect refusal.
-        let e = probe_with_mutated_fixtures(|dir| {
+        let e = G.probe_with_mutated_fixtures(|dir| {
             std::fs::remove_file(dir.join("sealed-struct.deny.rs"))
                 .map_err(|_| GrammarProofRefuse::RemoveFixture)?;
             Ok(())
@@ -1270,7 +1280,7 @@ mod tests {
 
     #[test]
     fn an_unrecognized_fixture_file_is_a_load_error() -> TestResult {
-        let e = probe_with_mutated_fixtures(|dir| {
+        let e = G.probe_with_mutated_fixtures(|dir| {
             std::fs::write(dir.join("rogue.rs"), "fn smuggled() {}\n")
                 .map_err(|_| GrammarProofRefuse::WriteRogue)?;
             Ok(())
@@ -1281,11 +1291,11 @@ mod tests {
     #[test]
     fn item_5_proof_nested_place_assign_in_no_list_is_a_load_error() -> TestResult {
         // TRUTH item 5 Proof: nested_place_assign in no jurisdiction → load Err.
-        let text = real_grammar_text()?.replace(
+        let text = G.real_grammar_text()?.replace(
             "bans = [\"nested_place_assign\", \"await\"]\n",
             "bans = [\"await\"]\n",
         );
-        let e = probe_text(&text)?;
+        let e = G.probe_text(&text)?;
         GrammarProofRefuse::LoadSilent.require(e.is_err())?;
         let msg = format!("{:?}", e.err());
         GrammarProofRefuse::NestedPlaceUnnamed.require(msg.contains("nested_place_assign") && msg.contains("no list"))
@@ -1293,11 +1303,11 @@ mod tests {
 
     #[test]
     fn item_5_proof_ban_in_two_jurisdictions_is_a_load_error() -> TestResult {
-        let text = real_grammar_text()?.replace(
+        let text = G.real_grammar_text()?.replace(
             "bans_attribute = [\n  \"allow_dead_code\",",
             "bans_attribute = [\n  \"unwrap\",\n  \"allow_dead_code\",",
         );
-        let e = probe_text(&text)?;
+        let e = G.probe_text(&text)?;
         GrammarProofRefuse::LoadSilent.require(e.is_err())?;
         let msg = format!("{:?}", e.err());
         GrammarProofRefuse::DualSeatUnnamed.require(msg.contains("both") || msg.contains("unwrap"))
@@ -1335,11 +1345,11 @@ mod tests {
 
     #[test]
     fn grammar_refuses_unknown_ban_and_missing_bite_proof() -> TestResult {
-        let no_matcher = real_grammar_text()?.replace("\"unwrap\",", "\"no_such_matcher\",");
-        must_refuse_text(&no_matcher, GrammarProofRefuse::UnknownMatcherSilent)?;
+        let no_matcher = G.real_grammar_text()?.replace("\"unwrap\",", "\"no_such_matcher\",");
+        G.must_refuse_text(&no_matcher, GrammarProofRefuse::UnknownMatcherSilent)?;
 
         let mut f = tempfile::NamedTempFile::new().map_err(|_| GrammarProofRefuse::Tempfile)?;
-        f.write_all(real_grammar_text()?.as_bytes())
+        f.write_all(G.real_grammar_text()?.as_bytes())
             .map_err(|_| GrammarProofRefuse::WriteFixture)?;
         let e = Grammar::load(
             f.path(),
@@ -1353,7 +1363,7 @@ mod tests {
     /// proof demands `fn bite_{name}(` on a trimmed line (tip 686).
     #[test]
     fn soft_contains_bite_prefix_is_not_a_proof() -> TestResult {
-        let mut bite = real_bite_src()?;
+        let mut bite = G.real_bite_src()?;
         let start = bite
             .find("fn bite_unwrap()")
             .ok_or(GrammarProofRefuse::BiteUnwrapMissing)?;
@@ -1372,7 +1382,7 @@ mod tests {
                 .any(|l| l.trim_start().starts_with("fn bite_unwrap(")),
         )?;
         let mut f = tempfile::NamedTempFile::new().map_err(|_| GrammarProofRefuse::Tempfile)?;
-        f.write_all(real_grammar_text()?.as_bytes())
+        f.write_all(G.real_grammar_text()?.as_bytes())
             .map_err(|_| GrammarProofRefuse::WriteFixture)?;
         let Err(err) = Grammar::load(
             f.path(),
@@ -1387,7 +1397,7 @@ mod tests {
     /// A directory named like an expected fixture must not count as present.
     #[test]
     fn fixture_directory_masquerade_is_a_load_error() -> TestResult {
-        let e = probe_with_mutated_fixtures(|dir| {
+        let e = G.probe_with_mutated_fixtures(|dir| {
             std::fs::remove_file(dir.join("sealed-struct.deny.rs"))
                 .map_err(|_| GrammarProofRefuse::RemoveFixture)?;
             std::fs::create_dir(dir.join("sealed-struct.deny.rs"))
