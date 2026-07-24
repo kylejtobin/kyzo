@@ -387,18 +387,18 @@ impl RunLaw {
                 // waiver's `line` is display-only and must not gate matching,
                 // or a `//` insert above the item would falsely stale it.
                 let entries = waivers.for_check(&check);
-                let mut consumed = vec![false; entries.len()];
+                let mut consumed: BTreeSet<usize> = BTreeSet::new();
                 raw.iter()
                     .filter(|h| {
                         let found = entries.iter().enumerate().find(|(i, w)| {
-                            !consumed[*i]
+                            !consumed.contains(i)
                                 && identity::IDENTITY.waiver_matches_hit(w, h, b.files())
                                 // TRUTH item 7: a dead citation stops the waiver
                                 // from applying (in addition to reporting it).
                                 && citation::CITATION.citation_live(root, &laws, w)
                         });
                         if let Some((i, _)) = found {
-                            consumed[i] = true;
+                            consumed.insert(i);
                             false
                         } else {
                             true
