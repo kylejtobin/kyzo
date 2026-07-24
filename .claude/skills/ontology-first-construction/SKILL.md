@@ -25,6 +25,10 @@ Before producing a plan or code, state:
 * legal constructors and transitions;
 * dependency graph and derived order;
 * explicit temporal policies;
-* unresolved design gaps.
+* unresolved design gaps;
+* for any new construct or seat that reclassifies an existing population of
+  violations: the real semantic kind it names, and the near-neighbor fixture
+  that still reds because of it. A seat whose effect is that the count fell is
+  an exemption, not a construct — refuse it.
 
 The types define what may exist. Constructors define what must already exist. The graph supplies structural order.

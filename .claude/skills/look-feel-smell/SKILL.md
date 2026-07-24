@@ -10,7 +10,7 @@ looks like checking. Stop. Go to that spot FIRST. What's wrong? For real.
 
 Green is the floor. Testimony is nothing. Read the code against the law.
 
-## The four lies. Grep straight at them.
+## The five lies. Grep straight at them.
 
 1. **Second authority** — a duplicate way to decide the one thing. `rg` the
    forbidden symbol. Zero on real paths or it's a fail.
@@ -20,6 +20,12 @@ Green is the floor. Testimony is nothing. Read the code against the law.
    No answer = fraud.
 4. **Undeleted corpse** — the old thing still there, renamed, cfg'd out, or
    silenced. `ls`/`rg` it. Gone means gone.
+5. **Count bought by hiding** — a violation count fell or a check greened not
+   because code was fixed but because a costume (`if X {E} else {E}`,
+   `size_of_val(&x)`, wildcard-destructure `let T{..}=x`), a new seat
+   exempting a red population, or a loosened check made the reds stop
+   counting. Ask of every drop: *what real fix caused it?* No fix = the green
+   is the lie.
 
 ## Rules
 

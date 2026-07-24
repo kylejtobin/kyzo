@@ -5,58 +5,36 @@ description: Build KyzoDB plans and specs as escape-proof default-deny declarati
 
 # kyzo-plan-build-spec
 
-Write a spec that closes the hatches nobody imagined. A blacklist forbids escapes one at a time and blocks only the ones you named; a whitelist plus one closure sentence refuses everything outside it by construction. Default-deny, applied to the document itself.
-
 ## Critical
 
-- **Whitelist, never blacklist.** List what is lawful, then add one closure sentence: everything not listed is red. Delete every "X is forbidden because…" paragraph — the closure already forbids it, and for free it forbids the escapes no author imagined.
-- **No counts, no green.** A violation count, a pass tally, "get it to zero," "make it green" — none of these is ever a goal or a proof, and any of them in a spec is the sabotage. Assume quantity is infinite and irrelevant. The only question is: is every construct lawful, or red.
-- **Max sensitivity, not clever matchers.** A construct that is not provably lawful trips the wire and lands on a bot's desk, red until cleared. Do not build advanced pattern matchers that recognize the lawful and silently pass the rest — flag the suspicious and make a bot file the paperwork.
-- **The spec is the program.** Put ontology — relations, laws, doors, refusals, verbs — in data the engine loads, so the spec and the code are one artifact and cannot diverge without the diff going red.
-- **Gate before done.** Run `python scripts/validate_plan.py <file>`. It is the deterministic refusal, not a suggestion. A draft it flags is not done until each flag is fixed or justified in writing.
+Write the plan as a default-deny declaration. These three laws are the whole skill. Obey them first, before anything below.
 
-## The four moves
+- **Closure law.** A lawful plan contains only the elements in the table under "Lawful plan elements." Any sentence, section, or file that is not one of them is red — delete it. One closure sentence refuses every escape, including the ones no author thought to name.
+- **No number is a status.** A violation count, a pass tally, "green," "to zero," "drive it down" — none is ever a goal or a proof in a plan, and its presence is red. Quantity is assumed infinite and irrelevant; the only question is lawful-or-red.
+- **No machinery.** A plan is prose and data only. A script, matcher, validator, or any tool the author controls is not a plan element and is red — judgment is read off the plan by a reasoner, never offloaded to code the author wrote.
 
-1. **Whitelist + closure sentence.** Enumerate the lawful things. Close with one sentence — "this table is total; anything not listed is red." No anti-escape prose needed.
-2. **Tables, not essays.** Any enumerable content (lawful constructs, who-may-write-what, refusal triggers, verbs) becomes rows under a header sentence: *total; not listed = red*. That one sentence does the work of every foreclosure paragraph at once.
-3. **Rulings become rows.** One line each: `pick | what it makes unrepresentable | how to falsify it | rejected alternative (one clause)`. The clause only explains; the closure already forbids.
-4. **Spec is the program.** Move the ontology into data rows (the TOML/relation form the engine actually loads). The document and the program become one artifact; evading the spec derives red.
+## Lawful plan elements
 
-## Steps
+| element | form | refusal it must carry |
+| --- | --- | --- |
+| law | one sentence of prose — the invariant the plan rests on | none; load-bearing prose, kept whole |
+| table | rows of enumerable content (constructs, doors, refusals, verbs) | must end with a closure sentence; without one the table is red |
+| closure sentence | "This table is total; not listed = red" | its absence after any table is red |
+| ruling | `pick \| what it makes unrepresentable \| how to falsify it \| rejected alternative (one clause)` | an empty "how to falsify it" cell is red |
+| current-state | `item \| built or named-and-red \| meter run?` | every item is named-and-red by default; "built" is red unless its meter ran |
+| ontology-as-data | the TOML/relation rows the engine actually loads | ontology written as prose instead of data is red |
 
-1. Start from `assets/plan-template.md`.
-2. Convert every enumerable set to a total table + closure sentence.
-3. Convert every ruling to a one-line row.
-4. Move ontology (relations, doors, refusals, verbs) into data the engine loads.
-5. Delete foreclosure prose. Keep only the core laws, the closure sentences, the falsification procedures (meters), and the current-state block.
-6. Run `python scripts/validate_plan.py <file>`. Clear or justify every flag.
+This table is total: a plan element not listed here is red — remove it.
+
+Because the list is total, every escape reached for before is already red by construction — a count as progress, a residual that parks a known hole, a script the author controls, a foreclosure essay ("X is forbidden because…"), a "weaker in exactly NONE" testimony, a file beyond the ask. None is a lawful element; none needs its own ban.
+
+## The four moves (how to produce it)
+
+1. **Whitelist, not blacklist.** Enumerate the lawful things; close with one sentence. Delete every "X is forbidden because…" paragraph — the closure forbids it, and forbids the hatches no one imagined, for free.
+2. **Tables, not essays.** Every enumerable set becomes rows under its closure sentence.
+3. **Rulings become rows.** One line each; the rejected-alternative clause explains the cost, it does not forbid — the closure already forbids.
+4. **Spec is the program.** Put the ontology in the data the engine loads, so the plan and the code are one artifact — the plan cannot be weakened without the diff going red.
 
 ## What survives as prose
 
-The core laws, the closure sentences, the meters (each a falsification procedure — how to prove the law broken), and the current-state block (what is truly built versus named-and-red). Everything else is a row or data.
-
-## Quality checklist (before finalize)
-
-- [ ] Every table ends with a closure sentence: *total; not listed = red*.
-- [ ] No "X is forbidden because…" paragraph survives — each is a row or deleted.
-- [ ] No count, tally, or "get to green" appears as a goal or a proof anywhere.
-- [ ] Ontology (relations/laws/doors/refusals/verbs) is data the engine loads, not prose.
-- [ ] Every law names its meter — the procedure that falsifies it.
-- [ ] A current-state block states what is truly built versus named-and-red.
-- [ ] `validate_plan.py` exits clean, or every flag is justified in writing.
-
-## Examples
-
-**Rewrite a blacklist into a closed table.** Four paragraphs each forbidding one construct with a reason → one table of lawful constructs + `This table is total; a construct not listed is red.` The reader who tries an unlisted construct is refused by the sentence, not by a paragraph that had to anticipate them.
-
-**Author a new spec.** Fill the template: the laws stay prose; relations/doors/refusals/verbs go straight into data rows; each law gets a meter; the current-state block starts every unbuilt seat as named-and-red.
-
-**Audit a doc.** Run the validator. Every open table (no closure sentence), foreclosure essay, or count-as-goal is a flag to fix.
-
-## Troubleshooting
-
-- **Validator flags a law line as foreclosure prose.** It matched a prohibition plus an argument in prose. Move the prohibition into a table row; keep only the meter as prose.
-- **Validator flags a count.** A tally is stated as a goal or proof. Remove it — the run's lawful-or-red verdict is the only status.
-- **Validator says no closure sentence.** The document has tables with no total-and-red closure. Add one per table.
-
-See `references/four-moves.md` for the full rationale, anti-patterns, and a worked before/after.
+Only the laws, the closure sentences, the falsification procedures (each: how to prove the law broken), and the current-state block. Everything else is a row or data. A sentence that is none of these is red — cut it.
