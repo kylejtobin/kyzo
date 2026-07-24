@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 homepage.workspace = true
 repository.workspace = true
-description = "KyzoDB standalone binary: CLI, REPL, and HTTP server"
+description = "KyzoDB standalone binary: CLI and REPL (marshal-only host)"
 
 [[bin]]
 name = "kyzo"
@@ -15,8 +15,6 @@ path = "src/main.rs"
 [dependencies]
 kyzo = { path = "../kyzo-core" }
 clap = { version = "4", features = ["derive"] }
-env_logger = "0.11"
-log = "0.4"
 rand = "0.9"
 serde = "1"
 serde_derive = "1"
@@ -58,24 +56,6 @@ webpki-roots = "0.26"
 ctrlc = "3"
 tempfile = "3"
 
-# The HTTP server. tokio features are named explicitly, not "full": a
-# database engine does not get to inherit invisible defaults (the same
-# posture kyzo-core's `StorageOptions` takes on cache/thread knobs).
-tokio = { version = "1", features = ["rt-multi-thread", "net", "fs", "sync"] }
-axum = "0.8"
-axum-macros = "0.5"
-async-stream = "0.3"
-futures = "0.3"
-# CORS/auth/compression. Compression is deliberately gzip+brotli ONLY:
-# `compression-gzip` -> `async-compression`'s `flate2` codec, whose default
-# backend is `miniz_oxide` (pure Rust; the C `libz-sys`/`zlib-ng` backends
-# are separate, non-default flate2 features, never enabled here) —
-# `compression-br` -> the `brotli` crate, a from-scratch pure-Rust port,
-# not a binding to Google's C library. `compression-zstd` is excluded: it
-# depends on `zstd-safe` -> `zstd-sys`, C. Verified with the same
-# `cargo tree` sweep as the TLS stack: no `cc`/`*-sys` crate present.
-tower-http = { version = "0.6", features = ["cors", "auth", "compression-gzip", "compression-br"] }
-rayon = "1"
 
 # A binary crate's integration tests (tests/) are a separate crate that sees
 # only dev-dependencies, not the bin's regular deps — so tempfile is declared

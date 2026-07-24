@@ -6,7 +6,7 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! Storage-engine selection for the CLI/server composition root.
+//! Storage-engine selection for the CLI/REPL composition root.
 //!
 //! The CozoDB original dispatched over five backends (`mem`, `sqlite`,
 //! `rocksdb`, `sled`, `tikv`) behind a `DbInstance` enum. kyzo-core has
@@ -27,7 +27,7 @@
 use std::path::Path;
 
 use kyzo::{Catalog, Engine, FjallStorage, StorageOptions, new_fjall_storage_with};
-use miette::{IntoDiagnostic, Result, miette};
+use miette::{IntoDiagnostic, Result};
 
 /// Which storage posture the host opens. One closed vocabulary — never a
 /// free `String` engine name.
@@ -37,15 +37,6 @@ pub enum EngineKind {
     Mem,
     /// Persistent fjall store at `--path`.
     Fjall,
-}
-
-impl EngineKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            EngineKind::Mem => "mem",
-            EngineKind::Fjall => "fjall",
-        }
-    }
 }
 
 /// Resource knobs exposed on the CLI, passed straight through to
@@ -124,14 +115,6 @@ impl DbHandle {
                 _ephemeral_dir: self._ephemeral_dir,
             },
         )
-    }
-
-    pub fn db(&self) -> &Engine<FjallStorage> {
-        &self.db
-    }
-
-    pub fn storage(&self) -> &FjallStorage {
-        &self.storage
     }
 }
 

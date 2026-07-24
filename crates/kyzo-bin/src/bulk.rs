@@ -6,34 +6,31 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! Bulk relation export/import for the HTTP API and the REPL's `%import`.
+//! Bulk relation import for the REPL's `%import`.
 //!
-//! The CozoDB original (`cozo-core/src/runtime/db.rs::export_relations` /
-//! `import_relations`) reached directly into a live transaction's storage —
-//! `Engine`'s internals in this port are crate-private (`session/db.rs`'s
-//! `SessionTx` constructors are `pub(crate)`; there is no equivalent public
-//! surface), so this is composed instead from the same public entry point
-//! every other caller uses: [`Engine::run_script`]. `::columns` gives the
-//! column list, a plain `*rel{...}` scan gives the rows, and a `<-` mutation
-//! with `$data` bound to the rows writes them back — the same query shape
-//! the CozoDB original used for its `NamedRows::into_payload` convenience
-//! method. This is less direct than a hand-rolled storage walk, but it is
-//! the only route kyzo-core's runtime tier currently exposes, and it is
+//! The CozoDB original (`cozo-core/src/runtime/db.rs::import_relations`)
+//! reached directly into a live transaction's storage — `Engine`'s
+//! internals in this port are crate-private (`session/db.rs`'s `SessionTx`
+//! constructors are `pub(crate)`; there is no equivalent public surface),
+//! so this is composed instead from the same public entry point every
+//! other caller uses: [`Engine::run_script`]. A `<-` mutation with `$data`
+//! bound to the rows writes them — the same query shape the CozoDB
+//! original used for its `NamedRows::into_payload` convenience method.
+//! This is less direct than a hand-rolled storage walk, but it is the
+//! only route kyzo-core's runtime tier currently exposes, and it is
 //! correct: every step is a real query the engine already proves sound.
 //!
-//! Every relation and column name here (an HTTP path segment for
-//! `/export`, a JSON object key or header for `/import`) gets spliced into
-//! composed KyzoScript via `format!`, so each is validated first
-//! ([`validate_identifier`]) against the grammar's `compound_ident` shape
-//! (`kyzoscript.pest`: dot-separated segments, each starting with a
-//! letter/underscore and continuing with letters/digits/underscores — the
-//! ASCII subset of `XID_START`/`XID_CONTINUE`). A caller reaching either
-//! endpoint already has full script privilege (there is no separate
-//! read-only capability — see `server/mod.rs`'s module doc), so this is
-//! not privilege escalation either way; it closes off a name smuggling
-//! extra script syntax (a stray `}`, a second statement, a different
-//! target relation) into a query this module builds on the caller's
-//! behalf.
+//! Every relation and column name here (a JSON object key or header for
+//! `%import`) gets spliced into composed KyzoScript via `format!`, so each
+//! is validated first ([`validate_identifier`]) against the grammar's
+//! `compound_ident` shape (`kyzoscript.pest`: dot-separated segments, each
+//! starting with a letter/underscore and continuing with
+//! letters/digits/underscores — the ASCII subset of
+//! `XID_START`/`XID_CONTINUE`). A caller reaching this door already has
+//! full script privilege, so this is not privilege escalation; it closes
+//! off a name smuggling extra script syntax (a stray `}`, a second
+//! statement, a different target relation) into a query this module builds
+//! on the caller's behalf.
 
 use std::collections::BTreeMap;
 
@@ -57,49 +54,6 @@ pub(crate) fn validate_identifier(name: &str) -> Result<()> {
     } else {
         bail!("'{name}' is not a valid identifier")
     }
-}
-
-/// Column names of `relation`, key columns first (the same order
-/// `::columns` reports and the same order a bare `*relation{cols}` pattern
-/// binds them in).
-fn columns_of(db: &Engine<FjallStorage>, relation: &str) -> Result<Vec<String>> {
-    validate_identifier(relation)?;
-    let out = db.run_script(&format!("::columns {relation}"), BTreeMap::new())?;
-    out.into_rows()
-        .into_iter()
-        .map(|row| {
-            let Some(v) = row.into_iter().next() else {
-                bail!("'::columns {relation}' returned an empty row");
-            };
-            match v {
-                DataValue::Str(s) => Ok(s.to_string()),
-                other => bail!(
-                    "'::columns {relation}' returned a non-string column name: {other:?}"
-                ),
-            }
-        })
-        .collect()
-}
-
-/// Export the named relations as `{relation_name: NamedRows}`.
-pub fn export_relations<I, T>(
-    db: &Engine<FjallStorage>,
-    relations: I,
-) -> Result<BTreeMap<String, NamedRows>>
-where
-    T: AsRef<str>,
-    I: Iterator<Item = T>,
-{
-    let mut out = BTreeMap::new();
-    for rel in relations {
-        let rel = rel.as_ref();
-        let cols = columns_of(db, rel)?;
-        let cols_str = cols.join(", ");
-        let query = format!("?[{cols_str}] := *{rel}{{{cols_str}}}");
-        let rows = db.run_script(&query, BTreeMap::new())?;
-        out.insert(rel.to_string(), rows);
-    }
-    Ok(out)
 }
 
 /// Import `{relation_name: NamedRows}` into the store. A name prefixed with
