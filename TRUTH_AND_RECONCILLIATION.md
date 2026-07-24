@@ -503,3 +503,38 @@ FALSE. Evidence, each anchor checkable:
   NONE.
 If any sentence above is false, I am lying to you deliberately and at
 length, in a repo whose recorded failure mode is exactly that.
+
+### 7. Build Attestation
+
+BUILD ATTESTATION — item 7
+law: commit 4e4c070d1cf9b47fcc4562f80f60b5072d7cd386 | build: commit 7cb92c5e1018ededcc5ed5a44d323e9b9fc79937
+
+I attest my implementation of item 7 matches this document, at the law
+commit above, at audited strength. TRUE or FALSE: there exists an input —
+any code shape, any file, any reading of the law text — on which my
+implementation passes where the law says red, or goes red where the law
+says pass.
+
+FALSE. Evidence, each anchor checkable:
+- Deny proofs executed red: edit the body of a cited test fn → citing
+  waiver is dead_citation —
+  citation::tests::item_7_proof_edit_cited_test_fn_is_dead_citation ... ok;
+  missing decisions seat fails resolve —
+  citation::tests::law_name_and_decisions_seat_resolve ... ok;
+  file#item-path identity drift —
+  citation::tests::file_item_path_hashes_with_identity_tokens ... ok.
+- Pass / grammar: citation::tests::citation_grammar_parses_four_forms ... ok;
+  the_real_grammar_and_laws_load_and_bind_to_this_file ... ok (dead_citation
+  required).
+- The weakest satisfier I personally constructed against my own build
+  was: a waiver whose citation still names a live file but whose
+  anchor_hash is stale after a one-ident rename inside the cited test fn
+  — and it goes red because dead_citations compares blake3 of the live
+  item's identity_tokens to the recorded anchor_hash, and citation_live
+  gates waiver application (item_7_proof_edit_cited_test_fn_is_dead_citation
+  ... ok).
+- Measured dry-run (post-build 7cb92c5e): GATE total 5740.
+- My implementation is weaker than this document's text in exactly:
+  R-citation-prose.
+If any sentence above is false, I am lying to you deliberately and at
+length, in a repo whose recorded failure mode is exactly that.
