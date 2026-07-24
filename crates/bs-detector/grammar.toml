@@ -237,7 +237,7 @@ io = false
 [[seats.fns]]
 file = "crates/bs-detector/src/engines/behavior/build_script_sandbox.rs"
 fn_path = "check_at_scoped"
-site_hash = "bc0f1d0dee4f50eb391992f072e283eb21bd281769a846a3b675e139c420fa4a"
+site_hash = "8919bc36117ddd5efee50fa3fa7a6458dcf0f0dd56b5ec4414776862a7c1aa46"
 io = false
 
 # Item 2 relational: sealed-public-door hosts. Empty allowed_imports means

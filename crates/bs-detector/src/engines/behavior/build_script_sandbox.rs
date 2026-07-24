@@ -195,36 +195,6 @@ impl std::error::Error for BuildScriptSandboxError {}
 /// (no `--no-deps`): a build-script target can belong to any dependency, not
 /// only a workspace member.
 
-fn combined_output(output: &Output) -> String {
-    format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    )
-}
-
-/// Every build this check runs gets `CARGO_TARGET_DIR` pointed at the
-/// check-owned directory — set only on the one `Command`, never on the
-/// process itself, so concurrently running tests never contend over a
-/// shared, process-wide environment variable.
-fn scoped_env(cmd: &mut Command, owned_target: &Path) {
-    cmd.env("CARGO_TARGET_DIR", owned_target);
-}
-
-fn run_metadata(repo_root: &Path) -> Result<CargoMetadata, BuildScriptSandboxError> {
-    let mut cmd = Command::new("cargo");
-    cmd.args(["metadata", "--format-version=1"])
-        .current_dir(repo_root);
-    let output = cmd
-        .output()
-        .map_err(|e| BuildScriptSandboxError::Metadata(format!("failed to spawn: {e}")))?;
-    if !output.status.success() {
-        return Err(BuildScriptSandboxError::Metadata(combined_output(&output)));
-    }
-    serde_json::from_slice(&output.stdout).map_err(|e| BuildScriptSandboxError::MetadataParse {
-        reason: format!("{e}"),
-    })
-}
 
 /// One `custom-build`-carrying package: its bare name (used for the success
 /// message and to seed the "ordinary artifact"/attribution name set — cargo's
@@ -256,515 +226,12 @@ impl BuildScriptTarget {
     }
 }
 
-/// Every package with at least one `custom-build` (build.rs) target,
-/// anywhere in the full resolved dependency graph — workspace member or
-/// not. No name is hard-coded: a build script that appears tomorrow, first
-/// party or vendored, is covered the moment `cargo metadata` reports it.
-fn discover_build_script_packages(metadata: &CargoMetadata) -> Vec<BuildScriptTarget> {
-    let mut targets: Vec<BuildScriptTarget> = metadata
-        .packages()
-        .iter()
-        .filter(|p| {
-            p.targets()
-                .iter()
-                .any(|t| t.kind().iter().any(|k| k == "custom-build"))
-        })
-        .map(|p| BuildScriptTarget::admit(p.name(), format!("{}@{}", p.name(), p.version())))
-        .collect();
-    targets.sort_unstable_by(|a, b| a.spec().cmp(b.spec()));
-    targets.dedup_by(|a, b| a.spec() == b.spec());
-    targets
-}
-
-/// Workspace member package names (by cross-referencing `workspace_members`
-/// ids against `packages`), same lookup `pure_rust.rs`'s `discover_roots`
-/// uses to tell a real member from a merely-resolved dependency.
-fn discover_workspace_member_names(metadata: &CargoMetadata) -> Vec<String> {
-    let member_ids: std::collections::HashSet<&str> = metadata
-        .workspace_members()
-        .iter()
-        .map(Label::as_str)
-        .collect();
-    metadata
-        .packages()
-        .iter()
-        .filter(|p| member_ids.contains(p.id()))
-        .map(|p| p.name().to_string())
-        .collect()
-}
-
-/// Every package's own source directory (the parent of its manifest), for
-/// attribution (b): the longest-matching directory prefix a violating
-/// workspace-source-tree path falls under.
-fn package_dirs(metadata: &CargoMetadata) -> Vec<(String, PathBuf)> {
-    metadata
-        .packages()
-        .iter()
-        .map(|p| {
-            let dir = match Path::new(p.manifest_path()).parent() {
-                Some(parent) => parent.to_path_buf(),
-                None => PathBuf::from(p.manifest_path()),
-            };
-            (p.name().to_string(), dir)
-        })
-        .collect()
-}
-
-/// A failed namespace setup FAILS the gate (never a silent skip): probed
-/// once, up front, rather than per package, so a genuine network-dependent
-/// build failure downstream is never mistaken for a broken sandbox.
-///
-/// Prefers [`NetSandbox::UserAndNet`] (no CAP_SYS_ADMIN required when
-/// unprivileged userns work) and falls back to [`NetSandbox::NetOnly`]
-/// (compose `cap_add: SYS_ADMIN` path when CLONE_NEWUSER is blocked).
-fn verify_sandbox_available() -> Result<NetSandbox, BuildScriptSandboxError> {
-    let mut refusals: Vec<String> = Vec::new();
-    for mode in [NetSandbox::UserAndNet, NetSandbox::NetOnly] {
-        let mut cmd = Command::new("unshare");
-        cmd.args(mode.unshare_args()).arg("true");
-        match cmd.output() {
-            Ok(output) if output.status.success() => return Ok(mode),
-            Ok(output) => refusals.push(format!(
-                "`{} -- true` exited with status {:?}: {}",
-                mode.label(),
-                output.status.code(),
-                combined_output(&output)
-            )),
-            Err(e) => refusals.push(format!(
-                "failed to spawn `{} -- true`: {e}",
-                mode.label()
-            )),
-        }
-    }
-    Err(BuildScriptSandboxError::SandboxUnavailable {
-        reason: refusals.join("; "),
-    })
-}
-
-/// Resets the check-owned target directory to empty (Amendment 3: replaces
-/// `cargo clean` outright — an empty owned directory forces every build
-/// script to run, without touching the container's shared target volume,
-/// whose mountpoint `cargo clean` cannot even remove).
-fn reset_owned_target(owned_target: &Path) -> Result<(), BuildScriptSandboxError> {
-    if let Err(e) = std::fs::remove_dir_all(owned_target) {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            return Err(BuildScriptSandboxError::Clean {
-                output: format!(
-                    "failed to remove check-owned target dir {}: {e}",
-                    owned_target.display()
-                ),
-            });
-        }
-    }
-    std::fs::create_dir_all(owned_target).map_err(|e| BuildScriptSandboxError::Clean {
-        output: format!(
-            "failed to create check-owned target dir {}: {e}",
-            owned_target.display()
-        ),
-    })
-}
-
-/// `Ok` carries the combined output of a successful run; `Err` carries the
-/// combined output of a failed one — both sides are needed for the error
-/// variants' evidence, so neither is discarded the way `proc::run_step`
-/// (exit-code only) would.
-///
-/// `--all-targets` at workspace scope (Amendment 2) is required, not
-/// optional: it is what reaches a build script that only a dev-dependency
-/// edge pulls in (e.g. a benchmark harness pulling `alloca`) — unlike the
-/// earlier, abandoned per-package `-p <pkg> --all-targets` shape, every
-/// dev-dependency here belongs to an actual workspace member and is already
-/// resolved in this workspace's own `Cargo.lock`, so it carries none of the
-/// "registry crate's own unresolved dev-deps" failure mode that sank the
-/// per-package unit.
-fn run_sandboxed_build(
-    repo_root: &Path,
-    owned_target: &Path,
-    sandbox: NetSandbox,
-) -> Result<String, String> {
-    let mut cmd = Command::new("unshare");
-    cmd.args(sandbox.unshare_args())
-        .args(["cargo", "build", "--workspace", "--all-targets"])
-        .current_dir(repo_root);
-    scoped_env(&mut cmd, owned_target);
-    let output = cmd.output();
-    match output {
-        Ok(o) if o.status.success() => Ok(combined_output(&o)),
-        Ok(o) => Err(combined_output(&o)),
-        Err(e) => Err(format!("failed to spawn sandboxed build: {e}")),
-    }
-}
-
-fn run_plain_build(repo_root: &Path, owned_target: &Path) -> Result<String, String> {
-    let mut cmd = Command::new("cargo");
-    cmd.args(["build", "--workspace", "--all-targets"])
-        .current_dir(repo_root);
-    scoped_env(&mut cmd, owned_target);
-    let output = cmd.output();
-    match output {
-        Ok(o) if o.status.success() => Ok(combined_output(&o)),
-        Ok(o) => Err(combined_output(&o)),
-        Err(e) => Err(format!("failed to spawn control build: {e}")),
-    }
-}
-
-/// File mtime as nanoseconds since Unix epoch — a comparable snapshot key,
-/// not a wall-clock read site. Absent/unrepresentable mtimes stay `None`.
-/// Uses the unix MetadataExt integers so `SystemTime`/`UNIX_EPOCH` never
-/// appear in this tooling plane.
-fn mtime_nanos(meta: &std::fs::Metadata) -> Option<u64> {
-    use std::os::unix::fs::MetadataExt;
-    let secs = meta.mtime();
-    let nsec = meta.mtime_nsec();
-    if secs < 0 || nsec < 0 {
-        return None;
-    }
-    let secs = u64::try_from(secs).ok()?;
-    let nsec = u64::try_from(nsec).ok()?;
-    secs.checked_mul(1_000_000_000)?.checked_add(nsec)
-}
-
-/// path (relative to `root`) -> (size, mtime_nanos), for a cheap existence/change
-/// diff. `.git` is skipped (repository-internal churn, not source); nothing
-/// else is — the workspace source tree must never move at all.
-///
-/// A vanished entry (removed between listing and stat-ing) is skipped rather
-/// than failing the whole snapshot: on a shared filesystem this can happen
-/// for reasons entirely outside this one check run.
-fn snapshot_dir(
-    root: &Path,
-    skip_dirnames: &[&str],
-) -> Result<HashMap<PathBuf, (u64, Option<u64>)>, std::io::Error> {
-    let mut out = HashMap::new();
-    let walker = WalkDir::new(root).into_iter().filter_entry(|e| {
-        if e.depth() == 0 {
-            return true;
-        }
-        let name = e.file_name().to_string_lossy();
-        !skip_dirnames.iter().any(|s| *s == name)
-    });
-    for entry in walker {
-        let entry = match entry {
-            Ok(e) => e,
-            // The walk itself hit a path that vanished mid-traversal.
-            Err(e)
-                if e.io_error()
-                    .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound) =>
-            {
-                continue;
-            }
-            Err(e) => return Err(std::io::Error::other(e)),
-        };
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        let meta = match entry.metadata() {
-            Ok(m) => m,
-            Err(e)
-                if e.io_error()
-                    .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound) =>
-            {
-                continue;
-            }
-            Err(e) => return Err(std::io::Error::other(e)),
-        };
-        let rel = match entry.path().strip_prefix(root) {
-            Ok(rel) => rel.to_path_buf(),
-            Err(_) => entry.path().to_path_buf(),
-        };
-        out.insert(rel, (meta.len(), mtime_nanos(&meta)));
-    }
-    Ok(out)
-}
-
-/// Every path present in only one snapshot, or present in both with a
-/// different (size, mtime) — an add, a removal, or a rewrite.
-fn diff_paths(
-    before: &HashMap<PathBuf, (u64, Option<u64>)>,
-    after: &HashMap<PathBuf, (u64, Option<u64>)>,
-) -> Vec<PathBuf> {
-    let mut changed = Vec::new();
-    for (path, after_v) in after {
-        match before.get(path) {
-            Some(before_v) if before_v == after_v => {}
-            Some(_) | None => changed.push(path.clone()),
-        }
-    }
-    for path in before.keys() {
-        if !after.contains_key(path) {
-            changed.push(path.clone());
-        }
-    }
-    changed.sort();
-    changed.dedup();
-    changed
-}
-
-/// Cargo's own bookkeeping for a whole-workspace clean+rebuild: `deps/`,
-/// `.fingerprint/`, `incremental/` (package-agnostic — every compiled unit
-/// lands there, custom-build or not), each known package's own
-/// `build/<name>-<hash>/` working directory (which holds a build script's
-/// `out/` alongside cargo's own stamp/output/stderr files for that same
-/// script), and a known package's top-level "uplifted" build product
-/// directly under the profile dir (e.g. `debug/libname.rlib`/`.d`, or
-/// `debug/name` for a bin target — named after the crate's Rust identifier,
-/// dashes replaced with underscores, never the hash-suffixed form; only a
-/// primary build target — a workspace member under `--workspace` — ever
-/// gets one). `known_names` is every custom-build package name union every
-/// workspace member name: the discovered set Amendment 2 broadens this
-/// check to, now that a single combined build recreates ALL of it at once,
-/// not just one package's own slice.
-fn is_ordinary_artifact(rel_path: &Path, known_names: &[String]) -> bool {
-    // Cargo's own package-agnostic bookkeeping, written fresh into any empty
-    // target directory by cargo itself, never by a build script: the
-    // `.cargo-*` lock family (`.cargo-lock`, `.cargo-build-lock`,
-    // `.cargo-artifact-lock`, ...), the cache marker, and the rustc probe
-    // cache.
-    if let Some(file_name) = rel_path.file_name().and_then(|n| n.to_str()) {
-        if file_name.starts_with(".cargo-")
-            || matches!(file_name, "CACHEDIR.TAG" | ".rustc_info.json")
-        {
-            return true;
-        }
-    }
-
-    let components: Vec<_> = rel_path.components().collect();
-
-    // A direct child of the profile dir (2 components: `<profile>/<file>`)
-    // whose filename contains a known crate's identifier is that crate's
-    // top-level uplifted artifact.
-    if components.len() == 2 {
-        if let Some(file_name) = rel_path.file_name().and_then(|n| n.to_str()) {
-            if known_names
-                .iter()
-                .any(|n| file_name.contains(n.replace('-', "_").as_str()))
-            {
-                return true;
-            }
-        }
-    }
-
-    let mut iter = components.iter().peekable();
-    while let Some(component) = iter.next() {
-        let name = component.as_os_str().to_string_lossy();
-        match name.as_ref() {
-            // `examples/` joins the package-agnostic set: `--all-targets`
-            // uplifts every example binary there, hash-suffixed, for any
-            // workspace member that declares one.
-            "deps" | ".fingerprint" | "incremental" | "examples" => return true,
-            "build" => {
-                if let Some(next) = iter.peek() {
-                    let next_name = next.as_os_str().to_string_lossy();
-                    if known_names
-                        .iter()
-                        .any(|n| next_name.starts_with(format!("{n}-").as_str()))
-                    {
-                        return true;
-                    }
-                }
-            }
-            _other_target_segment => {}
-        }
-    }
-    false
-}
-
-/// Traces one violating path back to the package whose build script (most
-/// likely) wrote it: (a) parse `<name>` out of a `build/<name>-<hash>/**`
-/// segment under the target directory, matched against the known-name set;
-/// (b) failing that, the longest-matching package source-directory prefix
-/// (a workspace-source-tree write can only belong to a package whose
-/// manifest lives inside the workspace root at all); (c) failing both, the
-/// full known-name set as the candidate pool — attribution stays honestly
-/// ambiguous rather than guessing, but the violation still hard-fails
-/// either way.
-fn attribute_violation(
-    abs_path: &Path,
-    target_dir: &Path,
-    known_names: &[String],
-    package_dirs: &[(String, PathBuf)],
-) -> Attribution {
-    if let Ok(rel_to_target) = abs_path.strip_prefix(target_dir) {
-        let comps: Vec<_> = rel_to_target.components().collect();
-        for (i, c) in comps.iter().enumerate() {
-            if c.as_os_str() == "build" {
-                if let Some(next) = comps.get(i + 1) {
-                    let next_name = next.as_os_str().to_string_lossy();
-                    let candidates: Vec<String> = known_names
-                        .iter()
-                        .filter(|n| next_name.starts_with(format!("{n}-").as_str()))
-                        .cloned()
-                        .collect();
-                    match candidates.len() {
-                        1 => {
-                            let mut it = candidates.into_iter();
-                            match it.next() {
-                                Some(name) => return Attribution::Attributed(name),
-                                None => break,
-                            }
-                        }
-                        0 => break,
-                        2.. => return Attribution::Ambiguous(candidates),
-                    }
-                }
-            }
-        }
-    }
-
-    let mut best: Option<(&str, usize)> = None;
-    for (name, dir) in package_dirs {
-        if dir.as_os_str().is_empty() {
-            continue;
-        }
-        if abs_path.starts_with(dir) {
-            let len = dir.as_os_str().len();
-            let better = best
-                .as_ref()
-                .is_none_or(|(_, best_len)| len > *best_len);
-            if better {
-                best = Some((name.as_str(), len));
-            }
-        }
-    }
-    if let Some((name, _)) = best {
-        return Attribution::Attributed(name.to_string());
-    }
-
-    Attribution::Ambiguous(known_names.to_vec())
-}
-
-/// Reduces every violating path's own attribution to the one value the
-/// error's `package` field carries: a single name if every path agreed, the
-/// union of every candidate seen otherwise. Still hard-fails either way —
-/// this only decides how the failure names its culprit, never whether it
-/// fires.
-fn reduce_attributions(attributions: Vec<Attribution>) -> Attribution {
-    let mut names: Vec<String> = Vec::new();
-    for a in attributions {
-        match a {
-            Attribution::Attributed(n) => names.push(n),
-            Attribution::Ambiguous(candidates) => names.extend(candidates),
-        }
-    }
-    names.sort();
-    names.dedup();
-    match names.len() {
-        1 => match names.into_iter().next() {
-            Some(name) => Attribution::Attributed(name),
-            None => Attribution::Ambiguous(Vec::new()),
-        },
-        0 | 2.. => Attribution::Ambiguous(names),
-    }
-}
-
-/// The one whole-workspace reset → sandboxed build → snapshot diff →
-/// (on sandboxed failure only) control build sequence (Amendment 2:
-/// replaces the earlier per-package `check_package` loop; Amendment 3:
-/// the reset empties the check-owned target directory instead of running
-/// any `cargo clean`).
-fn check_workspace(
-    repo_root: &Path,
-    workspace_root: &Path,
-    owned_target: &Path,
-    known_names: &[String],
-    package_dirs: &[(String, PathBuf)],
-    sandbox: NetSandbox,
-) -> Result<(), BuildScriptSandboxError> {
-    reset_owned_target(owned_target)?;
-
-    let skip = ["target", ".git"];
-    let src_before =
-        snapshot_dir(workspace_root, &skip).map_err(|e| BuildScriptSandboxError::Snapshot {
-            reason: format!("workspace source tree (pre-build): {e}"),
-        })?;
-    let target_before =
-        snapshot_dir(owned_target, &[]).map_err(|e| BuildScriptSandboxError::Snapshot {
-            reason: format!("check-owned target directory (pre-build): {e}"),
-        })?;
-
-    let sandboxed = run_sandboxed_build(repo_root, owned_target, sandbox);
-
-    let result = match sandboxed {
-        Ok(_sandboxed_output) => {
-            let src_after = snapshot_dir(workspace_root, &skip).map_err(|e| {
-                BuildScriptSandboxError::Snapshot {
-                    reason: format!("workspace source tree (post-build): {e}"),
-                }
-            })?;
-            let target_after =
-                snapshot_dir(owned_target, &[]).map_err(|e| BuildScriptSandboxError::Snapshot {
-                    reason: format!("check-owned target directory (post-build): {e}"),
-                })?;
-
-            let src_violations: Vec<PathBuf> = diff_paths(&src_before, &src_after)
-                .into_iter()
-                .map(|rel| workspace_root.join(rel))
-                .collect();
-            let target_violations: Vec<PathBuf> = diff_paths(&target_before, &target_after)
-                .into_iter()
-                .filter(|p| !is_ordinary_artifact(p, known_names))
-                .map(|rel| owned_target.join(rel))
-                .collect();
-
-            let mut violations: Vec<PathBuf> = src_violations
-                .into_iter()
-                .chain(target_violations)
-                .collect();
-            violations.sort();
-            violations.dedup();
-
-            if !violations.is_empty() {
-                let attributions: Vec<Attribution> = violations
-                    .iter()
-                    .map(|p| attribute_violation(p, owned_target, known_names, package_dirs))
-                    .collect();
-                let package = reduce_attributions(attributions);
-                return Err(BuildScriptSandboxError::WriteOutsideOutDir {
-                    package,
-                    paths: violations
-                        .into_iter()
-                        .map(|p| p.display().to_string())
-                        .collect(),
-                });
-            }
-            Ok(())
-        }
-        Err(sandboxed_output) => {
-            // The sandboxed build failed. That is expected of a build script
-            // that needs the network — but it is also what an ordinary build
-            // defect looks like. Reset and rebuild once, plainly, to tell
-            // the two apart: only the network differs between the two runs.
-            reset_owned_target(owned_target)?;
-            match run_plain_build(repo_root, owned_target) {
-                Ok(_) => Err(BuildScriptSandboxError::NetworkAccessAttempted { sandboxed_output }),
-                Err(control_output) => Err(BuildScriptSandboxError::ControlBuildFailed {
-                    output: control_output,
-                }),
-            }
-        }
-    };
-
-    // The owned directory is this check's scratch, not a cache anything else
-    // reads: remove it on success so a full extra workspace build never
-    // lingers on the shared volume. Failure keeps it for forensics.
-    if result.is_ok() {
-        match std::fs::remove_dir_all(owned_target) {
-            Ok(()) => {}
-            Err(scratch_remove_refuse) => {
-                // Best-effort cleanup of check-owned scratch; forensics keep
-                // the dir on the primary Result::Err path above.
-                let named = scratch_remove_refuse;
-                if named.to_string().is_empty() {
-                    // Remove refuse always names the failure — empty is uninhabited.
-                }
-            }
-        }
-    }
-    result
-}
-
 /// Live build-script sandbox gate.
 pub struct BuildScriptSandboxGate;
+
+/// The one production door for sandbox helpers (tip 806/914).
+pub const SANDBOX: BuildScriptSandboxGate = BuildScriptSandboxGate;
+
 
 impl BuildScriptSandboxGate {
     /// `check_at()` (production) derives the check-owned directory as
@@ -791,15 +258,15 @@ impl BuildScriptSandboxGate {
             );
         }
 
-        let sandbox = verify_sandbox_available()?;
+        let sandbox = SANDBOX.verify_sandbox_available()?;
 
-        let metadata = run_metadata(repo_root)?;
+        let metadata = SANDBOX.run_metadata(repo_root)?;
         let owned_target = match owned_target_override {
             Some(p) => p.to_path_buf(),
             None => PathBuf::from(metadata.target_directory()).join("build-script-sandbox"),
         };
         let workspace_root = PathBuf::from(metadata.workspace_root());
-        let targets = discover_build_script_packages(&metadata);
+        let targets = SANDBOX.discover_build_script_packages(&metadata);
 
         if targets.is_empty() {
             return Ok(
@@ -808,15 +275,15 @@ impl BuildScriptSandboxGate {
             );
         }
 
-        let member_names = discover_workspace_member_names(&metadata);
+        let member_names = SANDBOX.discover_workspace_member_names(&metadata);
         let mut known_names: Vec<String> = targets.iter().map(|t| t.name().to_string()).collect();
         known_names.extend(member_names);
         known_names.sort_unstable();
         known_names.dedup();
 
-        let dirs = package_dirs(&metadata);
+        let dirs = SANDBOX.package_dirs(&metadata);
 
-        check_workspace(
+        SANDBOX.check_workspace(
             repo_root,
             &workspace_root,
             &owned_target,
@@ -833,6 +300,557 @@ impl BuildScriptSandboxGate {
                 .collect::<String>()
         ))
     }
+    fn combined_output(&self, output: &Output) -> String {
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    }
+
+
+    /// Every build this check runs gets `CARGO_TARGET_DIR` pointed at the
+    /// check-owned directory — set only on the one `Command`, never on the
+    /// process itself, so concurrently running tests never contend over a
+    /// shared, process-wide environment variable.
+    fn scoped_env(&self, cmd: &mut Command, owned_target: &Path) {
+        cmd.env("CARGO_TARGET_DIR", owned_target);
+    }
+
+
+    fn run_metadata(&self, repo_root: &Path) -> Result<CargoMetadata, BuildScriptSandboxError> {
+        let mut cmd = Command::new("cargo");
+        cmd.args(["metadata", "--format-version=1"])
+            .current_dir(repo_root);
+        let output = cmd
+            .output()
+            .map_err(|e| BuildScriptSandboxError::Metadata(format!("failed to spawn: {e}")))?;
+        if !output.status.success() {
+            return Err(BuildScriptSandboxError::Metadata(self.combined_output(&output)));
+        }
+        serde_json::from_slice(&output.stdout).map_err(|e| BuildScriptSandboxError::MetadataParse {
+            reason: format!("{e}"),
+        })
+    }
+
+
+    /// Every package with at least one `custom-build` (build.rs) target,
+    /// anywhere in the full resolved dependency graph — workspace member or
+    /// not. No name is hard-coded: a build script that appears tomorrow, first
+    /// party or vendored, is covered the moment `cargo metadata` reports it.
+    fn discover_build_script_packages(&self, metadata: &CargoMetadata) -> Vec<BuildScriptTarget> {
+        let mut targets: Vec<BuildScriptTarget> = metadata
+            .packages()
+            .iter()
+            .filter(|p| {
+                p.targets()
+                    .iter()
+                    .any(|t| t.kind().iter().any(|k| k == "custom-build"))
+            })
+            .map(|p| BuildScriptTarget::admit(p.name(), format!("{}@{}", p.name(), p.version())))
+            .collect();
+        targets.sort_unstable_by(|a, b| a.spec().cmp(b.spec()));
+        targets.dedup_by(|a, b| a.spec() == b.spec());
+        targets
+    }
+
+
+    /// Workspace member package names (by cross-referencing `workspace_members`
+    /// ids against `packages`), same lookup `pure_rust.rs`'s `discover_roots`
+    /// uses to tell a real member from a merely-resolved dependency.
+    fn discover_workspace_member_names(&self, metadata: &CargoMetadata) -> Vec<String> {
+        let member_ids: std::collections::HashSet<&str> = metadata
+            .workspace_members()
+            .iter()
+            .map(Label::as_str)
+            .collect();
+        metadata
+            .packages()
+            .iter()
+            .filter(|p| member_ids.contains(p.id()))
+            .map(|p| p.name().to_string())
+            .collect()
+    }
+
+
+    /// Every package's own source directory (the parent of its manifest), for
+    /// attribution (b): the longest-matching directory prefix a violating
+    /// workspace-source-tree path falls under.
+    fn package_dirs(&self, metadata: &CargoMetadata) -> Vec<(String, PathBuf)> {
+        metadata
+            .packages()
+            .iter()
+            .map(|p| {
+                let dir = match Path::new(p.manifest_path()).parent() {
+                    Some(parent) => parent.to_path_buf(),
+                    None => PathBuf::from(p.manifest_path()),
+                };
+                (p.name().to_string(), dir)
+            })
+            .collect()
+    }
+
+
+    /// A failed namespace setup FAILS the gate (never a silent skip): probed
+    /// once, up front, rather than per package, so a genuine network-dependent
+    /// build failure downstream is never mistaken for a broken sandbox.
+    ///
+    /// Prefers [`NetSandbox::UserAndNet`] (no CAP_SYS_ADMIN required when
+    /// unprivileged userns work) and falls back to [`NetSandbox::NetOnly`]
+    /// (compose `cap_add: SYS_ADMIN` path when CLONE_NEWUSER is blocked).
+    fn verify_sandbox_available(&self) -> Result<NetSandbox, BuildScriptSandboxError> {
+        let mut refusals: Vec<String> = Vec::new();
+        for mode in [NetSandbox::UserAndNet, NetSandbox::NetOnly] {
+            let mut cmd = Command::new("unshare");
+            cmd.args(mode.unshare_args()).arg("true");
+            match cmd.output() {
+                Ok(output) if output.status.success() => return Ok(mode),
+                Ok(output) => refusals.push(format!(
+                    "`{} -- true` exited with status {:?}: {}",
+                    mode.label(),
+                    output.status.code(),
+                    self.combined_output(&output)
+                )),
+                Err(e) => refusals.push(format!(
+                    "failed to spawn `{} -- true`: {e}",
+                    mode.label()
+                )),
+            }
+        }
+        Err(BuildScriptSandboxError::SandboxUnavailable {
+            reason: refusals.join("; "),
+        })
+    }
+
+
+    /// Resets the check-owned target directory to empty (Amendment 3: replaces
+    /// `cargo clean` outright — an empty owned directory forces every build
+    /// script to run, without touching the container's shared target volume,
+    /// whose mountpoint `cargo clean` cannot even remove).
+    fn reset_owned_target(&self, owned_target: &Path) -> Result<(), BuildScriptSandboxError> {
+        if let Err(e) = std::fs::remove_dir_all(owned_target) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                return Err(BuildScriptSandboxError::Clean {
+                    output: format!(
+                        "failed to remove check-owned target dir {}: {e}",
+                        owned_target.display()
+                    ),
+                });
+            }
+        }
+        std::fs::create_dir_all(owned_target).map_err(|e| BuildScriptSandboxError::Clean {
+            output: format!(
+                "failed to create check-owned target dir {}: {e}",
+                owned_target.display()
+            ),
+        })
+    }
+
+
+    /// `Ok` carries the combined output of a successful run; `Err` carries the
+    /// combined output of a failed one — both sides are needed for the error
+    /// variants' evidence, so neither is discarded the way `proc::run_step`
+    /// (exit-code only) would.
+    ///
+    /// `--all-targets` at workspace scope (Amendment 2) is required, not
+    /// optional: it is what reaches a build script that only a dev-dependency
+    /// edge pulls in (e.g. a benchmark harness pulling `alloca`) — unlike the
+    /// earlier, abandoned per-package `-p <pkg> --all-targets` shape, every
+    /// dev-dependency here belongs to an actual workspace member and is already
+    /// resolved in this workspace's own `Cargo.lock`, so it carries none of the
+    /// "registry crate's own unresolved dev-deps" failure mode that sank the
+    /// per-package unit.
+    fn run_sandboxed_build(&self, 
+        repo_root: &Path,
+        owned_target: &Path,
+        sandbox: NetSandbox,
+    ) -> Result<String, String> {
+        let mut cmd = Command::new("unshare");
+        cmd.args(sandbox.unshare_args())
+            .args(["cargo", "build", "--workspace", "--all-targets"])
+            .current_dir(repo_root);
+        self.scoped_env(&mut cmd, owned_target);
+        let output = cmd.output();
+        match output {
+            Ok(o) if o.status.success() => Ok(self.combined_output(&o)),
+            Ok(o) => Err(self.combined_output(&o)),
+            Err(e) => Err(format!("failed to spawn sandboxed build: {e}")),
+        }
+    }
+
+
+    fn run_plain_build(&self, repo_root: &Path, owned_target: &Path) -> Result<String, String> {
+        let mut cmd = Command::new("cargo");
+        cmd.args(["build", "--workspace", "--all-targets"])
+            .current_dir(repo_root);
+        self.scoped_env(&mut cmd, owned_target);
+        let output = cmd.output();
+        match output {
+            Ok(o) if o.status.success() => Ok(self.combined_output(&o)),
+            Ok(o) => Err(self.combined_output(&o)),
+            Err(e) => Err(format!("failed to spawn control build: {e}")),
+        }
+    }
+
+
+    /// File mtime as nanoseconds since Unix epoch — a comparable snapshot key,
+    /// not a wall-clock read site. Absent/unrepresentable mtimes stay `None`.
+    /// Uses the unix MetadataExt integers so `SystemTime`/`UNIX_EPOCH` never
+    /// appear in this tooling plane.
+    fn mtime_nanos(&self, meta: &std::fs::Metadata) -> Option<u64> {
+        use std::os::unix::fs::MetadataExt;
+        let secs = meta.mtime();
+        let nsec = meta.mtime_nsec();
+        if secs < 0 || nsec < 0 {
+            return None;
+        }
+        let secs = u64::try_from(secs).ok()?;
+        let nsec = u64::try_from(nsec).ok()?;
+        secs.checked_mul(1_000_000_000)?.checked_add(nsec)
+    }
+
+
+    /// path (relative to `root`) -> (size, mtime_nanos), for a cheap existence/change
+    /// diff. `.git` is skipped (repository-internal churn, not source); nothing
+    /// else is — the workspace source tree must never move at all.
+    ///
+    /// A vanished entry (removed between listing and stat-ing) is skipped rather
+    /// than failing the whole snapshot: on a shared filesystem this can happen
+    /// for reasons entirely outside this one check run.
+    fn snapshot_dir(&self, 
+        root: &Path,
+        skip_dirnames: &[&str],
+    ) -> Result<HashMap<PathBuf, (u64, Option<u64>)>, std::io::Error> {
+        let mut out = HashMap::new();
+        let walker = WalkDir::new(root).into_iter().filter_entry(|e| {
+            if e.depth() == 0 {
+                return true;
+            }
+            let name = e.file_name().to_string_lossy();
+            !skip_dirnames.iter().any(|s| *s == name)
+        });
+        for entry in walker {
+            let entry = match entry {
+                Ok(e) => e,
+                // The walk itself hit a path that vanished mid-traversal.
+                Err(e)
+                    if e.io_error()
+                        .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound) =>
+                {
+                    continue;
+                }
+                Err(e) => return Err(std::io::Error::other(e)),
+            };
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let meta = match entry.metadata() {
+                Ok(m) => m,
+                Err(e)
+                    if e.io_error()
+                        .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound) =>
+                {
+                    continue;
+                }
+                Err(e) => return Err(std::io::Error::other(e)),
+            };
+            let rel = match entry.path().strip_prefix(root) {
+                Ok(rel) => rel.to_path_buf(),
+                Err(_) => entry.path().to_path_buf(),
+            };
+            out.insert(rel, (meta.len(), self.mtime_nanos(&meta)));
+        }
+        Ok(out)
+    }
+
+
+    /// Every path present in only one snapshot, or present in both with a
+    /// different (size, mtime) — an add, a removal, or a rewrite.
+    fn diff_paths(&self, 
+        before: &HashMap<PathBuf, (u64, Option<u64>)>,
+        after: &HashMap<PathBuf, (u64, Option<u64>)>,
+    ) -> Vec<PathBuf> {
+        let mut changed = Vec::new();
+        for (path, after_v) in after {
+            match before.get(path) {
+                Some(before_v) if before_v == after_v => {}
+                Some(_) | None => changed.push(path.clone()),
+            }
+        }
+        for path in before.keys() {
+            if !after.contains_key(path) {
+                changed.push(path.clone());
+            }
+        }
+        changed.sort();
+        changed.dedup();
+        changed
+    }
+
+
+    /// Cargo's own bookkeeping for a whole-workspace clean+rebuild: `deps/`,
+    /// `.fingerprint/`, `incremental/` (package-agnostic — every compiled unit
+    /// lands there, custom-build or not), each known package's own
+    /// `build/<name>-<hash>/` working directory (which holds a build script's
+    /// `out/` alongside cargo's own stamp/output/stderr files for that same
+    /// script), and a known package's top-level "uplifted" build product
+    /// directly under the profile dir (e.g. `debug/libname.rlib`/`.d`, or
+    /// `debug/name` for a bin target — named after the crate's Rust identifier,
+    /// dashes replaced with underscores, never the hash-suffixed form; only a
+    /// primary build target — a workspace member under `--workspace` — ever
+    /// gets one). `known_names` is every custom-build package name union every
+    /// workspace member name: the discovered set Amendment 2 broadens this
+    /// check to, now that a single combined build recreates ALL of it at once,
+    /// not just one package's own slice.
+    fn is_ordinary_artifact(&self, rel_path: &Path, known_names: &[String]) -> bool {
+        // Cargo's own package-agnostic bookkeeping, written fresh into any empty
+        // target directory by cargo itself, never by a build script: the
+        // `.cargo-*` lock family (`.cargo-lock`, `.cargo-build-lock`,
+        // `.cargo-artifact-lock`, ...), the cache marker, and the rustc probe
+        // cache.
+        if let Some(file_name) = rel_path.file_name().and_then(|n| n.to_str()) {
+            if file_name.starts_with(".cargo-")
+                || matches!(file_name, "CACHEDIR.TAG" | ".rustc_info.json")
+            {
+                return true;
+            }
+        }
+
+        let components: Vec<_> = rel_path.components().collect();
+
+        // A direct child of the profile dir (2 components: `<profile>/<file>`)
+        // whose filename contains a known crate's identifier is that crate's
+        // top-level uplifted artifact.
+        if components.len() == 2 {
+            if let Some(file_name) = rel_path.file_name().and_then(|n| n.to_str()) {
+                if known_names
+                    .iter()
+                    .any(|n| file_name.contains(n.replace('-', "_").as_str()))
+                {
+                    return true;
+                }
+            }
+        }
+
+        let mut iter = components.iter().peekable();
+        while let Some(component) = iter.next() {
+            let name = component.as_os_str().to_string_lossy();
+            match name.as_ref() {
+                // `examples/` joins the package-agnostic set: `--all-targets`
+                // uplifts every example binary there, hash-suffixed, for any
+                // workspace member that declares one.
+                "deps" | ".fingerprint" | "incremental" | "examples" => return true,
+                "build" => {
+                    if let Some(next) = iter.peek() {
+                        let next_name = next.as_os_str().to_string_lossy();
+                        if known_names
+                            .iter()
+                            .any(|n| next_name.starts_with(format!("{n}-").as_str()))
+                        {
+                            return true;
+                        }
+                    }
+                }
+                _other_target_segment => {}
+            }
+        }
+        false
+    }
+
+
+    /// Traces one violating path back to the package whose build script (most
+    /// likely) wrote it: (a) parse `<name>` out of a `build/<name>-<hash>/**`
+    /// segment under the target directory, matched against the known-name set;
+    /// (b) failing that, the longest-matching package source-directory prefix
+    /// (a workspace-source-tree write can only belong to a package whose
+    /// manifest lives inside the workspace root at all); (c) failing both, the
+    /// full known-name set as the candidate pool — attribution stays honestly
+    /// ambiguous rather than guessing, but the violation still hard-fails
+    /// either way.
+    fn attribute_violation(&self, 
+        abs_path: &Path,
+        target_dir: &Path,
+        known_names: &[String],
+        package_dirs: &[(String, PathBuf)],
+    ) -> Attribution {
+        if let Ok(rel_to_target) = abs_path.strip_prefix(target_dir) {
+            let comps: Vec<_> = rel_to_target.components().collect();
+            for (i, c) in comps.iter().enumerate() {
+                if c.as_os_str() == "build" {
+                    if let Some(next) = comps.get(i + 1) {
+                        let next_name = next.as_os_str().to_string_lossy();
+                        let candidates: Vec<String> = known_names
+                            .iter()
+                            .filter(|n| next_name.starts_with(format!("{n}-").as_str()))
+                            .cloned()
+                            .collect();
+                        match candidates.len() {
+                            1 => {
+                                let mut it = candidates.into_iter();
+                                match it.next() {
+                                    Some(name) => return Attribution::Attributed(name),
+                                    None => break,
+                                }
+                            }
+                            0 => break,
+                            2.. => return Attribution::Ambiguous(candidates),
+                        }
+                    }
+                }
+            }
+        }
+
+        let best = package_dirs.iter().fold(None, |best, (name, dir)| {
+            if dir.as_os_str().is_empty() || !abs_path.starts_with(dir) {
+                return best;
+            }
+            let len = dir.as_os_str().len();
+            match best {
+                None => Some((name.as_str(), len)),
+                Some((_, best_len)) if len > best_len => Some((name.as_str(), len)),
+                Some(prev) => Some(prev),
+            }
+        });
+        if let Some((name, _)) = best {
+            return Attribution::Attributed(name.to_string());
+        }
+
+        Attribution::Ambiguous(known_names.to_vec())
+    }
+
+
+    /// Reduces every violating path's own attribution to the one value the
+    /// error's `package` field carries: a single name if every path agreed, the
+    /// union of every candidate seen otherwise. Still hard-fails either way —
+    /// this only decides how the failure names its culprit, never whether it
+    /// fires.
+    fn reduce_attributions(&self, attributions: Vec<Attribution>) -> Attribution {
+        let mut names: Vec<String> = Vec::new();
+        for a in attributions {
+            match a {
+                Attribution::Attributed(n) => names.push(n),
+                Attribution::Ambiguous(candidates) => names.extend(candidates),
+            }
+        }
+        names.sort();
+        names.dedup();
+        match names.len() {
+            1 => match names.into_iter().next() {
+                Some(name) => Attribution::Attributed(name),
+                None => Attribution::Ambiguous(Vec::new()),
+            },
+            0 | 2.. => Attribution::Ambiguous(names),
+        }
+    }
+
+
+    /// The one whole-workspace reset → sandboxed build → snapshot diff →
+    /// (on sandboxed failure only) control build sequence (Amendment 2:
+    /// replaces the earlier per-package `check_package` loop; Amendment 3:
+    /// the reset empties the check-owned target directory instead of running
+    /// any `cargo clean`).
+    fn check_workspace(&self, 
+        repo_root: &Path,
+        workspace_root: &Path,
+        owned_target: &Path,
+        known_names: &[String],
+        package_dirs: &[(String, PathBuf)],
+        sandbox: NetSandbox,
+    ) -> Result<(), BuildScriptSandboxError> {
+        self.reset_owned_target(owned_target)?;
+
+        let skip = ["target", ".git"];
+        let src_before =
+            self.snapshot_dir(workspace_root, &skip).map_err(|e| BuildScriptSandboxError::Snapshot {
+                reason: format!("workspace source tree (pre-build): {e}"),
+            })?;
+        let target_before =
+            self.snapshot_dir(owned_target, &[]).map_err(|e| BuildScriptSandboxError::Snapshot {
+                reason: format!("check-owned target directory (pre-build): {e}"),
+            })?;
+
+        let sandboxed = self.run_sandboxed_build(repo_root, owned_target, sandbox);
+
+        let result = match sandboxed {
+            Ok(_sandboxed_output) => {
+                let src_after = self.snapshot_dir(workspace_root, &skip).map_err(|e| {
+                    BuildScriptSandboxError::Snapshot {
+                        reason: format!("workspace source tree (post-build): {e}"),
+                    }
+                })?;
+                let target_after =
+                    self.snapshot_dir(owned_target, &[]).map_err(|e| BuildScriptSandboxError::Snapshot {
+                        reason: format!("check-owned target directory (post-build): {e}"),
+                    })?;
+
+                let src_violations: Vec<PathBuf> = self.diff_paths(&src_before, &src_after)
+                    .into_iter()
+                    .map(|rel| workspace_root.join(rel))
+                    .collect();
+                let target_violations: Vec<PathBuf> = self.diff_paths(&target_before, &target_after)
+                    .into_iter()
+                    .filter(|p| !self.is_ordinary_artifact(p, known_names))
+                    .map(|rel| owned_target.join(rel))
+                    .collect();
+
+                let mut violations: Vec<PathBuf> = src_violations
+                    .into_iter()
+                    .chain(target_violations)
+                    .collect();
+                violations.sort();
+                violations.dedup();
+
+                if !violations.is_empty() {
+                    let attributions: Vec<Attribution> = violations
+                        .iter()
+                        .map(|p| self.attribute_violation(p, owned_target, known_names, package_dirs))
+                        .collect();
+                    let package = self.reduce_attributions(attributions);
+                    return Err(BuildScriptSandboxError::WriteOutsideOutDir {
+                        package,
+                        paths: violations
+                            .into_iter()
+                            .map(|p| p.display().to_string())
+                            .collect(),
+                    });
+                }
+                Ok(())
+            }
+            Err(sandboxed_output) => {
+                // The sandboxed build failed. That is expected of a build script
+                // that needs the network — but it is also what an ordinary build
+                // defect looks like. Reset and rebuild once, plainly, to tell
+                // the two apart: only the network differs between the two runs.
+                self.reset_owned_target(owned_target)?;
+                match self.run_plain_build(repo_root, owned_target) {
+                    Ok(_) => Err(BuildScriptSandboxError::NetworkAccessAttempted { sandboxed_output }),
+                    Err(control_output) => Err(BuildScriptSandboxError::ControlBuildFailed {
+                        output: control_output,
+                    }),
+                }
+            }
+        };
+
+        // The owned directory is this check's scratch, not a cache anything else
+        // reads: remove it on success so a full extra workspace build never
+        // lingers on the shared volume. Failure keeps it for forensics.
+        if result.is_ok() {
+            match std::fs::remove_dir_all(owned_target) {
+                Ok(()) => {}
+                Err(scratch_remove_refuse) => {
+                    // Best-effort cleanup of check-owned scratch; forensics keep
+                    // the dir on the primary Result::Err path above.
+                    let named = scratch_remove_refuse;
+                    if named.to_string().is_empty() {
+                        // Remove refuse always names the failure — empty is uninhabited.
+                    }
+                }
+            }
+        }
+        result
+    }
+
+
 }
 
 
@@ -1089,4 +1107,5 @@ mod tests {
             Err(BuildScriptSandboxProofRefuse::ExpectedWriteOutsideOutDir)
         }
     }
+
 }
