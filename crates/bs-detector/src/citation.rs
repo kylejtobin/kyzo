@@ -300,69 +300,128 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    fn write_temp_rs(dir: &Path, rel: &str, src: &str) {
+    /// Typed test refusal — not `String`/`assert!`/`expect` (tip 764 / item 9).
+    #[derive(Debug)]
+    enum CitationProofRefuse {
+        Mkdir,
+        Write,
+        TempDir,
+        LawsWrite,
+        LawsLoad,
+        Parse,
+        Resolve,
+        LawNameForm,
+        FileItemForm,
+        TestFnForm,
+        DecisionsSeatForm,
+        RLawNameForm,
+        MalformedMustErr,
+        GarbageMustErr,
+        EmptyMustErr,
+        LiveMustNotBeDead,
+        EditMustDead,
+        DeadMustStopWaiver,
+        CratesParent,
+        RepoRoot,
+        HashLen,
+        MissingSeatMustNone,
+        HashMustChange,
+        ConstResolveBlind,
+        ConstHashMustChange,
+        ImplRefResolveBlind,
+    }
+
+    type TestResult = Result<(), CitationProofRefuse>;
+
+    fn require(cond: bool, refuse: CitationProofRefuse) -> TestResult {
+        if cond {
+            Ok(())
+        } else {
+            Err(refuse)
+        }
+    }
+
+    fn write_temp_rs(dir: &Path, rel: &str, src: &str) -> TestResult {
         let path = dir.join(rel);
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).expect("mkdir");
+            std::fs::create_dir_all(parent).map_err(|_| CitationProofRefuse::Mkdir)?;
         }
-        std::fs::write(&path, src).expect("write");
+        std::fs::write(&path, src).map_err(|_| CitationProofRefuse::Write)?;
+        Ok(())
     }
 
-    #[test]
-    fn citation_grammar_parses_four_forms() {
-        assert_eq!(
-            Citation::parse("unwrap").unwrap(),
-            Citation::LawName("unwrap".into())
-        );
-        assert_eq!(
-            Citation::parse("crates/x/src/a.rs#foo").unwrap(),
-            Citation::FileItem {
-                file: "crates/x/src/a.rs".into(),
-                item_path: "foo".into(),
-            }
-        );
-        assert_eq!(
-            Citation::parse("crates/x/src/a.rs::bite_foo").unwrap(),
-            Citation::TestFn {
-                file: "crates/x/src/a.rs".into(),
-                fn_name: "bite_foo".into(),
-            }
-        );
-        assert_eq!(
-            Citation::parse("decisions.md#2").unwrap(),
-            Citation::DecisionsSeat(2)
-        );
-        assert_eq!(
-            Citation::parse("R-citation-prose").unwrap(),
-            Citation::LawName("R-citation-prose".into())
-        );
-        assert!(Citation::parse("crates/x/src/a.rs#").is_err());
-        assert!(Citation::parse("not a form !!!").is_err());
-        assert!(Citation::parse("").is_err());
-    }
-
-    #[test]
-    fn item_7_proof_edit_cited_test_fn_is_dead_citation() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let root = dir.path();
+    fn fixture_laws(root: &Path, body: &str) -> Result<Laws, CitationProofRefuse> {
         let laws_path = root.join("laws.toml");
-        std::fs::write(
-            &laws_path,
+        std::fs::write(&laws_path, body).map_err(|_| CitationProofRefuse::LawsWrite)?;
+        Laws::load(&laws_path).map_err(|_| CitationProofRefuse::LawsLoad)
+    }
+
+    fn temp_root() -> Result<tempfile::TempDir, CitationProofRefuse> {
+        tempfile::tempdir().map_err(|_| CitationProofRefuse::TempDir)
+    }
+
+    #[test]
+    fn citation_grammar_parses_four_forms() -> TestResult {
+        require(
+            Citation::parse("unwrap") == Ok(Citation::LawName("unwrap".into())),
+            CitationProofRefuse::LawNameForm,
+        )?;
+        require(
+            Citation::parse("crates/x/src/a.rs#foo")
+                == Ok(Citation::FileItem {
+                    file: "crates/x/src/a.rs".into(),
+                    item_path: "foo".into(),
+                }),
+            CitationProofRefuse::FileItemForm,
+        )?;
+        require(
+            Citation::parse("crates/x/src/a.rs::bite_foo")
+                == Ok(Citation::TestFn {
+                    file: "crates/x/src/a.rs".into(),
+                    fn_name: "bite_foo".into(),
+                }),
+            CitationProofRefuse::TestFnForm,
+        )?;
+        require(
+            Citation::parse("decisions.md#2") == Ok(Citation::DecisionsSeat(2)),
+            CitationProofRefuse::DecisionsSeatForm,
+        )?;
+        require(
+            Citation::parse("R-citation-prose")
+                == Ok(Citation::LawName("R-citation-prose".into())),
+            CitationProofRefuse::RLawNameForm,
+        )?;
+        require(
+            Citation::parse("crates/x/src/a.rs#").is_err(),
+            CitationProofRefuse::MalformedMustErr,
+        )?;
+        require(
+            Citation::parse("not a form !!!").is_err(),
+            CitationProofRefuse::GarbageMustErr,
+        )?;
+        require(Citation::parse("").is_err(), CitationProofRefuse::EmptyMustErr)
+    }
+
+    #[test]
+    fn item_7_proof_edit_cited_test_fn_is_dead_citation() -> TestResult {
+        let dir = temp_root()?;
+        let root = dir.path();
+        let laws = fixture_laws(
+            root,
             r#"
 [[law]]
 name = "expect"
 law = "fixture law text"
 caught_by = "fixture"
 "#,
-        )
-        .expect("laws");
-        let laws = Laws::load(&laws_path).expect("laws load");
+        )?;
 
         let file = "crates/probe/src/lib.rs";
         let before = "#[cfg(test)]\nmod tests {\n    fn cited() { let x = 1; x }\n}\n";
-        write_temp_rs(root, file, before);
-        let c = Citation::parse(&format!("{file}::cited")).expect("parse");
-        let hash = resolve_hash(root, &laws, &c).expect("resolves before edit");
+        write_temp_rs(root, file, before)?;
+        let c = Citation::parse(&format!("{file}::cited")).map_err(|_| CitationProofRefuse::Parse)?;
+        let hash =
+            resolve_hash(root, &laws, &c).ok_or(CitationProofRefuse::Resolve)?;
 
         let w = Waiver {
             check: "expect".into(),
@@ -378,125 +437,109 @@ caught_by = "fixture"
             waiver: vec![w.clone()],
             scope_waiver: vec![],
         };
-        assert!(
+        require(
             dead_citations(root, &laws, &wf).is_empty(),
-            "live citation must not be dead"
-        );
+            CitationProofRefuse::LiveMustNotBeDead,
+        )?;
 
         let after = "#[cfg(test)]\nmod tests {\n    fn cited() { let y = 1; y }\n}\n";
-        write_temp_rs(root, file, after);
+        write_temp_rs(root, file, after)?;
         let dead = dead_citations(root, &laws, &wf);
-        assert_eq!(
-            dead.len(),
-            1,
-            "edit the body of a cited test fn must dead the citation: {dead:?}"
-        );
-        assert!(
+        require(dead.len() == 1, CitationProofRefuse::EditMustDead)?;
+        require(
             !citation_live(root, &laws, &w),
-            "dead citation must stop the waiver from applying"
-        );
+            CitationProofRefuse::DeadMustStopWaiver,
+        )
     }
 
     #[test]
-    fn law_name_and_decisions_seat_resolve() {
+    fn law_name_and_decisions_seat_resolve() -> TestResult {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
-            .expect("crates")
+            .ok_or(CitationProofRefuse::CratesParent)?
             .parent()
-            .expect("repo")
+            .ok_or(CitationProofRefuse::RepoRoot)?
             .to_path_buf();
-        let laws = Laws::load(&root.join("crates/bs-detector/laws.toml")).expect("laws");
-        let c = Citation::parse("stale_waivers").expect("parse");
-        let h = resolve_hash(&root, &laws, &c).expect("law resolves");
-        assert_eq!(h.len(), 64);
-        let seat = Citation::parse("decisions.md#1").expect("seat");
-        let sh = resolve_hash(&root, &laws, &seat).expect("seat resolves");
-        assert_eq!(sh.len(), 64);
-        assert!(resolve_hash(&root, &laws, &Citation::DecisionsSeat(99999)).is_none());
+        let laws = Laws::load(&root.join("crates/bs-detector/laws.toml"))
+            .map_err(|_| CitationProofRefuse::LawsLoad)?;
+        let c = Citation::parse("stale_waivers").map_err(|_| CitationProofRefuse::Parse)?;
+        let h = resolve_hash(&root, &laws, &c).ok_or(CitationProofRefuse::Resolve)?;
+        require(h.len() == 64, CitationProofRefuse::HashLen)?;
+        let seat = Citation::parse("decisions.md#1").map_err(|_| CitationProofRefuse::Parse)?;
+        let sh = resolve_hash(&root, &laws, &seat).ok_or(CitationProofRefuse::Resolve)?;
+        require(sh.len() == 64, CitationProofRefuse::HashLen)?;
+        require(
+            resolve_hash(&root, &laws, &Citation::DecisionsSeat(99999)).is_none(),
+            CitationProofRefuse::MissingSeatMustNone,
+        )
     }
 
     #[test]
-    fn file_item_path_hashes_with_identity_tokens() {
-        let dir = tempfile::tempdir().expect("tempdir");
+    fn file_item_path_hashes_with_identity_tokens() -> TestResult {
+        let dir = temp_root()?;
         let root = dir.path();
-        let laws_path = root.join("laws.toml");
-        std::fs::write(
-            &laws_path,
+        let laws = fixture_laws(
+            root,
             r#"[[law]]
 name = "x"
 law = "x"
 caught_by = "x"
 "#,
-        )
-        .expect("laws");
-        let laws = Laws::load(&laws_path).expect("load");
+        )?;
         let file = "crates/x/src/lib.rs";
-        write_temp_rs(root, file, "fn target() { let a = 1; a }\n");
-        let c = Citation::parse(&format!("{file}#target")).expect("parse");
-        let h1 = resolve_hash(root, &laws, &c).expect("h1");
-        write_temp_rs(root, file, "fn target() { let b = 1; b }\n");
-        let h2 = resolve_hash(root, &laws, &c).expect("h2");
-        assert_ne!(h1, h2, "item-path citation must use identity_tokens");
+        write_temp_rs(root, file, "fn target() { let a = 1; a }\n")?;
+        let c = Citation::parse(&format!("{file}#target")).map_err(|_| CitationProofRefuse::Parse)?;
+        let h1 = resolve_hash(root, &laws, &c).ok_or(CitationProofRefuse::Resolve)?;
+        write_temp_rs(root, file, "fn target() { let b = 1; b }\n")?;
+        let h2 = resolve_hash(root, &laws, &c).ok_or(CitationProofRefuse::Resolve)?;
+        require(h1 != h2, CitationProofRefuse::HashMustChange)
     }
 
     /// Tip 686: const citations were resolve-None blind.
     #[test]
-    fn anti_fraud_file_item_const_citation_resolves() {
-        let dir = tempfile::tempdir().expect("tempdir");
+    fn anti_fraud_file_item_const_citation_resolves() -> TestResult {
+        let dir = temp_root()?;
         let root = dir.path();
-        let laws_path = root.join("laws.toml");
-        std::fs::write(
-            &laws_path,
+        let laws = fixture_laws(
+            root,
             r#"[[law]]
 name = "x"
 law = "x"
 caught_by = "x"
 "#,
-        )
-        .expect("laws");
-        let laws = Laws::load(&laws_path).expect("load");
+        )?;
         let file = "crates/x/src/lib.rs";
-        write_temp_rs(root, file, "const TARGET: u8 = 1;\n");
-        let c = Citation::parse(&format!("{file}#TARGET")).expect("parse");
-        let h = resolve_hash(root, &laws, &c);
-        assert_eq!(
-            h.as_ref().map(|s| s.len()),
-            Some(64),
-            "costume: const citation resolves None (blind): {h:?}"
-        );
-        write_temp_rs(root, file, "const TARGET: u8 = 2;\n");
-        let h2 = resolve_hash(root, &laws, &c).expect("h2");
-        assert_ne!(h.unwrap(), h2, "const body edit must change anchor hash");
+        write_temp_rs(root, file, "const TARGET: u8 = 1;\n")?;
+        let c = Citation::parse(&format!("{file}#TARGET")).map_err(|_| CitationProofRefuse::Parse)?;
+        let h = resolve_hash(root, &laws, &c).ok_or(CitationProofRefuse::ConstResolveBlind)?;
+        require(h.len() == 64, CitationProofRefuse::HashLen)?;
+        write_temp_rs(root, file, "const TARGET: u8 = 2;\n")?;
+        let h2 = resolve_hash(root, &laws, &c).ok_or(CitationProofRefuse::Resolve)?;
+        require(h != h2, CitationProofRefuse::ConstHashMustChange)
     }
 
     /// Tip 686: `impl &Type { fn m }` was type_path_tail-blind.
     #[test]
-    fn anti_fraud_impl_ref_self_ty_method_citation_resolves() {
-        let dir = tempfile::tempdir().expect("tempdir");
+    fn anti_fraud_impl_ref_self_ty_method_citation_resolves() -> TestResult {
+        let dir = temp_root()?;
         let root = dir.path();
-        let laws_path = root.join("laws.toml");
-        std::fs::write(
-            &laws_path,
+        let laws = fixture_laws(
+            root,
             r#"[[law]]
 name = "x"
 law = "x"
 caught_by = "x"
 "#,
-        )
-        .expect("laws");
-        let laws = Laws::load(&laws_path).expect("load");
+        )?;
         let file = "crates/x/src/lib.rs";
         write_temp_rs(
             root,
             file,
             "struct Foo;\nimpl &Foo { fn method(&self) { let a = 1; let _ = a; } }\n",
-        );
-        let c = Citation::parse(&format!("{file}#Foo::method")).expect("parse");
-        let h = resolve_hash(root, &laws, &c);
-        assert_eq!(
-            h.as_ref().map(|s| s.len()),
-            Some(64),
-            "costume: impl &Foo method citation resolves None: {h:?}"
-        );
+        )?;
+        let c = Citation::parse(&format!("{file}#Foo::method"))
+            .map_err(|_| CitationProofRefuse::Parse)?;
+        let h = resolve_hash(root, &laws, &c).ok_or(CitationProofRefuse::ImplRefResolveBlind)?;
+        require(h.len() == 64, CitationProofRefuse::HashLen)
     }
 }
