@@ -120,75 +120,105 @@ impl<'ast> Visit<'ast> for Enclosing {
 mod tests {
     use super::*;
 
-    fn item(src: &str) -> syn::Item {
-        syn::parse_str(src).expect("fixture parses")
+    /// Typed test refusal — not `String`/`assert!`/`expect` (tip 764 / item 9).
+    #[derive(Debug)]
+    enum IdentityProofRefuse {
+        Parse,
+        MissingItem,
+        LayoutBreaksIdentity,
+        RenameKeepsIdentity,
+        DocKeepsIdentity,
+        LocalRenameKeepsIdentity,
+        LineCommentBreaksIdentity,
+        EnclosingHashMismatch,
+        IdentityNormalizesIdents,
+        IdentsNotVerbatim,
+        WaiverMissesOnSiteHash,
+        DriftedWaiverStillMatches,
     }
 
-    fn file(src: &str) -> syn::File {
-        syn::parse_file(src).expect("fixture parses")
+    type TestResult = Result<(), IdentityProofRefuse>;
+
+    fn require(cond: bool, refuse: IdentityProofRefuse) -> TestResult {
+        if cond {
+            Ok(())
+        } else {
+            Err(refuse)
+        }
+    }
+
+    fn item(src: &str) -> Result<syn::Item, IdentityProofRefuse> {
+        syn::parse_str(src).map_err(|_| IdentityProofRefuse::Parse)
+    }
+
+    fn file(src: &str) -> Result<syn::File, IdentityProofRefuse> {
+        syn::parse_file(src).map_err(|_| IdentityProofRefuse::Parse)
     }
 
     #[test]
-    fn layout_change_keeps_identity_and_content_change_breaks_it() {
-        let a = site_hash(&item("fn f(x: u64) -> u64 { x }"));
-        let b = site_hash(&item("fn f(x: u64)  ->\n    u64 { x }"));
-        assert_eq!(a, b, "layout is not content");
+    fn layout_change_keeps_identity_and_content_change_breaks_it() -> TestResult {
+        let a = site_hash(&item("fn f(x: u64) -> u64 { x }")?);
+        let b = site_hash(&item("fn f(x: u64)  ->\n    u64 { x }")?);
+        require(a == b, IdentityProofRefuse::LayoutBreaksIdentity)?;
 
-        let c = site_hash(&item("fn f(y: u64) -> u64 { y }"));
-        assert_ne!(a, c, "an identifier rename IS content");
+        let c = site_hash(&item("fn f(y: u64) -> u64 { y }")?);
+        require(a != c, IdentityProofRefuse::RenameKeepsIdentity)?;
 
-        let d = site_hash(&item("/// documented\nfn f(x: u64) -> u64 { x }"));
-        assert_ne!(a, d, "a doc comment is an attribute, therefore content");
+        let d = site_hash(&item("/// documented\nfn f(x: u64) -> u64 { x }")?);
+        require(a != d, IdentityProofRefuse::DocKeepsIdentity)
     }
 
     #[test]
-    fn item_6_proof_rename_local_changes_site_hash() {
-        let before = site_hash(&item("fn f() { let x = 1; x }"));
-        let after = site_hash(&item("fn f() { let y = 1; y }"));
-        assert_ne!(
-            before, after,
-            "rename a local in a waived body must change site_hash (stale)"
-        );
+    fn item_6_proof_rename_local_changes_site_hash() -> TestResult {
+        let before = site_hash(&item("fn f() { let x = 1; x }")?);
+        let after = site_hash(&item("fn f() { let y = 1; y }")?);
+        require(before != after, IdentityProofRefuse::LocalRenameKeepsIdentity)
     }
 
     #[test]
-    fn item_6_proof_line_comment_above_item_keeps_site_hash() {
-        let bare = file("fn f() { let x = 1; x }");
-        let with_noise = file("// noise above the item\nfn f() { let x = 1; x }");
-        let h_bare = site_hash(bare.items.first().expect("item"));
-        let h_noise = site_hash(with_noise.items.first().expect("item"));
-        assert_eq!(
-            h_bare, h_noise,
-            "a // line above the item is layout, not content — must NOT stale"
-        );
+    fn item_6_proof_line_comment_above_item_keeps_site_hash() -> TestResult {
+        let bare = file("fn f() { let x = 1; x }")?;
+        let with_noise = file("// noise above the item\nfn f() { let x = 1; x }")?;
+        let bare_item = bare.items.first().ok_or(IdentityProofRefuse::MissingItem)?;
+        let noise_item = with_noise
+            .items
+            .first()
+            .ok_or(IdentityProofRefuse::MissingItem)?;
+        let h_bare = site_hash(bare_item);
+        let h_noise = site_hash(noise_item);
+        require(
+            h_bare == h_noise,
+            IdentityProofRefuse::LineCommentBreaksIdentity,
+        )?;
         // Enclosing lookup at the shifted line still yields the same hash.
-        let line = with_noise.items.first().expect("item").span().start().line;
-        assert_eq!(
-            enclosing_item_site_hash(&with_noise, line).as_deref(),
-            Some(h_bare.as_str())
-        );
+        let line = noise_item.span().start().line;
+        require(
+            enclosing_item_site_hash(&with_noise, line).as_deref() == Some(h_bare.as_str()),
+            IdentityProofRefuse::EnclosingHashMismatch,
+        )
     }
 
     #[test]
-    fn item_6_identity_keeps_identifiers_verbatim_unlike_clone_normalize() {
+    fn item_6_identity_keeps_identifiers_verbatim_unlike_clone_normalize() -> TestResult {
         // graph::normalize_tokens collapses idents to "id" for clone shingles.
         // Identity must NOT: two rename-apart bodies must differ here.
-        let a = identity_tokens(&item("fn f() { let alpha = 1; alpha }"));
-        let b = identity_tokens(&item("fn f() { let beta = 1; beta }"));
-        assert_ne!(a, b, "identity_tokens must keep identifier spelling");
-        assert_eq!(
-            (a.contains("alpha"), b.contains("beta")),
-            (true, true),
-            "byte-verbatim identifiers required: a={a:?} b={b:?}"
-        );
+        let a = identity_tokens(&item("fn f() { let alpha = 1; alpha }")?);
+        let b = identity_tokens(&item("fn f() { let beta = 1; beta }")?);
+        require(a != b, IdentityProofRefuse::IdentityNormalizesIdents)?;
+        require(
+            a.contains("alpha") && b.contains("beta"),
+            IdentityProofRefuse::IdentsNotVerbatim,
+        )
     }
 
     #[test]
-    fn item_6_waiver_matches_by_site_hash_not_line() {
+    fn item_6_waiver_matches_by_site_hash_not_line() -> TestResult {
         let src = "// shift\nfn f() { let x = 1; x }";
-        let ast = file(src);
-        let item_line = ast.items.first().expect("item").span().start().line;
-        let hash = site_hash(ast.items.first().expect("item"));
+        let ast = file(src)?;
+        let (item_line, hash) = {
+            let first = ast.items.first().ok_or(IdentityProofRefuse::MissingItem)?;
+            (first.span().start().line, site_hash(first))
+        };
         let files = vec![SourceFile::admit(
             "crates/x/src/a.rs".to_string(),
             src.to_string(),
@@ -206,15 +236,15 @@ mod tests {
                 .to_string(),
         };
         let h = Hit::admit("crates/x/src/a.rs".to_string(), item_line, "expect".to_string());
-        assert!(
+        require(
             waiver_matches_hit(&w, &h, &files),
-            "match is by site_hash; waiver.line is display-only"
-        );
+            IdentityProofRefuse::WaiverMissesOnSiteHash,
+        )?;
         let mut drifted = w.clone();
         drifted.site_hash = "0".repeat(64);
-        assert!(
+        require(
             !waiver_matches_hit(&drifted, &h, &files),
-            "site_hash mismatch must refuse the waiver"
-        );
+            IdentityProofRefuse::DriftedWaiverStillMatches,
+        )
     }
 }
