@@ -411,7 +411,7 @@ length, in a repo whose recorded failure mode is exactly that.
 ### 4. Build Attestation
 
 BUILD ATTESTATION — item 4
-law: commit 4e4c070d1cf9b47fcc4562f80f60b5072d7cd386 | build: commit 7cd32c821537f62a65d7c1cc6969c442fb8df763
+law: commit 4e4c070d1cf9b47fcc4562f80f60b5072d7cd386 | build: commit f9ee16e4862223c374d8571e98e16e18734ace22
 
 I attest my implementation of item 4 matches this document, at the law
 commit above, at audited strength. TRUE or FALSE: there exists an input —
