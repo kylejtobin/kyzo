@@ -55,8 +55,8 @@ pub fn enclosing_item_site_hash(ast: &syn::File, line: usize) -> Option<String> 
 
 /// Look up the content hash for a detector hit via its file + display line.
 pub fn hit_site_hash(files: &[SourceFile], h: &Hit) -> Option<String> {
-    let f = files.iter().find(|f| f.rel_path == h.file)?;
-    enclosing_item_site_hash(&f.ast, h.line)
+    let f = files.iter().find(|f| f.rel_path() == h.file)?;
+    enclosing_item_site_hash(f.ast(), h.line)
 }
 
 /// Content binding for a waiver against a hit. Lines are display-only:
@@ -188,11 +188,11 @@ mod tests {
         let ast = file(src);
         let item_line = ast.items.first().expect("item").span().start().line;
         let hash = site_hash(ast.items.first().expect("item"));
-        let files = vec![SourceFile {
-            rel_path: "crates/x/src/a.rs".to_string(),
-            text: src.to_string(),
+        let files = vec![SourceFile::admit(
+            "crates/x/src/a.rs".to_string(),
+            src.to_string(),
             ast,
-        }];
+        )];
         let w = Waiver {
             check: "expect".to_string(),
             file: "crates/x/src/a.rs".to_string(),

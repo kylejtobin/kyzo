@@ -23,11 +23,37 @@ use walkdir::WalkDir;
 /// One parsed source file inside the boundary. The AST is parsed once here
 /// and shared by every engine — a second parse authority would let two
 /// checks disagree about what the file says.
+///
+/// Fields are private (TRUTH item 9). The sole admission door is
+/// [`SourceFile::admit`]; engines read through accessors.
 pub struct SourceFile {
     /// Repo-root-relative path, e.g. `crates/kyzo-core/src/data/tuple.rs`.
-    pub rel_path: String,
-    pub text: String,
-    pub ast: syn::File,
+    rel_path: String,
+    text: String,
+    ast: syn::File,
+}
+
+impl SourceFile {
+    /// Sole admission constructor — the only way to build a [`SourceFile`].
+    pub fn admit(rel_path: String, text: String, ast: syn::File) -> Self {
+        Self {
+            rel_path,
+            text,
+            ast,
+        }
+    }
+
+    pub fn rel_path(&self) -> &str {
+        &self.rel_path
+    }
+
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    pub fn ast(&self) -> &syn::File {
+        &self.ast
+    }
 }
 
 /// A file inside the boundary that refused to parse. Not silently skipped:
@@ -84,11 +110,7 @@ impl Boundary {
             let text = std::fs::read_to_string(path)
                 .with_context(|| format!("reading {rel}"))?;
             match syn::parse_file(&text) {
-                Ok(ast) => files.push(SourceFile {
-                    rel_path: rel,
-                    text,
-                    ast,
-                }),
+                Ok(ast) => files.push(SourceFile::admit(rel, text, ast)),
                 Err(e) => unparsed.push(UnparsedFile {
                     rel_path: rel,
                     error: e.to_string(),

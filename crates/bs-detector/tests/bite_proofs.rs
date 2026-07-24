@@ -17,11 +17,7 @@ use bs_detector::engines::{Hit, graph, meta, shape};
 
 fn parsed(rel: &str, src: &str) -> Option<SourceFile> {
     let ast = syn::parse_file(src).ok()?;
-    Some(SourceFile {
-        rel_path: rel.to_string(),
-        text: src.to_string(),
-        ast,
-    })
+    Some(SourceFile::admit(rel.to_string(), src.to_string(), ast))
 }
 
 fn shape_hits(name: &str, src: &str) -> Option<Vec<Hit>> {
@@ -431,7 +427,7 @@ fn bite_forbid_roots() {
         None => panic!("fixture parses"),
     };
     let b = Boundary {
-        existing: vec![f.rel_path.clone()],
+        existing: vec![f.rel_path().to_string()],
         files: vec![f],
         unparsed: vec![],
     };

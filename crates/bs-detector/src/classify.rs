@@ -36,13 +36,13 @@ use crate::grammar::{Disposition, Grammar, KindName, StructuralRule};
 pub fn classify_file(grammar: &Grammar, file: &SourceFile, aliases: &AliasTable) -> Vec<Hit> {
     let mut hits = vec![];
     let ctx = Ctx {
-        rel: &file.rel_path,
+        rel: file.rel_path(),
         grammar,
         aliases,
         self_ty: None,
         in_container: false,
     };
-    for item in &file.ast.items {
+    for item in &file.ast().items {
         classify_item(&ctx, item, &mut hits);
     }
     hits
@@ -66,13 +66,13 @@ pub fn scoped_construct_spans(
 ) -> Vec<ScopedConstructSpan> {
     let mut out = vec![];
     let ctx = Ctx {
-        rel: &file.rel_path,
+        rel: file.rel_path(),
         grammar,
         aliases,
         self_ty: None,
         in_container: false,
     };
-    collect_scoped_spans_items(&ctx, &file.ast.items, &mut out);
+    collect_scoped_spans_items(&ctx, &file.ast().items, &mut out);
     out
 }
 
@@ -1116,11 +1116,11 @@ mod fixture_tests {
                 Ok(a) => a,
                 Err(e) => panic!("{} deny fixture parses: {e}", kind.kebab()),
             };
-            let f = SourceFile {
-                rel_path: format!("crates/bs-detector/fixtures/{}.deny.rs", kind.kebab()),
-                text: src,
+            let f = SourceFile::admit(
+                format!("crates/bs-detector/fixtures/{}.deny.rs", kind.kebab()),
+                src,
                 ast,
-            };
+            );
             let hits = classify_file(&grammar, &f, &crate::alias::AliasTable::build(&[&f]).expect("aliases"));
             assert!(
                 hits.iter().any(|h| h.construct == law),
@@ -1143,11 +1143,11 @@ mod fixture_tests {
     #[test]
     fn item_1_proof_static_mut_is_denied() {
         let grammar = real_grammar();
-        let f = SourceFile {
-            rel_path: "crates/probe/src/lib.rs".to_string(),
-            text: "static mut G: u64 = 0;".to_string(),
-            ast: syn::parse_file("static mut G: u64 = 0;").expect("parses"),
-        };
+        let f = SourceFile::admit(
+            "crates/probe/src/lib.rs".to_string(),
+            "static mut G: u64 = 0;".to_string(),
+            syn::parse_file("static mut G: u64 = 0;").expect("parses"),
+        );
         let hits = classify_file(&grammar, &f, &crate::alias::AliasTable::build(&[&f]).expect("aliases"));
         assert_eq!(hits.len(), 1, "static mut must be denied: {hits:?}");
     }
@@ -1157,11 +1157,7 @@ mod fixture_tests {
         // Item 5: #[path] is bans_attribute only — module still seats;
         // the attribute matcher is the one door.
         let m = crate::engines::shape::matcher_by_name("path").expect("path matcher");
-        let f = SourceFile {
-            rel_path: "crates/probe/src/lib.rs".to_string(),
-            text: "#[path = \"x.rs\"]\nmod m;".to_string(),
-            ast: syn::parse_file("#[path = \"x.rs\"]\nmod m;").expect("parses"),
-        };
+        let f = SourceFile::admit("crates/probe/src/lib.rs".to_string(), "#[path = \"x.rs\"]\nmod m;".to_string(), syn::parse_file("#[path = \"x.rs\"]\nmod m;").expect("parses"));
         let hits = crate::engines::shape::run_matcher(m, &f);
         assert_eq!(hits.len(), 1, "path attr must hit under bans_attribute: {hits:?}");
         assert_eq!(classify_src("#[path = \"x.rs\"] mod m;").len(), 0, "module seats; path is not unclassified");
@@ -1192,11 +1188,7 @@ mod fixture_tests {
 
     fn classify_src(src: &str) -> Vec<Hit> {
         let grammar = real_grammar();
-        let f = SourceFile {
-            rel_path: "crates/probe/src/lib.rs".to_string(),
-            text: src.to_string(),
-            ast: syn::parse_file(src).expect("parses"),
-        };
+        let f = SourceFile::admit("crates/probe/src/lib.rs".to_string(), src.to_string(), syn::parse_file(src).expect("parses"));
         let aliases = crate::alias::AliasTable::build(&[&f]).expect("alias table");
         classify_file(&grammar, &f, &aliases)
     }
@@ -1235,11 +1227,7 @@ mod fixture_tests {
             Ok(s) => s,
             Err(e) => panic!("deny fixture readable: {e}"),
         };
-        let f = SourceFile {
-            rel_path: "crates/bs-detector/fixtures/declared-fn.deny.rs".to_string(),
-            text: src.clone(),
-            ast: syn::parse_file(&src).expect("parses"),
-        };
+        let f = SourceFile::admit("crates/bs-detector/fixtures/declared-fn.deny.rs".to_string(), src.clone(), syn::parse_file(&src).expect("parses"));
         let hits = classify_file(&grammar, &f, &crate::alias::AliasTable::build(&[&f]).expect("aliases"));
         assert!(
             hits.iter().any(|h| h.construct.contains("unclassified")),
@@ -1267,16 +1255,8 @@ mod fixture_tests {
         }
         let m_await = crate::engines::shape::matcher_by_name("await").expect("await");
         let m_nest = crate::engines::shape::matcher_by_name("nested_place_assign").expect("nest");
-        let f_await = SourceFile {
-            rel_path: "crates/probe/src/lib.rs".to_string(),
-            text: await_src.to_string(),
-            ast: syn::parse_file(await_src).expect("parses"),
-        };
-        let f_nest = SourceFile {
-            rel_path: "crates/probe/src/lib.rs".to_string(),
-            text: nest_src.to_string(),
-            ast: syn::parse_file(nest_src).expect("parses"),
-        };
+        let f_await = SourceFile::admit("crates/probe/src/lib.rs".to_string(), await_src.to_string(), syn::parse_file(await_src).expect("parses"));
+        let f_nest = SourceFile::admit("crates/probe/src/lib.rs".to_string(), nest_src.to_string(), syn::parse_file(nest_src).expect("parses"));
         assert_eq!(crate::engines::shape::run_matcher(m_await, &f_await).len(), 1);
         assert_eq!(crate::engines::shape::run_matcher(m_nest, &f_nest).len(), 1);
     }
@@ -1292,11 +1272,7 @@ mod fixture_tests {
             probe_matches(&grammar, rel, StructuralRule::AdmissionDoorBans, first),
             "fn new() -> Result<Self, E> in an impl must classify as admission-door"
         );
-        let f = SourceFile {
-            rel_path: rel.to_string(),
-            text: src.to_string(),
-            ast,
-        };
+        let f = SourceFile::admit(rel.to_string(), src.to_string(), ast);
         let hits = classify_file(&grammar, &f, &crate::alias::AliasTable::build(&[&f]).expect("aliases"));
         assert!(
             hits.is_empty(),

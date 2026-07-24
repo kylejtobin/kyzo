@@ -119,7 +119,7 @@ fn test_scope_lines(file: &SourceFile) -> std::collections::BTreeSet<usize> {
     let mut v = V {
         lines: std::collections::BTreeSet::new(),
     };
-    v.visit_file(&file.ast);
+    v.visit_file(file.ast());
     v.lines
 }
 
@@ -306,11 +306,11 @@ impl<'ast> Visit<'ast> for FileHitVisitor<'_> {
 
 fn file_hits(f: &SourceFile, kind: FileHitKind) -> Vec<Hit> {
     let mut v = FileHitVisitor {
-        rel: &f.rel_path,
+        rel: f.rel_path(),
         kind,
         hits: vec![],
     };
-    v.visit_file(&f.ast);
+    v.visit_file(f.ast());
     v.hits
 }
 
@@ -326,10 +326,10 @@ fn name_sites<'a>(
         macros,
         paths,
         construct,
-        rel: &file.rel_path,
+        rel: file.rel_path(),
         hits: vec![],
     };
-    v.visit_file(&file.ast);
+    v.visit_file(file.ast());
     v.hits
 }
 
@@ -353,12 +353,12 @@ fn macro_calls(file: &SourceFile, names: &[&str], construct: &str) -> Vec<Hit> {
 /// mentions one of `needles`.
 fn allow_attrs(file: &SourceFile, needles: &[&str], construct: &str) -> Vec<Hit> {
     let mut hits = vec![];
-    for (idx, raw) in file.text.lines().enumerate() {
+    for (idx, raw) in file.text().lines().enumerate() {
         let t = raw.trim_start();
         let is_attr = t.starts_with("#[allow(") || t.starts_with("#![allow(");
         if is_attr && needles.iter().any(|n| t.contains(n)) {
             hits.push(Hit {
-                file: file.rel_path.clone(),
+                file: file.rel_path().to_string(),
                 line: idx + 1,
                 construct: construct.to_string(),
             });
@@ -421,10 +421,10 @@ fn m_debug_assert(f: &SourceFile) -> Vec<Hit> {
         }
     }
     let mut v = V {
-        rel: &f.rel_path,
+        rel: f.rel_path(),
         hits: vec![],
     };
-    v.visit_file(&f.ast);
+    v.visit_file(f.ast());
     hits.append(&mut v.hits);
     hits
 }
@@ -448,10 +448,10 @@ fn m_let_underscore(f: &SourceFile) -> Vec<Hit> {
         }
     }
     let mut v = V {
-        rel: &f.rel_path,
+        rel: f.rel_path(),
         hits: vec![],
     };
-    v.visit_file(&f.ast);
+    v.visit_file(f.ast());
     v.hits
 }
 
@@ -482,10 +482,10 @@ fn m_ok_drop(f: &SourceFile) -> Vec<Hit> {
         }
     }
     let mut v = V {
-        rel: &f.rel_path,
+        rel: f.rel_path(),
         hits: vec![],
     };
-    v.visit_file(&f.ast);
+    v.visit_file(f.ast());
     v.hits
 }
 
@@ -547,7 +547,7 @@ fn m_capacity_min_cap(f: &SourceFile) -> Vec<Hit> {
     let mut clamped = Clamped {
         idents: std::collections::BTreeSet::new(),
     };
-    clamped.visit_file(&f.ast);
+    clamped.visit_file(f.ast());
 
     struct V<'a> {
         clamped: &'a std::collections::BTreeSet<String>,
@@ -590,10 +590,10 @@ fn m_capacity_min_cap(f: &SourceFile) -> Vec<Hit> {
     }
     let mut v = V {
         clamped: &clamped.idents,
-        rel: &f.rel_path,
+        rel: f.rel_path(),
         hits: vec![],
     };
-    v.visit_file(&f.ast);
+    v.visit_file(f.ast());
     v.hits
 }
 
@@ -652,10 +652,10 @@ fn arm_sites(f: &SourceFile, pick: fn(&syn::Arm) -> Option<(usize, &'static str)
     }
     let mut v = V {
         pick,
-        rel: &f.rel_path,
+        rel: f.rel_path(),
         hits: vec![],
     };
-    v.visit_file(&f.ast);
+    v.visit_file(f.ast());
     v.hits
 }
 
@@ -720,10 +720,10 @@ fn sig_sites(
     let mut v = V {
         pick,
         construct,
-        rel: &f.rel_path,
+        rel: f.rel_path(),
         hits: vec![],
     };
-    v.visit_file(&f.ast);
+    v.visit_file(f.ast());
     v.hits
 }
 
@@ -789,10 +789,10 @@ fn m_test_err_early_return(f: &SourceFile) -> Vec<Hit> {
         }
     }
     let mut v = V {
-        rel: &f.rel_path,
+        rel: f.rel_path(),
         hits: vec![],
     };
-    v.visit_file(&f.ast);
+    v.visit_file(f.ast());
     hits.append(&mut v.hits);
     hits
 }
@@ -870,10 +870,10 @@ fn m_nested_place_assign(f: &SourceFile) -> Vec<Hit> {
         }
     }
     let mut v = V {
-        rel: &f.rel_path,
+        rel: f.rel_path(),
         hits: vec![],
     };
-    v.visit_file(&f.ast);
+    v.visit_file(f.ast());
     v.hits
 }
 
@@ -922,10 +922,10 @@ fn m_assignment(f: &SourceFile) -> Vec<Hit> {
         }
     }
     let mut v = V {
-        rel: &f.rel_path,
+        rel: f.rel_path(),
         hits: vec![],
     };
-    v.visit_file(&f.ast);
+    v.visit_file(f.ast());
     v.hits
 }
 
@@ -947,10 +947,10 @@ fn m_await(f: &SourceFile) -> Vec<Hit> {
         }
     }
     let mut v = V {
-        rel: &f.rel_path,
+        rel: f.rel_path(),
         hits: vec![],
     };
-    v.visit_file(&f.ast);
+    v.visit_file(f.ast());
     v.hits
 }
 
@@ -978,10 +978,10 @@ fn attr_sites(f: &SourceFile, name: &str, construct: &str) -> Vec<Hit> {
     let mut v = V {
         name,
         construct,
-        rel: &f.rel_path,
+        rel: f.rel_path(),
         hits: vec![],
     };
-    v.visit_file(&f.ast);
+    v.visit_file(f.ast());
     v.hits
 }
 
@@ -994,11 +994,11 @@ fn line_starts_scan(
     construct: &str,
 ) -> Vec<Hit> {
     let mut hits = vec![];
-    for (idx, raw) in f.text.lines().enumerate() {
+    for (idx, raw) in f.text().lines().enumerate() {
         let t = raw.trim_start();
         let extra = needle.is_none_or(|n| t.contains(n));
         if t.starts_with(prefix) && extra {
-            push(&mut hits, &f.rel_path, idx + 1, construct);
+            push(&mut hits, f.rel_path(), idx + 1, construct);
         }
     }
     hits
@@ -1100,10 +1100,10 @@ fn m_serde_default_skip(f: &SourceFile) -> Vec<Hit> {
         }
     }
     let mut v = V {
-        rel: &f.rel_path,
+        rel: f.rel_path(),
         hits: vec![],
     };
-    v.visit_file(&f.ast);
+    v.visit_file(f.ast());
     v.hits
 }
 
@@ -1172,10 +1172,10 @@ fn m_nondeterminism(f: &SourceFile) -> Vec<Hit> {
         }
     }
     let mut v = V {
-        rel: &f.rel_path,
+        rel: f.rel_path(),
         hits: &mut hits,
     };
-    v.visit_file(&f.ast);
+    v.visit_file(f.ast());
     hits
 }
 
@@ -1329,10 +1329,10 @@ fn m_condemned_boundary(f: &SourceFile) -> Vec<Hit> {
         }
     }
     let mut v = V {
-        rel: &f.rel_path,
+        rel: f.rel_path(),
         hits: vec![],
     };
-    v.visit_file(&f.ast);
+    v.visit_file(f.ast());
     v.hits
 }
 
@@ -1365,10 +1365,10 @@ fn m_hand_layout(f: &SourceFile) -> Vec<Hit> {
         }
     }
     let mut v = V {
-        rel: &f.rel_path,
+        rel: f.rel_path(),
         hits: vec![],
     };
-    v.visit_file(&f.ast);
+    v.visit_file(f.ast());
     v.hits
 }
 
@@ -1437,11 +1437,7 @@ mod tests {
     use super::*;
 
     fn parse(rel: &str, src: &str) -> SourceFile {
-        SourceFile {
-            rel_path: rel.to_string(),
-            text: src.to_string(),
-            ast: syn::parse_file(src).expect("fixture parses"),
-        }
+        SourceFile::admit(rel.to_string(), src.to_string(), syn::parse_file(src).expect("fixture parses"))
     }
 
     fn run(name: &str, src: &str) -> Vec<Hit> {

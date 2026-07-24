@@ -105,7 +105,7 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
             scope.is_none_or(|s| s.scope.iter().any(|p| file.starts_with(p.as_str())))
         };
         let scoped: Vec<&SourceFile> =
-            b.files.iter().filter(|f| in_scope(&f.rel_path)).collect();
+            b.files.iter().filter(|f| in_scope(f.rel_path())).collect();
         let hits: Vec<Hit> = scoped.iter().flat_map(|f| shape::run_matcher(m, f)).collect();
         passes.push((name, hits));
     }
@@ -187,7 +187,7 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
                     scope.is_none_or(|s| s.scope.iter().any(|p| file.starts_with(p.as_str())))
                 };
                 let mut hits = Vec::new();
-                for f in b.files.iter().filter(|f| in_scope(&f.rel_path)) {
+                for f in b.files.iter().filter(|f| in_scope(f.rel_path())) {
                     let spans = classify::scoped_construct_spans(&grammar, f, aliases);
                     let raw = shape::run_matcher(m, f);
                     for h in raw {

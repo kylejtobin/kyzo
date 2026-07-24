@@ -289,11 +289,11 @@ fn collect_file(
         }
     }
     let mut v = V {
-        file: &file.rel_path,
+        file: file.rel_path(),
         edges,
         ambiguous: BTreeSet::new(),
     };
-    v.visit_file(&file.ast);
+    v.visit_file(file.ast());
     Ok(())
 }
 
@@ -302,11 +302,7 @@ mod tests {
     use super::*;
 
     fn file(src: &str) -> SourceFile {
-        SourceFile {
-            rel_path: "crates/probe/src/lib.rs".to_string(),
-            text: src.to_string(),
-            ast: syn::parse_file(src).expect("parses"),
-        }
+        SourceFile::admit("crates/probe/src/lib.rs".to_string(), src.to_string(), syn::parse_file(src).expect("parses"))
     }
 
     #[test]
@@ -314,7 +310,7 @@ mod tests {
         let f = file("type Name = String;");
         let t = AliasTable::build(&[&f]).expect("builds");
         let ty: syn::Type = syn::parse_str("Name").expect("type");
-        assert!(t.type_carries_string(&f.rel_path, &ty));
+        assert!(t.type_carries_string(f.rel_path(), &ty));
     }
 
     #[test]
@@ -322,7 +318,7 @@ mod tests {
         let f = file("use std::string::String as Text;");
         let t = AliasTable::build(&[&f]).expect("builds");
         let ty: syn::Type = syn::parse_str("Text").expect("type");
-        assert!(t.type_carries_string(&f.rel_path, &ty));
+        assert!(t.type_carries_string(f.rel_path(), &ty));
     }
 
     #[test]

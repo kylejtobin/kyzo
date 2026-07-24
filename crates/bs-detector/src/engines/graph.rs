@@ -122,10 +122,10 @@ pub fn derive_bypass(files: &[&SourceFile]) -> Vec<Hit> {
             }
         }
         let mut v = V {
-            rel: &f.rel_path,
+            rel: f.rel_path(),
             types: &mut types,
         };
-        v.visit_file(&f.ast);
+        v.visit_file(f.ast());
     }
 
     types
@@ -222,10 +222,10 @@ pub fn copy_detector(files: &[&SourceFile]) -> Vec<Hit> {
             }
         }
         let mut v = V {
-            rel: &f.rel_path,
+            rel: f.rel_path(),
             units: &mut units,
         };
-        v.visit_file(&f.ast);
+        v.visit_file(f.ast());
     }
 
     // Exact Jaccard via an inverted shingle index: a pair's co-occurrence
@@ -377,7 +377,7 @@ pub fn agreement_registry(files: &[&SourceFile], registry_text: &str) -> Vec<Hit
         let mut v = V {
             defined: &mut defined,
         };
-        v.visit_file(&f.ast);
+        v.visit_file(f.ast());
     }
     declared
         .into_iter()
@@ -476,7 +476,7 @@ fn error_ty_is_workspace_enum(ty: &syn::Type, enums: &BTreeSet<String>) -> bool 
 pub fn total_refusal(files: &[&SourceFile]) -> Vec<Hit> {
     let mut enums: BTreeSet<String> = BTreeSet::new();
     for f in files {
-        for item in &f.ast.items {
+        for item in &f.ast().items {
             if let syn::Item::Enum(e) = item {
                 enums.insert(e.ident.to_string());
             }
@@ -516,11 +516,11 @@ pub fn total_refusal(files: &[&SourceFile]) -> Vec<Hit> {
             }
         }
         let mut v = V {
-            rel: &f.rel_path,
+            rel: f.rel_path(),
             enums: &enums,
             hits: &mut hits,
         };
-        v.visit_file(&f.ast);
+        v.visit_file(f.ast());
     }
     hits
 }
@@ -574,11 +574,11 @@ fn use_tree_roots(tree: &syn::UseTree, out: &mut Vec<(String, proc_macro2::Span)
 pub fn sealed_public_door(files: &[&SourceFile], hosts: &[HostDoor]) -> Vec<Hit> {
     let mut hits = vec![];
     for f in files {
-        let Some(host) = hosts.iter().find(|h| f.rel_path.starts_with(&h.path)) else {
+        let Some(host) = hosts.iter().find(|h| f.rel_path().starts_with(&h.path)) else {
             continue;
         };
         let allowed: BTreeSet<&str> = host.allowed_imports.iter().map(|s| s.as_str()).collect();
-        for item in &f.ast.items {
+        for item in &f.ast().items {
             let syn::Item::Use(u) = item else {
                 continue;
             };
@@ -592,7 +592,7 @@ pub fn sealed_public_door(files: &[&SourceFile], hosts: &[HostDoor]) -> Vec<Hit>
                     continue;
                 }
                 hits.push(Hit {
-                    file: f.rel_path.clone(),
+                    file: f.rel_path().to_string(),
                     line: span_line(&span),
                     construct: format!("import-outside-door:{root}"),
                 });
@@ -633,8 +633,8 @@ fn collect_env_sites(file: &SourceFile) -> Vec<EnvSite> {
     // `crates/xtask/src/a/b.rs` → `a::b`, `.../main.rs`/`lib.rs`/`mod.rs` → ∅.
     let file_mod_prefix: Vec<String> = {
         let marker = "/src/";
-        if let Some(idx) = file.rel_path.find(marker) {
-            let rest = &file.rel_path[idx + marker.len()..];
+        if let Some(idx) = file.rel_path().find(marker) {
+            let rest = &file.rel_path()[idx + marker.len()..];
             if let Some(stem) = rest.strip_suffix(".rs") {
                 if matches!(stem, "main" | "lib" | "mod") {
                     vec![]
@@ -704,7 +704,7 @@ fn collect_env_sites(file: &SourceFile) -> Vec<EnvSite> {
         fn_stack: vec![],
         sites: &mut sites,
     };
-    v.visit_file(&file.ast);
+    v.visit_file(file.ast());
     sites
 }
 
@@ -715,14 +715,14 @@ pub fn config_once(files: &[&SourceFile], seats: &[ConfigOnceSeat]) -> Vec<Hit> 
     for seat in seats {
         let scoped: Vec<&&SourceFile> = files
             .iter()
-            .filter(|f| f.rel_path.starts_with(&seat.path))
+            .filter(|f| f.rel_path().starts_with(&seat.path))
             .collect();
         // Skip test/bite fixtures under the host when they are not the
         // binary's production tree? No — law is absolute over the path.
         let mut sites: Vec<(&str, EnvSite)> = vec![];
         for f in &scoped {
             for s in collect_env_sites(f) {
-                sites.push((f.rel_path.as_str(), s));
+                sites.push((f.rel_path(), s));
             }
         }
         if sites.len() != 1 {
@@ -769,11 +769,7 @@ mod tests {
     use super::*;
 
     fn parse(rel: &str, src: &str) -> SourceFile {
-        SourceFile {
-            rel_path: rel.to_string(),
-            text: src.to_string(),
-            ast: syn::parse_file(src).expect("fixture parses"),
-        }
+        SourceFile::admit(rel.to_string(), src.to_string(), syn::parse_file(src).expect("fixture parses"))
     }
 
     #[test]

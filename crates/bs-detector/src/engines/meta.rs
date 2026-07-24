@@ -72,13 +72,13 @@ pub fn stale_waivers(
 pub fn forbid_roots(b: &Boundary) -> Vec<Hit> {
     let mut hits = vec![];
     for f in &b.files {
-        let is_root = f.rel_path.ends_with("/src/lib.rs")
-            || f.rel_path.ends_with("/src/main.rs")
-            || f.rel_path.contains("/src/bin/")
-            || f.rel_path.ends_with("/build.rs");
-        if is_root && !f.text.contains("#![forbid(unsafe_code)]") {
+        let is_root = f.rel_path().ends_with("/src/lib.rs")
+            || f.rel_path().ends_with("/src/main.rs")
+            || f.rel_path().contains("/src/bin/")
+            || f.rel_path().ends_with("/build.rs");
+        if is_root && !f.text().contains("#![forbid(unsafe_code)]") {
             hits.push(Hit {
-                file: f.rel_path.clone(),
+                file: f.rel_path().to_string(),
                 line: 1,
                 construct: "root_without_forbid_unsafe".to_string(),
             });
@@ -150,11 +150,11 @@ why_not_sabotage = {why}
         let src = "fn f() { let x = 1; x }";
         let ast = syn::parse_file(src).expect("parses");
         let real_hash = identity::site_hash(ast.items.first().expect("item"));
-        let files = vec![SourceFile {
-            rel_path: "crates/x/src/a.rs".to_string(),
-            text: src.to_string(),
+        let files = vec![SourceFile::admit(
+            "crates/x/src/a.rs".to_string(),
+            src.to_string(),
             ast,
-        }];
+        )];
         // Live hit whose enclosing item hash matches the waiver.
         let mut live_w = wf.waiver[0].clone();
         live_w.site_hash = real_hash.clone();
@@ -182,11 +182,11 @@ why_not_sabotage = {why}
         );
         // Content rename: same line/construct, different identity → stale.
         let renamed = syn::parse_file("fn f() { let y = 1; y }").expect("parses");
-        let renamed_files = vec![SourceFile {
-            rel_path: "crates/x/src/a.rs".to_string(),
-            text: "fn f() { let y = 1; y }".to_string(),
-            ast: renamed,
-        }];
+        let renamed_files = vec![SourceFile::admit(
+            "crates/x/src/a.rs".to_string(),
+            "fn f() { let y = 1; y }".to_string(),
+            renamed,
+        )];
         assert_eq!(
             stale_waivers(&live_wf, &live, &renamed_files).len(),
             1,
@@ -202,11 +202,7 @@ why_not_sabotage = {why}
         let noisy = "// inserted comment\nfn f() { let x = 1; x }";
         let noisy_ast = syn::parse_file(noisy).expect("parses");
         let item_line = noisy_ast.items.first().expect("item").span().start().line;
-        let files = vec![SourceFile {
-            rel_path: "crates/x/src/a.rs".to_string(),
-            text: noisy.to_string(),
-            ast: noisy_ast,
-        }];
+        let files = vec![SourceFile::admit("crates/x/src/a.rs".to_string(), noisy.to_string(), noisy_ast)];
         let wf = WaiverFile {
             waiver: vec![crate::waiver::Waiver {
                 check: "expect".to_string(),
@@ -238,11 +234,7 @@ why_not_sabotage = {why}
     #[test]
     fn root_without_forbid_detonates() {
         let b = Boundary {
-            files: vec![SourceFile {
-                rel_path: "crates/x/src/lib.rs".to_string(),
-                text: "pub fn f() {}\n".to_string(),
-                ast: syn::parse_file("pub fn f() {}\n").expect("parses"),
-            }],
+            files: vec![SourceFile::admit("crates/x/src/lib.rs".to_string(), "pub fn f() {}\n".to_string(), syn::parse_file("pub fn f() {}\n").expect("parses"))],
             unparsed: vec![],
             existing: vec!["crates/x/src/lib.rs".to_string()],
         };
