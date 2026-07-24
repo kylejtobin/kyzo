@@ -1,0 +1,1 @@
+fn proof_fn() {}

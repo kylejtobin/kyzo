@@ -4,10 +4,19 @@
 # [bans_absolute]: banned-shape predicates no waiver can cover.
 # [bans]: banned-shape predicates a waiver may cover, one entry per hit,
 #   granted only by the kyzo-waiver agent.
-# [[construct]]: structural classification law. Every struct and enum in
-#   crates/ must classify against a construct below; an item matching no
-#   construct is a violation ("unclassified") by default — deny is the
-#   default, silence certifies nothing.
+# [kinds]: TRUTH item 1's totality proof. Every `syn::Item` kind, and every
+#   impl/trait interior kind, is either `condemned` (red on sight, its own
+#   laws.toml entry) or `seated` (may classify only as one of the named
+#   constructs below). A kind in neither list, or in both, refuses to load.
+# [[construct]]: structural classification law. Every item of a seated kind
+#   must classify against one of its kind's named constructs below; an item
+#   matching none of them is a violation ("unclassified") by default — deny
+#   is the default, silence certifies nothing.
+# [seats]: declared receiverless-fn seats (item 2's declared-fn skeleton),
+#   each binding file + fn path + a blake3 site hash (item 6). Empty today —
+#   no receiverless fn in the tree has been individually declared yet, so
+#   every one is `unclassified` until a future seat names it. No
+#   grandfathering.
 # Every ban must resolve to a registered matcher and a bite proof named
 # bite_<ban> in tests/bite_proofs.rs, or the gate refuses to run.
 
@@ -57,6 +66,41 @@ bans = [
   "hand_layout",
 ]
 
+[kinds]
+# The eight condemned kinds (TRUTH item 1): macro kinds are condemned
+# because expanded code escapes the source walk (item 4 R2); allowing
+# macro definitions manufactures escapes. `verbatim` names the
+# unparseable-token kind at every position (item, impl interior, trait
+# interior) — one condemnation, one law, regardless of where it sits.
+condemned = [
+  "extern-crate",
+  "foreign-mod",
+  "union",
+  "trait-alias",
+  "verbatim",
+  "macro",
+  "impl-macro",
+  "trait-macro",
+]
+
+[kinds.seated]
+const = ["constant"]
+enum = ["sum-type"]
+fn = ["composition-root", "derivation", "transition", "consuming-verb", "admission-door", "declared-fn"]
+impl = ["impl-container"]
+mod = ["module"]
+static = ["constant"]
+struct = ["newtype-scalar", "sealed-struct", "unit-marker"]
+trait = ["trait-container"]
+type = ["alias"]
+use = ["import"]
+impl-const = ["constant"]
+impl-fn = ["composition-root", "derivation", "transition", "consuming-verb", "admission-door", "declared-fn"]
+impl-type = ["alias"]
+trait-const = ["constant"]
+trait-fn = ["composition-root", "derivation", "transition", "consuming-verb", "admission-door", "declared-fn"]
+trait-type = ["alias"]
+
 [[construct]]
 name = "newtype-scalar"
 kind = "struct"
@@ -65,9 +109,91 @@ rule = "tuple-single-private-field"
 [[construct]]
 name = "sealed-struct"
 kind = "struct"
-rule = "all-fields-private"
+rule = "named-all-private-no-string-terminal"
+
+[[construct]]
+name = "unit-marker"
+kind = "struct"
+rule = "unit-struct"
 
 [[construct]]
 name = "sum-type"
 kind = "enum"
 rule = "no-string-variant-fields"
+
+[[construct]]
+name = "alias"
+kind = "alias"
+rule = "alias-no-banned-terminal"
+
+[[construct]]
+name = "import"
+kind = "import"
+rule = "import-no-glob"
+
+[[construct]]
+name = "constant"
+kind = "constant"
+rule = "constant-no-static-mut"
+
+[[construct]]
+name = "module"
+kind = "module"
+rule = "module-no-path-attr"
+
+[[construct]]
+name = "impl-container"
+kind = "impl-container"
+rule = "interiors-classify"
+
+[[construct]]
+name = "trait-container"
+kind = "trait-container"
+rule = "interiors-classify"
+
+[[construct]]
+name = "composition-root"
+kind = "fn"
+rule = "composition-root-body"
+
+[[construct]]
+name = "derivation"
+kind = "fn"
+rule = "derivation-bans"
+
+[[construct]]
+name = "transition"
+kind = "fn"
+rule = "transition-bans"
+
+[[construct]]
+name = "consuming-verb"
+kind = "fn"
+rule = "consuming-verb-bans"
+
+[[construct]]
+name = "admission-door"
+kind = "fn"
+rule = "admission-door-bans"
+
+[[construct]]
+name = "declared-fn"
+kind = "fn"
+rule = "declared-fn-seat"
+
+# Proof seats for `declared-fn` (item 1's fixture law + item 2's Proof:
+# "declared fn whose body hash drifted -> red"). The pass fixture's exact
+# site hash is computed by identity::site_hash over its literal source; the
+# deny fixture repeats the same file/fn_path with a deliberately WRONG hash
+# — a drifted seat, refused by the declared-fn rule itself, not by silence.
+[[seats.fns]]
+file = "crates/bs-detector/fixtures/declared-fn.pass.rs"
+fn_path = "proof_fn"
+site_hash = "3a16d35a57a5a0edef11b80742f3757725b645d0203b904f90761bea29606d29"
+io = false
+
+[[seats.fns]]
+file = "crates/bs-detector/fixtures/declared-fn.deny.rs"
+fn_path = "proof_fn"
+site_hash = "0000000000000000000000000000000000000000000000000000000000000000"
+io = false

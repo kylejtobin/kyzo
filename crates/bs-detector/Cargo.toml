@@ -19,6 +19,9 @@ serde = { version = "1", features = ["derive"] }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 regex = "1"
+# Site identity (TRUTH item 6 forward-use): declared-fn seats bind to a
+# blake3 hash of the item's token stream, so a body edit reds the seat.
+blake3 = "1"
 
 [dev-dependencies]
 tempfile = "3"

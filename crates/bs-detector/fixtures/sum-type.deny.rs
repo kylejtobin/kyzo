@@ -1,0 +1,3 @@
+enum SumString {
+    A(String),
+}

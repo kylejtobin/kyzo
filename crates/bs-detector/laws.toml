@@ -244,3 +244,43 @@ caught_by = "meta pass, unchanged; no waiver can cover it"
 name = "unclassified"
 law = "an item matching no approved construct in the grammar — unknown shape is guilty by default"
 caught_by = "default-deny classifier over grammar.toml constructs"
+
+[[law]]
+name = "extern_crate"
+law = "TRUTH item 1: an `extern crate` item — a pre-2018 escape hatch condemned outright, no waiver"
+caught_by = "grammar.toml [kinds].condemned; classify.rs reports it under this name directly"
+
+[[law]]
+name = "foreign_mod"
+law = "TRUTH item 1: an `extern \"C\" { .. }` foreign block — FFI declarations condemned outright"
+caught_by = "grammar.toml [kinds].condemned; classify.rs reports it under this name directly"
+
+[[law]]
+name = "union"
+law = "TRUTH item 1: a `union` item — untagged overlapping storage condemned outright, no waiver"
+caught_by = "grammar.toml [kinds].condemned; classify.rs reports it under this name directly"
+
+[[law]]
+name = "trait_alias"
+law = "TRUTH item 1: a `trait Alias = ..` trait alias — an unproven second name for a bound"
+caught_by = "grammar.toml [kinds].condemned; classify.rs reports it under this name directly"
+
+[[law]]
+name = "verbatim"
+law = "TRUTH item 1: a token shape syn could not interpret as any known item/interior kind — unparsed law is unproven law"
+caught_by = "grammar.toml [kinds].condemned; classify.rs reports it under this name directly, at every position (item, impl interior, trait interior)"
+
+[[law]]
+name = "macro_item"
+law = "TRUTH item 1: a `macro_rules!`/item-macro definition — expanded code escapes the source walk (item 4 R2); authored macros manufacture escapes"
+caught_by = "grammar.toml [kinds].condemned; classify.rs reports it under this name directly"
+
+[[law]]
+name = "impl_item_macro"
+law = "TRUTH item 1: a macro invocation inside an impl block's interior — the same escape, impl-scoped"
+caught_by = "grammar.toml [kinds].condemned; classify.rs reports it under this name directly"
+
+[[law]]
+name = "trait_item_macro"
+law = "TRUTH item 1: a macro invocation inside a trait block's interior — the same escape, trait-scoped"
+caught_by = "grammar.toml [kinds].condemned; classify.rs reports it under this name directly"

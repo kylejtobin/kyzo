@@ -1,0 +1,1 @@
+struct Newtype(u64);

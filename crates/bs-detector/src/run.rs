@@ -42,13 +42,27 @@ fn waivable(grammar: &Grammar, check: &str) -> bool {
     if grammar.bans_absolute.iter().any(|b| b == check) {
         return false;
     }
+    // TRUTH item 1: condemned kinds are "red on sight" — the same absolute
+    // standing as bans_absolute, expressed through the kind table instead
+    // of the shape-ban list.
+    if grammar
+        .condemned
+        .iter()
+        .any(|k| k.condemned_law_name() == Some(check))
+    {
+        return false;
+    }
     !matches!(check, "agreement_registry" | "coverage" | "unparsed" | "stale_waivers")
 }
 
 pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
     let bite_src = std::fs::read_to_string(root.join("crates/bs-detector/tests/bite_proofs.rs"))
         .with_context(|| "reading bite_proofs.rs — a gate without bite proofs may not run")?;
-    let grammar = Grammar::load(&root.join("crates/bs-detector/grammar.toml"), &bite_src)?;
+    let grammar = Grammar::load(
+        &root.join("crates/bs-detector/grammar.toml"),
+        &bite_src,
+        &root.join("crates/bs-detector/fixtures"),
+    )?;
     let laws = Laws::load(&root.join("crates/bs-detector/laws.toml"))?;
     let waivers = WaiverFile::load(&root.join("crates/bs-detector/waivers.toml"))?;
     let b = Boundary::walk(root)?;
@@ -91,13 +105,40 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
         passes.push((name, hits));
     }
     let run_pass = |name: &str| only.is_none() || only == Some(name);
-    if run_pass("unclassified") {
-        let hits: Vec<Hit> = b
+    // Item 1: one walk, then partition. Condemned kinds report under their
+    // own laws.toml name (red on sight, never absorbed by `unclassified`).
+    // Seated items matching no construct report under `unclassified`.
+    let condemned_names: Vec<&str> = grammar
+        .condemned
+        .iter()
+        .filter_map(|k| k.condemned_law_name())
+        .collect();
+    let need_classify = run_pass("unclassified")
+        || condemned_names.iter().any(|n| run_pass(n));
+    if need_classify {
+        let all: Vec<Hit> = b
             .files
             .iter()
-            .flat_map(|f| classify::unclassified(&grammar, f))
+            .flat_map(|f| classify::classify_file(&grammar, f))
             .collect();
-        passes.push(("unclassified", hits));
+        let mut condemned_hits: BTreeMap<&str, Vec<Hit>> =
+            condemned_names.iter().map(|n| (*n, Vec::new())).collect();
+        let mut unclassified_hits: Vec<Hit> = Vec::new();
+        for h in all {
+            if let Some(bucket) = condemned_hits.get_mut(h.construct.as_str()) {
+                bucket.push(h);
+            } else {
+                unclassified_hits.push(h);
+            }
+        }
+        if run_pass("unclassified") {
+            passes.push(("unclassified", unclassified_hits));
+        }
+        for name in &condemned_names {
+            if run_pass(name) {
+                passes.push((name, condemned_hits.remove(name).unwrap_or_default()));
+            }
+        }
     }
     let all: Vec<&SourceFile> = b.files.iter().collect();
     if run_pass("derive_bypass") {

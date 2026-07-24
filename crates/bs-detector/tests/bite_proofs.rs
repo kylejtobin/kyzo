@@ -416,6 +416,7 @@ fn the_real_grammar_and_laws_load_and_bind_to_this_file() {
     let g = match bs_detector::grammar::Grammar::load(
         &root.join("grammar.toml"),
         include_str!("bite_proofs.rs"),
+        &root.join("fixtures"),
     ) {
         Ok(g) => g,
         Err(e) => panic!("grammar.toml must be lawful: {e:#}"),
@@ -424,6 +425,7 @@ fn the_real_grammar_and_laws_load_and_bind_to_this_file() {
         g.bans.len() + g.bans_absolute.len() >= 40,
         "every banned shape stays registered"
     );
+    assert_eq!(g.condemned.len(), 8, "item 1: exactly eight condemned kinds");
     let laws = match bs_detector::grammar::Laws::load(&root.join("laws.toml")) {
         Ok(l) => l,
         Err(e) => panic!("laws.toml must be lawful: {e:#}"),
@@ -433,7 +435,25 @@ fn the_real_grammar_and_laws_load_and_bind_to_this_file() {
             panic!("ban `{name}` has no retained law — coverage proof broken");
         }
     }
-    for pass in ["unclassified", "derive_bypass", "copy_detector", "agreement_registry", "coverage", "unparsed", "forbid_roots", "stale_waivers"] {
+    for pass in [
+        "unclassified",
+        "derive_bypass",
+        "copy_detector",
+        "agreement_registry",
+        "coverage",
+        "unparsed",
+        "forbid_roots",
+        "stale_waivers",
+        // TRUTH item 1 condemned kinds — each has its own laws.toml entry.
+        "extern_crate",
+        "foreign_mod",
+        "union",
+        "trait_alias",
+        "verbatim",
+        "macro_item",
+        "impl_item_macro",
+        "trait_item_macro",
+    ] {
         if laws.require(pass).is_err() {
             panic!("pass `{pass}` has no retained law — coverage proof broken");
         }
