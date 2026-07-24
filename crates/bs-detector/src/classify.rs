@@ -376,6 +376,9 @@ fn recurse_into_item(ctx: &Ctx, item: &syn::Item, hits: &mut Vec<Hit>) {
         }
         syn::Item::Trait(t) => {
             classify_generics_items(ctx, &t.generics, hits);
+            // Tip 686: supertrait bounds are a separate nest surface from
+            // generics/where — skipping them silent-greened bound nests.
+            classify_bounds_items(ctx, &t.supertraits, hits);
             let inner = Ctx {
                 rel: ctx.rel,
                 grammar: ctx.grammar,
@@ -385,6 +388,19 @@ fn recurse_into_item(ctx: &Ctx, item: &syn::Item, hits: &mut Vec<Hit>) {
             };
             for it in &t.items {
                 classify_trait_item(&inner, it, hits);
+            }
+        }
+        // Tip 686: trait-alias bounds hold type-position nests.
+        syn::Item::TraitAlias(t) => {
+            classify_generics_items(ctx, &t.generics, hits);
+            classify_bounds_items(ctx, &t.bounds, hits);
+        }
+        // Tip 686: foreign interiors — the extern block is condemned as a
+        // unit, but type-position nests inside foreign sigs/statics were a
+        // silent-green drain.
+        syn::Item::ForeignMod(m) => {
+            for it in &m.items {
+                classify_foreign_item(ctx, it, hits);
             }
         }
         _not_a_container => {}
@@ -482,6 +498,32 @@ fn classify_signature_items(ctx: &Ctx, sig: &syn::Signature, hits: &mut Vec<Hit>
     v.visit_signature(sig);
 }
 
+fn classify_bounds_items(
+    ctx: &Ctx,
+    bounds: &syn::punctuated::Punctuated<syn::TypeParamBound, syn::token::Plus>,
+    hits: &mut Vec<Hit>,
+) {
+    let nested_ctx = nested_item_ctx(ctx);
+    let mut v = NestedItemVisit {
+        ctx: &nested_ctx,
+        hits,
+    };
+    for bound in bounds {
+        v.visit_type_param_bound(bound);
+    }
+}
+
+fn classify_foreign_item(ctx: &Ctx, item: &syn::ForeignItem, hits: &mut Vec<Hit>) {
+    match item {
+        syn::ForeignItem::Fn(f) => classify_signature_items(ctx, &f.sig, hits),
+        syn::ForeignItem::Static(s) => classify_type_items(ctx, &s.ty, hits),
+        syn::ForeignItem::Type(t) => classify_generics_items(ctx, &t.generics, hits),
+        syn::ForeignItem::Macro(_) => {}
+        // Named (not bare `_`) — future ForeignItem variants are visible.
+        _unrecognized_foreign_item => {}
+    }
+}
+
 #[derive(Clone, Copy)]
 enum ContainerMember<'a> {
     Impl(&'a syn::ImplItem),
@@ -555,6 +597,9 @@ fn classify_container_member(ctx: &Ctx, member: ContainerMember<'_>, hits: &mut 
         }
         ContainerMember::Trait(syn::TraitItem::Type(t)) => {
             classify_generics_items(ctx, &t.generics, hits);
+            // Tip 686: `type T: Bound<...>` — bounds were a silent-green drain
+            // when only the optional default RHS was walked.
+            classify_bounds_items(ctx, &t.bounds, hits);
             if let Some((_, ty)) = &t.default {
                 classify_type_items(ctx, ty, hits);
             }
@@ -2161,6 +2206,54 @@ mod fixture_tests {
         assert_expression_nest_exact(
             "const X: [u8; { fn nested_hide() {} 1 }] = [0; 1];",
             "const-ty-array-len",
+        );
+    }
+
+    /// Tip 686: trait supertrait bound nest — Item::Trait walked generics +
+    /// members only; `supertraits` was a silent-green drain.
+    #[test]
+    fn anti_fraud_trait_supertrait_bound_nested_fn_must_be_exact_unclassified() {
+        assert_expression_nest_exact(
+            "trait T: From<[u8; { fn nested_hide() {} 1 }]> {}",
+            "trait-supertrait-bound",
+        );
+    }
+
+    /// Tip 686: trait associated-type bound nest — default RHS was walked,
+    /// but `bounds` after `:` were not.
+    #[test]
+    fn anti_fraud_trait_type_bound_nested_fn_must_be_exact_unclassified() {
+        assert_expression_nest_exact(
+            "trait Tr { type T: From<[u8; { fn nested_hide() {} 1 }]>; }",
+            "trait-type-bound",
+        );
+    }
+
+    /// Tip 686: trait-alias bound nest — Item::TraitAlias was `_not_a_container`.
+    #[test]
+    fn anti_fraud_trait_alias_bound_nested_fn_must_be_exact_unclassified() {
+        assert_expression_nest_exact(
+            "trait Alias = From<[u8; { fn nested_hide() {} 1 }]>;",
+            "trait-alias-bound",
+        );
+    }
+
+    /// Tip 686: foreign-fn arg type-position nest — ForeignMod interiors were
+    /// never walked (block condemned, nested items silent-green).
+    #[test]
+    fn anti_fraud_foreign_fn_arg_array_len_nested_fn_must_be_exact_unclassified() {
+        assert_expression_nest_exact(
+            "extern \"C\" { fn f(_x: *const [u8; { fn nested_hide() {} 1 }]); }",
+            "foreign-fn-arg-array-len",
+        );
+    }
+
+    /// Tip 686: foreign-static type-position nest.
+    #[test]
+    fn anti_fraud_foreign_static_ty_array_len_nested_fn_must_be_exact_unclassified() {
+        assert_expression_nest_exact(
+            "extern \"C\" { static X: [u8; { fn nested_hide() {} 1 }]; }",
+            "foreign-static-ty-array-len",
         );
     }
 
