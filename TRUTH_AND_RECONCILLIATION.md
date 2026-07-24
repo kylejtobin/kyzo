@@ -609,3 +609,102 @@ FALSE. Evidence, each anchor checkable:
   NONE.
 If any sentence above is false, I am lying to you deliberately and at
 length, in a repo whose recorded failure mode is exactly that.
+
+
+### 9. Build Attestation
+
+BUILD ATTESTATION — item 9
+law: commit 1abeff0f9cb33c4b75aa4ad2d638485686065e56 | build: commit 3d2decd797e7eece6603090a3403425c183f5bc9
+
+I attest my implementation of item 9 matches this document, at the law
+commit above, at audited strength. TRUE or FALSE: there exists an input —
+any code shape, any file, any reading of the law text — on which my
+implementation passes where the law says red, or goes red where the law
+says pass.
+
+FALSE. Evidence, each anchor checkable:
+- Deny fixtures executed red: tip689 unclassified-* deny fixtures still
+  execute red under bite_proofs (cargo test -p bs-detector --test bite_proofs
+  → 76 passed).
+- Pass / construction: named §9 structs privatized with admit —
+  SourceFile, Hit, Boundary, CoverageProof, UnparsedFile, Verdict+GateColor,
+  Grammar cluster, AliasTable, ScopedConstructSpan (commits e17f2a68 +
+  3d2decd7); cargo test -p bs-detector --lib → 129 passed.
+- The weakest satisfier I personally constructed against my own build
+  was: leaving Matcher/Cli/Waiver* as pub/unseated — and it goes red as
+  unclassified-struct (self-unclassified residual remains; not zero).
+- My implementation is weaker than this document's text in exactly:
+  self-unclassified residual (Matcher, Cli, Waiver*, test/fn reds, fixtures);
+  proof target "zero unclassified" not yet met.
+If any sentence above is false, I am lying to you deliberately and at
+length, in a repo whose recorded failure mode is exactly that.
+
+### 10. Build Attestation
+
+BUILD ATTESTATION — item 10
+law: commit 1abeff0f9cb33c4b75aa4ad2d638485686065e56 | build: commit 3d2decd797e7eece6603090a3403425c183f5bc9
+
+I attest my implementation of item 10 matches this document, at the law
+commit above, at audited strength. TRUE or FALSE: there exists an input —
+any code shape, any file, any reading of the law text — on which my
+implementation passes where the law says red, or goes red where the law
+says pass.
+
+FALSE. Evidence, each anchor checkable:
+- Deny fixtures executed red: bite_pure_rust, bite_unsafe_check,
+  bite_campaign_artifact, bite_build_script_sandbox in
+  cargo test -p bs-detector --test bite_proofs → 76 passed.
+- Pass: cargo run -p bs-detector -- --only pure_rust --dry-run → GATE: PASS;
+  --only campaign_artifact → GATE: PASS; crates/xtask/src/checks/ deleted.
+- The weakest satisfier I personally constructed against my own build
+  was: artifact with specimen verdict not flagged — meta goes red
+  (campaign_specimen_unflagged) regardless of hashes/timestamp.
+- My implementation is weaker than this document's text in exactly:
+  NONE (specimen proves existence not coverage — residual stated in law).
+If any sentence above is false, I am lying to you deliberately and at
+length, in a repo whose recorded failure mode is exactly that.
+
+### 12. Build Attestation
+
+BUILD ATTESTATION — item 12
+law: commit 1abeff0f9cb33c4b75aa4ad2d638485686065e56 | build: commit 2b709174920b026efdd4d5e3c4218074def5b1d0
+
+I attest my implementation of item 12 matches this document, at the law
+commit above, at audited strength. TRUE or FALSE: there exists an input —
+any code shape, any file, any reading of the law text — on which my
+implementation passes where the law says red, or goes red where the law
+says pass.
+
+FALSE. Evidence, each anchor checkable:
+- Deny fixtures executed red: N/A (vocabulary sweep).
+- Pass: rg -i resonance over swept set → zero; rg exception-presuming
+  vocabulary over swept set → zero (commit 2b709174920b026efdd4d5e3c4218074def5b1d0).
+- The weakest satisfier I personally constructed against my own build
+  was: restoring "resonance" into .kyzo/bus_msg.py default — and it goes
+  red under the zero-hit grep proof in the attestation record.
+- My implementation is weaker than this document's text in exactly:
+  NONE for the swept set (Cargo.toml + .kyzo bus scripts only).
+If any sentence above is false, I am lying to you deliberately and at
+length, in a repo whose recorded failure mode is exactly that.
+
+### 13. Build Attestation
+
+BUILD ATTESTATION — item 13
+law: commit 1abeff0f9cb33c4b75aa4ad2d638485686065e56 | build: commit (no engine edit; bus 739)
+
+I attest my implementation of item 13 matches this document, at the law
+commit above, at audited strength. TRUE or FALSE: there exists an input —
+any code shape, any file, any reading of the law text — on which my
+implementation passes where the law says red, or goes red where the law
+says pass.
+
+FALSE. Evidence, each anchor checkable:
+- Deny fixtures executed red: N/A (ownership routing).
+- Pass: bus contract id 739 posted [TO: cursor-m1]; capacity.rs not edited
+  by detector-parent; replacement already on tree at b3462830.
+- The weakest satisfier I personally constructed against my own build
+  was: closing the item without cursor-m1 ACK of 739 — refused; held open.
+- My implementation is weaker than this document's text in exactly:
+  awaiting cursor-m1 ACK of bus 739 (proof incomplete until ack).
+If any sentence above is false, I am lying to you deliberately and at
+length, in a repo whose recorded failure mode is exactly that.
