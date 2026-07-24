@@ -414,9 +414,8 @@ pub struct ConstructDef {
     name: Label,
     kind: ConstructFamily,
     rule: StructuralRule,
-    /// Construct-scoped bans (TRUTH item 5 jurisdiction (c)). Empty by
-    /// default; attributed by span containment in `run.rs`.
-    #[serde(default)]
+    /// Construct-scoped bans (TRUTH item 5 jurisdiction (c)). Required key —
+    /// empty list is written `bans = []`, never serde-default silence.
     bans: Vec<Label>,
 }
 
@@ -1002,7 +1001,7 @@ struct CampaignEntry {
 #[serde(deny_unknown_fields)]
 struct LawsFile {
     law: Vec<LawEntry>,
-    #[serde(default)]
+    /// Required key — empty ledger is `campaign = []`, never serde-default silence.
     campaign: Vec<CampaignEntry>,
 }
 
@@ -1258,8 +1257,8 @@ mod tests {
                 "struct = [\"newtype-scalar\", \"sealed-struct\", \"unit-marker\", \"sealed-struct-twin\"]\n",
             )
             .replace(
-                "name = \"sealed-struct\"\nkind = \"struct\"\nrule = \"named-all-private-no-string-terminal\"\n",
-                "name = \"sealed-struct\"\nkind = \"struct\"\nrule = \"named-all-private-no-string-terminal\"\n\n[[construct]]\nname = \"sealed-struct-twin\"\nkind = \"struct\"\nrule = \"named-all-private-no-string-terminal\"\n",
+                "name = \"sealed-struct\"\nkind = \"struct\"\nrule = \"named-all-private-no-string-terminal\"\nbans = []\n",
+                "name = \"sealed-struct\"\nkind = \"struct\"\nrule = \"named-all-private-no-string-terminal\"\nbans = []\n\n[[construct]]\nname = \"sealed-struct-twin\"\nkind = \"struct\"\nrule = \"named-all-private-no-string-terminal\"\nbans = []\n",
             );
         let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let dir = tempfile::tempdir().map_err(|_| GrammarProofRefuse::Tempdir)?;
@@ -1437,7 +1436,7 @@ mod tests {
     fn laws_require_refuses_a_lawless_check() -> TestResult {
         let mut f = tempfile::NamedTempFile::new().map_err(|_| GrammarProofRefuse::Tempfile)?;
         f.write_all(
-            b"[[law]]\nname = \"unwrap\"\nlaw = \"a panic where refusal is owed\"\ncaught_by = \"grammar ban\"\n",
+            b"campaign = []\n[[law]]\nname = \"unwrap\"\nlaw = \"a panic where refusal is owed\"\ncaught_by = \"grammar ban\"\n",
         )
         .map_err(|_| GrammarProofRefuse::WriteFixture)?;
         let laws = Laws::load(f.path()).map_err(|_| GrammarProofRefuse::LawsLoad)?;

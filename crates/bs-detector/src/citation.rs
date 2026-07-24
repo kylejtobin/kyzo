@@ -444,7 +444,14 @@ mod tests {
 
         fn fixture_laws(&self, root: &Path, body: &str) -> Result<Laws, CitationProofRefuse> {
             let laws_path = root.join("laws.toml");
-            std::fs::write(&laws_path, body).map_err(|_| CitationProofRefuse::LawsWrite)?;
+            // Required key after tip 1002 serde_default_skip burn — empty
+            // campaign ledger must be stated, never serde-default silence.
+            let text = if body.contains("campaign") {
+                body.to_string()
+            } else {
+                format!("campaign = []\n{body}")
+            };
+            std::fs::write(&laws_path, text).map_err(|_| CitationProofRefuse::LawsWrite)?;
             Laws::load(&laws_path).map_err(|_| CitationProofRefuse::LawsLoad)
         }
 

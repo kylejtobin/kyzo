@@ -291,12 +291,26 @@ impl AttestationTemplate {
     }
 }
 
+/// Wire shape for one waiver row — Deserialize lives here only so [`Waiver`]
+/// never grows a second admission door beside [`Waiver::admit_row`].
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WaiverWire {
+    check: Label,
+    file: RelPath,
+    line: usize,
+    construct: Label,
+    site_hash: HexDigest,
+    citation: Text,
+    anchor_hash: HexDigest,
+    why_not_sabotage: Text,
+}
+
 /// One approved, content-bound waiver entry.
 ///
-/// Fields are private (TRUTH item 9). Deserialize is the sole admission
-/// door; callers read through accessors.
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+/// Fields are private (TRUTH item 9). Sole admission is [`Waiver::admit_row`]
+/// / [`Waiver::admit_wire`] — no `Deserialize` derive (derive_bypass).
+#[derive(Clone, Debug)]
 pub struct Waiver {
     /// The registered check this covers a hit of (must exist in
     /// checks.toml — a waiver naming an unknown check is a load error).
@@ -358,24 +372,34 @@ impl Waiver {
         self.why_not_sabotage.as_str()
     }
 
-    /// Test-only: admit one waiver row by TOML (tip 885). Bypasses
-    /// `WaiverFile::load`'s attestation-form gate — deserialize is the
-    /// sole field door; one argument, no clippy allow.
-    #[cfg(test)]
-    pub(crate) fn admit_row(row: &str) -> Result<Self, WaiverRowRefuse> {
-        toml::from_str(row).map_err(|e| WaiverRowRefuse::Toml(Label::admit(e.to_string())))
+    fn admit_wire(wire: WaiverWire) -> Self {
+        Self {
+            check: wire.check,
+            file: wire.file,
+            line: wire.line,
+            construct: wire.construct,
+            site_hash: wire.site_hash,
+            citation: wire.citation,
+            anchor_hash: wire.anchor_hash,
+            why_not_sabotage: wire.why_not_sabotage,
+        }
     }
 
+    /// Admit one waiver row by TOML (tip 885 / tip 1002). Sole field door —
+    /// wire Deserialize never lands on [`Waiver`] itself.
+    pub(crate) fn admit_row(row: &str) -> Result<Self, WaiverRowRefuse> {
+        let wire: WaiverWire =
+            toml::from_str(row).map_err(|e| WaiverRowRefuse::Toml(Label::admit(e.to_string())))?;
+        Ok(Self::admit_wire(wire))
+    }
 }
 
-/// Test-only refuse for [`Waiver::admit_row`].
-#[cfg(test)]
+/// Refuse for [`Waiver::admit_row`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum WaiverRowRefuse {
     Toml(Label),
 }
 
-#[cfg(test)]
 impl std::fmt::Display for WaiverRowRefuse {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -416,14 +440,21 @@ impl ScopeWaiver {
     }
 }
 
-/// Fields are private (TRUTH item 9). Deserialize is the sole admission
-/// door; callers read through accessors.
+/// Wire file shape — Deserialize of waiver rows stays on [`WaiverWire`].
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct WaiverFile {
+struct WaiverFileWire {
     /// Both ledgers are REQUIRED keys: an empty ledger is written
     /// `waiver = []`, stated on purpose — zero waiver entrys is a claim the
     /// file makes, never a shape it defaults into.
+    waiver: Vec<WaiverWire>,
+    scope_waiver: Vec<ScopeWaiver>,
+}
+
+/// Fields are private (TRUTH item 9). Admission is [`WaiverFile::load`] via
+/// [`Waiver::admit_wire`] per row — callers read through accessors.
+#[derive(Debug)]
+pub struct WaiverFile {
     waiver: Vec<Waiver>,
     scope_waiver: Vec<ScopeWaiver>,
 }
@@ -444,8 +475,12 @@ impl WaiverFile {
     pub fn load(path: &Path) -> Result<WaiverFile> {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("reading {}", path.display()))?;
-        let parsed: WaiverFile =
+        let wire: WaiverFileWire =
             toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+        let parsed = WaiverFile {
+            waiver: wire.waiver.into_iter().map(Waiver::admit_wire).collect(),
+            scope_waiver: wire.scope_waiver,
+        };
         let template = AttestationTemplate::load_canonical()?;
 
         let mut seen: BTreeSet<(String, String, String, String)> = BTreeSet::new();

@@ -115,56 +115,67 @@ trait-type = ["alias"]
 name = "newtype-scalar"
 kind = "struct"
 rule = "tuple-single-private-field"
+bans = []
 
 [[construct]]
 name = "sealed-struct"
 kind = "struct"
 rule = "named-all-private-no-string-terminal"
+bans = []
 
 [[construct]]
 name = "unit-marker"
 kind = "struct"
 rule = "unit-struct"
+bans = []
 
 [[construct]]
 name = "sum-type"
 kind = "enum"
 rule = "no-string-variant-fields"
+bans = []
 
 [[construct]]
 name = "alias"
 kind = "alias"
 rule = "alias-no-banned-terminal"
+bans = []
 
 [[construct]]
 name = "import"
 kind = "import"
 rule = "import-no-glob"
+bans = []
 
 [[construct]]
 name = "constant"
 kind = "constant"
 rule = "constant-no-static-mut"
+bans = []
 
 [[construct]]
 name = "module"
 kind = "module"
 rule = "module-no-path-attr"
+bans = []
 
 [[construct]]
 name = "impl-container"
 kind = "impl-container"
 rule = "interiors-classify"
+bans = []
 
 [[construct]]
 name = "trait-container"
 kind = "trait-container"
 rule = "interiors-classify"
+bans = []
 
 [[construct]]
 name = "composition-root"
 kind = "fn"
 rule = "composition-root-body"
+bans = []
 
 [[construct]]
 name = "derivation"
@@ -194,6 +205,7 @@ bans = ["await"]
 name = "declared-fn"
 kind = "fn"
 rule = "declared-fn-seat"
+bans = []
 
 # Proof seats for `declared-fn` (item 1's fixture law + item 2's Proof:
 # "declared fn whose body hash drifted -> red"). The pass fixture's exact
