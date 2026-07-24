@@ -114,7 +114,12 @@ impl<'ast, 'a> Visit<'ast> for DeriveBypassWalk<'a> {
                             let key = Label::admit(ty.clone());
                             let line = BOUNDARY.span_line(&m.sig.ident.span());
                             let next = match self.types.remove(&key) {
-                                Some(t) => t.with_fallible_ctor(),
+                                Some(t) => TypeFacts {
+                                    file: t.file,
+                                    line: t.line,
+                                    fallible_ctor: true,
+                                    bad_derives: t.bad_derives,
+                                },
                                 None => TypeFacts {
                                     file: self.rel.clone(),
                                     line,
