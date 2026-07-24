@@ -11,6 +11,9 @@ keywords.workspace = true
 categories.workspace = true
 description = "KyzoDB storage engine core: a pure-Rust fork of CozoDB"
 documentation = "https://docs.rs/kyzo"
+# benches/ also holds helpers + the retired ra_exec remake brief (bench_api
+# door cut in 8ba39759). Only explicit [[bench]] targets may compile.
+autobenches = false
 
 [package.metadata.docs.rs]
 all-features = true
@@ -144,17 +147,12 @@ name = "string_eq"
 harness = false
 
 [[bench]]
-name = "ra_exec"
-harness = false
-required-features = ["bench-internals"]
-
-[[bench]]
 name = "recovery_sla"
 harness = false
 required-features = ["bench-internals"]
 
 [features]
-# Sealed RA-bench façade (`bench_api`) + SimStorage in non-test builds.
+# SimStorage (+ recovery SLA helpers) in non-test builds for kyzo-trials / benches.
 bench-internals = []
 
 [lints]

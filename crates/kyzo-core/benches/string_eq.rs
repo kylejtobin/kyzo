@@ -127,10 +127,6 @@ const DISTRIBUTIONS: &[Distribution] = &[
 /// would be evidence the bench isn't measuring the compare path at all.
 const EQ_SIZES: [u64; 2] = [10_000, 100_000];
 
-fn no_params() -> BTreeMap<String, DataValue> {
-    BTreeMap::new()
-}
-
 // ── germanstr_eq: the primitive, in memory, no engine ───────────────────
 
 fn make_keys(n: u64, make: fn(u64) -> String) -> Vec<DataValue> {
