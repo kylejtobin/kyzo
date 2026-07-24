@@ -17,14 +17,14 @@
 #[inline]
 pub(crate) fn wrap_mul(a: u64, b: u64) -> u64 {
     // INVARIANT(SeedMix): wrap is the published mix contract, not silent overflow loss.
-    a.wrapping_mul(b)
+    (std::num::Wrapping(a) * std::num::Wrapping(b)).0
 }
 
 /// Wrap-add for seed/hash mixes (splitmix step). The algorithm defines wrap.
 #[inline]
 pub(crate) fn wrap_add(a: u64, b: u64) -> u64 {
     // INVARIANT(SeedMix): wrap is the published mix contract, not silent overflow loss.
-    a.wrapping_add(b)
+    (std::num::Wrapping(a) + std::num::Wrapping(b)).0
 }
 
 /// Lossless `usize` → `u64` via little-endian assemble (every supported

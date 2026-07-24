@@ -15,6 +15,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::num::Wrapping as W;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -331,8 +332,8 @@ impl Sha256 {
             let mut buf = [0u8; 8];
             buf[..src.len()].copy_from_slice(&src);
             // INVARIANT(Sha256): FIPS 180-4 length field is bit-count mod 2⁶⁴;
-            // pointer-width ≤ 64 ⇒ LE widen; wrapping_mul is the published mod 2⁶⁴.
-            u64::from_le_bytes(buf).wrapping_mul(8)
+            // pointer-width ≤ 64 ⇒ LE widen; Wrapping mul is the published mod 2⁶⁴.
+            (W(u64::from_le_bytes(buf)) * W(8)).0
         };
         let mut padded = data.to_vec();
         padded.push(0x80);
@@ -354,10 +355,8 @@ impl Sha256 {
             for i in 16..64 {
                 let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
                 let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
-                w[i] = w[i - 16] // INVARIANT(Sha256): message schedule Σ wraps mod 2³² (FIPS 180-4).
-                    .wrapping_add(s0)
-                    .wrapping_add(w[i - 7])
-                    .wrapping_add(s1);
+                // INVARIANT(Sha256): message schedule Σ wraps mod 2³² (FIPS 180-4).
+                w[i] = (W(w[i - 16]) + W(s0) + W(w[i - 7]) + W(s1)).0;
             }
 
             let mut a = h[0];
@@ -373,40 +372,33 @@ impl Sha256 {
                 let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
                 let ch = (e & f) ^ ((!e) & g);
                 // INVARIANT(Sha256): compression Σ wraps mod 2³² (FIPS 180-4).
-                let temp1 = hh
-                    .wrapping_add(s1)
-                    .wrapping_add(ch)
-                    // INVARIANT(Sha256): compression Σ wraps mod 2³² (FIPS 180-4).
-                    .wrapping_add(K[i])
-                    .wrapping_add(w[i]);
+                let temp1 = (W(hh) + W(s1) + W(ch) + W(K[i]) + W(w[i])).0;
                 let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
                 let maj = (a & b) ^ (a & c) ^ (b & c);
                 // INVARIANT(Sha256): compression Σ wraps mod 2³² (FIPS 180-4).
-                let temp2 = s0.wrapping_add(maj);
+                let temp2 = (W(s0) + W(maj)).0;
 
                 hh = g;
                 g = f;
                 f = e;
                 // INVARIANT(Sha256): compression Σ wraps mod 2³² (FIPS 180-4).
-                e = d.wrapping_add(temp1);
+                e = (W(d) + W(temp1)).0;
                 d = c;
                 c = b;
                 b = a;
                 // INVARIANT(Sha256): compression Σ wraps mod 2³² (FIPS 180-4).
-                a = temp1.wrapping_add(temp2);
+                a = (W(temp1) + W(temp2)).0;
             }
 
             // INVARIANT(Sha256): chaining variables accumulate mod 2³².
-            h[0] = h[0].wrapping_add(a);
-            h[1] = h[1].wrapping_add(b);
-            h[2] = h[2].wrapping_add(c);
-            // INVARIANT(Sha256): chaining variables accumulate mod 2³².
-            h[3] = h[3].wrapping_add(d);
-            h[4] = h[4].wrapping_add(e);
-            h[5] = h[5].wrapping_add(f);
-            // INVARIANT(Sha256): chaining variables accumulate mod 2³².
-            h[6] = h[6].wrapping_add(g);
-            h[7] = h[7].wrapping_add(hh);
+            h[0] = (W(h[0]) + W(a)).0;
+            h[1] = (W(h[1]) + W(b)).0;
+            h[2] = (W(h[2]) + W(c)).0;
+            h[3] = (W(h[3]) + W(d)).0;
+            h[4] = (W(h[4]) + W(e)).0;
+            h[5] = (W(h[5]) + W(f)).0;
+            h[6] = (W(h[6]) + W(g)).0;
+            h[7] = (W(h[7]) + W(hh)).0;
         }
 
         let mut out = [0u8; 32];
