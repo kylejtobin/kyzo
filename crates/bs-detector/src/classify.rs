@@ -188,8 +188,8 @@ struct Ctx<'a> {
     in_container: bool,
 }
 
-fn hit(rel: &str, line: usize, construct: impl Into<String>) -> Hit {
-    Hit::admit(rel.to_string(), line, construct)
+fn hit(rel: &str, line: usize, construct: impl AsRef<str>) -> Hit {
+    Hit::admit(rel, line, construct.as_ref())
 }
 
 fn line_of<T: ?Sized + syn::spanned::Spanned>(node: &T) -> usize {
@@ -312,6 +312,10 @@ fn recurse_into_item(ctx: &Ctx, item: &syn::Item, hits: &mut Vec<Hit>) {
             }
         }
         syn::Item::Fn(f) => classify_block_items(ctx, &f.block, hits),
+        // Tip 650: const/static RHS blocks are legal item nests in Rust.
+        // Treating them as non-containers silent-greened nested unseated items.
+        syn::Item::Const(c) => classify_expr_items(ctx, &c.expr, hits),
+        syn::Item::Static(s) => classify_expr_items(ctx, &s.expr, hits),
         syn::Item::Impl(i) => {
             let inner = Ctx {
                 rel: ctx.rel,
@@ -340,43 +344,58 @@ fn recurse_into_item(ctx: &Ctx, item: &syn::Item, hits: &mut Vec<Hit>) {
     }
 }
 
-fn classify_block_items(ctx: &Ctx, block: &syn::Block, hits: &mut Vec<Hit>) {
-    // Nested items are NOT impl/trait members — `in_container` must not
-    // bleed from the enclosing method or a nested `fn` false-greens as
-    // admission-door (tip 650 hard-count: no soft drain).
-    let nested_ctx = Ctx {
+/// Nested items are NOT impl/trait members — `in_container` must not
+/// bleed from the enclosing method or a nested `fn` false-greens as
+/// admission-door (tip 650 hard-count: no soft drain).
+fn nested_item_ctx<'a>(ctx: &Ctx<'a>) -> Ctx<'a> {
+    Ctx {
         rel: ctx.rel,
         grammar: ctx.grammar,
         aliases: ctx.aliases,
         self_ty: None,
         in_container: false,
-    };
-    struct Nested<'a, 'c> {
-        ctx: &'a Ctx<'c>,
-        hits: &'a mut Vec<Hit>,
     }
-    impl<'ast> Visit<'ast> for Nested<'_, '_> {
-        fn visit_item(&mut self, node: &'ast syn::Item) {
-            classify_item(self.ctx, node, self.hits);
-            // classify_item already recurses containers; do not
-            // visit_item default-recurse or items double-fire.
-        }
-        fn visit_stmt(&mut self, node: &'ast syn::Stmt) {
-            match node {
-                syn::Stmt::Item(it) => {
-                    classify_item(self.ctx, it, self.hits);
-                }
-                other => visit::visit_stmt(self, other),
+}
+
+struct NestedItemVisit<'a, 'c> {
+    ctx: &'a Ctx<'c>,
+    hits: &'a mut Vec<Hit>,
+}
+
+impl<'ast> Visit<'ast> for NestedItemVisit<'_, '_> {
+    fn visit_item(&mut self, node: &'ast syn::Item) {
+        classify_item(self.ctx, node, self.hits);
+        // classify_item already recurses containers; do not
+        // visit_item default-recurse or items double-fire.
+    }
+    fn visit_stmt(&mut self, node: &'ast syn::Stmt) {
+        match node {
+            syn::Stmt::Item(it) => {
+                classify_item(self.ctx, it, self.hits);
             }
+            other => visit::visit_stmt(self, other),
         }
     }
-    let mut v = Nested {
+}
+
+fn classify_block_items(ctx: &Ctx, block: &syn::Block, hits: &mut Vec<Hit>) {
+    let nested_ctx = nested_item_ctx(ctx);
+    let mut v = NestedItemVisit {
         ctx: &nested_ctx,
         hits,
     };
     for stmt in &block.stmts {
         v.visit_stmt(stmt);
     }
+}
+
+fn classify_expr_items(ctx: &Ctx, expr: &syn::Expr, hits: &mut Vec<Hit>) {
+    let nested_ctx = nested_item_ctx(ctx);
+    let mut v = NestedItemVisit {
+        ctx: &nested_ctx,
+        hits,
+    };
+    v.visit_expr(expr);
 }
 
 #[derive(Clone, Copy)]
@@ -1578,7 +1597,117 @@ mod fixture_tests {
         );
     }
 
+    /// Tip 650 nest surfaces — each costume must emit exactly
+    /// `unclassified-fn:nested_hide`. Empty hits = walk blind soft drain.
+    fn assert_expression_nest_exact(src: &str, costume: &str) {
+        let hits = classify_src(src);
+        let nested = hit_constructs_for(&hits, "nested_hide");
+        assert_eq!(
+            nested,
+            vec!["unclassified-fn:nested_hide".to_string()],
+            "{costume}-nested fn must be exactly unclassified-fn:nested_hide (walk blind or soft seat): {nested:?} full={hits:?}"
+        );
+    }
+
     #[test]
+    fn anti_fraud_match_arm_nested_fn_must_be_exact_unclassified() {
+        assert_expression_nest_exact(
+            "fn f() { match 0u8 { _ => { fn nested_hide() {} } } }",
+            "match-arm",
+        );
+    }
+
+    #[test]
+    fn anti_fraud_loop_body_nested_fn_must_be_exact_unclassified() {
+        assert_expression_nest_exact(
+            "fn f() { loop { fn nested_hide() {} break; } }",
+            "loop",
+        );
+    }
+
+    #[test]
+    fn anti_fraud_while_body_nested_fn_must_be_exact_unclassified() {
+        assert_expression_nest_exact(
+            "fn f() { while true { fn nested_hide() {} break; } }",
+            "while",
+        );
+    }
+
+    #[test]
+    fn anti_fraud_for_body_nested_fn_must_be_exact_unclassified() {
+        assert_expression_nest_exact(
+            "fn f() { for _ in 0..1 { fn nested_hide() {} } }",
+            "for",
+        );
+    }
+
+    #[test]
+    fn anti_fraud_closure_body_nested_fn_must_be_exact_unclassified() {
+        assert_expression_nest_exact(
+            "fn f() { let _c = || { fn nested_hide() {} }; }",
+            "closure",
+        );
+    }
+
+    #[test]
+    fn anti_fraud_async_block_nested_fn_must_be_exact_unclassified() {
+        assert_expression_nest_exact(
+            "fn f() { let _a = async { fn nested_hide() {} }; }",
+            "async-block",
+        );
+    }
+
+    #[test]
+    fn anti_fraud_unsafe_block_nested_fn_must_be_exact_unclassified() {
+        assert_expression_nest_exact(
+            "fn f() { unsafe { fn nested_hide() {} } }",
+            "unsafe-block",
+        );
+    }
+
+    /// Tip 650: const/static *item* RHS blocks may contain nested items
+    /// (legal Rust). recurse_into_item treated Const/Static as
+    /// non-containers — silent-green drain.
+    #[test]
+    fn anti_fraud_const_item_rhs_nested_fn_must_be_exact_unclassified() {
+        assert_expression_nest_exact(
+            "const X: i32 = { fn nested_hide() {} 1 };",
+            "const-item-rhs",
+        );
+    }
+
+    #[test]
+    fn anti_fraud_static_item_rhs_nested_fn_must_be_exact_unclassified() {
+        assert_expression_nest_exact(
+            "static X: i32 = { fn nested_hide() {} 1 };",
+            "static-item-rhs",
+        );
+    }
+
+    #[test]
+    fn anti_fraud_nested_const_item_rhs_fn_must_be_exact_unclassified() {
+        assert_expression_nest_exact(
+            "fn f() { const X: i32 = { fn nested_hide() {} 1 }; }",
+            "nested-const-item-rhs",
+        );
+    }
+
+    #[test]
+    fn anti_fraud_const_block_nested_fn_must_be_exact_unclassified() {
+        assert_expression_nest_exact(
+            "fn f() { const { fn nested_hide() {} }; }",
+            "const-block",
+        );
+    }
+
+    #[test]
+    fn anti_fraud_inline_const_nested_fn_must_be_exact_unclassified() {
+        assert_expression_nest_exact(
+            "fn f() { let _x = const { fn nested_hide() {} 1 }; }",
+            "inline-const",
+        );
+    }
+
     fn item_4_proof_restrict_struct_is_clean() {
         assert_hit_count("struct R { r: Restrict }", 0);
     }
