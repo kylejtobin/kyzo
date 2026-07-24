@@ -17,6 +17,7 @@ pub mod boundary;
 pub mod cargo_meta;
 pub mod citation;
 pub mod classify;
+pub mod cli;
 pub mod engines;
 pub mod grammar;
 pub mod identity;

@@ -172,6 +172,26 @@ impl fmt::Display for Label {
     }
 }
 
+/// Clap/`FromStr` refuse for [`Label`]. Uninhabited: [`Label::admit`] is total.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LabelParseRefuse {}
+
+impl fmt::Display for LabelParseRefuse {
+    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {}
+    }
+}
+
+impl std::error::Error for LabelParseRefuse {}
+
+impl std::str::FromStr for Label {
+    type Err = LabelParseRefuse;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self::admit(s))
+    }
+}
+
 impl From<&str> for Label {
     fn from(text: &str) -> Self {
         Self::admit(text)
