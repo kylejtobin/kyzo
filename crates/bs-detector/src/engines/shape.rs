@@ -1359,203 +1359,277 @@ pub const MATCHERS: &[Matcher] = &[
     Matcher::admit(b"hand_layout", ScanClass::ProductionOnly, m_hand_layout),
 ];
 
+/// Typed test refusal — file-level so `total_refusal` indexes it as a workspace
+/// enum (tip 777). Nested inside `mod tests` was `not-workspace-enum`.
+#[cfg(test)]
+#[derive(Debug)]
+enum ShapeProofRefuse {
+    Parse,
+    MatcherMissing,
+    DuplicateName,
+    HitCount,
+    Construct,
+    CommentNotWaiver,
+    CfgNotTestStrip,
+    CfgTestStrip,
+    CfgTestModStrip,
+    ModTestsStillScanned,
+    NondeterminismCfgModStrip,
+    NondeterminismCfgStmtStrip,
+    NondeterminismLive,
+    PeerDial,
+    NakedArrayDoor,
+    OwnDoorNaked,
+    OkDropMatchArm,
+    OkDropTail,
+    OkDropCleanMustQuiet,
+    MultilineDefaultDerive,
+    CfgAttrDefaultDerive,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn parse(rel: &str, src: &str) -> SourceFile {
-        SourceFile::admit(rel.to_string(), src.to_string(), syn::parse_file(src).expect("fixture parses"))
+    type TestResult = Result<(), ShapeProofRefuse>;
+
+    fn require(cond: bool, refuse: ShapeProofRefuse) -> TestResult {
+        if cond {
+            Ok(())
+        } else {
+            Err(refuse)
+        }
     }
 
-    fn run(name: &str, src: &str) -> Vec<Hit> {
-        let m = matcher_by_name(name).expect("matcher registered");
-        run_matcher(m, &parse("crates/x/src/probe.rs", src))
+    fn require_eq<T: PartialEq>(got: T, want: T, refuse: ShapeProofRefuse) -> TestResult {
+        require(got == want, refuse)
+    }
+
+    fn parse(rel: &str, src: &str) -> Result<SourceFile, ShapeProofRefuse> {
+        let ast = syn::parse_file(src).map_err(|_| ShapeProofRefuse::Parse)?;
+        Ok(SourceFile::admit(rel, src, ast))
+    }
+
+    fn run(name: &str, src: &str) -> Result<Vec<Hit>, ShapeProofRefuse> {
+        let m = matcher_by_name(name).ok_or(ShapeProofRefuse::MatcherMissing)?;
+        Ok(run_matcher(m, &parse("crates/x/src/probe.rs", src)?))
+    }
+
+    fn must_hit(name: &str, src: &str, want: usize, refuse: ShapeProofRefuse) -> TestResult {
+        require_eq(run(name, src)?.len(), want, refuse)
     }
 
     #[test]
-    fn every_matcher_has_a_unique_name() {
+    fn every_matcher_has_a_unique_name() -> TestResult {
         let mut names: Vec<&str> = MATCHERS.iter().map(|m| m.name()).collect();
         let before = names.len();
         names.sort_unstable();
         names.dedup();
-        assert_eq!(before, names.len(), "duplicate matcher name = second authority");
+        require_eq(before, names.len(), ShapeProofRefuse::DuplicateName)
     }
 
     #[test]
-    fn dishonesty_shapes_detonate() {
-        assert_eq!(run("unwrap", "fn f(x: Option<u8>) { x.unwrap(); }").len(), 1);
-        assert_eq!(run("expect", "fn f(x: Option<u8>) { x.expect(\"y\"); }").len(), 1);
-        assert_eq!(run("let_underscore", "fn f() { let _ = g(); } fn g() -> u8 { 1 }").len(), 1);
-        assert_eq!(run("ok_drop", "fn f(x: Result<u8, u8>) { x.ok(); }").len(), 1);
-        assert_eq!(run("as_cast", "fn f(x: u64) -> u8 { x as u8 }").len(), 1);
-        assert_eq!(run("catchall_arm", "fn f(x: u8) -> u8 { match x { 1 => 1, _ => 0 } }").len(), 1);
-        assert_eq!(run("panic_bang", "fn f() { panic!(\"boom\"); }").len(), 1);
-        assert_eq!(run("todo_bang", "fn f() { todo!(); }").len(), 1);
-        assert_eq!(run("debug_assert", "fn f(x: u8) { debug_assert!(x > 0); }").len(), 1);
-        assert_eq!(
-            run("allow_dead_code", "#[allow(dead_code)]\nfn f() {}").len(),
-            1
-        );
-        assert_eq!(
-            run("err_costume", "fn f(r: Result<u8,u8>) -> u8 { match r { Ok(v) => v, Err(_) => 0 } }").len(),
-            1
-        );
-        assert_eq!(
-            run("sleep_sync", "fn f() { std::thread::sleep(std::time::Duration::from_millis(1200)); }").len(),
-            1
-        );
-        assert_eq!(
-            run("serde_default_skip", "struct S { #[serde(default)]\n x: u8 }").len(),
-            1
-        );
+    fn dishonesty_shapes_detonate() -> TestResult {
+        must_hit("unwrap", "fn f(x: Option<u8>) { x.unwrap(); }", 1, ShapeProofRefuse::HitCount)?;
+        must_hit("expect", "fn f(x: Option<u8>) { x.expect(\"y\"); }", 1, ShapeProofRefuse::HitCount)?;
+        must_hit(
+            "let_underscore",
+            "fn f() { let _ = g(); } fn g() -> u8 { 1 }",
+            1,
+            ShapeProofRefuse::HitCount,
+        )?;
+        must_hit("ok_drop", "fn f(x: Result<u8, u8>) { x.ok(); }", 1, ShapeProofRefuse::HitCount)?;
+        must_hit("as_cast", "fn f(x: u64) -> u8 { x as u8 }", 1, ShapeProofRefuse::HitCount)?;
+        must_hit(
+            "catchall_arm",
+            "fn f(x: u8) -> u8 { match x { 1 => 1, _ => 0 } }",
+            1,
+            ShapeProofRefuse::HitCount,
+        )?;
+        must_hit("panic_bang", "fn f() { panic!(\"boom\"); }", 1, ShapeProofRefuse::HitCount)?;
+        must_hit("todo_bang", "fn f() { todo!(); }", 1, ShapeProofRefuse::HitCount)?;
+        must_hit(
+            "debug_assert",
+            "fn f(x: u8) { debug_assert!(x > 0); }",
+            1,
+            ShapeProofRefuse::HitCount,
+        )?;
+        must_hit(
+            "allow_dead_code",
+            "#[allow(dead_code)]\nfn f() {}",
+            1,
+            ShapeProofRefuse::HitCount,
+        )?;
+        must_hit(
+            "err_costume",
+            "fn f(r: Result<u8,u8>) -> u8 { match r { Ok(v) => v, Err(_) => 0 } }",
+            1,
+            ShapeProofRefuse::HitCount,
+        )?;
+        must_hit(
+            "sleep_sync",
+            "fn f() { std::thread::sleep(std::time::Duration::from_millis(1200)); }",
+            1,
+            ShapeProofRefuse::HitCount,
+        )?;
+        must_hit(
+            "serde_default_skip",
+            "struct S { #[serde(default)]\n x: u8 }",
+            1,
+            ShapeProofRefuse::HitCount,
+        )
     }
 
     #[test]
-    fn unchecked_arith_accepts_no_comment_as_waiver() {
-        let naked = run("unchecked_arith", "fn f(a: u64, b: u64) -> u64 { a.wrapping_mul(b) }");
-        assert_eq!(naked.len(), 1, "every site is a violation");
-        let commented = run(
+    fn unchecked_arith_accepts_no_comment_as_waiver() -> TestResult {
+        must_hit(
+            "unchecked_arith",
+            "fn f(a: u64, b: u64) -> u64 { a.wrapping_mul(b) }",
+            1,
+            ShapeProofRefuse::HitCount,
+        )?;
+        must_hit(
             "unchecked_arith",
             "fn f(a: u64, b: u64) -> u64 {\n    // INVARIANT(SeedMix): wrap is the published mix contract.\n    a.wrapping_mul(b)\n}",
-        );
-        assert_eq!(
-            commented.len(),
             1,
-            "a comment is not a waiver entry — only an approved waiver stands"
-        );
+            ShapeProofRefuse::CommentNotWaiver,
+        )
     }
 
     /// Tip 650/659: blanket cfg(test) strip is BLINDED — removed. Every
     /// site below must detonate; a silent empty is the soft drain returning.
     /// Named `anti_fraud_tip_659` so sabotage_audit can lock the seat.
     #[test]
-    fn anti_fraud_tip_659() {
-        anti_fraud_cfg_test_unwrap_must_be_counted();
+    fn anti_fraud_tip_659() -> TestResult {
+        anti_fraud_cfg_test_unwrap_must_be_counted()
     }
 
     #[test]
-    fn anti_fraud_cfg_test_unwrap_must_be_counted() {
-        assert_eq!(
-            run("unwrap", "#[cfg(not(test))]\nfn f(x: Option<u8>) -> u8 { x.unwrap() }").len(),
+    fn anti_fraud_cfg_test_unwrap_must_be_counted() -> TestResult {
+        must_hit(
+            "unwrap",
+            "#[cfg(not(test))]\nfn f(x: Option<u8>) -> u8 { x.unwrap() }",
             1,
-            "not(test) production path must still fire",
-        );
-        assert_eq!(
-            run("unwrap", "#[cfg(all(test, unix))]\nfn f(x: Option<u8>) -> u8 { x.unwrap() }").len(),
+            ShapeProofRefuse::CfgNotTestStrip,
+        )?;
+        must_hit(
+            "unwrap",
+            "#[cfg(all(test, unix))]\nfn f(x: Option<u8>) -> u8 { x.unwrap() }",
             1,
-            "cfg(test) must NOT strip unwrap",
-        );
-        assert_eq!(
-            run(
-                "unwrap",
-                "#[cfg(test)] mod tests { fn f(x: Option<u8>) -> u8 { x.unwrap() } }",
-            )
-            .len(),
+            ShapeProofRefuse::CfgTestStrip,
+        )?;
+        must_hit(
+            "unwrap",
+            "#[cfg(test)] mod tests { fn f(x: Option<u8>) -> u8 { x.unwrap() } }",
             1,
-            "cfg(test) mod must NOT strip unwrap",
-        );
-        assert_eq!(
-            run("unwrap", "mod tests { pub fn f(x: Option<u8>) -> u8 { x.unwrap() } }").len(),
+            ShapeProofRefuse::CfgTestModStrip,
+        )?;
+        must_hit(
+            "unwrap",
+            "mod tests { pub fn f(x: Option<u8>) -> u8 { x.unwrap() } }",
             1,
-            "mod named tests without cfg still scanned",
-        );
+            ShapeProofRefuse::ModTestsStillScanned,
+        )
     }
 
     #[test]
-    fn anti_fraud_cfg_test_nondeterminism_must_be_counted() {
-        assert_eq!(
-            run(
-                "nondeterminism",
-                "#[cfg(test)] mod tests { fn f() { let _t = std::time::Instant::now(); } }",
-            )
-            .iter()
-            .filter(|h| h.construct() == "nondeterminism")
-            .count(),
+    fn anti_fraud_cfg_test_nondeterminism_must_be_counted() -> TestResult {
+        let hits = run(
+            "nondeterminism",
+            "#[cfg(test)] mod tests { fn f() { let _t = std::time::Instant::now(); } }",
+        )?;
+        require_eq(
+            hits
+                .iter()
+                .filter(|h| h.construct() == "nondeterminism")
+                .count(),
             1,
-            "cfg(test) mod must NOT strip nondeterminism",
-        );
-        assert_eq!(
-            run(
-                "nondeterminism",
-                "fn live() { #[cfg(test)] let _t0 = std::time::Instant::now(); }",
-            )
-            .len(),
+            ShapeProofRefuse::NondeterminismCfgModStrip,
+        )?;
+        must_hit(
+            "nondeterminism",
+            "fn live() { #[cfg(test)] let _t0 = std::time::Instant::now(); }",
             1,
-            "cfg(test) statement must NOT strip nondeterminism",
-        );
-        assert_eq!(
-            run("nondeterminism", "fn live() { let t = std::time::Instant::now(); let _x = t; }")
-                .len(),
+            ShapeProofRefuse::NondeterminismCfgStmtStrip,
+        )?;
+        must_hit(
+            "nondeterminism",
+            "fn live() { let t = std::time::Instant::now(); let _x = t; }",
             1,
-        );
-        assert_eq!(
-            run("peer_dial", "fn f() { let _c = std::net::TcpStream::connect(\"127.0.0.1:1\"); }")
-                .len(),
+            ShapeProofRefuse::NondeterminismLive,
+        )?;
+        must_hit(
+            "peer_dial",
+            "fn f() { let _c = std::net::TcpStream::connect(\"127.0.0.1:1\"); }",
             1,
-        );
+            ShapeProofRefuse::PeerDial,
+        )
     }
 
     #[test]
-    fn naked_array_sig_has_no_name_exemptions() {
-        assert_eq!(
-            run("naked_array_sig", "fn seal_key(k: [u8; 32]) {}").len(),
-            1
-        );
-        assert_eq!(
-            run("naked_array_sig", "struct D([u8; 32]); impl D { fn from_derived(b: [u8; 32]) -> D { D(b) } fn as_bytes(&self) -> &[u8; 32] { &self.0 } }").len(),
+    fn naked_array_sig_has_no_name_exemptions() -> TestResult {
+        must_hit(
+            "naked_array_sig",
+            "fn seal_key(k: [u8; 32]) {}",
+            1,
+            ShapeProofRefuse::NakedArrayDoor,
+        )?;
+        must_hit(
+            "naked_array_sig",
+            "struct D([u8; 32]); impl D { fn from_derived(b: [u8; 32]) -> D { D(b) } fn as_bytes(&self) -> &[u8; 32] { &self.0 } }",
             2,
-            "the type's own doors are naked too — real wrap doors swear waivers"
-        );
+            ShapeProofRefuse::OwnDoorNaked,
+        )
     }
 
     /// Tip 686: match-arm `mem::drop(value)` was a silent-green drain —
     /// stmt-only ok_drop required a trailing semicolon. RED before the widen.
     #[test]
-    fn anti_fraud_ok_drop_match_arm_mem_drop_must_be_counted() {
-        assert_eq!(
-            run(
-                "ok_drop",
-                "fn f(x: u8) { match x { value => core::mem::drop(value) } }",
-            )
-            .len(),
+    fn anti_fraud_ok_drop_match_arm_mem_drop_must_be_counted() -> TestResult {
+        must_hit(
+            "ok_drop",
+            "fn f(x: u8) { match x { value => core::mem::drop(value) } }",
             1,
-            "match-arm mem::drop is the same shut-up as drop(x);",
-        );
-        assert_eq!(
-            run("ok_drop", "fn f(x: u8) { drop(x) }").len(),
+            ShapeProofRefuse::OkDropMatchArm,
+        )?;
+        must_hit(
+            "ok_drop",
+            "fn f(x: u8) { drop(x) }",
             1,
-            "tail-position drop without semicolon must still fire",
-        );
-        assert_eq!(
-            run("ok_drop", "fn f(x: u8) -> u8 { x }").len(),
+            ShapeProofRefuse::OkDropTail,
+        )?;
+        must_hit(
+            "ok_drop",
+            "fn f(x: u8) -> u8 { x }",
             0,
-            "clean pass shape must stay silent",
-        );
+            ShapeProofRefuse::OkDropCleanMustQuiet,
+        )
     }
+
     /// Tip 686: `line_starts_scan` only saw `Default` on the `#[derive(` line.
     /// Split / cfg_attr-smuggled derive is the same second door — empty = blind.
     /// Proven RED against pre-fix line scanner (0 hits); AST walk closes it.
     #[test]
-    fn anti_fraud_multiline_default_derive_must_be_counted() {
+    fn anti_fraud_multiline_default_derive_must_be_counted() -> TestResult {
         let hits = run(
             "default_derive",
             "#[derive(\n    Debug,\n    Default,\n)]\nstruct S;",
-        );
-        assert_eq!(
-            hits.len(),
-            1,
-            "multiline derive(Default) must detonate (line-scan soft drain): {hits:?}"
-        );
-        assert_eq!(hits[0].construct(), "default_derive");
+        )?;
+        require_eq(hits.len(), 1, ShapeProofRefuse::MultilineDefaultDerive)?;
+        require_eq(
+            hits[0].construct(),
+            "default_derive",
+            ShapeProofRefuse::Construct,
+        )?;
         let smuggled = run(
             "default_derive",
             "#[cfg_attr(feature = \"x\", derive(Default))]\nstruct T;",
-        );
-        assert_eq!(
-            smuggled.len(),
-            1,
-            "cfg_attr-smuggled derive(Default) must detonate: {smuggled:?}"
-        );
-        assert_eq!(smuggled[0].construct(), "default_derive");
+        )?;
+        require_eq(smuggled.len(), 1, ShapeProofRefuse::CfgAttrDefaultDerive)?;
+        require_eq(
+            smuggled[0].construct(),
+            "default_derive",
+            ShapeProofRefuse::Construct,
+        )
     }
 }
