@@ -507,7 +507,7 @@ length, in a repo whose recorded failure mode is exactly that.
 ### 7. Build Attestation
 
 BUILD ATTESTATION — item 7
-law: commit 4e4c070d1cf9b47fcc4562f80f60b5072d7cd386 | build: commit 7cb92c5e1018ededcc5ed5a44d323e9b9fc79937
+law: commit 4e4c070d1cf9b47fcc4562f80f60b5072d7cd386 | build: commit 3d71139edc3163e804294503d6bdcef600f83a76
 
 I attest my implementation of item 7 matches this document, at the law
 commit above, at audited strength. TRUE or FALSE: there exists an input —
@@ -522,18 +522,24 @@ FALSE. Evidence, each anchor checkable:
   missing decisions seat fails resolve —
   citation::tests::law_name_and_decisions_seat_resolve ... ok;
   file#item-path identity drift —
-  citation::tests::file_item_path_hashes_with_identity_tokens ... ok.
+  citation::tests::file_item_path_hashes_with_identity_tokens ... ok;
+  production expect at citation parse removed (bounce 615) —
+  cargo run -p bs-detector -- --only expect --dry-run → GATE: PASS
+  (= 0 violations); zero FAIL under crates/bs-detector for expect.
 - Pass / grammar: citation::tests::citation_grammar_parses_four_forms ... ok;
   the_real_grammar_and_laws_load_and_bind_to_this_file ... ok (dead_citation
-  required).
+  required). cfg(test) expects in citation.rs tests module are
+  ProductionOnly-unscanned (confirmed).
 - The weakest satisfier I personally constructed against my own build
   was: a waiver whose citation still names a live file but whose
   anchor_hash is stale after a one-ident rename inside the cited test fn
   — and it goes red because dead_citations compares blake3 of the live
   item's identity_tokens to the recorded anchor_hash, and citation_live
   gates waiver application (item_7_proof_edit_cited_test_fn_is_dead_citation
-  ... ok).
-- Measured dry-run (post-build 7cb92c5e): GATE total 5740.
+  ... ok). Second attack (bounce 615): prior-check contains('#') then
+  .expect — banned token; now typed Err via let-else.
+- Measured dry-run (post-build 3d71139e): GATE total 5738; expect:0
+  tree-wide including crates/bs-detector; dead_citation:0 (empty ledger).
 - My implementation is weaker than this document's text in exactly:
   R-citation-prose.
 If any sentence above is false, I am lying to you deliberately and at
