@@ -36,7 +36,6 @@ use crate::program::expr::Expr;
 use crate::program::op::{resolve_fixed_rule_option, resolve_search_modality_option};
 use crate::program::query::QueryOutOptions;
 use crate::program::symbol::Symbol;
-use crate::program::wire::wire_omit_span;
 use crate::value::{AsOf, DataValue, ValidityTs};
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -224,21 +223,15 @@ impl std::error::Error for HeadAggrLenMismatch {}
 
 /// One parsed inline rule: head bindings with per-position [`HeadAggrSlot`]s.
 /// Wire omits span/trivia (seat 59); decode mints empty.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde_derive::Serialize, serde_derive::Deserialize)]
 pub struct InputInlineRule {
     pub head: Vec<Symbol>,
     pub aggr: Vec<HeadAggrSlot>,
     pub body: Vec<InputAtom>,
+    #[serde(skip, default = "SourceSpan::empty")]
     pub span: SourceSpan,
+    #[serde(skip, default = "Trivia::empty")]
     pub trivia: Trivia,
-}
-
-wire_omit_span! {
-    InputInlineRule {
-        head: Vec<Symbol>,
-        aggr: Vec<HeadAggrSlot>,
-        body: Vec<InputAtom>,
-    } + trivia
 }
 
 /// What a name is defined as in a program: a set of inline rules, or a
@@ -372,7 +365,7 @@ impl<'de> Deserialize<'de> for FixedRuleOptions {
 /// impl against it at bind time. No `Arc<dyn FixedRule>`. Options are a
 /// typed [`FixedRuleOptions`] bag — unknown names unconstructible.
 /// Wire omits span/trivia (seat 59); decode mints empty.
-#[derive(Clone)]
+#[derive(Clone, serde_derive::Serialize, serde_derive::Deserialize)]
 pub struct FixedRuleApply {
     pub fixed_handle: FixedRuleHandle,
     pub rule_args: Vec<FixedRuleArg>,
@@ -380,18 +373,10 @@ pub struct FixedRuleApply {
     pub head: Vec<Symbol>,
     /// Declaration arity — the one authority; [`Self::arity`] returns it.
     pub arity: usize,
+    #[serde(skip, default = "SourceSpan::empty")]
     pub span: SourceSpan,
+    #[serde(skip, default = "Trivia::empty")]
     pub trivia: Trivia,
-}
-
-wire_omit_span! {
-    FixedRuleApply {
-        fixed_handle: FixedRuleHandle,
-        rule_args: Vec<FixedRuleArg>,
-        options: FixedRuleOptions,
-        head: Vec<Symbol>,
-        arity: usize,
-    } + trivia
 }
 
 impl FixedRuleApply {
@@ -905,7 +890,7 @@ pub enum SearchAtomConstructRefuse {
 /// - **negatable-shaped** — sits under [`InputAtom::Negation`] like any
 ///   relation; engine `NegatedSearchUnsupported` retirement [OPEN] #249 T2 / #353
 /// Wire omits span (seat 59); decode mints empty.
-#[derive(Clone)]
+#[derive(Clone, serde_derive::Serialize, serde_derive::Deserialize)]
 pub struct SearchInput {
     pub relation: Symbol,
     pub index: Symbol,
@@ -914,18 +899,8 @@ pub struct SearchInput {
     pub query: Expr,
     pub filter: SearchFilter,
     pub modality: SearchModalityOptions,
+    #[serde(skip, default = "SourceSpan::empty")]
     pub span: SourceSpan,
-}
-
-wire_omit_span! {
-    SearchInput {
-        relation: Symbol,
-        index: Symbol,
-        bindings: BTreeMap<Symbol, Expr>,
-        query: Expr,
-        filter: SearchFilter,
-        modality: SearchModalityOptions,
-    }
 }
 
 impl SearchInput {
@@ -964,18 +939,12 @@ impl SearchInput {
 
 /// A rule application in a parsed body: `name[args…]` with expression args.
 /// Wire omits span (seat 59); decode mints empty.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde_derive::Serialize, serde_derive::Deserialize)]
 pub struct InputRuleApplyAtom {
     pub name: Symbol,
     pub args: Vec<Expr>,
+    #[serde(skip, default = "SourceSpan::empty")]
     pub span: SourceSpan,
-}
-
-wire_omit_span! {
-    InputRuleApplyAtom {
-        name: Symbol,
-        args: Vec<Expr>,
-    }
 }
 
 /// Which axis an [`ValidityClause::Delta`] varies, the other held at the
@@ -1018,57 +987,36 @@ impl ValidityClause {
 /// A stored-relation application addressed by named fields:
 /// `*name{field: expr, …}`. Field names are [`Symbol`] keys.
 /// Wire omits span (seat 59); decode mints empty.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde_derive::Serialize, serde_derive::Deserialize)]
 pub struct InputNamedFieldRelationApplyAtom {
     pub name: Symbol,
     pub args: BTreeMap<Symbol, Expr>,
     pub validity: Option<ValidityClause>,
+    #[serde(skip, default = "SourceSpan::empty")]
     pub span: SourceSpan,
-}
-
-wire_omit_span! {
-    InputNamedFieldRelationApplyAtom {
-        name: Symbol,
-        args: BTreeMap<Symbol, Expr>,
-        validity: Option<ValidityClause>,
-    }
 }
 
 /// A stored-relation application with positional args: `*name[args…]`.
 /// Wire omits span (seat 59); decode mints empty.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde_derive::Serialize, serde_derive::Deserialize)]
 pub struct InputRelationApplyAtom {
     pub name: Symbol,
     pub args: Vec<Expr>,
     pub validity: Option<ValidityClause>,
+    #[serde(skip, default = "SourceSpan::empty")]
     pub span: SourceSpan,
-}
-
-wire_omit_span! {
-    InputRelationApplyAtom {
-        name: Symbol,
-        args: Vec<Expr>,
-        validity: Option<ValidityClause>,
-    }
 }
 
 /// `binding = expr` (or `binding in expr` when `one_many_unif`).
 /// Wire omits span (seat 59); decode mints empty.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde_derive::Serialize, serde_derive::Deserialize)]
 pub struct Unification {
     pub binding: Symbol,
     pub expr: Expr,
     /// If false, `=`; if true, `in`.
     pub one_many_unif: bool,
+    #[serde(skip, default = "SourceSpan::empty")]
     pub span: SourceSpan,
-}
-
-wire_omit_span! {
-    Unification {
-        binding: Symbol,
-        expr: Expr,
-        one_many_unif: bool,
-    }
 }
 
 impl Unification {
