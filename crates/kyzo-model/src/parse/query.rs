@@ -118,9 +118,9 @@ fn merge_spans(symbs: &[Symbol], fallback: SourceSpan) -> SourceSpan {
     let Some((first, rest)) = symbs.split_first() else {
         return fallback;
     };
-    let mut fst = first.span;
+    let mut fst = first.span();
     for nxt in rest {
-        fst = fst.merge(nxt.span);
+        fst = fst.merge(nxt.span());
     }
     fst
 }
@@ -254,7 +254,7 @@ pub(crate) fn parse_query<'a>(
                 struct AggrInConstRuleError(#[label] SourceSpan);
 
                 for (a, v) in aggr.iter().zip(head.iter()) {
-                    ensure!(!a.is_aggregated(), AggrInConstRuleError(v.span));
+                    ensure!(!a.is_aggregated(), AggrInConstRuleError(v.span()));
                 }
                 let data_part = src.need("a child")?;
                 let entry_param_head = extract_entry_param_head(data_part.clone());
@@ -595,7 +595,7 @@ fn finalize_program(mut prog: InputProgram) -> Result<InputProgram> {
         for (sorter, _) in &prog.out_opts().sorters {
             ensure!(
                 head_args.contains(sorter),
-                SortKeyNotFound(sorter.to_string(), sorter.span)
+                SortKeyNotFound(sorter.to_string(), sorter.span())
             )
         }
     }
@@ -610,9 +610,9 @@ fn finalize_program(mut prog: InputProgram) -> Result<InputProgram> {
         Some((handle, _, _, _)) => {
             if handle.key_bindings.is_empty() {
                 if handle.dep_bindings.is_empty() {
-                    Some((handle.name().to_string(), handle.span()))
+                    Some((handle.name.to_string(), handle.span))
                 } else {
-                    bail!(RelationHasNoKeys(handle.name().to_string(), handle.span()));
+                    bail!(RelationHasNoKeys(handle.name.to_string(), handle.span));
                 }
             } else {
                 None
@@ -626,7 +626,7 @@ fn finalize_program(mut prog: InputProgram) -> Result<InputProgram> {
             bail!(RelationHasNoKeys(name, span));
         };
         if head_args.is_empty() {
-            bail!(RelationHasNoKeys(handle.name().to_string(), handle.span()));
+            bail!(RelationHasNoKeys(handle.name.to_string(), handle.span));
         }
         handle.key_bindings = head_args.clone();
         handle.metadata.keys = head_args
@@ -770,7 +770,7 @@ fn parse_atom(
             let var = src.need("a child")?;
             let mut symb = Symbol::new(var.as_str(), var.extract_span());
             if matches!(symb.kind(), SymbolKind::Ignored) {
-                symb.set_name(format!("*^*{}", *ignored_counter).into());
+                symb.set_name(format!("*^*{}", *ignored_counter));
                 *ignored_counter += 1;
             }
             let expr = build_expr(src.need("a child")?, param_pool)?;
@@ -789,7 +789,7 @@ fn parse_atom(
             let var = src.need("a child")?;
             let mut symb = Symbol::new(var.as_str(), var.extract_span());
             if matches!(symb.kind(), SymbolKind::Ignored) {
-                symb.set_name(format!("*^*{}", *ignored_counter).into());
+                symb.set_name(format!("*^*{}", *ignored_counter));
                 *ignored_counter += 1;
             }
             src.need("a child")?;
@@ -984,7 +984,7 @@ fn parse_fixed_rule(
     struct DuplicateBindingError(#[label] SourceSpan);
 
     for (a, v) in aggr.iter().zip(head.iter()) {
-        ensure!(!a.is_aggregated(), AggrInfixedError(v.span))
+        ensure!(!a.is_aggregated(), AggrInfixedError(v.span()))
     }
 
     let mut seen_bindings = BTreeSet::new();
@@ -1323,7 +1323,7 @@ fn parse_read_validity_clause(
             let var_pair = children.need("a child")?;
             let mut var = Symbol::new(var_pair.as_str(), var_pair.extract_span());
             if matches!(var.kind(), SymbolKind::Ignored) {
-                var.set_name(format!("*^*{}", *ignored_counter).into());
+                var.set_name(format!("*^*{}", *ignored_counter));
                 *ignored_counter += 1;
             }
             let sys = match children.next() {
@@ -1345,7 +1345,7 @@ fn parse_read_validity_clause(
             let var_pair = children.need("a child")?;
             let mut var = Symbol::new(var_pair.as_str(), var_pair.extract_span());
             if matches!(var.kind(), SymbolKind::Ignored) {
-                var.set_name(format!("*^*{}", *ignored_counter).into());
+                var.set_name(format!("*^*{}", *ignored_counter));
                 *ignored_counter += 1;
             }
             ValidityClause::Delta {
@@ -1386,7 +1386,7 @@ mod tests {
                 assert_eq!(fixed.head[0].to_string(), "a");
                 assert_eq!(fixed.head[1].to_string(), "b");
                 assert_eq!(fixed.arity()?, 2);
-                assert_eq!(fixed.fixed_handle.name().to_string(), "Constant");
+                assert_eq!(fixed.fixed_handle.name.to_string(), "Constant");
             }
             InputInlineRulesOrFixed::Rules { .. } => {
                 bail!("const `<-` entry must be Fixed(Constant), got Rules")

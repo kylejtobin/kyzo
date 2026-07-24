@@ -947,170 +947,9 @@ mod tests {
     use crate::value::test_rng::Rng;
 
     // ------------------------------------------------------------------
-    // Independent semantic comparator over owned datums: tag order, then
-    // per-kind law. Shares nothing with the encoder.
-    // ------------------------------------------------------------------
-
-    fn tag_of(d: &DataValue) -> Tag {
-        match d {
-            DataValue::Null => Tag::Null,
-            DataValue::Bool(_) => Tag::Bool,
-            DataValue::Num(_) => Tag::Num,
-            DataValue::Str(_) => Tag::Str,
-            DataValue::Bytes(_) => Tag::Bytes,
-            DataValue::Uuid(_) => Tag::Uuid,
-            DataValue::List(_) => Tag::List,
-            DataValue::Set(_) => Tag::Set,
-            DataValue::Regex(_) => Tag::Regex,
-            DataValue::Json(_) => Tag::Json,
-            DataValue::Vector(_) => Tag::Vector,
-            DataValue::Validity(_) => Tag::Validity,
-            DataValue::Interval(_) => Tag::Interval,
-            DataValue::Geometry(_) => Tag::Geometry,
-        }
-    }
-
-    fn semantic_cmp(a: &DataValue, b: &DataValue) -> Ordering {
-        let t = tag_of(a).cmp(&tag_of(b));
-        if t != Ordering::Equal {
-            return t;
-        }
-        match (a, b) {
-            (DataValue::Null, DataValue::Null) => Ordering::Equal,
-            (DataValue::Bool(x), DataValue::Bool(y)) => x.cmp(y),
-            (DataValue::Num(x), DataValue::Num(y)) => x.cmp(y),
-            (DataValue::Str(x), DataValue::Str(y)) => cmp_terminated(x.as_bytes(), y.as_bytes()),
-            (DataValue::Bytes(x), DataValue::Bytes(y)) => cmp_terminated(x, y),
-            (DataValue::Uuid(x), DataValue::Uuid(y)) => x.cmp(y),
-            (DataValue::List(x), DataValue::List(y)) => {
-                for (i, j) in x.iter().zip(y.iter()) {
-                    let c = semantic_cmp(i, j);
-                    if c != Ordering::Equal {
-                        return c;
-                    }
-                }
-                x.len().cmp(&y.len())
-            }
-            (DataValue::Set(x), DataValue::Set(y)) => {
-                for (i, j) in x.iter().zip(y.iter()) {
-                    let c = semantic_cmp(i, j);
-                    if c != Ordering::Equal {
-                        return c;
-                    }
-                }
-                x.len().cmp(&y.len())
-            }
-            (DataValue::Regex(a), DataValue::Regex(b)) => a
-                .flags()
-                .bits()
-                .cmp(&b.flags().bits())
-                .then(a.pattern().as_bytes().cmp(b.pattern().as_bytes())),
-            (DataValue::Json(x), DataValue::Json(y)) => semantic_json_cmp(x, y),
-            (DataValue::Vector(x), DataValue::Vector(y)) => {
-                x.dimension().cmp(&y.dimension()).then_with(|| {
-                    for (i, j) in x.components().zip(y.components()) {
-                        let c = Num::float(i.get()).cmp(&Num::float(j.get()));
-                        if c != Ordering::Equal {
-                            return c;
-                        }
-                    }
-                    Ordering::Equal
-                })
-            }
-            (DataValue::Validity(x), DataValue::Validity(y)) => x.cmp_as_of_order(*y),
-            (DataValue::Interval(x), DataValue::Interval(y)) => semantic_interval_cmp(x, y),
-            (DataValue::Geometry(x), DataValue::Geometry(y)) => x.cmp(y),
-            // Tags already compared equal: mismatched kinds are uninhabited.
-            // Total without abort — Equal is the seal (same tag already).
-            (left, right) => tag_of(left).cmp(&tag_of(right))
-        }
-    }
-
-    /// Independent mirror of the JSON grammar's deterministic order.
-    fn semantic_json_cmp(a: &Json, b: &Json) -> Ordering {
-        fn rank(j: &Json) -> u8 {
-            match j {
-                Json::Null => 0x05,
-                Json::Bool(false) => 0x06,
-                Json::Bool(true) => 0x07,
-                Json::Num(_) => 0x10,
-                Json::Str(_) => 0x18,
-                Json::Arr(_) => 0x48,
-                Json::Obj(_) => 0x4C,
-            }
-        }
-        let r = rank(a).cmp(&rank(b));
-        if r != Ordering::Equal {
-            return r;
-        }
-        match (a, b) {
-            (Json::Null, Json::Null)
-            | (Json::Bool(false), Json::Bool(false))
-            | (Json::Bool(true), Json::Bool(true)) => Ordering::Equal,
-            (Json::Num(x), Json::Num(y)) => x.num().cmp(&y.num()),
-            (Json::Str(x), Json::Str(y)) => x.as_bytes().cmp(y.as_bytes()),
-            (Json::Arr(x), Json::Arr(y)) => {
-                for (i, j) in x.iter().zip(y.iter()) {
-                    let c = semantic_json_cmp(i, j);
-                    if c != Ordering::Equal {
-                        return c;
-                    }
-                }
-                x.len().cmp(&y.len())
-            }
-            (Json::Obj(x), Json::Obj(y)) => {
-                for ((ka, va), (kb, vb)) in x.entries().iter().zip(y.entries().iter()) {
-                    let c = ka
-                        .as_bytes()
-                        .cmp(kb.as_bytes())
-                        .then_with(|| semantic_json_cmp(va, vb));
-                    if c != Ordering::Equal {
-                        return c;
-                    }
-                }
-                x.entries().len().cmp(&y.entries().len())
-            }
-            // Ranks already compared equal: mismatched variants uninhabited.
-            // Total without abort — Equal is the seal (same rank already).
-            (left, right) => rank(left).cmp(&rank(right))
-        }
-    }
-
-    /// Independent mirror of the interval grammar's deterministic order.
-    fn semantic_interval_cmp(a: &Interval, b: &Interval) -> Ordering {
-        fn key(iv: &Interval) -> (u8, u8, i64, u8, i64) {
-            match iv.ends() {
-                None => (0x01, 0, 0, 0, 0),
-                Some((lo, hi)) => {
-                    let (lm, lt) = match lo {
-                        Lo::NegUnbounded => (0x01, 0),
-                        Lo::At(t) => (0x02, t),
-                    };
-                    let (hm, ht) = match hi {
-                        Hi::PosUnbounded => (0x01, 0),
-                        Hi::At(t) => (0x02, t),
-                    };
-                    (0x02, lm, lt, hm, ht)
-                }
-            }
-        }
-        let (af, alm, alt, ahm, aht) = key(a);
-        let (bf, blm, blt, bhm, bht) = key(b);
-        af.cmp(&bf)
-            .then(alm.cmp(&blm))
-            .then(alt.cmp(&blt))
-            .then(ahm.cmp(&bhm))
-            .then(aht.cmp(&bht))
-    }
-
-    /// Semantic string/bytes order: plain lexicographic — a prefix sorts
-    /// first. (Same as `[u8]::cmp`; named for clarity at call sites.)
-    fn cmp_terminated(a: &[u8], b: &[u8]) -> Ordering {
-        a.cmp(b)
-    }
-
-    // ------------------------------------------------------------------
-    // Laws.
+    // Laws. The one-law lock is codec bytes vs production DataValue::Ord
+    // (tag/cmp, which owns json_storage_cmp / interval_storage_cmp). A
+    // third test-side semantic mirror is a deleted duplicate authority.
     // ------------------------------------------------------------------
 
     const U1: [u8; 16] = [0x11; 16];
@@ -1224,8 +1063,8 @@ mod tests {
         Ok(out)
     }
 
-    /// THE one-law triple on the edge corpus: canonical byte order ==
-    /// `DataValue::Ord` == independent semantic order. Every pair.
+    /// THE one-law lock on the edge corpus: canonical byte order ==
+    /// production `DataValue::Ord` (`tag` + `cmp`). Every pair.
     #[test]
     fn law_order_embedding_edge_corpus() -> Result<()> {
         let corpus = edge_datums()?;
@@ -1234,17 +1073,20 @@ mod tests {
             for j in 0..corpus.len() {
                 let byte = encoded[i].as_bytes().cmp(encoded[j].as_bytes());
                 let structural = corpus[i].cmp(&corpus[j]);
-                let semantic = semantic_cmp(&corpus[i], &corpus[j]);
                 assert_eq!(
                     byte, structural,
                     "byte order != Ord: {:?} vs {:?}",
                     corpus[i], corpus[j]
                 );
-                assert_eq!(
-                    structural, semantic,
-                    "Ord != semantic: {:?} vs {:?}",
-                    corpus[i], corpus[j]
-                );
+                if corpus[i].tag() != corpus[j].tag() {
+                    assert_eq!(
+                        corpus[i].tag().cmp(&corpus[j].tag()),
+                        byte,
+                        "cross-kind DataValue::tag order != byte: {:?} vs {:?}",
+                        corpus[i],
+                        corpus[j]
+                    );
+                }
             }
         }
         Ok(())
@@ -1364,9 +1206,9 @@ mod tests {
         Ok(())
     }
 
-    /// Randomized one-law triple + round-trip: generated scalars and
+    /// Randomized one-law lock + round-trip: generated scalars and
     /// shallow sequences, adversarial alphabets (NUL-heavy strings),
-    /// every kind including Interval.
+    /// every kind including Interval. Codec bytes vs production Ord only.
     #[test]
     fn law_order_embedding_randomized() -> Result<()> {
         let mut rng = Rng(0xC0FFEE);
@@ -1379,15 +1221,9 @@ mod tests {
             for j in 0..corpus.len() {
                 let byte = encoded[i].as_bytes().cmp(encoded[j].as_bytes());
                 let structural = corpus[i].cmp(&corpus[j]);
-                let semantic = semantic_cmp(&corpus[i], &corpus[j]);
                 assert_eq!(
                     byte, structural,
                     "random byte != Ord: {:?} vs {:?}",
-                    corpus[i], corpus[j]
-                );
-                assert_eq!(
-                    structural, semantic,
-                    "random Ord != semantic: {:?} vs {:?}",
                     corpus[i], corpus[j]
                 );
             }
@@ -1425,7 +1261,7 @@ mod tests {
             DataValue::Geometry(Geometry::from_cells(0, 0)),
         ];
         // Cross-kind: every pair is comparable; PartialOrd never None;
-        // cmp never panics; byte == Ord == semantic.
+        // cmp never panics; byte == Ord (production tag/cmp).
         for a in &kinds {
             for b in &kinds {
                 let partial = a.partial_cmp(b);
@@ -1433,12 +1269,14 @@ mod tests {
                 let structural = a.cmp(b);
                 assert_eq!(partial, Some(structural));
                 let byte = encode_owned(a).as_bytes().cmp(encode_owned(b).as_bytes());
-                let semantic = semantic_cmp(a, b);
                 assert_eq!(byte, structural, "cross-kind byte != Ord: {a:?} vs {b:?}");
-                assert_eq!(
-                    structural, semantic,
-                    "cross-kind Ord != semantic: {a:?} vs {b:?}"
-                );
+                if a.tag() != b.tag() {
+                    assert_eq!(
+                        a.tag().cmp(&b.tag()),
+                        byte,
+                        "cross-kind DataValue::tag != byte: {a:?} vs {b:?}"
+                    );
+                }
             }
         }
         // NaN hole closed inside Num: every NaN bit pattern is one Num,
