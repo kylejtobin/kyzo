@@ -776,7 +776,7 @@ enum GraphProofRefuse {
 }
 #[cfg(test)]
 impl GraphProofRefuse {
-    fn require(self, cond: bool) -> Result<(), Self> {
+    fn require(self, cond: bool) -> Result<(), GraphProofRefuse> {
         if cond {
             Ok(())
         } else {
@@ -784,7 +784,7 @@ impl GraphProofRefuse {
         }
     }
 
-    fn require_eq<T: PartialEq>(self, got: T, want: T) -> Result<(), Self> {
+    fn require_eq<T: PartialEq>(self, got: T, want: T) -> Result<(), GraphProofRefuse> {
         self.require(got == want)
     }
 }

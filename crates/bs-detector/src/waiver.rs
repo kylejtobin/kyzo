@@ -396,7 +396,7 @@ enum WaiverProofRefuse {
 }
 #[cfg(test)]
 impl WaiverProofRefuse {
-    fn require(self, cond: bool) -> Result<(), Self> {
+    fn require(self, cond: bool) -> Result<(), WaiverProofRefuse> {
         if cond {
             Ok(())
         } else {

@@ -135,7 +135,7 @@ enum IdentityProofRefuse {
 }
 #[cfg(test)]
 impl IdentityProofRefuse {
-    fn require(self, cond: bool) -> Result<(), Self> {
+    fn require(self, cond: bool) -> Result<(), IdentityProofRefuse> {
         if cond {
             Ok(())
         } else {

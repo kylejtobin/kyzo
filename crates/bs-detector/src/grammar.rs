@@ -1109,7 +1109,7 @@ enum GrammarProofRefuse {
 }
 #[cfg(test)]
 impl GrammarProofRefuse {
-    fn require(self, cond: bool) -> Result<(), Self> {
+    fn require(self, cond: bool) -> Result<(), GrammarProofRefuse> {
         if cond {
             Ok(())
         } else {

@@ -1388,7 +1388,7 @@ enum ShapeProofRefuse {
 }
 #[cfg(test)]
 impl ShapeProofRefuse {
-    fn require(self, cond: bool) -> Result<(), Self> {
+    fn require(self, cond: bool) -> Result<(), ShapeProofRefuse> {
         if cond {
             Ok(())
         } else {
@@ -1396,7 +1396,7 @@ impl ShapeProofRefuse {
         }
     }
 
-    fn require_eq<T: PartialEq>(self, got: T, want: T) -> Result<(), Self> {
+    fn require_eq<T: PartialEq>(self, got: T, want: T) -> Result<(), ShapeProofRefuse> {
         self.require(got == want)
     }
 }

@@ -449,7 +449,7 @@ enum AliasProofRefuse {
 }
 #[cfg(test)]
 impl AliasProofRefuse {
-    fn require(self, cond: bool) -> Result<(), Self> {
+    fn require(self, cond: bool) -> Result<(), AliasProofRefuse> {
         if cond {
             Ok(())
         } else {

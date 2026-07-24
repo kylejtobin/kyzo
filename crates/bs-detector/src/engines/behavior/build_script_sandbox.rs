@@ -825,7 +825,7 @@ enum BuildScriptSandboxProofRefuse {
 }
 #[cfg(test)]
 impl BuildScriptSandboxProofRefuse {
-    fn require(self, cond: bool) -> Result<(), Self> {
+    fn require(self, cond: bool) -> Result<(), BuildScriptSandboxProofRefuse> {
         if cond {
             Ok(())
         } else {
@@ -833,7 +833,7 @@ impl BuildScriptSandboxProofRefuse {
         }
     }
 
-    fn require_eq<T: PartialEq>(self, got: T, want: T) -> Result<(), Self> {
+    fn require_eq<T: PartialEq>(self, got: T, want: T) -> Result<(), BuildScriptSandboxProofRefuse> {
         self.require(got == want)
     }
 }

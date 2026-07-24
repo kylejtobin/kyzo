@@ -336,7 +336,7 @@ enum CitationProofRefuse {
 }
 #[cfg(test)]
 impl CitationProofRefuse {
-    fn require(self, cond: bool) -> Result<(), Self> {
+    fn require(self, cond: bool) -> Result<(), CitationProofRefuse> {
         if cond {
             Ok(())
         } else {

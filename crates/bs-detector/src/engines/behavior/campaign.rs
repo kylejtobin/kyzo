@@ -254,7 +254,7 @@ enum CampaignProofRefuse {
 }
 #[cfg(test)]
 impl CampaignProofRefuse {
-    fn require(self, cond: bool) -> Result<(), Self> {
+    fn require(self, cond: bool) -> Result<(), CampaignProofRefuse> {
         if cond {
             Ok(())
         } else {

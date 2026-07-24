@@ -263,7 +263,7 @@ enum PureRustProofRefuse {
 }
 #[cfg(test)]
 impl PureRustProofRefuse {
-    fn require(self, cond: bool) -> Result<(), Self> {
+    fn require(self, cond: bool) -> Result<(), PureRustProofRefuse> {
         if cond {
             Ok(())
         } else {

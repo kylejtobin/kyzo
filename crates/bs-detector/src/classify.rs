@@ -1280,7 +1280,7 @@ enum ClassifyProofRefuse {
 }
 #[cfg(test)]
 impl ClassifyProofRefuse {
-    fn require(self, cond: bool) -> Result<(), Self> {
+    fn require(self, cond: bool) -> Result<(), ClassifyProofRefuse> {
         if cond {
             Ok(())
         } else {
