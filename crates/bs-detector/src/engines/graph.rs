@@ -295,7 +295,11 @@ impl GraphLaw {
                         continue;
                     }
                     let key = (*a, *b);
-                    let n = inter.get(&key).copied().unwrap_or(0) + 1;
+                    let n = if let Some(c) = inter.get(&key) {
+                        *c + 1
+                    } else {
+                        1
+                    };
                     inter.insert(key, n);
                 }
             }
