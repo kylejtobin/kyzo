@@ -582,7 +582,7 @@ fn bite_campaign_artifact() -> BiteOutcome {
         86_400,
         vec![bs_detector::boundary::RelPath::admit(src_rel)],
     )];
-    let hits = CAMPAIGN.verify_campaigns(root, &seats);
+    let hits = CAMPAIGN.verify_campaigns(root, &seats, 1);
     P.require(hits.iter()
             .any(|h| h.construct().starts_with("campaign_specimen_unflagged:")), BiteProofRefuse::Behavior)?;
     Ok(())

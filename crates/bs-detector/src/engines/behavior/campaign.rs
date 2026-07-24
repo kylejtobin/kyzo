@@ -14,7 +14,6 @@
 //! fails meta regardless of hashes and timestamp.
 
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 
@@ -184,11 +183,13 @@ impl CampaignArtifact {
     }
 
     /// Build a fresh artifact from live source bytes + specimen verdict.
+    /// `timestamp_unix` is host-injected — this crate never reads the wall clock.
     pub fn mint(
         name: &str,
         repo_root: &Path,
         sources: &[String],
         specimen_verdict: SpecimenVerdict,
+        timestamp_unix: u64,
     ) -> Result<Self, ArtifactRefuse> {
         let mut out = Vec::with_capacity(sources.len());
         for rel in sources {
@@ -202,10 +203,6 @@ impl CampaignArtifact {
                 digest.to_hex().to_string(),
             ));
         }
-        let timestamp_unix = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
         Ok(Self::admit(name, timestamp_unix, specimen_verdict, out))
     }
 
@@ -233,13 +230,6 @@ pub struct CampaignLaw;
 pub const CAMPAIGN: CampaignLaw = CampaignLaw;
 
 impl CampaignLaw {
-    fn now_unix(&self) -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0)
-    }
-
     fn live_blake3(&self, repo_root: &Path, rel: &str) -> Result<String, ArtifactRefuse> {
         let bytes = std::fs::read(repo_root.join(rel))
             .map_err(|e| ArtifactRefuse::Io(Label::admit(format!("reading {rel}: {e}"))))?;
@@ -248,7 +238,15 @@ impl CampaignLaw {
 
     /// Meta pass over every seated campaign. Proof law: specimen ≠ flagged →
     /// red regardless of hashes and timestamp.
-    pub fn verify_campaigns(&self, repo_root: &Path, seats: &[CampaignSeat]) -> Vec<Hit> {
+    ///
+    /// `now_unix` is the host observation instant — this crate never reads the
+    /// wall clock (nondeterminism ban).
+    pub fn verify_campaigns(
+        &self,
+        repo_root: &Path,
+        seats: &[CampaignSeat],
+        now_unix: u64,
+    ) -> Vec<Hit> {
         let mut hits = Vec::new();
         for seat in seats {
             let art_path = repo_root
@@ -288,8 +286,14 @@ impl CampaignLaw {
                 ));
             }
 
-            let now = self.now_unix();
-            if now.saturating_sub(artifact.timestamp_unix()) > seat.freshness_bound_secs() {
+            // INVARIANT(CampaignFreshness): age is only defined when observation
+            // instant is at/after the artifact stamp; a future stamp is treated
+            // as age 0 (not stale), never as wrapping underflow.
+            let age = match now_unix.checked_sub(artifact.timestamp_unix()) {
+                Some(secs) => secs,
+                None => 0,
+            };
+            if age > seat.freshness_bound_secs() {
                 hits.push(Hit::admit(
                     seat.artifact(),
                     1,
@@ -397,9 +401,11 @@ mod tests {
                 std::fs::create_dir_all(dir).map_err(|_| CampaignProofRefuse::MkdirArt)?;
             }
         }
+        // Fixed observation/stamp — tests never read the wall clock.
+        let stamp = 1_700_000_000_u64;
         let art = CampaignArtifact::admit(
             "build_script_sandbox",
-            CAMPAIGN.now_unix(),
+            stamp,
             SpecimenVerdict::Unflagged,
             vec![ArtifactSource::admit(src_rel, digest)],
         );
@@ -414,7 +420,7 @@ mod tests {
             86_400,
             vec![RelPath::admit(src_rel)],
         )];
-        let hits = CAMPAIGN.verify_campaigns(root, &seats);
+        let hits = CAMPAIGN.verify_campaigns(root, &seats, stamp);
         let unflagged = hits
             .iter()
             .any(|h| h.construct().starts_with("campaign_specimen_unflagged:"));

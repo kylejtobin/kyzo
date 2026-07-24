@@ -167,7 +167,9 @@ impl RunLaw {
         Ok(())
     }
 
-    pub fn run(&self, root: &Path, only: Option<&str>) -> Result<Verdict> {
+    /// `now_unix` is the host observation instant for campaign freshness.
+    /// The library never reads the wall clock.
+    pub fn run(&self, root: &Path, only: Option<&str>, now_unix: u64) -> Result<Verdict> {
         let bite_src = std::fs::read_to_string(root.join("crates/bs-detector/tests/bite_proofs.rs"))
             .with_context(|| "reading bite_proofs.rs — a gate without bite proofs may not run")?;
         let grammar = Grammar::load(
@@ -373,7 +375,11 @@ impl RunLaw {
         if run_pass("campaign_artifact") {
             passes.push((
                 "campaign_artifact".to_string(),
-                behavior::campaign::CAMPAIGN.verify_campaigns(root, laws.campaigns()),
+                behavior::campaign::CAMPAIGN.verify_campaigns(
+                    root,
+                    laws.campaigns(),
+                    now_unix,
+                ),
             ));
         }
 
@@ -568,7 +574,9 @@ mod tests {
     #[test]
     fn anti_fraud_counts_line_meters_unclassified_fn_exactly() -> TestResult {
         let dir = R.stage_root_with_free_fn("fn free_unseated() {}\n")?;
-        let v = RUN.run(dir.path(), Some("unclassified-fn")).map_err(|_| RunProofRefuse::Run)?;
+        let v = RUN
+            .run(dir.path(), Some("unclassified-fn"), 0)
+            .map_err(|_| RunProofRefuse::Run)?;
         let n = v
             .report()
             .lines()

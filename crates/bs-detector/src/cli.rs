@@ -43,6 +43,10 @@ struct Cli {
     /// Print findings without writing the log/counts artifacts.
     #[arg(long)]
     dry_run: bool,
+    /// Host observation instant (unix seconds) for campaign freshness.
+    /// Required — the detector never reads the wall clock.
+    #[arg(long)]
+    now_unix: u64,
 }
 
 impl CliLaw {
@@ -65,7 +69,7 @@ impl CliLaw {
             .with_context(|| format!("resolving root {}", cli.root.display()))?;
 
         let only = cli.only.as_ref().map(|l| l.as_str());
-        let v = crate::run::RUN.run(&root, only)?;
+        let v = crate::run::RUN.run(&root, only, cli.now_unix)?;
 
         println!("{}", v.header());
         print!("{}", v.report());
