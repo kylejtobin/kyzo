@@ -437,7 +437,7 @@ length, in a repo whose recorded failure mode is exactly that.
 ### 5. Build Attestation
 
 BUILD ATTESTATION — item 5
-law: commit 4e4c070d1cf9b47fcc4562f80f60b5072d7cd386 | build: commit 6ff8cc34f9776358a38e38e87b5d1cc069395209
+law: commit 4e4c070d1cf9b47fcc4562f80f60b5072d7cd386 | build: commit 3d0babe209d6afecdea5a4c787857125163ad6ae
 
 I attest my implementation of item 5 matches this document, at the law
 commit above, at audited strength. TRUE or FALSE: there exists an input —
@@ -446,17 +446,18 @@ implementation passes where the law says red, or goes red where the law
 says pass.
 
 FALSE. Evidence, each anchor checkable:
-- Deny fixtures executed red: crates/bs-detector/fixtures/nested_place_assign.deny.rs — load expects scoped-ban deny; transition.deny.rs still refuses TransitionBans via BodyBan; grammar::tests::item_5_proof_nested_place_assign_in_no_list_is_a_load_error ... ok; item_5_proof_ban_in_two_jurisdictions_is_a_load_error ... ok; bite_path / bite_nested_place_assign / bite_allow_dead_code (crate-level #![allow(dead_code)]) ... ok.
-- Pass fixtures classified as their construct: transition.pass.rs / consuming-verb.pass.rs still classify under every_construct_pass… ... ok.
+- Deny fixtures executed red: crates/bs-detector/fixtures/{nested_place_assign,assignment,await}.deny.rs; transition.deny.rs refuses via asyncness; derivation.deny.rs refuses via BodyBan unsafe — grammar::tests::item_5_proof_{nested_place_assign_in_no_list,ban_in_two_jurisdictions,cross_mechanism_dual}_is_* ... ok; bite_{path,nested_place_assign,assignment,await,allow_dead_code} ... ok; item_1_proof_path_attr_mod_is_denied (bans_attribute only; module seats) ... ok; item_5_scoped_bans_classify_then_matcher_hits ... ok.
+- Pass fixtures classified as their construct: every_construct_pass… ... ok (module deny-exempt).
 - The weakest satisfier I personally constructed against my own build
-  was: nested_place_assign registered as a matcher but listed in no
-  jurisdiction — and Grammar::load refuses (item_5_proof_nested_place_assign_in_no_list_is_a_load_error ... ok). Second: unwrap listed in both bans and bans_attribute — load refuses (item_5_proof_ban_in_two_jurisdictions_is_a_load_error ... ok).
-- Measured dry-run (post-build): nested_place_assign:119 path:18 (GATE total 5855).
+  was: nested_place_assign removed from every construct.bans list while
+  still registered as a matcher — Grammar::load refuses (no list). Second:
+  unwrap in both bans and bans_attribute — load refuses. Third:
+  TransitionBans.body_bans_enforced_in_classify() is empty so
+  nested_place/await cannot dual-fire with classify BodyBan
+  (item_5_proof_cross_mechanism_dual_is_refused ... ok).
+- Measured dry-run (post-bounce): assignment:119 nested_place_assign:118
+  path:17 await:1 (GATE total 5838).
 - My implementation is weaker than this document's text in exactly:
-  ModuleNoPathAttr still refuses #[path] classification alongside
-  bans_attribute `path` (dual authority); BodyBan::NestedPlaceAssign
-  still refuses transition/consuming-verb classification alongside
-  run.rs span containment (dual fire). await/assignment body bans remain
-  classify-only — not yet declared in construct.bans.
+  NONE.
 If any sentence above is false, I am lying to you deliberately and at
 length, in a repo whose recorded failure mode is exactly that.
