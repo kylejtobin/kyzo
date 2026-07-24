@@ -13,14 +13,12 @@
 //! xtask <verb>`). There is no other door: no justfile, no scripts run
 //! directly, no floating toolchain. `cargo xtask gate` is the seal.
 //!
-//! Conduct policing (the old `resonance` verb) moved wholesale to the
-//! bs-detector crate: `cargo run --release -p bs-detector -- --root .` is
-//! that door now, with checks.toml/waivers.toml as its law and ledger.
+//! Conduct policing moved wholesale to the bs-detector crate.
+//! TRUTH item 10: pure_rust / unsafe_check / build_script_sandbox live
+//! in the detector (one coverage registry), not here.
 
 #![forbid(unsafe_code)]
 
-mod cargo_meta;
-mod checks;
 mod fsutil;
 mod gate;
 mod host_env;
@@ -32,20 +30,12 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
-/// The one closed sum of every verb's own closed refusal type. `main`'s
-/// dispatch match arm is the only place a per-verb error is converted into
-/// this — never a trait object, never an erased first-party failure
-/// (CLAUDE.md law 33): each variant still names exactly which verb's own
-/// typed error it carries.
 enum XtaskError {
     RepoRoot(anyhow::Error),
     Gate(gate::GateError),
     Process(proc::ProcessFailure),
     Bench(verbs::BenchRefuse),
     Dataset(verbs::DatasetRefuse),
-    UnsafeCheck(checks::unsafe_check::UnsafeCheckError),
-    PureRust(checks::pure_rust::PureRustError),
-    BuildScriptSandbox(checks::build_script_sandbox::BuildScriptSandboxError),
 }
 
 impl fmt::Display for XtaskError {
@@ -56,9 +46,6 @@ impl fmt::Display for XtaskError {
             XtaskError::Process(e) => write!(f, "{e}"),
             XtaskError::Bench(e) => write!(f, "{e}"),
             XtaskError::Dataset(e) => write!(f, "{e}"),
-            XtaskError::UnsafeCheck(e) => write!(f, "{e}"),
-            XtaskError::PureRust(e) => write!(f, "{e}"),
-            XtaskError::BuildScriptSandbox(e) => write!(f, "{e}"),
         }
     }
 }
@@ -86,16 +73,9 @@ enum Verb {
     Fmt,
     /// `cargo clippy --no-deps -- -D warnings` over every first-party package.
     Clippy,
-    /// The unsafe law: forbid present, zero allows, no lying docs.
-    Unsafe,
-    /// No C/C++-toolchain crate in the engine dependency tree.
-    PureRust,
-    /// Every build-script target, net-isolated and snapshot-diffed for
-    /// writes outside its own OUT_DIR.
-    BuildScriptSandbox,
     /// The full first-party test suite.
     Test,
-    /// The whole test suite under the `release-checked` profile (overflow-checks live).
+    /// The whole test suite under the `release-checked` profile.
     TestReleaseChecked,
     /// Run the freshly-built binary in the container.
     Run {
@@ -107,8 +87,7 @@ enum Verb {
         #[arg(trailing_var_arg = true)]
         graphs: Vec<String>,
     },
-    /// Fetch SNAP graphs per `bench/manifest.json` (URL + SHA-256); refuse
-    /// on digest mismatch. Replaces the condemned `scripts/fetch-bench-data.sh`.
+    /// Fetch SNAP graphs per `bench/manifest.json`.
     FetchBenchData,
     /// MPL header preservation over every tracked .rs file.
     MplHeaders,
@@ -122,19 +101,13 @@ enum Verb {
     FuzzSmoke,
     /// The cross-run/thread/architecture determinism campaign.
     DeterminismCampaign {
-        /// Where to write this run's digest.
         out: String,
-        /// An earlier run's digest to compare against (e.g. a downloaded
-        /// cross-architecture artifact).
         compare: Option<String>,
     },
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    // Validates we are being run from within the repo; no verb below
-    // consumes the path itself (each shells out relative to the container's
-    // working directory).
     if let Err(e) = fsutil::repo_root() {
         eprintln!("FAIL: {}", XtaskError::RepoRoot(e));
         return ExitCode::FAILURE;
@@ -146,11 +119,6 @@ fn main() -> ExitCode {
         Verb::Check => verbs::check().map_err(XtaskError::Process),
         Verb::Fmt => verbs::fmt().map_err(XtaskError::Process),
         Verb::Clippy => verbs::clippy().map_err(XtaskError::Process),
-        Verb::Unsafe => verbs::unsafe_check().map_err(XtaskError::UnsafeCheck),
-        Verb::PureRust => verbs::pure_rust().map_err(XtaskError::PureRust),
-        Verb::BuildScriptSandbox => {
-            verbs::build_script_sandbox().map_err(XtaskError::BuildScriptSandbox)
-        }
         Verb::Test => verbs::test().map_err(XtaskError::Process),
         Verb::TestReleaseChecked => verbs::test_release_checked().map_err(XtaskError::Process),
         Verb::Run { args } => verbs::run_bin(&args).map_err(XtaskError::Process),

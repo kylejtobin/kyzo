@@ -49,7 +49,6 @@ static PURE_SYS_RE: LazyLock<Regex> =
 
 #[derive(Debug)]
 pub enum PureRustError {
-    RepoRoot(anyhow::Error),
     Spawn(std::io::Error),
     TreeCommandFailed { package: String, output: String },
     NoPackageFound,
@@ -59,7 +58,6 @@ pub enum PureRustError {
 impl fmt::Display for PureRustError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PureRustError::RepoRoot(e) => write!(f, "could not locate workspace root: {e:#}"),
             PureRustError::Spawn(e) => write!(f, "pure-Rust gate: failed to spawn cargo: {e}"),
             PureRustError::TreeCommandFailed { package, output } => write!(
                 f,
@@ -81,11 +79,6 @@ impl fmt::Display for PureRustError {
 }
 
 impl std::error::Error for PureRustError {}
-
-pub fn check() -> Result<String, PureRustError> {
-    let repo_root = crate::fsutil::repo_root().map_err(PureRustError::RepoRoot)?;
-    check_at(&repo_root)
-}
 
 fn run_cargo(repo_root: &Path, args: &[&str]) -> std::io::Result<std::process::Output> {
     Command::new("cargo")
@@ -140,7 +133,7 @@ fn discover_roots(metadata: &CargoMetadata) -> Vec<String> {
 
 const KEEP_MANIFEST_OUTSIDE_WORKSPACE: bool = true;
 
-fn check_at(repo_root: &Path) -> Result<String, PureRustError> {
+pub fn check_at(repo_root: &Path) -> Result<String, PureRustError> {
     if !repo_root.join("Cargo.toml").is_file() {
         return Ok("pure-Rust gate: no Cargo workspace yet — armed but idle".to_string());
     }

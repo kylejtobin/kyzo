@@ -20,14 +20,21 @@ use anyhow::{Result, bail};
 use quote::ToTokens;
 use syn::visit::{self, Visit};
 
-use crate::boundary::SourceFile;
+use crate::boundary::{Label, RelPath, SourceFile};
+
+/// `(file, simple name)` key for alias edges — no `String` terminals.
+type AliasKey = (RelPath, Label);
+
+fn alias_key(file: &str, name: impl Into<Label>) -> AliasKey {
+    (RelPath::admit(file), name.into())
+}
 
 /// Validated alias table: constructible only via [`AliasTable::build`]
 /// (or [`AliasTable::empty`]), which has already refused every cycle.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct AliasTable {
     /// `(rel_path, simple name)` known to resolve to a string-carrying type.
-    string_names: BTreeSet<(String, String)>,
+    string_names: BTreeSet<AliasKey>,
 }
 
 impl AliasTable {
@@ -40,16 +47,16 @@ impl AliasTable {
     /// Collect every `type Name = …` and `use … as Rename` across `files`,
     /// refuse cycles, and seal the string-carrying name set.
     pub fn build(files: &[&SourceFile]) -> Result<Self> {
-        let mut edges: BTreeMap<(String, String), syn::Type> = BTreeMap::new();
+        let mut edges: BTreeMap<AliasKey, syn::Type> = BTreeMap::new();
         for f in files {
             collect_file(f, &mut edges)?;
         }
         let raw = RawEdges { edges };
         let mut string_names = BTreeSet::new();
-        let keys: Vec<(String, String)> = raw.edges.keys().cloned().collect();
+        let keys: Vec<AliasKey> = raw.edges.keys().cloned().collect();
         for (file, name) in keys {
             let mut stack = BTreeSet::new();
-            if raw.resolve_name_is_string(&file, &name, &mut stack)? {
+            if raw.resolve_name_is_string(file.as_str(), name.as_str(), &mut stack)? {
                 string_names.insert((file, name));
             }
         }
@@ -86,7 +93,7 @@ impl AliasTable {
                 if tp.path.segments.len() == 1 {
                     if let Some(seg) = tp.path.segments.last() {
                         let name = seg.ident.to_string();
-                        return self.string_names.contains(&(file.to_string(), name));
+                        return self.string_names.contains(&alias_key(file, name));
                     }
                 }
                 false
@@ -98,7 +105,7 @@ impl AliasTable {
 
 /// Unvalidated edge bag — exists only inside [`AliasTable::build`].
 struct RawEdges {
-    edges: BTreeMap<(String, String), syn::Type>,
+    edges: BTreeMap<AliasKey, syn::Type>,
 }
 
 impl RawEdges {
@@ -108,7 +115,7 @@ impl RawEdges {
         name: &str,
         stack: &mut BTreeSet<String>,
     ) -> Result<bool> {
-        let Some(rhs) = self.edges.get(&(file.to_string(), name.to_string())) else {
+        let Some(rhs) = self.edges.get(&alias_key(file, name)) else {
             return Ok(false);
         };
         let cycle_key = format!("{file}::{name}");
@@ -316,13 +323,13 @@ fn path_is_string_terminal(path: &syn::Path) -> bool {
 }
 
 fn insert_edge(
-    edges: &mut BTreeMap<(String, String), syn::Type>,
-    ambiguous: &mut BTreeSet<(String, String)>,
+    edges: &mut BTreeMap<AliasKey, syn::Type>,
+    ambiguous: &mut BTreeSet<AliasKey>,
     file: &str,
     name: String,
     rhs: syn::Type,
 ) {
-    let key = (file.to_string(), name);
+    let key = alias_key(file, name);
     if ambiguous.contains(&key) {
         return;
     }
@@ -344,8 +351,8 @@ fn collect_use_renames(
     tree: &syn::UseTree,
     prefix: &[String],
     file: &str,
-    edges: &mut BTreeMap<(String, String), syn::Type>,
-    ambiguous: &mut BTreeSet<(String, String)>,
+    edges: &mut BTreeMap<AliasKey, syn::Type>,
+    ambiguous: &mut BTreeSet<AliasKey>,
 ) {
     match tree {
         syn::UseTree::Path(p) => {
@@ -389,12 +396,12 @@ fn collect_use_renames(
 
 fn collect_file(
     file: &SourceFile,
-    edges: &mut BTreeMap<(String, String), syn::Type>,
+    edges: &mut BTreeMap<AliasKey, syn::Type>,
 ) -> Result<()> {
     struct V<'a> {
         file: &'a str,
-        edges: &'a mut BTreeMap<(String, String), syn::Type>,
-        ambiguous: BTreeSet<(String, String)>,
+        edges: &'a mut BTreeMap<AliasKey, syn::Type>,
+        ambiguous: BTreeSet<AliasKey>,
     }
     impl<'ast> Visit<'ast> for V<'_> {
         fn visit_item_type(&mut self, node: &'ast syn::ItemType) {

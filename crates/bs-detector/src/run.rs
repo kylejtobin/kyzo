@@ -19,54 +19,72 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use crate::alias::AliasTable;
-use crate::boundary::{Boundary, SourceFile};
+use crate::boundary::{Boundary, Label, SourceFile};
 use crate::citation;
 use crate::classify;
-use crate::engines::{Hit, graph, meta, shape};
+use crate::engines::{Hit, behavior, graph, meta, shape};
 use crate::grammar::{Grammar, Laws};
 use crate::identity;
 use crate::waiver::WaiverFile;
 
+/// Whether the gate run is green or red — stored as a sum, never a bool field
+/// (TRUTH item 9 / rust-values: a domain decision is not a bit).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GateColor {
+    Pass,
+    Fail,
+}
+
 /// Gate outcome — frozen contract for the log and counts artifact.
 ///
 /// Fields are private (TRUTH item 9). [`Verdict::admit`] is the sole
-/// constructor.
+/// constructor. Text fields are [`Label`]; pass/fail is [`GateColor`].
 pub struct Verdict {
     /// `GATE: PASS` or `GATE: FAIL <check, …>` — frozen contract.
-    header: String,
+    header: Label,
     /// One `FAIL file:line — construct — law` line per violation, plus
     /// `SCOPE`/stale lines.
-    report: String,
+    report: Label,
     /// `name:N … = TOTAL violations` — frozen contract for the banner.
-    counts_line: String,
-    red: bool,
+    counts_line: Label,
+    color: GateColor,
 }
 
 impl Verdict {
     /// Sole admission constructor.
-    pub fn admit(header: String, report: String, counts_line: String, red: bool) -> Self {
+    pub fn admit(
+        header: impl Into<Label>,
+        report: impl Into<Label>,
+        counts_line: impl Into<Label>,
+        color: GateColor,
+    ) -> Self {
         Self {
-            header,
-            report,
-            counts_line,
-            red,
+            header: header.into(),
+            report: report.into(),
+            counts_line: counts_line.into(),
+            color,
         }
     }
 
     pub fn header(&self) -> &str {
-        &self.header
+        self.header.as_str()
     }
 
     pub fn report(&self) -> &str {
-        &self.report
+        self.report.as_str()
     }
 
     pub fn counts_line(&self) -> &str {
-        &self.counts_line
+        self.counts_line.as_str()
     }
 
+    pub fn color(&self) -> GateColor {
+        self.color
+    }
+
+    /// Process-exit helper: true when the gate is red.
     pub fn red(&self) -> bool {
-        self.red
+        matches!(self.color, GateColor::Fail)
     }
 }
 
@@ -99,6 +117,9 @@ fn waivable(grammar: &Grammar, check: &str) -> bool {
             | "unparsed"
             | "stale_waivers"
             | "dead_citation"
+            | "pure_rust"
+            | "unsafe_check"
+            | "campaign_artifact"
     )
 }
 
@@ -201,7 +222,7 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
         || condemned_names.iter().any(|n| run_pass(n));
     let all_files: Vec<&SourceFile> = b.files().iter().collect();
     let aliases = if need_classify
-        || grammar.constructs().iter().any(|c| !c.bans.is_empty())
+        || grammar.constructs().iter().any(|c| !c.bans().is_empty())
     {
         Some(
             AliasTable::build(&all_files)
@@ -251,7 +272,7 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
     {
         let mut scoped_ban_names: BTreeSet<&str> = BTreeSet::new();
         for c in grammar.constructs() {
-            for ban in &c.bans {
+            for ban in c.bans() {
                 scoped_ban_names.insert(ban.as_str());
             }
         }
@@ -274,9 +295,9 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
                     let raw = shape::run_matcher(m, f);
                     for h in raw {
                         let inside = spans.iter().any(|s| {
-                            s.bans.iter().any(|b| b == name)
-                                && h.line() >= s.start_line
-                                && h.line() <= s.end_line
+                            s.bans().iter().any(|b| b == name)
+                                && h.line() >= s.start_line()
+                                && h.line() <= s.end_line()
                         });
                         if inside {
                             hits.push(h);
@@ -326,6 +347,26 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
     }
     if run_pass("forbid_roots") {
         passes.push(("forbid_roots".to_string(), meta::forbid_roots(&b)));
+    }
+    // TRUTH item 10: live execution checks (ported from xtask/src/checks).
+    if run_pass("pure_rust") {
+        passes.push((
+            "pure_rust".to_string(),
+            behavior::pure_rust_hits(root),
+        ));
+    }
+    if run_pass("unsafe_check") {
+        passes.push((
+            "unsafe_check".to_string(),
+            behavior::unsafe_check_hits(root),
+        ));
+    }
+    // Campaign artifact meta (build_script_sandbox seated as campaign).
+    if run_pass("campaign_artifact") {
+        passes.push((
+            "campaign_artifact".to_string(),
+            behavior::campaign::verify_campaigns(root, laws.campaigns()),
+        ));
     }
 
     for (check, raw) in passes {
@@ -413,11 +454,14 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
     }
 
     let total: usize = counts.values().sum();
-    let red = !failed.is_empty();
-    let header = if red {
-        format!("GATE: FAIL {}", failed.join(", "))
+    let color = if failed.is_empty() {
+        GateColor::Pass
     } else {
-        "GATE: PASS".to_string()
+        GateColor::Fail
+    };
+    let header = match color {
+        GateColor::Fail => format!("GATE: FAIL {}", failed.join(", ")),
+        GateColor::Pass => "GATE: PASS".to_string(),
     };
     let counts_line = {
         let mut parts: Vec<(&String, &usize)> = counts.iter().filter(|(_, n)| **n > 0).collect();
@@ -426,7 +470,7 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
         format!("{} = {total} violations", body.join(" "))
     };
 
-    Ok(Verdict::admit(header, report, counts_line, red))
+    Ok(Verdict::admit(header, report, counts_line, color))
 }
 
 #[cfg(test)]

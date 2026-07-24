@@ -18,12 +18,11 @@
 //! - [`shape`]: banned-shape predicates (named matchers over one site).
 //! - [`graph`]: relational passes (no single site is the whole lie).
 //! - [`meta`]: meta passes (the detector policing its own run).
-//!
-//! Unbuilt under `engines/`: no `behavior` module (execution-only lies are
-//! not seated here yet).
+//! - [`behavior`]: execution checks and campaigns (TRUTH item 10).
 
 use crate::boundary::{Label, RelPath};
 
+pub mod behavior;
 pub mod graph;
 pub mod meta;
 pub mod shape;

@@ -36,6 +36,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
+use crate::boundary::{Label, RelPath};
 use crate::engines::shape;
 
 /// Every kind of item syn can hand the classifier, closed at the pinned
@@ -388,13 +389,31 @@ impl StructuralRule {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConstructDef {
-    pub name: String,
-    pub kind: ConstructFamily,
-    pub rule: StructuralRule,
+    name: Label,
+    kind: ConstructFamily,
+    rule: StructuralRule,
     /// Construct-scoped bans (TRUTH item 5 jurisdiction (c)). Empty by
     /// default; attributed by span containment in `run.rs`.
     #[serde(default)]
-    pub bans: Vec<String>,
+    bans: Vec<Label>,
+}
+
+impl ConstructDef {
+    pub fn name(&self) -> &str {
+        self.name.as_str()
+    }
+
+    pub fn kind(&self) -> ConstructFamily {
+        self.kind
+    }
+
+    pub fn rule(&self) -> StructuralRule {
+        self.rule
+    }
+
+    pub fn bans(&self) -> &[Label] {
+        &self.bans
+    }
 }
 
 /// One declared receiverless-fn seat: file + fn path + site hash, all
@@ -403,10 +422,28 @@ pub struct ConstructDef {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FnSeat {
-    pub file: String,
-    pub fn_path: String,
-    pub site_hash: String,
-    pub io: bool,
+    file: RelPath,
+    fn_path: Label,
+    site_hash: Label,
+    io: bool,
+}
+
+impl FnSeat {
+    pub fn file(&self) -> &str {
+        self.file.as_str()
+    }
+
+    pub fn fn_path(&self) -> &str {
+        self.fn_path.as_str()
+    }
+
+    pub fn site_hash(&self) -> &str {
+        self.site_hash.as_str()
+    }
+
+    pub fn io(&self) -> bool {
+        self.io
+    }
 }
 
 /// A host crate's sealed-public-door import allowlist (item 2 relational).
@@ -416,8 +453,26 @@ pub struct FnSeat {
 #[serde(deny_unknown_fields)]
 pub struct HostDoor {
     /// Repo-root-relative directory prefix, e.g. `crates/kyzo-bin/`.
-    pub path: String,
-    pub allowed_imports: Vec<String>,
+    path: RelPath,
+    allowed_imports: Vec<Label>,
+}
+
+impl HostDoor {
+    /// Sole non-deserialize admission (tests / harnesses).
+    pub fn admit(path: impl Into<RelPath>, allowed_imports: Vec<Label>) -> Self {
+        Self {
+            path: path.into(),
+            allowed_imports,
+        }
+    }
+
+    pub fn path(&self) -> &str {
+        self.path.as_str()
+    }
+
+    pub fn allowed_imports(&self) -> &[Label] {
+        &self.allowed_imports
+    }
 }
 
 /// Config-once seat for one binary crate (item 2 relational): env/args
@@ -426,15 +481,33 @@ pub struct HostDoor {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigOnceSeat {
-    pub path: String,
-    pub fn_path: String,
+    path: RelPath,
+    fn_path: Label,
+}
+
+impl ConfigOnceSeat {
+    /// Sole non-deserialize admission (tests / harnesses).
+    pub fn admit(path: impl Into<RelPath>, fn_path: impl Into<Label>) -> Self {
+        Self {
+            path: path.into(),
+            fn_path: fn_path.into(),
+        }
+    }
+
+    pub fn path(&self) -> &str {
+        self.path.as_str()
+    }
+
+    pub fn fn_path(&self) -> &str {
+        self.fn_path.as_str()
+    }
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct KindsSection {
     condemned: Vec<KindName>,
-    seated: BTreeMap<KindName, Vec<String>>,
+    seated: BTreeMap<KindName, Vec<Label>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -450,9 +523,9 @@ struct SeatsSection {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct GrammarFile {
-    bans_absolute: Vec<String>,
-    bans: Vec<String>,
-    bans_attribute: Vec<String>,
+    bans_absolute: Vec<Label>,
+    bans: Vec<Label>,
+    bans_attribute: Vec<Label>,
     kinds: KindsSection,
     construct: Vec<ConstructDef>,
     seats: SeatsSection,
@@ -461,9 +534,9 @@ struct GrammarFile {
 /// What the kind table says about one kind.
 pub enum Disposition<'a> {
     /// Red on sight, reported under this laws.toml check name.
-    Condemned(&'static str),
+    Condemned { law: Label },
     /// May classify only as one of these construct names.
-    Seated(&'a [String]),
+    Seated(&'a [Label]),
 }
 
 /// The loaded, validated grammar.
@@ -472,14 +545,14 @@ pub enum Disposition<'a> {
 /// admission door; engines read through accessors.
 pub struct Grammar {
     /// Banned shapes no waiver can cover (expression jurisdiction).
-    bans_absolute: Vec<String>,
+    bans_absolute: Vec<Label>,
     /// Banned shapes a waiver may cover, one entry per hit (expression).
-    bans: Vec<String>,
+    bans: Vec<Label>,
     /// Attribute-jurisdiction bans (item- and crate-level attributes).
-    bans_attribute: Vec<String>,
+    bans_attribute: Vec<Label>,
     constructs: Vec<ConstructDef>,
     condemned: BTreeSet<KindName>,
-    seated: BTreeMap<KindName, Vec<String>>,
+    seated: BTreeMap<KindName, Vec<Label>>,
     fn_seats: Vec<FnSeat>,
     hosts: Vec<HostDoor>,
     config_once: Vec<ConfigOnceSeat>,
@@ -689,10 +762,12 @@ impl Grammar {
         // Declared fn seats: all three coordinates, well-formed hash.
         let mut seat_keys: BTreeSet<(&str, &str)> = BTreeSet::new();
         for s in &parsed.seats.fns {
-            if s.file.trim().is_empty() || s.fn_path.trim().is_empty() {
+            if s.file.as_str().trim().is_empty() || s.fn_path.as_str().trim().is_empty() {
                 bail!("a [seats].fns entry with an empty file or fn_path matches nothing");
             }
-            if s.site_hash.len() != 64 || !s.site_hash.chars().all(|c| c.is_ascii_hexdigit()) {
+            if s.site_hash.as_str().len() != 64
+                || !s.site_hash.as_str().chars().all(|c| c.is_ascii_hexdigit())
+            {
                 bail!(
                     "seat `{}` in `{}` has a malformed site_hash — 64 hex chars or nothing",
                     s.fn_path,
@@ -718,10 +793,10 @@ impl Grammar {
         }
         let mut host_paths: BTreeSet<&str> = BTreeSet::new();
         for h in &parsed.seats.hosts {
-            if h.path.trim().is_empty() {
+            if h.path.as_str().trim().is_empty() {
                 bail!("a [seats].hosts entry with an empty path matches nothing");
             }
-            if !h.path.ends_with('/') {
+            if !h.path.ends_with("/") {
                 bail!(
                     "host path `{}` must end in `/` — a prefix without a slash silently overlaps neighbors",
                     h.path
@@ -733,10 +808,10 @@ impl Grammar {
         }
         let mut cfg_paths: BTreeSet<&str> = BTreeSet::new();
         for c in &parsed.seats.config_once {
-            if c.path.trim().is_empty() || c.fn_path.trim().is_empty() {
+            if c.path.as_str().trim().is_empty() || c.fn_path.as_str().trim().is_empty() {
                 bail!("a [seats].config_once entry with an empty path or fn_path matches nothing");
             }
-            if !c.path.ends_with('/') {
+            if !c.path.ends_with("/") {
                 bail!(
                     "config_once path `{}` must end in `/`",
                     c.path
@@ -834,7 +909,9 @@ impl Grammar {
     /// callers treat it as red, never as pass.
     pub fn disposition(&self, kind: KindName) -> Option<Disposition<'_>> {
         if self.condemned.contains(&kind) {
-            return kind.condemned_law_name().map(Disposition::Condemned);
+            return kind.condemned_law_name().map(|law| Disposition::Condemned {
+                law: Label::admit(law),
+            });
         }
         self.seated.get(&kind).map(|s| Disposition::Seated(s.as_slice()))
     }
@@ -850,18 +927,18 @@ impl Grammar {
     pub fn fn_seat(&self, file: &str, fn_path: &str) -> Option<&FnSeat> {
         self.fn_seats
             .iter()
-            .find(|s| s.file == file && s.fn_path == fn_path)
+            .find(|s| s.file.as_str() == file && s.fn_path.as_str() == fn_path)
     }
 
-    pub fn bans_absolute(&self) -> &[String] {
+    pub fn bans_absolute(&self) -> &[Label] {
         &self.bans_absolute
     }
 
-    pub fn bans(&self) -> &[String] {
+    pub fn bans(&self) -> &[Label] {
         &self.bans
     }
 
-    pub fn bans_attribute(&self) -> &[String] {
+    pub fn bans_attribute(&self) -> &[Label] {
         &self.bans_attribute
     }
 
@@ -885,22 +962,34 @@ impl Grammar {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct LawEntry {
+    name: Label,
+    law: Label,
+    caught_by: Label,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CampaignEntry {
     name: String,
-    law: String,
-    caught_by: String,
+    artifact: String,
+    freshness_bound_secs: u64,
+    sources: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct LawsFile {
     law: Vec<LawEntry>,
+    #[serde(default)]
+    campaign: Vec<CampaignEntry>,
 }
 
 /// The retained law ledger: check name → law text. `require` is the
 /// mechanical form of the coverage law: a check about to run with no law
 /// entry refuses the whole run.
 pub struct Laws {
-    by_name: BTreeMap<String, String>,
+    by_name: BTreeMap<Label, Label>,
+    campaigns: Vec<crate::engines::behavior::campaign::CampaignSeat>,
 }
 
 impl Laws {
@@ -911,19 +1000,45 @@ impl Laws {
             toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
         let mut by_name = BTreeMap::new();
         for e in parsed.law {
-            if e.caught_by.trim().is_empty() {
+            if e.caught_by.as_str().trim().is_empty() {
                 bail!("law `{}` names no catching mechanism — coverage unproven", e.name);
             }
             if by_name.insert(e.name.clone(), e.law).is_some() {
                 bail!("duplicate law entry `{}`", e.name);
             }
         }
-        Ok(Laws { by_name })
+        let mut campaigns = Vec::new();
+        for c in parsed.campaign {
+            if c.sources.is_empty() {
+                bail!("campaign `{}` declares no sources — refuse vacuous seat", c.name);
+            }
+            if c.artifact.trim().is_empty() {
+                bail!("campaign `{}` declares no artifact path", c.name);
+            }
+            if !by_name.keys().any(|k| k.as_str() == c.name) {
+                bail!(
+                    "campaign `{}` has no [[law]] entry — a campaign without a retained law may not seat",
+                    c.name
+                );
+            }
+            campaigns.push(crate::engines::behavior::campaign::CampaignSeat {
+                name: c.name,
+                artifact: c.artifact,
+                freshness_bound_secs: c.freshness_bound_secs,
+                sources: c.sources,
+            });
+        }
+        Ok(Laws { by_name, campaigns })
     }
 
     pub fn require(&self, check: &str) -> Result<&str> {
-        match self.by_name.get(check) {
-            Some(law) => Ok(law.as_str()),
+        match self
+            .by_name
+            .iter()
+            .find(|(k, _)| k.as_str() == check)
+            .map(|(_, v)| v.as_str())
+        {
+            Some(law) => Ok(law),
             None => bail!(
                 "check `{check}` has no entry in laws.toml — a check without a retained law may not run"
             ),
@@ -933,7 +1048,14 @@ impl Laws {
     /// Lookup for citation resolve (TRUTH item 7): a laws.toml law name
     /// citation hashes this text.
     pub fn get(&self, name: &str) -> Option<&str> {
-        self.by_name.get(name).map(|s| s.as_str())
+        self.by_name
+            .iter()
+            .find(|(k, _)| k.as_str() == name)
+            .map(|(_, v)| v.as_str())
+    }
+
+    pub fn campaigns(&self) -> &[crate::engines::behavior::campaign::CampaignSeat] {
+        &self.campaigns
     }
 }
 

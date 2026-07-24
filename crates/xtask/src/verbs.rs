@@ -124,33 +124,6 @@ pub fn clippy() -> Result<(), ProcessFailure> {
     run_step("clippy", clippy_cmd(OTHER_PACKAGES, &[]))
 }
 
-/// The unsafe law (story #322: ported from `scripts/check-unsafe.sh`,
-/// behavior-preserving): forbid present, zero allows, no doc claims a
-/// nonexistent exception.
-pub fn unsafe_check() -> Result<(), crate::checks::unsafe_check::UnsafeCheckError> {
-    let msg = crate::checks::unsafe_check::check()?;
-    println!("{msg}");
-    Ok(())
-}
-
-/// No C/C++-toolchain crate in the engine dependency tree (story #322:
-/// ported from `scripts/check-pure-rust.sh`, behavior-preserving).
-pub fn pure_rust() -> Result<(), crate::checks::pure_rust::PureRustError> {
-    let msg = crate::checks::pure_rust::check()?;
-    println!("{msg}");
-    Ok(())
-}
-
-/// Every build-script (`custom-build`) target in the full dependency graph
-/// runs net-isolated and is snapshot-diffed for stray writes (story #294:
-/// `crates/xtask/src/checks/build_script_sandbox.rs`).
-pub fn build_script_sandbox()
--> Result<(), crate::checks::build_script_sandbox::BuildScriptSandboxError> {
-    let msg = crate::checks::build_script_sandbox::check()?;
-    println!("{msg}");
-    Ok(())
-}
-
 /// Default config, lib + integration, across every first-party package.
 /// nextest runs each test in its own process — a wedged FUSE teardown
 /// kills one process and becomes a named, timed-out FAIL instead of a

@@ -50,11 +50,39 @@ pub fn classify_file(grammar: &Grammar, file: &SourceFile, aliases: &AliasTable)
 }
 
 /// Inclusive line span of one construct instance that declares construct-scoped bans.
+///
+/// Fields are private (TRUTH item 9). Sole admission is [`ScopedConstructSpan::admit`].
 #[derive(Clone, Debug)]
 pub struct ScopedConstructSpan {
-    pub start_line: usize,
-    pub end_line: usize,
-    pub bans: Vec<String>,
+    start_line: usize,
+    end_line: usize,
+    bans: Vec<crate::boundary::Label>,
+}
+
+impl ScopedConstructSpan {
+    pub fn admit(
+        start_line: usize,
+        end_line: usize,
+        bans: Vec<crate::boundary::Label>,
+    ) -> Self {
+        Self {
+            start_line,
+            end_line,
+            bans,
+        }
+    }
+
+    pub fn start_line(&self) -> usize {
+        self.start_line
+    }
+
+    pub fn end_line(&self) -> usize {
+        self.end_line
+    }
+
+    pub fn bans(&self) -> &[crate::boundary::Label] {
+        &self.bans
+    }
 }
 
 /// Spans of fn items whose *shape* matches a construct that lists construct-scoped
@@ -141,18 +169,18 @@ fn push_scoped_fn_span<T: syn::spanned::Spanned>(
     out: &mut Vec<ScopedConstructSpan>,
 ) {
     for c in ctx.grammar.constructs() {
-        if c.bans.is_empty() {
+        if c.bans().is_empty() {
             continue;
         }
-        if !shape_only_fn_matches(c.rule, sig, ctx) {
+        if !shape_only_fn_matches(c.rule(), sig, ctx) {
             continue;
         }
         let span = whole.span();
-        out.push(ScopedConstructSpan {
-            start_line: crate::boundary::span_line(&span),
-            end_line: span.end().line,
-            bans: c.bans.clone(),
-        });
+        out.push(ScopedConstructSpan::admit(
+            crate::boundary::span_line(&span),
+            span.end().line,
+            c.bans().to_vec(),
+        ));
     }
 }
 
@@ -287,7 +315,9 @@ fn classify_item(ctx: &Ctx, item: &syn::Item, hits: &mut Vec<Hit>) {
     };
     match ctx.grammar.disposition(kind) {
         None => hits.push(hit(ctx.rel, line_of(item), "kind-table-mutated-post-load")),
-        Some(Disposition::Condemned(law)) => hits.push(hit(ctx.rel, line_of(item), law)),
+        Some(Disposition::Condemned { law }) => {
+            hits.push(hit(ctx.rel, line_of(item), law.as_str()))
+        }
         Some(Disposition::Seated(seats)) => {
             // Item 3: classification emits the unique construct name, or red.
             // `.any()` soft-drain deleted — zero or two matches are both red.
@@ -549,8 +579,8 @@ fn classify_container_member(ctx: &Ctx, member: ContainerMember<'_>, hits: &mut 
     };
     match ctx.grammar.disposition(kind) {
         None => hits.push(hit(ctx.rel, 0, "kind-table-mutated-post-load")),
-        Some(Disposition::Condemned(law)) => {
-            hits.push(hit(ctx.rel, container_member_condemned_line(member), law));
+        Some(Disposition::Condemned { law }) => {
+            hits.push(hit(ctx.rel, container_member_condemned_line(member), law.as_str()));
         }
         Some(Disposition::Seated(seats)) => {
             let seated = match member {
@@ -637,7 +667,11 @@ fn container_member_label(member: ContainerMember<'_>) -> (usize, String) {
 // ---------------------------------------------------------------------------
 
 fn construct_rule<'a>(grammar: &'a Grammar, name: &str) -> Option<StructuralRule> {
-    grammar.constructs().iter().find(|c| c.name == name).map(|c| c.rule)
+    grammar
+        .constructs()
+        .iter()
+        .find(|c| c.name() == name)
+        .map(|c| c.rule())
 }
 
 fn exactly_one_name<'a>(matches: impl Iterator<Item = &'a str>) -> Option<&'a str> {
@@ -651,11 +685,15 @@ fn exactly_one_name<'a>(matches: impl Iterator<Item = &'a str>) -> Option<&'a st
     found
 }
 
-fn seat_matches_item<'a>(ctx: &Ctx<'a>, item: &syn::Item, seats: &'a [String]) -> Option<&'a str> {
+fn seat_matches_item<'a>(
+    ctx: &Ctx<'a>,
+    item: &syn::Item,
+    seats: &'a [crate::boundary::Label],
+) -> Option<&'a str> {
     // filter_map: an unknown seat name is skipped (load proved seats resolve;
     // a post-load ghost cannot green via `None => false` costume).
     exactly_one_name(seats.iter().filter_map(|name| {
-        construct_rule(ctx.grammar, name)
+        construct_rule(ctx.grammar, name.as_str())
             .filter(|rule| rule_matches_item(ctx, *rule, item))
             .map(|_| name.as_str())
     }))
@@ -664,10 +702,10 @@ fn seat_matches_item<'a>(ctx: &Ctx<'a>, item: &syn::Item, seats: &'a [String]) -
 fn seat_matches_impl_item<'a>(
     ctx: &Ctx<'a>,
     item: &syn::ImplItem,
-    seats: &'a [String],
+    seats: &'a [crate::boundary::Label],
 ) -> Option<&'a str> {
     exactly_one_name(seats.iter().filter_map(|name| {
-        construct_rule(ctx.grammar, name)
+        construct_rule(ctx.grammar, name.as_str())
             .filter(|rule| rule_matches_impl_item(ctx, *rule, item))
             .map(|_| name.as_str())
     }))
@@ -676,10 +714,10 @@ fn seat_matches_impl_item<'a>(
 fn seat_matches_trait_item<'a>(
     ctx: &Ctx<'a>,
     item: &syn::TraitItem,
-    seats: &'a [String],
+    seats: &'a [crate::boundary::Label],
 ) -> Option<&'a str> {
     exactly_one_name(seats.iter().filter_map(|name| {
-        construct_rule(ctx.grammar, name)
+        construct_rule(ctx.grammar, name.as_str())
             .filter(|rule| rule_matches_trait_item(ctx, *rule, item))
             .map(|_| name.as_str())
     }))
@@ -1089,10 +1127,10 @@ fn declared_fn_matches(
     let Some(seat) = ctx.grammar.fn_seat(ctx.rel, &sig.ident.to_string()) else {
         return false;
     };
-    if crate::identity::site_hash(whole) != seat.site_hash {
+    if crate::identity::site_hash(whole) != seat.site_hash() {
         return false;
     }
-    if !seat.io {
+    if !seat.io() {
         if sig.asyncness.is_some() {
             return false;
         }
@@ -1236,53 +1274,53 @@ mod fixture_tests {
     fn every_construct_pass_classifies_and_deny_is_refused_by_its_own_rule() {
         let grammar = real_grammar();
         for c in grammar.constructs() {
-            let rel = if c.name == "declared-fn" {
+            let rel = if c.name() == "declared-fn" {
                 "crates/bs-detector/fixtures/declared-fn.pass.rs"
             } else {
-                rel_for(&c.name)
+                rel_for(c.name())
             };
-            let pass_path = crate_dir().join("fixtures").join(format!("{}.pass.rs", c.name));
+            let pass_path = crate_dir().join("fixtures").join(format!("{}.pass.rs", c.name()));
             let pass_src = match std::fs::read_to_string(&pass_path) {
                 Ok(s) => s,
-                Err(e) => panic!("{} pass fixture readable: {e}", c.name),
+                Err(e) => panic!("{} pass fixture readable: {e}", c.name()),
             };
             let pass_ast = match syn::parse_file(&pass_src) {
                 Ok(a) => a,
-                Err(e) => panic!("{} pass fixture parses: {e}", c.name),
+                Err(e) => panic!("{} pass fixture parses: {e}", c.name()),
             };
             let Some(first) = pass_ast.items.first() else {
-                panic!("{} pass fixture has an item", c.name);
+                panic!("{} pass fixture has an item", c.name());
             };
             assert!(
-                probe_matches(&grammar, rel, c.rule, first),
+                probe_matches(&grammar, rel, c.rule(), first),
                 "{} pass fixture must classify as its own construct",
-                c.name
+                c.name()
             );
 
-            if c.rule.deny_exempt() {
+            if c.rule().deny_exempt() {
                 continue;
             }
-            let deny_rel = if c.name == "declared-fn" {
+            let deny_rel = if c.name() == "declared-fn" {
                 "crates/bs-detector/fixtures/declared-fn.deny.rs"
             } else {
-                rel_for(&c.name)
+                rel_for(c.name())
             };
-            let deny_path = crate_dir().join("fixtures").join(format!("{}.deny.rs", c.name));
+            let deny_path = crate_dir().join("fixtures").join(format!("{}.deny.rs", c.name()));
             let deny_src = match std::fs::read_to_string(&deny_path) {
                 Ok(s) => s,
-                Err(e) => panic!("{} deny fixture readable: {e}", c.name),
+                Err(e) => panic!("{} deny fixture readable: {e}", c.name()),
             };
             let deny_ast = match syn::parse_file(&deny_src) {
                 Ok(a) => a,
-                Err(e) => panic!("{} deny fixture parses: {e}", c.name),
+                Err(e) => panic!("{} deny fixture parses: {e}", c.name()),
             };
             let Some(first) = deny_ast.items.first() else {
-                panic!("{} deny fixture has an item", c.name);
+                panic!("{} deny fixture has an item", c.name());
             };
             assert!(
-                !probe_matches(&grammar, deny_rel, c.rule, first),
+                !probe_matches(&grammar, deny_rel, c.rule(), first),
                 "{} deny fixture must be refused by its OWN rule",
-                c.name
+                c.name()
             );
         }
     }
@@ -1830,8 +1868,8 @@ mod fixture_tests {
         let fn_rules: Vec<StructuralRule> = grammar
             .constructs()
             .iter()
-            .filter(|c| matches!(c.kind, crate::grammar::ConstructFamily::Fn))
-            .map(|c| c.rule)
+            .filter(|c| matches!(c.kind(), crate::grammar::ConstructFamily::Fn))
+            .map(|c| c.rule())
             .collect();
         for (rel, src) in cases {
             let ast = syn::parse_file(src).expect("parses");
@@ -1870,8 +1908,8 @@ mod fixture_tests {
         let struct_rules: Vec<StructuralRule> = grammar
             .constructs()
             .iter()
-            .filter(|c| matches!(c.kind, crate::grammar::ConstructFamily::Struct))
-            .map(|c| c.rule)
+            .filter(|c| matches!(c.kind(), crate::grammar::ConstructFamily::Struct))
+            .map(|c| c.rule())
             .collect();
         for src in cases {
             let ast = syn::parse_file(src).expect("parses");
@@ -1904,7 +1942,7 @@ mod fixture_tests {
         };
         let seats = match grammar.disposition(KindName::Struct) {
             Some(crate::grammar::Disposition::Seated(s)) => s,
-            Some(crate::grammar::Disposition::Condemned(_)) => {
+            Some(crate::grammar::Disposition::Condemned { .. }) => {
                 panic!("struct must be seated, not condemned")
             }
             None => panic!("struct must be seated"),

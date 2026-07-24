@@ -423,6 +423,135 @@ fn bite_forbid_roots() {
     assert_eq!(meta::forbid_roots(&b).len(), 1);
 }
 
+// --- TRUTH item 10: execution checks + campaign artifact -------------------
+
+#[test]
+fn bite_pure_rust() {
+    use bs_detector::engines::behavior::pure_rust::{PureRustError, check_at};
+    let tmp = tempfile::tempdir().expect("tmp");
+    let root = tmp.path();
+    let deps = tempfile::tempdir().expect("deps");
+    let write = |base: &std::path::Path, rel: &str, content: &str| {
+        let fp = base.join(rel);
+        if let Some(p) = fp.parent() {
+            std::fs::create_dir_all(p).expect("mkdir");
+        }
+        std::fs::write(&fp, content).expect("write");
+    };
+    write(
+        root,
+        "Cargo.toml",
+        "[workspace]\nresolver = \"2\"\nmembers = [\"kyzo\"]\n",
+    );
+    write(
+        root,
+        "kyzo/Cargo.toml",
+        &format!(
+            "[package]\nname = \"kyzo\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[dependencies]\ncc = {{ path = {:?} }}\n",
+            deps.path().join("planted-cc").display().to_string()
+        ),
+    );
+    write(root, "kyzo/src/lib.rs", "");
+    write(
+        deps.path(),
+        "planted-cc/Cargo.toml",
+        "[package]\nname = \"cc\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
+    );
+    write(deps.path(), "planted-cc/src/lib.rs", "");
+    match check_at(root) {
+        Err(PureRustError::BannedCratesFound(hits)) => {
+            assert!(
+                hits.iter().any(|h| h.starts_with("cc v")),
+                "planted cc must flag: {hits:?}"
+            );
+        }
+        other => panic!("expected BannedCratesFound, got {other:?}"),
+    }
+}
+
+#[test]
+fn bite_unsafe_check() {
+    use bs_detector::engines::behavior::unsafe_check::{UnsafeCheckError, check_at};
+    let tmp = tempfile::tempdir().expect("tmp");
+    let root = tmp.path();
+    let write = |rel: &str, content: &str| {
+        let fp = root.join(rel);
+        if let Some(p) = fp.parent() {
+            std::fs::create_dir_all(p).expect("mkdir");
+        }
+        std::fs::write(&fp, content).expect("write");
+    };
+    write("Cargo.toml", "[workspace]\nresolver = \"2\"\nmembers = []\n");
+    write(
+        "crates/kyzo-core/src/lib.rs",
+        "pub fn f() {}\n", // missing forbid
+    );
+    write("crates/kyzo-bin/src/main.rs", "#![forbid(unsafe_code)]\nfn main() {}\n");
+    match check_at(root) {
+        Err(UnsafeCheckError::MissingForbid { root }) => {
+            assert!(root.contains("kyzo-core"), "must name kyzo-core root: {root}");
+        }
+        other => panic!("expected MissingForbid, got {other:?}"),
+    }
+}
+
+#[test]
+fn bite_campaign_artifact() {
+    use bs_detector::engines::behavior::campaign::{
+        ArtifactSource, CampaignArtifact, CampaignSeat, SpecimenVerdict, verify_campaigns,
+    };
+    let tmp = tempfile::tempdir().expect("tmp");
+    let root = tmp.path();
+    let src_rel = "crates/bs-detector/src/engines/behavior/build_script_sandbox.rs";
+    let src_dir = root.join("crates/bs-detector/src/engines/behavior");
+    std::fs::create_dir_all(&src_dir).expect("mkdir");
+    let body = b"// specimen source\n";
+    std::fs::write(src_dir.join("build_script_sandbox.rs"), body).expect("write");
+    let digest = blake3::hash(body).to_hex().to_string();
+    let art_dir = root.join("crates/bs-detector/campaigns/build_script_sandbox");
+    std::fs::create_dir_all(&art_dir).expect("mkdir");
+    // Proof: specimen ≠ flagged → meta fails regardless of hashes/timestamp.
+    let art = CampaignArtifact {
+        name: "build_script_sandbox".to_string(),
+        timestamp_unix: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+        specimen_verdict: SpecimenVerdict::Clean,
+        sources: vec![ArtifactSource {
+            path: src_rel.to_string(),
+            blake3: digest,
+        }],
+    };
+    std::fs::write(art_dir.join("artifact.toml"), art.render_toml()).expect("art");
+    let seats = vec![CampaignSeat {
+        name: "build_script_sandbox".to_string(),
+        artifact: "campaigns/build_script_sandbox/artifact.toml".to_string(),
+        freshness_bound_secs: 86_400,
+        sources: vec![src_rel.to_string()],
+    }];
+    let hits = verify_campaigns(root, &seats);
+    assert!(
+        hits.iter()
+            .any(|h| h.construct().starts_with("campaign_specimen_unflagged:")),
+        "specimen ≠ flagged must red: {hits:?}"
+    );
+}
+
+#[test]
+fn bite_build_script_sandbox() {
+    // Existence bite: the campaign runner flags a known-bad plant (network).
+    // Full plant is slow; assert the law seat exists and the runner is linked.
+    assert!(
+        bs_detector::grammar::Laws::load(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("laws.toml").as_path())
+            .expect("laws")
+            .campaigns()
+            .iter()
+            .any(|c| c.name == "build_script_sandbox"),
+        "build_script_sandbox must be seated as [[campaign]]"
+    );
+}
+
 // --- the grammar and law ledger bind to THIS file ----------------------------------------------
 
 #[test]
@@ -449,7 +578,7 @@ fn the_real_grammar_and_laws_load_and_bind_to_this_file() {
         Ok(l) => l,
         Err(e) => panic!("laws.toml must be lawful: {e:#}"),
     };
-    let construct_bans = g.constructs().iter().flat_map(|c| c.bans.iter());
+    let construct_bans = g.constructs().iter().flat_map(|c| c.bans().iter());
     for name in g
         .bans_absolute()
         .iter()
@@ -457,7 +586,7 @@ fn the_real_grammar_and_laws_load_and_bind_to_this_file() {
         .chain(g.bans_attribute().iter())
         .chain(construct_bans)
     {
-        if laws.require(name).is_err() {
+        if laws.require(name.as_str()).is_err() {
             panic!("ban `{name}` has no retained law — coverage proof broken");
         }
     }
@@ -487,6 +616,10 @@ fn the_real_grammar_and_laws_load_and_bind_to_this_file() {
         "forbid_roots",
         "stale_waivers",
         "dead_citation",
+        "pure_rust",
+        "unsafe_check",
+        "campaign_artifact",
+        "build_script_sandbox",
         // TRUTH item 1 condemned kinds — each has its own laws.toml entry.
         "extern_crate",
         "foreign_mod",

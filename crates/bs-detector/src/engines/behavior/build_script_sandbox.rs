@@ -42,6 +42,7 @@ use std::process::{Command, Output};
 use walkdir::WalkDir;
 
 use crate::cargo_meta::CargoMetadata;
+// Ported from xtask; campaign-seated under laws.toml [[campaign]].
 
 /// Where a violating write was traced to: a single package by name, or — if
 /// the evidence does not pin it down to exactly one — the full set of
@@ -67,7 +68,6 @@ impl fmt::Display for Attribution {
 
 #[derive(Debug)]
 pub enum BuildScriptSandboxError {
-    RepoRoot(anyhow::Error),
     /// `cargo metadata` itself could not be run (spawn failure or nonzero exit).
     Metadata(String),
     /// `cargo metadata` ran but its JSON could not be parsed.
@@ -141,9 +141,6 @@ impl NetSandbox {
 impl fmt::Display for BuildScriptSandboxError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            BuildScriptSandboxError::RepoRoot(e) => {
-                write!(f, "could not locate workspace root: {e:#}")
-            }
             BuildScriptSandboxError::Metadata(output) => {
                 write!(
                     f,
@@ -191,11 +188,6 @@ impl fmt::Display for BuildScriptSandboxError {
 }
 
 impl std::error::Error for BuildScriptSandboxError {}
-
-pub fn check() -> Result<String, BuildScriptSandboxError> {
-    let repo_root = crate::fsutil::repo_root().map_err(BuildScriptSandboxError::RepoRoot)?;
-    check_at(&repo_root)
-}
 
 /// Shape of `cargo metadata --format-version=1` lives in [`crate::cargo_meta`]
 /// — shared with the pure-Rust gate so the two never drift. Full-graph
@@ -761,11 +753,11 @@ fn check_workspace(
 /// so a plant's reset+build cycle is fully isolated from every other
 /// concurrently-running plant and from the real workspace — never by
 /// serializing the test runner, which the container owns.
-fn check_at(repo_root: &Path) -> Result<String, BuildScriptSandboxError> {
+pub fn check_at(repo_root: &Path) -> Result<String, BuildScriptSandboxError> {
     check_at_scoped(repo_root, None)
 }
 
-fn check_at_scoped(
+pub fn check_at_scoped(
     repo_root: &Path,
     owned_target_override: Option<&Path>,
 ) -> Result<String, BuildScriptSandboxError> {

@@ -19,6 +19,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use proc_macro2::LineColumn;
+use serde::Deserialize;
 use walkdir::WalkDir;
 
 /// Repo-relative UTF-8 path bytes. No `String`/`str` field — path text is
@@ -80,6 +81,13 @@ impl From<&str> for RelPath {
 impl From<String> for RelPath {
     fn from(path: String) -> Self {
         Self::admit(path)
+    }
+}
+
+impl<'de> Deserialize<'de> for RelPath {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        Ok(Self::admit(s))
     }
 }
 
@@ -156,6 +164,13 @@ impl From<&str> for Label {
 impl From<String> for Label {
     fn from(text: String) -> Self {
         Self::admit(text)
+    }
+}
+
+impl<'de> Deserialize<'de> for Label {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        Ok(Self::admit(s))
     }
 }
 

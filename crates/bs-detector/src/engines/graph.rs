@@ -564,10 +564,10 @@ fn use_tree_roots(tree: &syn::UseTree, out: &mut Vec<(String, proc_macro2::Span)
 pub fn sealed_public_door(files: &[&SourceFile], hosts: &[HostDoor]) -> Vec<Hit> {
     let mut hits = vec![];
     for f in files {
-        let Some(host) = hosts.iter().find(|h| f.rel_path().starts_with(&h.path)) else {
+        let Some(host) = hosts.iter().find(|h| f.rel_path().starts_with(h.path())) else {
             continue;
         };
-        let allowed: BTreeSet<&str> = host.allowed_imports.iter().map(|s| s.as_str()).collect();
+        let allowed: BTreeSet<&str> = host.allowed_imports().iter().map(|s| s.as_str()).collect();
         for item in &f.ast().items {
             let syn::Item::Use(u) = item else {
                 continue;
@@ -701,7 +701,7 @@ pub fn config_once(files: &[&SourceFile], seats: &[ConfigOnceSeat]) -> Vec<Hit> 
     for seat in seats {
         let scoped: Vec<&&SourceFile> = files
             .iter()
-            .filter(|f| f.rel_path().starts_with(&seat.path))
+            .filter(|f| f.rel_path().starts_with(seat.path()))
             .collect();
         // Skip test/bite fixtures under the host when they are not the
         // binary's production tree? No — law is absolute over the path.
@@ -713,22 +713,23 @@ pub fn config_once(files: &[&SourceFile], seats: &[ConfigOnceSeat]) -> Vec<Hit> 
         }
         if sites.len() != 1 {
             hits.push(Hit::admit(
-                seat.path.trim_end_matches('/').to_string(),
+                seat.path().trim_end_matches('/').to_string(),
                 0,
                 format!(
                     "config-once-count:{} (want 1 in `{}`)",
                     sites.len(),
-                    seat.fn_path
+                    seat.fn_path()
                 ),
             ));
             for (file, s) in &sites {
-                if s.fn_path != seat.fn_path {
+                if s.fn_path != seat.fn_path() {
                     hits.push(Hit::admit(
                         (*file).to_string(),
                         s.line,
                         format!(
                             "config-once-outside-ctor:{} (want `{}`)",
-                            s.fn_path, seat.fn_path
+                            s.fn_path,
+                            seat.fn_path()
                         ),
                     ));
                 }
@@ -736,13 +737,14 @@ pub fn config_once(files: &[&SourceFile], seats: &[ConfigOnceSeat]) -> Vec<Hit> 
             continue;
         }
         let (file, s) = &sites[0];
-        if s.fn_path != seat.fn_path {
+        if s.fn_path != seat.fn_path() {
             hits.push(Hit::admit(
                 (*file).to_string(),
                 s.line,
                 format!(
                     "config-once-outside-ctor:{} (want `{}`)",
-                    s.fn_path, seat.fn_path
+                    s.fn_path,
+                    seat.fn_path()
                 ),
             ));
         }
@@ -831,10 +833,10 @@ mod tests {
             "crates/kyzo-bin/src/main.rs",
             "use std::process::ExitCode;\nuse crate::engine::Engine;\nuse kyzo_core::Db;\n",
         );
-        let hosts = vec![HostDoor {
-            path: "crates/kyzo-bin/".to_string(),
-            allowed_imports: vec!["kyzo_core".to_string()],
-        }];
+        let hosts = vec![HostDoor::admit(
+            "crates/kyzo-bin/",
+            vec![crate::boundary::Label::admit("kyzo_core")],
+        )];
         let hits = sealed_public_door(&[&f], &hosts);
         assert!(
             hits.iter().any(|h| h.construct().contains("import-outside-door:std")),
@@ -856,10 +858,7 @@ mod tests {
             "crates/xtask/src/host_env.rs",
             "fn read(name: &str) -> Option<String> { std::env::var(name).ok() }",
         );
-        let seats = vec![ConfigOnceSeat {
-            path: "crates/xtask/".to_string(),
-            fn_path: "host_env::read".to_string(),
-        }];
+        let seats = vec![ConfigOnceSeat::admit("crates/xtask/", "host_env::read")];
         let hits = config_once(&[&good], &seats);
         assert!(hits.is_empty(), "one site in declared ctor must pass: {hits:?}");
 

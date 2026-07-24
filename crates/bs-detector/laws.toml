@@ -429,3 +429,31 @@ caught_by = "named residual — classify::fixture_tests::every_condemned_kind_de
 name = "R-citation-prose"
 law = "TRUTH item 7 residual: no mechanism verifies that prose reasons truly from its anchor — the attestation deters; the operator spot-audits; both are non-mechanical and this entry says so"
 caught_by = "named residual only — dead_citation checks existence and identity hash, never that why_not_sabotage follows from the anchor"
+
+[[law]]
+name = "pure_rust"
+law = "TRUTH item 10: a C/C++-toolchain or banned *-sys crate in a shipped engine package's normal+build dependency tree"
+caught_by = "behavior::pure_rust live gate pass; bite_pure_rust plant proves BannedCratesFound"
+
+[[law]]
+name = "unsafe_check"
+law = "TRUTH item 10: engine crate roots must forbid(unsafe_code), must not allow(unsafe_code), must not claim a nonexistent unsafe exception"
+caught_by = "behavior::unsafe_check live gate pass; bite_unsafe_check deny fixtures"
+
+[[law]]
+name = "build_script_sandbox"
+law = "TRUTH item 10: every custom-build target must run net-isolated and write only inside its OUT_DIR — seated as an execution campaign, not a silent skip"
+caught_by = "laws.toml [[campaign]] build_script_sandbox; artifact + campaign_artifact meta; specimen must be flagged"
+
+[[law]]
+name = "campaign_artifact"
+law = "TRUTH item 10: a campaign artifact with hash mismatch, specimen unflagged, campaign missing, or past freshness bound is red; specimen ≠ flagged fails regardless of hashes and timestamp"
+caught_by = "behavior::campaign::verify_campaigns meta pass; bite_campaign_artifact"
+
+[[campaign]]
+name = "build_script_sandbox"
+artifact = "campaigns/build_script_sandbox/artifact.toml"
+freshness_bound_secs = 2592000
+sources = [
+  "crates/bs-detector/src/engines/behavior/build_script_sandbox.rs",
+]

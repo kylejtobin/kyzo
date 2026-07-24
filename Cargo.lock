@@ -542,6 +542,7 @@ dependencies = [
  "quote",
  "regex",
  "serde",
+ "serde_json",
  "syn",
  "tempfile",
  "toml 0.8.23",

@@ -8,32 +8,23 @@
  */
 
 //! The `gate` verb: the one-command seal. Runs env-report, check, fmt,
-//! clippy, unsafe, pure-rust, build-script-sandbox, the bs-detector
-//! conduct gate, test, and test-release-checked, in that dependency order —
-//! cheapest/most-arguable checks first, the full test suite last — stopping
-//! at the first failure (story #322's Engineering Choice, task 1).
+//! clippy, the bs-detector conduct gate (which owns pure_rust /
+//! unsafe_check / build_script_sandbox campaign per TRUTH item 10),
+//! test, and test-release-checked — cheapest first, stopping at the
+//! first failure.
 
 use std::fmt;
 
-use crate::checks::build_script_sandbox::BuildScriptSandboxError;
-use crate::checks::pure_rust::PureRustError;
-use crate::checks::unsafe_check::UnsafeCheckError;
 use crate::proc::ProcessFailure;
 use crate::verbs;
 
-/// Every way `gate` can refuse, one variant per step it runs — a closed sum
-/// of the underlying verb's own closed refusal type. A caller (a human
-/// reading stderr, the CI gate-summary job) always knows exactly which step
-/// failed and why, never an erased or generic failure.
+/// Every way `gate` can refuse, one variant per step it runs.
 #[derive(Debug)]
 pub enum GateError {
     EnvReport(ProcessFailure),
     Check(ProcessFailure),
     Fmt(ProcessFailure),
     Clippy(ProcessFailure),
-    Unsafe(UnsafeCheckError),
-    PureRust(PureRustError),
-    BuildScriptSandbox(BuildScriptSandboxError),
     BsDetector(ProcessFailure),
     Test(ProcessFailure),
     TestReleaseChecked(ProcessFailure),
@@ -46,11 +37,6 @@ impl fmt::Display for GateError {
             GateError::Check(e) => write!(f, "check step failed: {e}"),
             GateError::Fmt(e) => write!(f, "fmt step failed: {e}"),
             GateError::Clippy(e) => write!(f, "clippy step failed: {e}"),
-            GateError::Unsafe(e) => write!(f, "unsafe step failed: {e}"),
-            GateError::PureRust(e) => write!(f, "pure-rust step failed: {e}"),
-            GateError::BuildScriptSandbox(e) => {
-                write!(f, "build-script-sandbox step failed: {e}")
-            }
             GateError::BsDetector(e) => write!(f, "bs-detector step failed: {e}"),
             GateError::Test(e) => write!(f, "test step failed: {e}"),
             GateError::TestReleaseChecked(e) => {
@@ -67,9 +53,6 @@ pub fn run() -> Result<(), GateError> {
     verbs::check().map_err(GateError::Check)?;
     verbs::fmt().map_err(GateError::Fmt)?;
     verbs::clippy().map_err(GateError::Clippy)?;
-    verbs::unsafe_check().map_err(GateError::Unsafe)?;
-    verbs::pure_rust().map_err(GateError::PureRust)?;
-    verbs::build_script_sandbox().map_err(GateError::BuildScriptSandbox)?;
     verbs::bs_detector().map_err(GateError::BsDetector)?;
     verbs::test().map_err(GateError::Test)?;
     verbs::test_release_checked().map_err(GateError::TestReleaseChecked)?;

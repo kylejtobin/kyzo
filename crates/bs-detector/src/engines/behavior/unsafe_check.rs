@@ -53,7 +53,6 @@ static LIAR_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
 
 #[derive(Debug)]
 pub enum UnsafeCheckError {
-    RepoRoot(anyhow::Error),
     Io(anyhow::Error),
     MissingForbid { root: String },
     AllowFound { offenders: Vec<String> },
@@ -63,7 +62,6 @@ pub enum UnsafeCheckError {
 impl fmt::Display for UnsafeCheckError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            UnsafeCheckError::RepoRoot(e) => write!(f, "could not locate workspace root: {e:#}"),
             UnsafeCheckError::Io(e) => write!(f, "unsafe gate: {e:#}"),
             UnsafeCheckError::MissingForbid { root } => write!(
                 f,
@@ -85,12 +83,7 @@ impl fmt::Display for UnsafeCheckError {
 
 impl std::error::Error for UnsafeCheckError {}
 
-pub fn check() -> Result<String, UnsafeCheckError> {
-    let repo_root = crate::fsutil::repo_root().map_err(UnsafeCheckError::RepoRoot)?;
-    check_at(&repo_root)
-}
-
-fn check_at(repo_root: &Path) -> Result<String, UnsafeCheckError> {
+pub fn check_at(repo_root: &Path) -> Result<String, UnsafeCheckError> {
     if !repo_root.join("Cargo.toml").is_file() {
         return Ok("unsafe gate: no Cargo workspace yet — armed but idle".to_string());
     }
