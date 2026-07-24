@@ -84,9 +84,9 @@ impl std::error::Error for PureRustError {}
 pub struct PureRustGate;
 
 impl PureRustGate {
-    /// Consuming-verb on the ZST gate (tip 814: receiver required — associated
-    /// fn without self is unclassified-impl-fn bucket-shuffle).
-    pub fn check_at(self, repo_root: &Path) -> Result<String, PureRustError> {
+    /// Check entry door — declared-fn seat (tip 815): static live-check with
+    /// no natural receiver; seated individually, not bulk-grandfathered.
+    pub fn check_at(repo_root: &Path) -> Result<String, PureRustError> {
         check_at_body(repo_root)
     }
 }
@@ -467,7 +467,7 @@ mod tests {
         )?;
         plant_source(deps.path(), "planted-tool-dep/src/lib.rs", "")?;
 
-        let outcome = PureRustGate.check_at(root);
+        let outcome = PureRustGate::check_at(root);
         if let Err(PureRustError::BannedCratesFound(hits)) = outcome {
             PureRustProofRefuse::PlantedCcMustHit.require(hits.iter().any(|h| h.starts_with("cc v")))?;
             PureRustProofRefuse::PlantedOpensslMustHit.require(hits.iter().any(|h| h.starts_with("openssl v")))?;

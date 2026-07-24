@@ -212,6 +212,35 @@ fn_path = "proof_fn"
 site_hash = "0000000000000000000000000000000000000000000000000000000000000000"
 io = false
 
+# Tip 815: live-check ENTRY DOORS — receiverless by nature (no stateful gate
+# value). Individual declared-fn seats with real site_hash; NOT bulk mint.
+# Justification: each is the one public composition door for a behavior
+# check (pure_rust / unsafe_check / build_script_sandbox); body helpers stay
+# unseated until inlined.
+[[seats.fns]]
+file = "crates/bs-detector/src/engines/behavior/pure_rust.rs"
+fn_path = "check_at"
+site_hash = "19d0a082f977d5ce221c5d6630ea35ef447db324ce88121c225ea819c06d1294"
+io = false
+
+[[seats.fns]]
+file = "crates/bs-detector/src/engines/behavior/unsafe_check.rs"
+fn_path = "check_at"
+site_hash = "687927a46cdba81908e74c4f8798c32d08dd9ec8572d010a025ea38ce6705def"
+io = false
+
+[[seats.fns]]
+file = "crates/bs-detector/src/engines/behavior/build_script_sandbox.rs"
+fn_path = "check_at"
+site_hash = "e11293bb9f7630756ab5fd3b80f68d39613bf6a01916f743c70962312df1beee"
+io = false
+
+[[seats.fns]]
+file = "crates/bs-detector/src/engines/behavior/build_script_sandbox.rs"
+fn_path = "check_at_scoped"
+site_hash = "c48a681c23374ad5afddf43c09a0866a9a2cac32d97a999522248b02d3148bb9"
+io = false
+
 # Item 2 relational: sealed-public-door hosts. Empty allowed_imports means
 # every non-crate/super/self import in the host is red until the operator
 # names the sealed surface. No grandfathering.

@@ -488,7 +488,7 @@ fn bite_pure_rust() -> BiteOutcome {
         "[package]\nname = \"cc\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
     )?;
     write_file(deps.path(), "planted-cc/src/lib.rs", "")?;
-    match PureRustGate.check_at(root) {
+    match PureRustGate::check_at(root) {
         Err(PureRustError::BannedCratesFound(hits)) => {
             require(hits.iter().any(|h| h.starts_with("cc v")), BiteProofRefuse::Behavior)?;
         }
@@ -508,7 +508,7 @@ fn bite_unsafe_check() -> BiteOutcome {
         "pub fn f() {}\n", // missing forbid
     )?;
     write_file(root, "crates/kyzo-bin/src/main.rs", "#![forbid(unsafe_code)]\nfn main() {}\n")?;
-    match UnsafeCheckGate.check_at(root) {
+    match UnsafeCheckGate::check_at(root) {
         Err(UnsafeCheckError::MissingForbid { root }) => {
             require(root.contains("kyzo-core"), BiteProofRefuse::Behavior)?;
         }
