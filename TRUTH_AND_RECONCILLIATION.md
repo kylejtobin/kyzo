@@ -407,3 +407,29 @@ FALSE. Evidence, each anchor checkable:
   NONE.
 If any sentence above is false, I am lying to you deliberately and at
 length, in a repo whose recorded failure mode is exactly that.
+
+### 4. Build Attestation
+
+BUILD ATTESTATION — item 4
+law: commit 4e4c070d1cf9b47fcc4562f80f60b5072d7cd386 | build: commit 7cd32c821537f62a65d7c1cc6969c442fb8df763
+
+I attest my implementation of item 4 matches this document, at the law
+commit above, at audited strength. TRUE or FALSE: there exists an input —
+any code shape, any file, any reading of the law text — on which my
+implementation passes where the law says red, or goes red where the law
+says pass.
+
+FALSE. Evidence, each anchor checkable:
+- Deny proofs executed red: `type Name = String; struct S { n: Name }` and
+  `use std::string::String as Text; struct T { t: Text }` —
+  classify::fixture_tests::item_4_proof_{type_alias_to_string_struct_is_red,use_as_string_struct_is_red} ... ok;
+  alias::tests::item_4_proof_{type_alias_to_string_carries,use_as_string_carries} ... ok.
+- Pass proof clean: `struct R { r: Restrict }` —
+  item_4_proof_restrict_struct_is_clean ... ok; item_4_proof_restrict_does_not_carry ... ok.
+- The weakest satisfier I personally constructed against my own build
+  was: `type A = B; type B = A;` — AliasTable::build refuses
+  (item_4_proof_alias_cycle_is_a_load_error ... ok).
+- My implementation is weaker than this document's text in exactly:
+  R1, R2.
+If any sentence above is false, I am lying to you deliberately and at
+length, in a repo whose recorded failure mode is exactly that.
