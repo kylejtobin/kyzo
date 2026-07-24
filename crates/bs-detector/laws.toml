@@ -122,8 +122,8 @@ caught_by = "grammar absolute ban `allow_unsafe` — no waiver can cover it"
 
 [[law]]
 name = "catchall_arm"
-law = "a _ arm swallowing variants nobody enumerated — new variants silently fall in"
-caught_by = "grammar ban `catchall_arm` — matcher and bite proof unchanged"
+law = "a _ arm swallowing variants nobody enumerated — new variants silently fall in. External #[non_exhaustive] does NOT license Pat::Wild: known variants via if-let / explicit arms, unhandled shapes fall through (tip 795). A residual for wildcard-on-non_exhaustive would reopen silent swallow — refused."
+caught_by = "grammar ban `catchall_arm` — matcher and bite proof unchanged; citation::type_path_tail is the worked example (if-let chain, 96738eda)"
 
 [[law]]
 name = "default_derive"
