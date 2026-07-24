@@ -9,13 +9,14 @@
 //! One door for seed-sweep campaigns shared by gauntlet / serializability.
 
 /// Read `var` as `u64`, or `default` when unset / unparsable.
+/// Env read is seated in [`crate::host_env`].
 pub(crate) fn env_u64(var: &str, default: u64) -> u64 {
-    match std::env::var(var) {
-        Ok(s) => match s.parse() {
+    match crate::host_env::knob(var) {
+        Some(s) => match s.parse() {
             Ok(n) => n,
             Err(_) => default,
         },
-        Err(_) => default,
+        None => default,
     }
 }
 

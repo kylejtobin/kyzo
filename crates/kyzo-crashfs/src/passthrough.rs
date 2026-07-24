@@ -42,7 +42,7 @@ use std::os::unix::fs::{FileExt, MetadataExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::Duration;
 
 use fuser::{
     Errno, FileAttr, FileHandle, FileType, Filesystem, FopenFlags, Generation, INodeNo, ReplyAttr,
@@ -277,19 +277,25 @@ impl PassthroughFs {
             blocks: logical_size.div_ceil(512),
             atime: match meta.accessed() {
                 Ok(t) => t,
-                Err(_) => UNIX_EPOCH,
+                Err(_) => match meta.modified() {
+                    Ok(t) => t,
+                    Err(_) => return Err(Errno::EIO),
+                },
             },
             mtime: match meta.modified() {
                 Ok(t) => t,
-                Err(_) => UNIX_EPOCH,
+                Err(_) => return Err(Errno::EIO),
             },
             ctime: match meta.modified() {
                 Ok(t) => t,
-                Err(_) => UNIX_EPOCH,
+                Err(_) => return Err(Errno::EIO),
             },
             crtime: match meta.created() {
                 Ok(t) => t,
-                Err(_) => UNIX_EPOCH,
+                Err(_) => match meta.modified() {
+                    Ok(t) => t,
+                    Err(_) => return Err(Errno::EIO),
+                },
             },
             kind,
             perm: u16_from_mode_bits(meta.mode()),

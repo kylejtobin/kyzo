@@ -20,7 +20,6 @@ use std::hash::{Hash, Hasher};
 use std::num::NonZeroU32;
 use std::ops::Deref;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use kyzo_model::value::{DataValue, Tuple};
 
@@ -322,11 +321,12 @@ fn aggr_err(e: String) -> Rejection {
 }
 
 /// Oracle-owned bounds vocabulary — never consumes exec's Budget.
+/// No wall-clock seat here: the oracle is a pure reference evaluator.
+/// Callers that need a wall interrupt use the engine [`Budget`] seat.
 #[derive(Debug, Clone)]
 pub struct OracleBudget {
     epoch_ceiling: NonZeroU32,
     derived_tuple_ceiling: Option<u64>,
-    deadline: Option<(Instant, Duration)>,
     killed: bool,
 }
 
@@ -335,18 +335,12 @@ impl OracleBudget {
         Self {
             epoch_ceiling,
             derived_tuple_ceiling: None,
-            deadline: None,
             killed: false,
         }
     }
 
     pub fn with_derived_tuple_ceiling(mut self, ceiling: u64) -> Self {
         self.derived_tuple_ceiling = Some(ceiling);
-        self
-    }
-
-    pub fn with_timeout(mut self, allotted: Duration) -> Self {
-        self.deadline = Some((Instant::now(), allotted));
         self
     }
 
@@ -365,16 +359,6 @@ impl OracleBudget {
     pub fn check_interrupt(&self) -> Result<(), String> {
         if self.killed {
             return Err("query cancelled".into());
-        }
-        if let Some((started, allotted)) = self.deadline {
-            let elapsed = started.elapsed();
-            if elapsed > allotted {
-                return Err(format!(
-                    "query budget exceeded: deadline (ms) spent {} of ceiling {}",
-                    elapsed.as_millis(),
-                    allotted.as_millis()
-                ));
-            }
         }
         Ok(())
     }

@@ -317,7 +317,10 @@ fn main() -> io::Result<()> {
                     },
                     server_info: Some(ServerInfo {
                         name: "kyzo-lsp".to_string(),
-                        version: Some(env!("CARGO_PKG_VERSION").to_string()),
+                        version: match option_env!("CARGO_PKG_VERSION") {
+                            Some(v) => Some(v.to_string()),
+                            None => Some(String::from("0.0.0")),
+                        },
                     }),
                 };
                 if let Some(id) = id {

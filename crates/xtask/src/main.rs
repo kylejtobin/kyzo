@@ -23,6 +23,7 @@ mod cargo_meta;
 mod checks;
 mod fsutil;
 mod gate;
+mod host_env;
 mod proc;
 mod verbs;
 

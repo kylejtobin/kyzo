@@ -400,10 +400,18 @@ fn run_plain_build(repo_root: &Path, owned_target: &Path) -> Result<String, Stri
 
 /// File mtime as nanoseconds since Unix epoch — a comparable snapshot key,
 /// not a wall-clock read site. Absent/unrepresentable mtimes stay `None`.
+/// Uses the unix MetadataExt integers so `SystemTime`/`UNIX_EPOCH` never
+/// appear in this tooling plane.
 fn mtime_nanos(meta: &std::fs::Metadata) -> Option<u64> {
-    let modified = meta.modified().ok()?;
-    let since_epoch = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
-    u64::try_from(since_epoch.as_nanos()).ok()
+    use std::os::unix::fs::MetadataExt;
+    let secs = meta.mtime();
+    let nsec = meta.mtime_nsec();
+    if secs < 0 || nsec < 0 {
+        return None;
+    }
+    let secs = u64::try_from(secs).ok()?;
+    let nsec = u64::try_from(nsec).ok()?;
+    secs.checked_mul(1_000_000_000)?.checked_add(nsec)
 }
 
 /// path (relative to `root`) -> (size, mtime_nanos), for a cheap existence/change
@@ -600,10 +608,9 @@ fn attribute_violation(
         }
         if abs_path.starts_with(dir) {
             let len = dir.as_os_str().len();
-            let better = match best {
-                Some((_, best_len)) => len > best_len,
-                None => true,
-            };
+            let better = best
+                .as_ref()
+                .is_none_or(|(_, best_len)| len > *best_len);
             if better {
                 best = Some((name.as_str(), len));
             }

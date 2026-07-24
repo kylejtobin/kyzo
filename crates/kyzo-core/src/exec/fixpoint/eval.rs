@@ -195,7 +195,7 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 use std::ops::ControlFlow;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use miette::{Diagnostic, Result};
 use thiserror::Error;
@@ -208,6 +208,7 @@ use crate::exec::plan::program::MagicSymbol;
 use crate::exec::provenance::eval::{
     PendingWitnesses, WitnessBinder, WitnessKeyMode, WitnessTable,
 };
+use crate::session::host_clock::{self, MonoMillis};
 use kyzo_model::SourceSpan;
 use kyzo_model::program::aggregate::Aggregation;
 use kyzo_model::program::rule::HeadAggrSlot;
@@ -298,11 +299,12 @@ pub(crate) struct EvalInvariantError(pub(crate) &'static str);
 // Budget
 // ─────────────────────────────────────────────────────────────────────────
 
-/// An armed deadline: a start instant and the allotted duration. Kept
-/// together so the refusal can report both spend and ceiling.
+/// An armed deadline: a start stamp and the allotted duration. Kept
+/// together so the refusal can report both spend and ceiling. Stamps are
+/// [`MonoMillis`] from the host-clock seat — never `Instant` in this plane.
 #[derive(Debug, Copy, Clone)]
 struct Deadline {
-    started: Instant,
+    started: MonoMillis,
     allotted: Duration,
 }
 
@@ -359,11 +361,11 @@ impl Budget {
         self
     }
 
-    /// Arm a wall-clock timeout, starting now. (This is the only budget
-    /// dimension that touches the clock; see the module doc's WASM note.)
+    /// Arm a wall-clock timeout from the host-clock seat. (This is the only
+    /// budget dimension that touches the clock; see the module doc's WASM note.)
     pub fn with_timeout(mut self, allotted: Duration) -> Self {
         self.deadline = Some(Deadline {
-            started: Instant::now(),
+            started: host_clock::mono_millis(),
             allotted,
         });
         self
@@ -388,7 +390,7 @@ impl Budget {
             cancel.check()?;
         }
         if let Some(deadline) = &self.deadline {
-            let elapsed = deadline.started.elapsed();
+            let elapsed = host_clock::mono_millis().saturating_elapsed_since(deadline.started);
             if elapsed > deadline.allotted {
                 // Deadline report is `u64` millis; saturate past u64::MAX so
                 // LimitExceeded still fires — never panic on a long clock.

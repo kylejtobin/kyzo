@@ -33,23 +33,46 @@
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 
-
 use miette::{Result, miette};
 
 use kyzo::{DataValue, Engine, FjallStorage, NamedRows};
+use kyzo_trials::host_env;
 
 fn no_params() -> BTreeMap<String, DataValue> {
     BTreeMap::new()
 }
 
 fn db() -> Result<Engine<FjallStorage>> {
-    // One probe door with language_tour (copy_detector).
+    // One probe door with language_fix (copy_detector).
     Engine::<FjallStorage>::compose_temp_fjall().map_err(|e| miette!("engine: {e}"))
+}
+
+/// Fixed-seed FNV-1a — process-stable and cross-run stable (unlike DefaultHasher).
+struct FnvHasher(u64);
+
+impl Default for FnvHasher {
+    fn default() -> Self {
+        Self(0xcbf29ce484222325)
+    }
+}
+
+impl Hasher for FnvHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        let mut h = self.0;
+        for &b in bytes {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        self.0 = h;
+    }
 }
 
 /// Rows in RETURNED order — no sorting. Order itself is part of the claim.
 fn hash_named_rows(rows: &NamedRows) -> u64 {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let mut h = FnvHasher::default();
     rows.headers().hash(&mut h);
     rows.rows().len().hash(&mut h);
     for row in rows.rows() {
@@ -77,9 +100,12 @@ fn run(
 }
 
 fn main() -> Result<()> {
-    let threads = match std::env::var("RAYON_NUM_THREADS") { Ok(v) => v, Err(_) => String::from("default") };
+    let threads = match host_env::rayon_num_threads() {
+        Some(v) => v,
+        None => String::from("default"),
+    };
     let db = db()?;
-    let mut combined = std::collections::hash_map::DefaultHasher::new();
+    let mut combined = FnvHasher::default();
 
     // Composite key `{a, b}` — multi-edge graph (museum probe used `{a => b}`,
     // which collapses duplicate sources; that was a workload defect, not a

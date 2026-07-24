@@ -759,12 +759,12 @@ fn populate_retrying(db: &SimStorage, f: impl Fn(&SimStorage) -> Result<()>) -> 
 /// (`KYZO_DST_QUERY_SEEDS=5000 cargo test -p kyzo --release dst_query`) —
 /// the same knob shape as the parser fuzz corpus's `PROPTEST_CASES`.
 fn seeds(default: u64) -> u64 {
-    match std::env::var("KYZO_DST_QUERY_SEEDS") {
-        Ok(s) => match s.parse::<u64>() {
+    match crate::host_env::dst_query_seeds() {
+        Some(s) => match s.parse::<u64>() {
             Ok(n) => n,
             Err(_) => default,
         },
-        Err(_) => default,
+        None => default,
     }
 }
 

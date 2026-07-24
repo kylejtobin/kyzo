@@ -46,9 +46,9 @@ pub fn env_report() -> Result<(), ProcessFailure> {
     };
     println!("container memory.max: {mem}");
 
-    let threads = match std::env::var("RUST_TEST_THREADS") {
-        Ok(s) => s,
-        Err(_) => "unset (cargo default)".to_string(),
+    let threads = match crate::host_env::rust_test_threads() {
+        Some(s) => s,
+        None => "unset (cargo default)".to_string(),
     };
     println!("RUST_TEST_THREADS:    {threads}");
 
@@ -920,6 +920,11 @@ fn download_gunzip(url: &str) -> Result<Vec<u8>, DatasetRefuse> {
 #[cfg(test)]
 pub fn sha256_hex(data: &[u8]) -> String {
     Sha256::hash(data).to_hex()
+}
+
+/// Spawn failure on `git status` cannot prove a clean tree — Dirty, not a costume Ok.
+fn git_status_unprovable_is_dirty() -> bool {
+    true
 }
 
 /// Best-effort live commit probe for the verb path. Failure to spawn git or

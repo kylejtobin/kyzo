@@ -16,19 +16,14 @@
 /// The engine's ONE wall-clock read: the system-time stamp for writes.
 /// Lives in the session tier by law — the value plane has no ambient
 /// clock, and determinism campaigns replay stamps rather than minting
-/// them.
+/// them. OS read is seated in [`host_clock`].
 pub fn current_validity() -> miette::Result<kyzo_model::value::ValidityTs> {
-    let micros = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| miette::miette!("system clock before the epoch: {e}"))?
-        .as_micros();
-    let micros: i64 = micros
-        .try_into()
-        .map_err(|_| miette::miette!("system clock beyond i64 microseconds"))?;
+    let micros = host_clock::wall_micros()?;
     Ok(kyzo_model::value::ValidityTs::of_micros(micros))
 }
 
 pub(crate) mod access;
+pub(crate) mod host_clock;
 pub(crate) mod admit;
 pub(crate) mod capacity;
 pub(crate) mod catalog;

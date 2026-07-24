@@ -8,12 +8,11 @@
  */
 
 //! nondet.rs — stdlib kernel (move_plan).
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use itertools::Itertools;
-use miette::{Diagnostic, Result, bail, ensure, miette};
+use miette::{Result, bail, ensure, miette};
 use rand::prelude::*;
-use thiserror::Error;
 use uuid::v1::Timestamp;
 
 use kyzo_model::data_value_any;
@@ -135,13 +134,10 @@ pub(crate) fn op_rand_vec(args: &[DataValue]) -> Result<DataValue> {
 /// should refuse loudly rather than silently write validity at the epoch.
 /// The CozoDB original unwrapped and aborted the process.
 fn unix_now() -> Result<Duration> {
-    #[derive(Debug, Error, Diagnostic)]
-    #[error("The system clock reads earlier than the Unix epoch")]
-    #[diagnostic(code(eval::clock_before_epoch))]
-    #[diagnostic(help("Fix the host clock; timestamps are seconds since 1970-01-01T00:00:00Z"))]
-    struct ClockBeforeEpochError;
-
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| ClockBeforeEpochError.into())
+    // Wall micros from the session host-clock seat — never Instant/SystemTime here.
+    let micros = crate::session::host_clock::wall_micros()?;
+    let micros_u64 = u64::try_from(micros).map_err(|_| {
+        miette!("system clock before the epoch (negative micros)")
+    })?;
+    Ok(Duration::from_micros(micros_u64))
 }

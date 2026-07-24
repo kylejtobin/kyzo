@@ -1,0 +1,35 @@
+MECE LANE 5 — nondeterminism attestation
+lease: nondeterminism (~33 → 14)
+date: 2026-07-23
+FALSE if no law-violation exists: remaining hits are seated impurity or trait-forced type names, not ambient Instant/SystemTime/env scattered through eval/value planes.
+
+before: 33 (gate-counts / waivers-legacy inventory)
+after: 14 (syn path_idents ProductionOnly scan; bs-detector --only blocked by parallel grammar.toml edit)
+
+cleared (19):
+- session/mod.rs + stdlib/nondet.rs wall reads → session/host_clock seat
+- fixpoint Budget Deadline Instant → MonoMillis via host_clock
+- session/json "took" Instant → mono_millis
+- oracle OracleBudget Instant deadline removed (pure reference; engine Budget is the wall seat)
+- recovery_sla Instant → bench_recovery::mono_nanos (host_clock)
+- crash hang-watchdog Instant → poll counter
+- crashfs UNIX_EPOCH fallbacks → typed EIO / modified()
+- lsp env!("CARGO_PKG_VERSION") → option_env!
+- xtask mtime_nanos UNIX_EPOCH → MetadataExt mtime integers
+- determinism_digest DefaultHasher → fixed FNV-1a; env → trials host_env
+- campaign/dst/fsutil/verbs env → host_env seats (one std::env::var each)
+
+remaining 14:
+SEATS (waiver requests for Claude — honest impurity doors):
+1-2. crates/kyzo-core/src/session/host_clock.rs:52-53 Instant (OnceLock mono anchor)
+3-4. crates/kyzo-core/src/session/host_clock.rs:74-75 SystemTime/UNIX_EPOCH (wall_micros)
+5. crates/kyzo-trials/src/host_env.rs:12 env (single std::env::var seat)
+6. crates/xtask/src/host_env.rs:13 env (single std::env::var seat)
+
+TRAIT / OUT OF LEASE:
+7-10. crates/kyzo-crashfs/src/passthrough.rs:420,422-424 SystemTime (fuser setattr signature; unused params)
+11-14. crates/bs-detector/src/engines/shape.rs Local (syn::Local; lane must not touch bs-detector)
+
+weakest satisfier: crashfs setattr still names SystemTime because the fuser trait forces it; host_clock still names Instant/SystemTime because those are the OS doors — concentrated, not eliminated.
+evidence anchors: crates/kyzo-core/src/session/host_clock.rs; crates/{xtask,kyzo-trials}/src/host_env.rs; scanner TOTAL 14.
+compile: kyzo-oracle + xtask check green; full kyzo lib red from parallel Bytes32/naked_array lane (no errors in this lane's paths).

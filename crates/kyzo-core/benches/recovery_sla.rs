@@ -33,12 +33,11 @@
 
 use std::hint::black_box;
 use std::process::ExitCode;
-use std::time::Instant;
 
 use kyzo::bench_recovery::{
     IdentitySeed, RECOVERY_SLA_INTERCEPT_NS, RECOVERY_SLA_SLOPE_DEN, RECOVERY_SLA_SLOPE_NUM,
-    WalPayload, WalRecord, WalSegment, commit_ordinal, mint_store_identity, recovery_time_bound_ns,
-    replay,
+    WalPayload, WalRecord, WalSegment, commit_ordinal, mint_store_identity, mono_nanos,
+    recovery_time_bound_ns, replay,
 };
 use kyzo_model::value::convert::{
     u64_from_u128, u64_from_usize, u8_from_u64_low, usize_from_u64, usize_from_u64_fitting,
@@ -193,13 +192,13 @@ fn sample_real_replay(seed: u64, target_bytes: u64) -> Sample {
     };
     black_box(warm);
 
-    let start = Instant::now();
+    let start = mono_nanos();
     let recovered = match replay(store_id, &segments) {
         Ok(r) => r,
         Err(e) => std::panic::resume_unwind(Box::new(format!("timed replay: {e:?}"))),
     };
     black_box(recovered);
-    let recovery_time_ns = match u64_from_u128(start.elapsed().as_nanos()) {
+    let recovery_time_ns = match u64_from_u128(mono_nanos().saturating_sub(start)) {
         Ok(n) => n,
         Err(e) => refuse_width("recovery_time_ns", e),
     };
@@ -334,7 +333,7 @@ fn run() -> Result<(), String> {
 
     if recovery_time_p999 == 0 {
         return Err(
-            "vacuous recovery_time_p999=0ns — corpus too small for Instant resolution".into(),
+            "vacuous recovery_time_p999=0ns — corpus too small for mono_nanos resolution".into(),
         );
     }
     if min_bytes < (1 << 20) {

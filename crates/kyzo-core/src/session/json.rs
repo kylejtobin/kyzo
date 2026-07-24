@@ -59,7 +59,7 @@ impl<S: Storage> Engine<S> {
     /// `Result` a caller could forget to check.
     pub fn run_script_json(&self, payload: &str, params: &JsonValue) -> JsonValue {
         #[cfg(not(target_arch = "wasm32"))]
-        let start = std::time::Instant::now();
+        let start = crate::session::host_clock::mono_millis();
 
         let params: BTreeMap<String, DataValue> = match params {
             JsonValue::Object(map) => map
@@ -91,7 +91,14 @@ impl<S: Storage> Engine<S> {
                     };
                     map.insert("ok".to_string(), json!(true));
                     #[cfg(not(target_arch = "wasm32"))]
-                    map.insert("took".to_string(), json!(start.elapsed().as_secs_f64()));
+                    map.insert(
+                        "took".to_string(),
+                        json!(
+                            crate::session::host_clock::mono_millis()
+                                .saturating_elapsed_since(start)
+                                .as_secs_f64()
+                        ),
+                    );
                     envelope
                 }
                 Err(err) => format_error_as_json(miette::miette!("{err}"), Some(payload)),

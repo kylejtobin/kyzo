@@ -27,6 +27,8 @@
 /// Shared seed-sweep campaign door (gauntlet / serializability).
 #[cfg(test)]
 mod campaign;
+/// Host-env seat for campaign binaries (std::env reads live only here).
+pub mod host_env;
 /// Storage-contract conformance kit — `pub` surface for out-of-crate backends.
 pub mod conformance;
 pub mod determinism;

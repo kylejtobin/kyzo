@@ -707,9 +707,14 @@ mod fuse_crash_matrix {
     /// the campaign's verdict as a hard failure instead of an unbounded stall.
     fn run_bounded(label: &str, body: impl FnOnce() + Send + 'static) {
         let handle = std::thread::spawn(body);
-        let start = std::time::Instant::now();
+        // Poll budget — structural, not Instant. 50ms sleep × polls ≈ PER_SEED_BUDGET.
+        let max_polls = match u64::try_from(PER_SEED_BUDGET.as_millis() / 50) {
+            Ok(n) => n.saturating_add(1),
+            Err(_) => u64::MAX,
+        };
+        let mut polls = 0u64;
         while !handle.is_finished() {
-            if start.elapsed() > PER_SEED_BUDGET {
+            if polls >= max_polls {
                 eprintln!(
                     "HANG DETECTED in {label}: exceeded the {PER_SEED_BUDGET:?} budget — this IS \
                  the \"never hang\" property story #31 exists to police, caught by the campaign \
@@ -718,6 +723,7 @@ mod fuse_crash_matrix {
                 );
                 std::process::exit(90);
             }
+            polls = polls.saturating_add(1);
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
         if let Err(panic_payload) = handle.join() {

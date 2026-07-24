@@ -17,10 +17,10 @@ use anyhow::{Context, Result};
 
 pub fn repo_root() -> Result<PathBuf> {
     // Overridable so tooling can point at a throwaway copy.
-    if let Ok(r) = std::env::var("GATE_ROOT") {
+    if let Some(r) = crate::host_env::gate_root() {
         return Ok(PathBuf::from(r));
     }
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
+    let manifest_dir = crate::host_env::cargo_manifest_dir()
         .context("CARGO_MANIFEST_DIR not set (run via `cargo run -p xtask`)")?;
     // Walk up from xtask's own manifest dir to the real workspace root
     // (marked by a root `Cargo.toml` containing a `[workspace]` table),
