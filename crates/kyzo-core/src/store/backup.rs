@@ -1019,7 +1019,8 @@ mod tests {
             ObjectsCompleteness, OriginRootRegistry, PackRefuse, import_verify,
         };
         use crate::store::crypto::{
-            Kek, KekUnwrapCap, SegmentCounter, ShredLedger, ShredSalt, shred, wrap_shred_salt,
+            Kek, KekUnwrapCap, SegmentCounter, ShredLedger, ShredSalt, ShredTombstone,
+            wrap_shred_salt,
         };
         use crate::store::epoch::{CryptoDomain, FenceEpoch};
         use crate::store::open::StoreId;
@@ -1079,10 +1080,12 @@ mod tests {
             Err(PackRefuse::ForeignHistoryUnverified)
         ));
 
-        // Post-shred restore of a pack that still carries the wrap → Shredded.
-        let (_receipt, tombstone) = shred(wrapped);
+        // Ledger revoke → Shredded on restore. Does not claim on-disk destroy (seat 64 unbuilt).
         let mut shredded = ShredLedger::new();
-        shredded.record(tombstone);
+        shredded.record(ShredTombstone::name_revoked(
+            wrapped.segment(),
+            wrapped.crypto_domain(),
+        ));
         assert!(matches!(
             import_verify(&pack, verified, ObjectsCompleteness::Complete, &shredded),
             Err(PackRefuse::Shredded)
@@ -1106,7 +1109,7 @@ mod import_verify {
     use crate::store::FormatVersion;
     use crate::store::authority::{Entropy, IncarnationMintCap, OpenOrdinal};
     use crate::store::crypto::{
-        Kek, KekUnwrapCap, SegmentCounter, ShredLedger, ShredSalt, shred, wrap_shred_salt,
+        Kek, KekUnwrapCap, SegmentCounter, ShredLedger, ShredSalt, ShredTombstone, wrap_shred_salt,
     };
     use crate::store::epoch::{CryptoDomain, FenceEpoch};
     use crate::store::merkle::{ChainLinkKind, GENESIS_ROOT, ReplicaCutRecompute, StateRoot};
@@ -1403,11 +1406,14 @@ mod import_verify {
     }
 
     #[test]
-    fn post_shred_restore_refuses_shredded() -> Result<()> {
+    fn ledger_tombstone_restore_refuses_shredded() -> Result<()> {
         let (pack, wrapped) = sample_pack()?;
         let (cap, mut ledger) = trusted_verified_import_setup(&pack)?;
-        let (_receipt, tombstone) = shred(wrapped);
-        ledger.record(tombstone);
+        // Ledger revoke only — Store destroy door unbuilt (seat 64).
+        ledger.record(ShredTombstone::name_revoked(
+            wrapped.segment(),
+            wrapped.crypto_domain(),
+        ));
         assert!(matches!(
             import_verify(&pack, cap, ObjectsCompleteness::Complete, &ledger),
             Err(PackRefuse::Shredded)

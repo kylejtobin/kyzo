@@ -855,7 +855,11 @@ pub fn compress_then_encrypt(
     encrypt(compress(plaintext), dek, nonce, arm, aad)
 }
 
-/// Shred receipt — wrapped salt destroyed inside the sovereignty boundary.
+/// Shred receipt — reserved for the Store destroy door (seat 64).
+///
+/// The hollow `shred()` that minted this without destroying on-disk wrapped
+/// salt was deleted (tip 477). Receipt construction returns when that door
+/// is built for real.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShredReceipt {
     segment: SegmentCounter,
@@ -876,8 +880,10 @@ impl ShredReceipt {
 
 /// Durable shred tombstone naming one shredded (CryptoDomain, SegmentCounter).
 ///
-/// Survives so post-shred restore of an old pack that still carries the wrapped
+/// Survives so restore of an old pack that still carries the wrapped
 /// ciphertext converges to [`CryptoRefuse::Shredded`], not silent unreadability.
+/// Naming a revocation here does **not** destroy on-disk wrapped salt — that
+/// Store destroy door is unbuilt (seat 64); see [`ShredTombstone::name_revoked`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ShredTombstone {
     segment: SegmentCounter,
@@ -885,6 +891,18 @@ pub struct ShredTombstone {
 }
 
 impl ShredTombstone {
+    /// Name a (domain, segment) as revoked in a [`ShredLedger`].
+    ///
+    /// This is ledger bookkeeping only — it does not zeroize, rewrite, or
+    /// GC any persisted [`WrappedShredSalt`]. Seat 64's destroy door is
+    /// unbuilt; do not treat this as crypto-shred.
+    pub(crate) fn name_revoked(segment: SegmentCounter, crypto_domain: CryptoDomain) -> Self {
+        Self {
+            segment,
+            crypto_domain,
+        }
+    }
+
     /// Segment this tombstone revokes.
     pub fn segment(self) -> SegmentCounter {
         self.segment
@@ -897,7 +915,7 @@ impl ShredTombstone {
 
     /// Whether this tombstone covers a wrapped salt handle.
     pub fn covers(self, wrapped: &WrappedShredSalt) -> bool {
-        self.segment == wrapped.segment && self.crypto_domain == wrapped.crypto_domain
+        self.segment == wrapped.segment() && self.crypto_domain == wrapped.crypto_domain()
     }
 }
 
@@ -916,7 +934,7 @@ impl ShredLedger {
         }
     }
 
-    /// Record a tombstone from [`shred`].
+    /// Record a tombstone from [`ShredTombstone::name_revoked`] (or the future destroy door).
     pub fn record(&mut self, tombstone: ShredTombstone) {
         self.keys.insert((
             tombstone.crypto_domain.store_id().as_bytes().0,
@@ -932,21 +950,6 @@ impl ShredLedger {
             wrapped.crypto_domain.fence_epoch().get(),
             wrapped.segment.get(),
         ))
-    }
-}
-
-/// Destroy a [`WrappedShredSalt`] (and, by Spec, all authorized replicas via
-/// retention). Consumes the wrap — post-shred restore → [`CryptoRefuse::Shredded`]
-/// once the returned [`ShredTombstone`] is recorded in a [`ShredLedger`].
-pub fn shred(wrapped: WrappedShredSalt) -> (ShredReceipt, ShredTombstone) {
-    let WrappedShredSalt { ciphertext, segment, crypto_domain } = wrapped;
-    let receipt = ShredReceipt { segment, crypto_domain };
-    let tombstone = ShredTombstone { segment, crypto_domain };
-    let shredded_len = ciphertext.len();
-    if shredded_len > 0 {
-        (receipt, tombstone)
-    } else {
-        (receipt, tombstone)
     }
 }
 
@@ -1047,28 +1050,26 @@ mod tests {
         let opened = unwrap_shred_salt(&cap, &wrapped, &ledger)?;
         let dek = derive_dek(&cap, domain, seg, &opened);
         assert_eq!(dek.crypto_domain(), domain);
-        let (receipt, tombstone) = shred(wrapped);
-        assert_eq!(receipt.segment(), seg);
+        // Ledger revoke naming only — Store destroy door (seat 64) is unbuilt.
+        let tombstone = ShredTombstone::name_revoked(seg, domain);
         assert!(tombstone.covers(&WrappedShredSalt::from_persisted(vec![0], seg, domain)));
 
         Ok(())
     }
 
     #[test]
-    fn post_shred_unwrap_refuses_shredded() -> Result<()> {
+    fn ledger_tombstone_refuses_unwrap() -> Result<()> {
         let kek = Kek::admit(crate::data::fixed_bytes::Bytes32([0x11; 32]));
         let cap = KekUnwrapCap::from_kek(kek);
         let salt = ShredSalt::admit(crate::data::fixed_bytes::Bytes32([0x22; 32]));
         let seg = SegmentCounter::of_u64(3);
         let domain = test_domain();
         let wrapped = wrap_shred_salt(&cap, &salt, seg, domain)?;
-        // Old pack still holds a copy of the wrapped ciphertext.
-        let stale_copy = wrapped.clone();
-        let (_receipt, tombstone) = shred(wrapped);
+        // Ledger bookkeeping refuse — does not claim on-disk destroy (seat 64 unbuilt).
         let mut ledger = ShredLedger::new();
-        ledger.record(tombstone);
+        ledger.record(ShredTombstone::name_revoked(seg, domain));
         assert!(matches!(
-            unwrap_shred_salt(&cap, &stale_copy, &ledger),
+            unwrap_shred_salt(&cap, &wrapped, &ledger),
             Err(CryptoRefuse::Shredded)
         ));
 
