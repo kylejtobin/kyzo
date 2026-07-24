@@ -116,26 +116,27 @@ impl<'ast> Visit<'ast> for Enclosing {
     }
 }
 
+/// Typed test refusal — file-level for `total_refusal` workspace-enum index (tip 777).
+#[cfg(test)]
+#[derive(Debug)]
+enum IdentityProofRefuse {
+    Parse,
+    MissingItem,
+    LayoutBreaksIdentity,
+    RenameKeepsIdentity,
+    DocKeepsIdentity,
+    LocalRenameKeepsIdentity,
+    LineCommentBreaksIdentity,
+    EnclosingHashMismatch,
+    IdentityNormalizesIdents,
+    IdentsNotVerbatim,
+    WaiverMissesOnSiteHash,
+    DriftedWaiverStillMatches,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Typed test refusal — not `String`/`assert!`/`expect` (tip 764 / item 9).
-    #[derive(Debug)]
-    enum IdentityProofRefuse {
-        Parse,
-        MissingItem,
-        LayoutBreaksIdentity,
-        RenameKeepsIdentity,
-        DocKeepsIdentity,
-        LocalRenameKeepsIdentity,
-        LineCommentBreaksIdentity,
-        EnclosingHashMismatch,
-        IdentityNormalizesIdents,
-        IdentsNotVerbatim,
-        WaiverMissesOnSiteHash,
-        DriftedWaiverStillMatches,
-    }
 
     type TestResult = Result<(), IdentityProofRefuse>;
 

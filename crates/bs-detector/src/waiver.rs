@@ -360,44 +360,45 @@ impl WaiverFile {
     }
 }
 
+/// Typed test refusal — file-level for `total_refusal` workspace-enum index (tip 777).
+#[cfg(test)]
+#[derive(Debug)]
+enum WaiverProofRefuse {
+    Tempfile,
+    WriteFixture,
+    Load,
+    Template,
+    Fill,
+    ExpectCheckBind,
+    UnwrapCheckLeak,
+    SiteHashMismatch,
+    CitationMismatch,
+    AnchorMismatch,
+    HedgeSilent,
+    HedgeUnnamed,
+    FixtureReplace,
+    TrueSilent,
+    UnexpectedSlot,
+    EmptySlotSilent,
+    DupSiteSilent,
+    ShortHashSilent,
+    MalformedCitationSilent,
+    MissingAnchorSilent,
+    UnknownFieldSilent,
+    EmptyScopeSilent,
+    UndeclaredLedgerSilent,
+    ScopeSlashSilent,
+    ScopeSlashMsg,
+    EmptyLedgerLoad,
+    EmptyWaiverNotEmpty,
+    EmptyScopeNotEmpty,
+    FreeformSilent,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
-
-    /// Typed test refusal — not `String`/`assert!`/`expect` (tip 764 / item 9).
-    #[derive(Debug)]
-    enum WaiverProofRefuse {
-        Tempfile,
-        WriteFixture,
-        Load,
-        Template,
-        Fill,
-        ExpectCheckBind,
-        UnwrapCheckLeak,
-        SiteHashMismatch,
-        CitationMismatch,
-        AnchorMismatch,
-        HedgeSilent,
-        HedgeUnnamed,
-        FixtureReplace,
-        TrueSilent,
-        UnexpectedSlot,
-        EmptySlotSilent,
-        DupSiteSilent,
-        ShortHashSilent,
-        MalformedCitationSilent,
-        MissingAnchorSilent,
-        UnknownFieldSilent,
-        EmptyScopeSilent,
-        UndeclaredLedgerSilent,
-        ScopeSlashSilent,
-        ScopeSlashMsg,
-        EmptyLedgerLoad,
-        EmptyWaiverNotEmpty,
-        EmptyScopeNotEmpty,
-        FreeformSilent,
-    }
 
     type TestResult = Result<(), WaiverProofRefuse>;
 

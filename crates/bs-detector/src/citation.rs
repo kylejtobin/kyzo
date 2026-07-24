@@ -295,41 +295,42 @@ fn seat_block(text: &str, n: u32) -> Option<String> {
     Some(lines[start..end].join("\n"))
 }
 
+/// Typed test refusal — file-level for `total_refusal` workspace-enum index (tip 777).
+#[cfg(test)]
+#[derive(Debug)]
+enum CitationProofRefuse {
+    Mkdir,
+    Write,
+    TempDir,
+    LawsWrite,
+    LawsLoad,
+    Parse,
+    Resolve,
+    LawNameForm,
+    FileItemForm,
+    TestFnForm,
+    DecisionsSeatForm,
+    RLawNameForm,
+    MalformedMustErr,
+    GarbageMustErr,
+    EmptyMustErr,
+    LiveMustNotBeDead,
+    EditMustDead,
+    DeadMustStopWaiver,
+    CratesParent,
+    RepoRoot,
+    HashLen,
+    MissingSeatMustNone,
+    HashMustChange,
+    ConstResolveBlind,
+    ConstHashMustChange,
+    ImplRefResolveBlind,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
-
-    /// Typed test refusal — not `String`/`assert!`/`expect` (tip 764 / item 9).
-    #[derive(Debug)]
-    enum CitationProofRefuse {
-        Mkdir,
-        Write,
-        TempDir,
-        LawsWrite,
-        LawsLoad,
-        Parse,
-        Resolve,
-        LawNameForm,
-        FileItemForm,
-        TestFnForm,
-        DecisionsSeatForm,
-        RLawNameForm,
-        MalformedMustErr,
-        GarbageMustErr,
-        EmptyMustErr,
-        LiveMustNotBeDead,
-        EditMustDead,
-        DeadMustStopWaiver,
-        CratesParent,
-        RepoRoot,
-        HashLen,
-        MissingSeatMustNone,
-        HashMustChange,
-        ConstResolveBlind,
-        ConstHashMustChange,
-        ImplRefResolveBlind,
-    }
 
     type TestResult = Result<(), CitationProofRefuse>;
 

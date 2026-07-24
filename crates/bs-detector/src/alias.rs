@@ -434,21 +434,23 @@ fn collect_file(
     Ok(())
 }
 
+/// Typed test refusal — file-level so `total_refusal` indexes it as a workspace
+/// enum (tip 777). Nested inside `mod tests` was `not-workspace-enum`.
+#[cfg(test)]
+#[derive(Debug)]
+enum AliasProofRefuse {
+    Parse,
+    Build,
+    Type,
+    MustCarry,
+    MustNotCarry,
+    CycleSilent,
+    CycleUnnamed,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Typed test refusal — not `String`/`assert!`/`expect` (tip 764 / item 9).
-    #[derive(Debug)]
-    enum AliasProofRefuse {
-        Parse,
-        Build,
-        Type,
-        MustCarry,
-        MustNotCarry,
-        CycleSilent,
-        CycleUnnamed,
-    }
 
     type TestResult = Result<(), AliasProofRefuse>;
 
