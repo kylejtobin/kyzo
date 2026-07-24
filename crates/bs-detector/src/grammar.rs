@@ -756,6 +756,24 @@ impl Grammar {
         for kind in &condemned {
             expected.insert(format!("{}.deny.rs", kind.kebab()));
         }
+        // Tip 689 anti-fake-up gap-fill: seated kinds whose hard
+        // `unclassified-<kind>` check is NOT already proven by a construct
+        // deny/pass under full classify. Closed list — do not mint pairs that
+        // duplicate an existing construct fixture (fraudulent double-proof).
+        // Vacuous seats (const / mod / impl-const / trait-const) ship PASS only;
+        // a DENY that cannot detonate would itself be a fake-up.
+        for name in [
+            "unclassified-const.pass.rs",
+            "unclassified-impl-const.pass.rs",
+            "unclassified-trait-const.pass.rs",
+            "unclassified-impl-type.pass.rs",
+            "unclassified-impl-type.deny.rs",
+            "unclassified-trait-type.pass.rs",
+            "unclassified-trait-type.deny.rs",
+            "unclassified-trait-fn.deny.rs",
+        ] {
+            expected.insert(name.to_string());
+        }
         let entries = std::fs::read_dir(fixtures_dir)
             .with_context(|| format!("reading fixtures dir {}", fixtures_dir.display()))?;
         let mut present: BTreeSet<String> = BTreeSet::new();

@@ -1242,6 +1242,218 @@ mod fixture_tests {
         }
     }
 
+    /// Tip 689: every hard `unclassified-<kind>` check that can fire has a
+    /// DENY fixture (exact construct) and a PASS fixture (zero hits under
+    /// that prefix). Reuses construct seat fixtures where they already prove
+    /// the kind — gap-fill files only for missing adversaries.
+    #[test]
+    fn tip_689_every_unclassified_kind_deny_and_pass() {
+        let grammar = real_grammar();
+        let fixtures = crate_dir().join("fixtures");
+
+        /// One seated kind's tip-689 proof pair.
+        /// `deny` is `None` only when the seat is vacuous (check cannot fire).
+        struct Case {
+            kind: &'static str,
+            /// fixtures/ relative path — must emit exactly `unclassified-{kind}:{label}`
+            deny: Option<(&'static str, &'static str)>,
+            /// fixtures/ relative path — must emit ZERO `unclassified-{kind}:*`
+            pass: &'static str,
+            /// admit path (declared-fn seats bind to the fixture's own path)
+            pass_rel: &'static str,
+            deny_rel: &'static str,
+        }
+
+        let cases: &[Case] = &[
+            // --- reuse construct fixtures (already prove under classify) ---
+            Case {
+                kind: "enum",
+                deny: Some(("sum-type.deny.rs", "unclassified-enum:SumString")),
+                pass: "sum-type.pass.rs",
+                pass_rel: "crates/probe/src/lib.rs",
+                deny_rel: "crates/probe/src/lib.rs",
+            },
+            Case {
+                kind: "fn",
+                deny: Some(("declared-fn.deny.rs", "unclassified-fn:proof_fn")),
+                pass: "declared-fn.pass.rs",
+                pass_rel: "crates/bs-detector/fixtures/declared-fn.pass.rs",
+                deny_rel: "crates/bs-detector/fixtures/declared-fn.deny.rs",
+            },
+            Case {
+                kind: "impl",
+                deny: Some(("impl-container.deny.rs", "unclassified-impl:T")),
+                pass: "impl-container.pass.rs",
+                pass_rel: "crates/probe/src/lib.rs",
+                deny_rel: "crates/probe/src/lib.rs",
+            },
+            Case {
+                kind: "static",
+                deny: Some(("constant.deny.rs", "unclassified-static:G")),
+                pass: "constant.pass.rs",
+                pass_rel: "crates/probe/src/lib.rs",
+                deny_rel: "crates/probe/src/lib.rs",
+            },
+            Case {
+                kind: "struct",
+                deny: Some(("newtype-scalar.deny.rs", "unclassified-struct:NotNewtype")),
+                pass: "newtype-scalar.pass.rs",
+                pass_rel: "crates/probe/src/lib.rs",
+                deny_rel: "crates/probe/src/lib.rs",
+            },
+            Case {
+                kind: "trait",
+                deny: Some(("trait-container.deny.rs", "unclassified-trait:T")),
+                pass: "trait-container.pass.rs",
+                pass_rel: "crates/probe/src/lib.rs",
+                deny_rel: "crates/probe/src/lib.rs",
+            },
+            Case {
+                kind: "type",
+                deny: Some(("alias.deny.rs", "unclassified-type:AliasString")),
+                pass: "alias.pass.rs",
+                pass_rel: "crates/probe/src/lib.rs",
+                deny_rel: "crates/probe/src/lib.rs",
+            },
+            Case {
+                kind: "use",
+                deny: Some(("import.deny.rs", "unclassified-use:use")),
+                pass: "import.pass.rs",
+                pass_rel: "crates/probe/src/lib.rs",
+                deny_rel: "crates/probe/src/lib.rs",
+            },
+            Case {
+                kind: "impl-fn",
+                deny: Some(("admission-door.deny.rs", "unclassified-impl-fn:new")),
+                pass: "admission-door.pass.rs",
+                pass_rel: "crates/probe/src/lib.rs",
+                deny_rel: "crates/probe/src/lib.rs",
+            },
+            // mod: ModuleNoPathAttr seats every mod — check cannot fire.
+            Case {
+                kind: "mod",
+                deny: None,
+                pass: "module.pass.rs",
+                pass_rel: "crates/probe/src/lib.rs",
+                deny_rel: "crates/probe/src/lib.rs",
+            },
+            // --- tip 689 gap-fill (dedicated unclassified-* fixtures) ---
+            Case {
+                kind: "const",
+                deny: None, // ConstantNoStaticMut is vacuous for Item::Const
+                pass: "unclassified-const.pass.rs",
+                pass_rel: "crates/probe/src/lib.rs",
+                deny_rel: "crates/probe/src/lib.rs",
+            },
+            Case {
+                kind: "impl-const",
+                deny: None, // vacuous ConstantNoStaticMut on ImplItem::Const
+                pass: "unclassified-impl-const.pass.rs",
+                pass_rel: "crates/probe/src/lib.rs",
+                deny_rel: "crates/probe/src/lib.rs",
+            },
+            Case {
+                kind: "trait-const",
+                deny: None, // vacuous ConstantNoStaticMut on TraitItem::Const
+                pass: "unclassified-trait-const.pass.rs",
+                pass_rel: "crates/probe/src/lib.rs",
+                deny_rel: "crates/probe/src/lib.rs",
+            },
+            Case {
+                kind: "impl-type",
+                deny: Some(("unclassified-impl-type.deny.rs", "unclassified-impl-type:X")),
+                pass: "unclassified-impl-type.pass.rs",
+                pass_rel: "crates/probe/src/lib.rs",
+                deny_rel: "crates/probe/src/lib.rs",
+            },
+            Case {
+                kind: "trait-type",
+                deny: Some(("unclassified-trait-type.deny.rs", "unclassified-trait-type:X")),
+                pass: "unclassified-trait-type.pass.rs",
+                pass_rel: "crates/probe/src/lib.rs",
+                deny_rel: "crates/probe/src/lib.rs",
+            },
+            Case {
+                kind: "trait-fn",
+                deny: Some(("unclassified-trait-fn.deny.rs", "unclassified-trait-fn:f")),
+                // trait-container.pass's `fn f(&self)` seats as derivation
+                pass: "trait-container.pass.rs",
+                pass_rel: "crates/probe/src/lib.rs",
+                deny_rel: "crates/probe/src/lib.rs",
+            },
+        ];
+
+        assert_eq!(
+            cases.len(),
+            16,
+            "tip 689 must cover all 16 seated-kind hard checks"
+        );
+
+        for case in cases {
+            let prefix = format!("unclassified-{}:", case.kind);
+            let pass_src = std::fs::read_to_string(fixtures.join(case.pass))
+                .unwrap_or_else(|e| panic!("{} pass readable: {e}", case.kind));
+            let pass_ast = syn::parse_file(&pass_src)
+                .unwrap_or_else(|e| panic!("{} pass parses: {e}", case.kind));
+            let pass_f = SourceFile::admit(case.pass_rel.to_string(), pass_src, pass_ast);
+            let pass_hits = classify_file(
+                &grammar,
+                &pass_f,
+                &crate::alias::AliasTable::build(&[&pass_f]).expect("aliases"),
+            );
+            let pass_unclass: Vec<&str> = pass_hits
+                .iter()
+                .map(|h| h.construct())
+                .filter(|c| c.starts_with(&prefix))
+                .collect();
+            assert_eq!(
+                pass_unclass,
+                Vec::<&str>::new(),
+                "{} PASS fixture must not fire {prefix}*: {pass_hits:?}",
+                case.kind
+            );
+
+            match case.deny {
+                Some((deny_file, want)) => {
+                    let deny_src = std::fs::read_to_string(fixtures.join(deny_file))
+                        .unwrap_or_else(|e| panic!("{} deny readable: {e}", case.kind));
+                    let deny_ast = syn::parse_file(&deny_src)
+                        .unwrap_or_else(|e| panic!("{} deny parses: {e}", case.kind));
+                    let deny_f = SourceFile::admit(case.deny_rel.to_string(), deny_src, deny_ast);
+                    let deny_hits = classify_file(
+                        &grammar,
+                        &deny_f,
+                        &crate::alias::AliasTable::build(&[&deny_f]).expect("aliases"),
+                    );
+                    let got: Vec<String> = deny_hits
+                        .iter()
+                        .map(|h| h.construct().to_string())
+                        .filter(|c| c.starts_with(&prefix))
+                        .collect();
+                    assert_eq!(
+                        got,
+                        vec![want.to_string()],
+                        "{} DENY must be exact `{want}` under {prefix}: {deny_hits:?}",
+                        case.kind
+                    );
+                }
+                None => {
+                    // Vacuous seat: the check cannot fire. Adversary shapes that
+                    // look "open" must still seat — a detonating DENY here would
+                    // be fabricated fake-up.
+                    assert!(
+                        matches!(
+                            case.kind,
+                            "const" | "mod" | "impl-const" | "trait-const"
+                        ),
+                        "{} has no DENY but is not a named vacuous seat",
+                        case.kind
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn every_condemned_kind_deny_fixture_is_red_under_its_own_law() {
         let grammar = real_grammar();

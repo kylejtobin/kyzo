@@ -38,15 +38,14 @@ fn detonates(name: &str, src: &str) -> Option<usize> {
 #[test]
 fn bite_unwrap() {
     assert_eq!(detonates("unwrap", "fn f(x: Option<u8>) -> u8 { x.unwrap() }"), Some(1));
-    // The zone-law boundary: #[test] scaffolding has no callers, so the
-    // loud detonator is exempt there — and ONLY there.
-    assert_eq!(detonates("unwrap", "#[test]\nfn t() { Some(1u8).unwrap(); }"), Some(0));
+    // Tip 650/659: no ProductionOnly/#[test] strip — test scaffolding is scanned.
+    assert_eq!(detonates("unwrap", "#[test]\nfn t() { Some(1u8).unwrap(); }"), Some(1));
 }
 
 #[test]
 fn bite_expect() {
     assert_eq!(detonates("expect", "fn f(x: Option<u8>) -> u8 { x.expect(\"y\") }"), Some(1));
-    assert_eq!(detonates("expect", "#[test]\nfn t() { Some(1u8).expect(\"y\"); }"), Some(0));
+    assert_eq!(detonates("expect", "#[test]\nfn t() { Some(1u8).expect(\"y\"); }"), Some(1));
 }
 
 #[test]
@@ -75,13 +74,14 @@ fn bite_unwrap_unchecked() {
 #[test]
 fn bite_panic_bang() {
     assert_eq!(detonates("panic_bang", "fn f() { panic!(\"boom\"); }"), Some(1));
-    assert_eq!(detonates("panic_bang", "#[test]\nfn t() { panic!(\"loud test failure\"); }"), Some(0));
+    // Tip 650/659: no ProductionOnly/#[test] strip.
+    assert_eq!(detonates("panic_bang", "#[test]\nfn t() { panic!(\"loud test failure\"); }"), Some(1));
 }
 
 #[test]
 fn bite_unreachable_bang() {
     assert_eq!(detonates("unreachable_bang", "fn f(x: bool) -> u8 { if x { 1 } else { unreachable!() } }"), Some(1));
-    assert_eq!(detonates("unreachable_bang", "#[test]\nfn t() { if false { unreachable!() } }"), Some(0));
+    assert_eq!(detonates("unreachable_bang", "#[test]\nfn t() { if false { unreachable!() } }"), Some(1));
 }
 
 #[test]
@@ -465,7 +465,23 @@ fn the_real_grammar_and_laws_load_and_bind_to_this_file() {
         }
     }
     for pass in [
-        "unclassified",
+        // Tip 650/689: soft umbrella `unclassified` is gone — per-kind hard checks.
+        "unclassified-const",
+        "unclassified-enum",
+        "unclassified-fn",
+        "unclassified-impl",
+        "unclassified-mod",
+        "unclassified-static",
+        "unclassified-struct",
+        "unclassified-trait",
+        "unclassified-type",
+        "unclassified-use",
+        "unclassified-impl-const",
+        "unclassified-impl-fn",
+        "unclassified-impl-type",
+        "unclassified-trait-const",
+        "unclassified-trait-fn",
+        "unclassified-trait-type",
         "derive_bypass",
         "copy_detector",
         "agreement_registry",
@@ -490,6 +506,236 @@ fn the_real_grammar_and_laws_load_and_bind_to_this_file() {
     }
 }
 
+// --- tip 689: per-kind unclassified deny+pass (exact constructs only) --------
+
+fn classify_fixture(rel: &str, src: &str) -> Option<Vec<Hit>> {
+    let f = parsed(rel, src)?;
+    let grammar = bs_detector::grammar::Grammar::load(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("grammar.toml"),
+        include_str!("bite_proofs.rs"),
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures"),
+    )
+    .ok()?;
+    let aliases = bs_detector::alias::AliasTable::build(&[&f]).ok()?;
+    Some(bs_detector::classify::classify_file(&grammar, &f, &aliases))
+}
+
+fn fixture_src(name: &str) -> Option<String> {
+    std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures")
+            .join(name),
+    )
+    .ok()
+}
+
+fn unclassified_prefix_hits<'a>(hits: &'a [Hit], kind: &str) -> Vec<&'a str> {
+    let prefix = format!("unclassified-{kind}:");
+    hits.iter()
+        .map(|h| h.construct())
+        .filter(|c| c.starts_with(&prefix))
+        .collect()
+}
+
+#[test]
+fn bite_unclassified_enum() {
+    let deny = fixture_src("sum-type.deny.rs").expect("deny fixture");
+    let pass = fixture_src("sum-type.pass.rs").expect("pass fixture");
+    let deny_hits = classify_fixture("crates/probe/src/lib.rs", &deny).expect("classifies");
+    let pass_hits = classify_fixture("crates/probe/src/lib.rs", &pass).expect("classifies");
+    assert_eq!(
+        unclassified_prefix_hits(&deny_hits, "enum"),
+        vec!["unclassified-enum:SumString"]
+    );
+    assert_eq!(unclassified_prefix_hits(&pass_hits, "enum"), Vec::<&str>::new());
+}
+
+#[test]
+fn bite_unclassified_fn() {
+    let deny = fixture_src("declared-fn.deny.rs").expect("deny fixture");
+    let pass = fixture_src("declared-fn.pass.rs").expect("pass fixture");
+    let deny_hits = classify_fixture(
+        "crates/bs-detector/fixtures/declared-fn.deny.rs",
+        &deny,
+    )
+    .expect("classifies");
+    let pass_hits = classify_fixture(
+        "crates/bs-detector/fixtures/declared-fn.pass.rs",
+        &pass,
+    )
+    .expect("classifies");
+    assert_eq!(
+        unclassified_prefix_hits(&deny_hits, "fn"),
+        vec!["unclassified-fn:proof_fn"]
+    );
+    assert_eq!(unclassified_prefix_hits(&pass_hits, "fn"), Vec::<&str>::new());
+}
+
+#[test]
+fn bite_unclassified_impl() {
+    let deny = fixture_src("impl-container.deny.rs").expect("deny fixture");
+    let pass = fixture_src("impl-container.pass.rs").expect("pass fixture");
+    let deny_hits = classify_fixture("crates/probe/src/lib.rs", &deny).expect("classifies");
+    let pass_hits = classify_fixture("crates/probe/src/lib.rs", &pass).expect("classifies");
+    assert_eq!(
+        unclassified_prefix_hits(&deny_hits, "impl"),
+        vec!["unclassified-impl:T"]
+    );
+    assert_eq!(unclassified_prefix_hits(&pass_hits, "impl"), Vec::<&str>::new());
+}
+
+#[test]
+fn bite_unclassified_static() {
+    let deny = fixture_src("constant.deny.rs").expect("deny fixture");
+    let pass = fixture_src("constant.pass.rs").expect("pass fixture");
+    let deny_hits = classify_fixture("crates/probe/src/lib.rs", &deny).expect("classifies");
+    let pass_hits = classify_fixture("crates/probe/src/lib.rs", &pass).expect("classifies");
+    assert_eq!(
+        unclassified_prefix_hits(&deny_hits, "static"),
+        vec!["unclassified-static:G"]
+    );
+    assert_eq!(unclassified_prefix_hits(&pass_hits, "static"), Vec::<&str>::new());
+}
+
+#[test]
+fn bite_unclassified_struct() {
+    let deny = fixture_src("newtype-scalar.deny.rs").expect("deny fixture");
+    let pass = fixture_src("newtype-scalar.pass.rs").expect("pass fixture");
+    let deny_hits = classify_fixture("crates/probe/src/lib.rs", &deny).expect("classifies");
+    let pass_hits = classify_fixture("crates/probe/src/lib.rs", &pass).expect("classifies");
+    assert_eq!(
+        unclassified_prefix_hits(&deny_hits, "struct"),
+        vec!["unclassified-struct:NotNewtype"]
+    );
+    assert_eq!(unclassified_prefix_hits(&pass_hits, "struct"), Vec::<&str>::new());
+}
+
+#[test]
+fn bite_unclassified_trait() {
+    let deny = fixture_src("trait-container.deny.rs").expect("deny fixture");
+    let pass = fixture_src("trait-container.pass.rs").expect("pass fixture");
+    let deny_hits = classify_fixture("crates/probe/src/lib.rs", &deny).expect("classifies");
+    let pass_hits = classify_fixture("crates/probe/src/lib.rs", &pass).expect("classifies");
+    assert_eq!(
+        unclassified_prefix_hits(&deny_hits, "trait"),
+        vec!["unclassified-trait:T"]
+    );
+    assert_eq!(unclassified_prefix_hits(&pass_hits, "trait"), Vec::<&str>::new());
+}
+
+#[test]
+fn bite_unclassified_type() {
+    let deny = fixture_src("alias.deny.rs").expect("deny fixture");
+    let pass = fixture_src("alias.pass.rs").expect("pass fixture");
+    let deny_hits = classify_fixture("crates/probe/src/lib.rs", &deny).expect("classifies");
+    let pass_hits = classify_fixture("crates/probe/src/lib.rs", &pass).expect("classifies");
+    assert_eq!(
+        unclassified_prefix_hits(&deny_hits, "type"),
+        vec!["unclassified-type:AliasString"]
+    );
+    assert_eq!(unclassified_prefix_hits(&pass_hits, "type"), Vec::<&str>::new());
+}
+
+#[test]
+fn bite_unclassified_use() {
+    let deny = fixture_src("import.deny.rs").expect("deny fixture");
+    let pass = fixture_src("import.pass.rs").expect("pass fixture");
+    let deny_hits = classify_fixture("crates/probe/src/lib.rs", &deny).expect("classifies");
+    let pass_hits = classify_fixture("crates/probe/src/lib.rs", &pass).expect("classifies");
+    assert_eq!(
+        unclassified_prefix_hits(&deny_hits, "use"),
+        vec!["unclassified-use:use"]
+    );
+    assert_eq!(unclassified_prefix_hits(&pass_hits, "use"), Vec::<&str>::new());
+}
+
+#[test]
+fn bite_unclassified_impl_fn() {
+    let deny = fixture_src("admission-door.deny.rs").expect("deny fixture");
+    let pass = fixture_src("admission-door.pass.rs").expect("pass fixture");
+    let deny_hits = classify_fixture("crates/probe/src/lib.rs", &deny).expect("classifies");
+    let pass_hits = classify_fixture("crates/probe/src/lib.rs", &pass).expect("classifies");
+    assert_eq!(
+        unclassified_prefix_hits(&deny_hits, "impl-fn"),
+        vec!["unclassified-impl-fn:new"]
+    );
+    assert_eq!(unclassified_prefix_hits(&pass_hits, "impl-fn"), Vec::<&str>::new());
+}
+
+#[test]
+fn bite_unclassified_impl_type() {
+    let deny = fixture_src("unclassified-impl-type.deny.rs").expect("deny fixture");
+    let pass = fixture_src("unclassified-impl-type.pass.rs").expect("pass fixture");
+    let deny_hits = classify_fixture("crates/probe/src/lib.rs", &deny).expect("classifies");
+    let pass_hits = classify_fixture("crates/probe/src/lib.rs", &pass).expect("classifies");
+    assert_eq!(
+        unclassified_prefix_hits(&deny_hits, "impl-type"),
+        vec!["unclassified-impl-type:X"]
+    );
+    assert_eq!(unclassified_prefix_hits(&pass_hits, "impl-type"), Vec::<&str>::new());
+}
+
+#[test]
+fn bite_unclassified_trait_type() {
+    let deny = fixture_src("unclassified-trait-type.deny.rs").expect("deny fixture");
+    let pass = fixture_src("unclassified-trait-type.pass.rs").expect("pass fixture");
+    let deny_hits = classify_fixture("crates/probe/src/lib.rs", &deny).expect("classifies");
+    let pass_hits = classify_fixture("crates/probe/src/lib.rs", &pass).expect("classifies");
+    assert_eq!(
+        unclassified_prefix_hits(&deny_hits, "trait-type"),
+        vec!["unclassified-trait-type:X"]
+    );
+    assert_eq!(unclassified_prefix_hits(&pass_hits, "trait-type"), Vec::<&str>::new());
+}
+
+#[test]
+fn bite_unclassified_trait_fn() {
+    let deny = fixture_src("unclassified-trait-fn.deny.rs").expect("deny fixture");
+    let pass = fixture_src("trait-container.pass.rs").expect("pass fixture");
+    let deny_hits = classify_fixture("crates/probe/src/lib.rs", &deny).expect("classifies");
+    let pass_hits = classify_fixture("crates/probe/src/lib.rs", &pass).expect("classifies");
+    assert_eq!(
+        unclassified_prefix_hits(&deny_hits, "trait-fn"),
+        vec!["unclassified-trait-fn:f"]
+    );
+    assert_eq!(unclassified_prefix_hits(&pass_hits, "trait-fn"), Vec::<&str>::new());
+}
+
+#[test]
+fn bite_unclassified_mod_pass_only_vacuous() {
+    // ModuleNoPathAttr seats every mod — DENY cannot honestly detonate.
+    let pass = fixture_src("module.pass.rs").expect("pass fixture");
+    let pass_hits = classify_fixture("crates/probe/src/lib.rs", &pass).expect("classifies");
+    assert_eq!(unclassified_prefix_hits(&pass_hits, "mod"), Vec::<&str>::new());
+}
+
+#[test]
+fn bite_unclassified_const_pass_only_vacuous() {
+    let pass = fixture_src("unclassified-const.pass.rs").expect("pass fixture");
+    let pass_hits = classify_fixture("crates/probe/src/lib.rs", &pass).expect("classifies");
+    assert_eq!(unclassified_prefix_hits(&pass_hits, "const"), Vec::<&str>::new());
+}
+
+#[test]
+fn bite_unclassified_impl_const_pass_only_vacuous() {
+    let pass = fixture_src("unclassified-impl-const.pass.rs").expect("pass fixture");
+    let pass_hits = classify_fixture("crates/probe/src/lib.rs", &pass).expect("classifies");
+    assert_eq!(
+        unclassified_prefix_hits(&pass_hits, "impl-const"),
+        Vec::<&str>::new()
+    );
+}
+
+#[test]
+fn bite_unclassified_trait_const_pass_only_vacuous() {
+    let pass = fixture_src("unclassified-trait-const.pass.rs").expect("pass fixture");
+    let pass_hits = classify_fixture("crates/probe/src/lib.rs", &pass).expect("classifies");
+    assert_eq!(
+        unclassified_prefix_hits(&pass_hits, "trait-const"),
+        Vec::<&str>::new()
+    );
+}
+
 // --- ported ratchets: the old xtask checks' historical bugs still bite ---------------------------
 
 #[test]
@@ -497,7 +743,8 @@ fn bite_assert_bang() {
     // The RelationId shape: stored bytes bound-checked by assert on a
     // production decode path.
     assert_eq!(detonates("assert_bang", "fn decode(b: &[u8]) -> u64 { assert!(b.len() >= 8); 0 }"), Some(1));
-    assert_eq!(detonates("assert_bang", "#[test]\nfn t() { assert_eq!(1, 1); }"), Some(0));
+    // Tip 650/659: no ProductionOnly/#[test] strip — assert_eq! in tests counts.
+    assert_eq!(detonates("assert_bang", "#[test]\nfn t() { assert_eq!(1, 1); }"), Some(1));
 }
 
 #[test]
