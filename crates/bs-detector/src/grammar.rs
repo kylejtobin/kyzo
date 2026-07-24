@@ -631,10 +631,10 @@ impl Grammar {
         // ambient law with no jurisdiction (item 5 Proof: nested_place_assign
         // in no list → load Err).
         for m in shape::MATCHERS {
-            if !jurisdiction.contains_key(m.name) {
+            if !jurisdiction.contains_key(m.name()) {
                 bail!(
                     "ban `{}` is in no list — ambient scope is forbidden; refuse to load",
-                    m.name
+                    m.name()
                 );
             }
         }

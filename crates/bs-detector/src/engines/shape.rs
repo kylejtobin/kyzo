@@ -61,10 +61,7 @@ impl Matcher {
 
     /// UTF-8 view of the matcher name. Corrupt bytes → U+FFFD, never panic.
     pub fn name(&self) -> &str {
-        match std::str::from_utf8(self.name) {
-            Ok(s) => s,
-            Err(_not_utf8) => "\u{FFFD}",
-        }
+        crate::boundary::RelPath::utf8_view(self.name)
     }
 
     /// Historical scan-class label (does not gate — tip 650/659).
