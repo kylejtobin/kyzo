@@ -87,7 +87,8 @@ impl std::error::Error for UnsafeCheckError {}
 pub struct UnsafeCheckGate;
 
 impl UnsafeCheckGate {
-    pub fn check_at(repo_root: &Path) -> Result<String, UnsafeCheckError> {
+    /// Consuming-verb on the ZST gate (tip 814: receiver required).
+    pub fn check_at(self, repo_root: &Path) -> Result<String, UnsafeCheckError> {
         check_at_body(repo_root)
     }
 }

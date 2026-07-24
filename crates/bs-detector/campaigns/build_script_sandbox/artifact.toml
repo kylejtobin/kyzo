@@ -1,7 +1,7 @@
 name = "build_script_sandbox"
-timestamp_unix = 1784884922
+timestamp_unix = 1784885165
 specimen_verdict = "flagged"
 
 [[sources]]
 path = "crates/bs-detector/src/engines/behavior/build_script_sandbox.rs"
-blake3 = "048e8a1c7a323a88a35cc0b2c082d966f0b014fbc843a20e959e1c40f760b8cb"
+blake3 = "9841150d19698f0b6356b0a9260df3e1164a8d03c7b37db30cdaa5fcbb1f4436"

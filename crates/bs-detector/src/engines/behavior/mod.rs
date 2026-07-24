@@ -21,7 +21,7 @@ pub mod unsafe_check;
 
 /// Live pure-Rust tree scan → hits (empty = clean).
 pub fn pure_rust_hits(repo_root: &Path) -> Vec<Hit> {
-    match pure_rust::PureRustGate::check_at(repo_root) {
+    match pure_rust::PureRustGate.check_at(repo_root) {
         Ok(_) => vec![],
         Err(pure_rust::PureRustError::BannedCratesFound(hits)) => hits
             .into_iter()
@@ -43,7 +43,7 @@ pub fn pure_rust_hits(repo_root: &Path) -> Vec<Hit> {
 
 /// Live unsafe-law scan → hits (empty = clean).
 pub fn unsafe_check_hits(repo_root: &Path) -> Vec<Hit> {
-    match unsafe_check::UnsafeCheckGate::check_at(repo_root) {
+    match unsafe_check::UnsafeCheckGate.check_at(repo_root) {
         Ok(_) => vec![],
         Err(unsafe_check::UnsafeCheckError::MissingForbid { root }) => {
             vec![Hit::admit(root, 1, "unsafe_missing_forbid".to_string())]

@@ -810,11 +810,13 @@ impl BuildScriptSandboxGate {
     /// so a plant's reset+build cycle is fully isolated from every other
     /// concurrently-running plant and from the real workspace — never by
     /// serializing the test runner, which the container owns.
-    pub fn check_at(repo_root: &Path) -> Result<String, BuildScriptSandboxError> {
-        Self::check_at_scoped(repo_root, None)
+    /// Consuming-verb on the ZST gate (tip 814: receiver required).
+    pub fn check_at(self, repo_root: &Path) -> Result<String, BuildScriptSandboxError> {
+        self.check_at_scoped(repo_root, None)
     }
 
     pub fn check_at_scoped(
+        self,
         repo_root: &Path,
         owned_target_override: Option<&Path>,
     ) -> Result<String, BuildScriptSandboxError> {
@@ -939,7 +941,7 @@ mod tests {
              }\n",
         )?;
 
-        let outcome = BuildScriptSandboxGate::check_at_scoped(
+        let outcome = BuildScriptSandboxGate.check_at_scoped(
             tmp.path(),
             Some(&tmp.path().join("target")),
         );
@@ -970,7 +972,7 @@ mod tests {
              }\n",
         )?;
 
-        let outcome = BuildScriptSandboxGate::check_at_scoped(
+        let outcome = BuildScriptSandboxGate.check_at_scoped(
             tmp.path(),
             Some(&tmp.path().join("target")),
         );
@@ -1064,7 +1066,7 @@ mod tests {
         )?;
 
         let outcome =
-            BuildScriptSandboxGate::check_at_scoped(root, Some(&root.join("target")));
+            BuildScriptSandboxGate.check_at_scoped(root, Some(&root.join("target")));
         if let Err(BuildScriptSandboxError::WriteOutsideOutDir { package, paths }) = outcome {
             BuildScriptSandboxProofRefuse::AttributionMismatch.require_eq(package, Attribution::Attributed(violator_name.to_string()))?;
             BuildScriptSandboxProofRefuse::EscapedPathMissing.require(paths.iter().any(|p| p.contains("VIOLATOR_ESCAPED.txt")))?;
