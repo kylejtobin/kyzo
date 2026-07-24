@@ -613,6 +613,11 @@ length, in a repo whose recorded failure mode is exactly that.
 
 ### 9. Build Attestation
 
+**STATUS: INCOMPLETE — BOUNCED tip 755.** Attestation below is NOT a completion claim.
+Proof target unmet: gate scoped to crates/bs-detector must reach zero unclassified
+(and burn remaining self-reds). Do not treat this section as done until self-reds = 0.
+
+
 BUILD ATTESTATION — item 9
 law: commit 1abeff0f9cb33c4b75aa4ad2d638485686065e56 | build: commit 3d2decd797e7eece6603090a3403425c183f5bc9
 
