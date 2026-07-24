@@ -16,6 +16,7 @@
 #![forbid(unsafe_code)]
 
 use std::path::PathBuf;
+use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -40,7 +41,17 @@ struct Cli {
     dry_run: bool,
 }
 
-fn main() -> Result<()> {
+fn main() -> ExitCode {
+    match try_main() {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!("{e:?}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn try_main() -> Result<ExitCode> {
     let cli = Cli::parse();
     let root = cli
         .root
@@ -65,8 +76,11 @@ fn main() -> Result<()> {
         eprintln!("note: --only run — verdict artifacts NOT written (partial scope never speaks for the tree)");
     }
 
-    if v.red {
-        std::process::exit(1); // INVARIANT(GateVerdict): the gate's red exit IS the verdict for hooks/CI — a named, audited circuit breaker, not an error swallow.
-    }
-    Ok(())
+    // INVARIANT(GateVerdict): red exits FAILURE via Termination so destructors
+    // run and block-buffered stdout finishes — not process::exit (tip 262).
+    Ok(if v.red {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    })
 }
