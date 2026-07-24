@@ -195,29 +195,31 @@ impl PartialEq<Label> for String {
 ///
 /// Fields are private (TRUTH item 9). The sole admission door is
 /// [`SourceFile::admit`]; engines read through accessors.
+/// No `String`/`str` terminals — path is [`RelPath`], text is UTF-8 bytes.
 pub struct SourceFile {
     /// Repo-root-relative path, e.g. `crates/kyzo-core/src/data/tuple.rs`.
-    rel_path: String,
-    text: String,
+    rel_path: RelPath,
+    text: Vec<u8>,
     ast: syn::File,
 }
 
 impl SourceFile {
     /// Sole admission constructor — the only way to build a [`SourceFile`].
-    pub fn admit(rel_path: String, text: String, ast: syn::File) -> Self {
+    pub fn admit(rel_path: impl Into<RelPath>, text: impl AsRef<str>, ast: syn::File) -> Self {
         Self {
-            rel_path,
-            text,
+            rel_path: rel_path.into(),
+            text: text.as_ref().as_bytes().to_vec(),
             ast,
         }
     }
 
     pub fn rel_path(&self) -> &str {
-        &self.rel_path
+        self.rel_path.as_str()
     }
 
+    /// Source text as UTF-8. Corrupt bytes yield U+FFFD — never expect.
     pub fn text(&self) -> &str {
-        &self.text
+        RelPath::utf8_view(&self.text)
     }
 
     pub fn ast(&self) -> &syn::File {
