@@ -1210,6 +1210,28 @@ mod tests {
                 .map_err(|_| GrammarProofRefuse::WriteFixture)?;
             Ok(Grammar::load(f.path(), &self.real_bite_src()?, dir.path()))
         }
+
+        /// Shared load-Err + message check for grammar mutation proofs (tip 1010).
+        fn assert_load_err_msg(
+            &self,
+            text: &str,
+            msg_ok: impl FnOnce(&str) -> bool,
+            msg_refuse: GrammarProofRefuse,
+        ) -> TestResult {
+            let e = self.probe_text(text)?;
+            GrammarProofRefuse::LoadSilent.require(e.is_err())?;
+            let msg = format!("{:?}", e.err());
+            msg_refuse.require(msg_ok(&msg))
+        }
+
+        /// Shared fixture-mutation load-Err proof (tip 1010).
+        fn assert_mutated_fixtures_load_err(
+            &self,
+            mutate: impl FnOnce(&Path) -> TestResult,
+        ) -> TestResult {
+            let e = self.probe_with_mutated_fixtures(mutate)?;
+            GrammarProofRefuse::LoadSilent.require(e.is_err())
+        }
     }
 
     const G: GrammarProofs = GrammarProofs;
@@ -1226,10 +1248,11 @@ mod tests {
         // Anchor on the seated-table line break so `impl-const`/`trait-const`
         // are not mangled by a substring replace.
         let text = G.real_grammar_text()?.replace("\nconst = [\"constant\"]\n", "\n");
-        let e = G.probe_text(&text)?;
-        GrammarProofRefuse::LoadSilent.require(e.is_err())?;
-        let msg = format!("{:?}", e.err());
-        GrammarProofRefuse::NeitherSeatedUnnamed.require(msg.contains("neither seated nor condemned"))
+        G.assert_load_err_msg(
+            &text,
+            |msg| msg.contains("neither seated nor condemned"),
+            GrammarProofRefuse::NeitherSeatedUnnamed,
+        )
     }
 
     #[test]
@@ -1241,10 +1264,11 @@ mod tests {
             "[kinds.seated]\n",
             "[kinds.seated]\nunion = [\"sum-type\"]\n",
         );
-        let e = G.probe_text(&text)?;
-        GrammarProofRefuse::LoadSilent.require(e.is_err())?;
-        let msg = format!("{:?}", e.err());
-        GrammarProofRefuse::BothSeatedUnnamed.require(msg.contains("both seated and condemned"))
+        G.assert_load_err_msg(
+            &text,
+            |msg| msg.contains("both seated and condemned"),
+            GrammarProofRefuse::BothSeatedUnnamed,
+        )
     }
 
     #[test]
@@ -1291,22 +1315,20 @@ mod tests {
     #[test]
     fn a_missing_fixture_is_a_load_error() -> TestResult {
         // Copy the real fixtures, delete one deny, expect refusal.
-        let e = G.probe_with_mutated_fixtures(|dir| {
+        G.assert_mutated_fixtures_load_err(|dir| {
             std::fs::remove_file(dir.join("sealed-struct.deny.rs"))
                 .map_err(|_| GrammarProofRefuse::RemoveFixture)?;
             Ok(())
-        })?;
-        GrammarProofRefuse::LoadSilent.require(e.is_err())
+        })
     }
 
     #[test]
     fn an_unrecognized_fixture_file_is_a_load_error() -> TestResult {
-        let e = G.probe_with_mutated_fixtures(|dir| {
+        G.assert_mutated_fixtures_load_err(|dir| {
             std::fs::write(dir.join("rogue.rs"), "fn smuggled() {}\n")
                 .map_err(|_| GrammarProofRefuse::WriteRogue)?;
             Ok(())
-        })?;
-        GrammarProofRefuse::LoadSilent.require(e.is_err())
+        })
     }
 
     #[test]

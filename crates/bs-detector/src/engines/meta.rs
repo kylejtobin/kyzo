@@ -150,21 +150,9 @@ mod tests {
         }
 
         fn toml_basic_escape(&self, s: &str) -> String {
-            let mut out = String::from('"');
-            for c in s.chars() {
-                match c {
-                    '\\' => out.push_str("\\\\"),
-                    '"' => out.push_str("\\\""),
-                    '\n' => out.push_str("\\n"),
-                    '\r' => out.push_str("\\r"),
-                    '\t' => out.push_str("\\t"),
-                    c => out.push(c),
-                }
-            }
-            out.push('"');
-            out
+            // One authority with waiver proofs (tip 1010) — not a second escaper.
+            crate::waiver::TOML_ESCAPE.basic_string(s)
         }
-
     }
 
     const M: MetaProofs = MetaProofs;

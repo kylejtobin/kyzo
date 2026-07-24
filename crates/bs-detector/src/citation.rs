@@ -434,12 +434,10 @@ mod tests {
 
     impl CitationProofs {
         fn write_temp_rs(&self, dir: &Path, rel: &str, src: &str) -> TestResult {
-            let path = dir.join(rel);
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent).map_err(|_| CitationProofRefuse::Mkdir)?;
-            }
-            std::fs::write(&path, src).map_err(|_| CitationProofRefuse::Write)?;
-            Ok(())
+            // One authority with bite_proofs::write_file (tip 1010).
+            crate::boundary::PROBE_FS
+                .write_rel(dir, rel, src)
+                .map_err(|_| CitationProofRefuse::Write)
         }
 
         fn fixture_laws(&self, root: &Path, body: &str) -> Result<Laws, CitationProofRefuse> {

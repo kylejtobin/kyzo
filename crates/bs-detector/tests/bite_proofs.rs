@@ -82,12 +82,10 @@ impl BiteProofs {
     }
 
     fn write_file(&self, base: &std::path::Path, rel: &str, content: &str) -> BiteOutcome {
-        let fp = base.join(rel);
-        if let Some(p) = fp.parent() {
-            std::fs::create_dir_all(p).map_err(|_| BiteProofRefuse::Io)?;
-        }
-        std::fs::write(&fp, content).map_err(|_| BiteProofRefuse::Io)?;
-        Ok(())
+        // One authority with citation::write_temp_rs (tip 1010).
+        bs_detector::boundary::PROBE_FS
+            .write_rel(base, rel, content)
+            .map_err(|_| BiteProofRefuse::Io)
     }
 
     fn classify_fixture(&self, rel: &str, src: &str) -> Result<Vec<Hit>, BiteProofRefuse> {

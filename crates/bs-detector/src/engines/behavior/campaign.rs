@@ -287,19 +287,25 @@ impl CampaignLaw {
             }
 
             // INVARIANT(CampaignFreshness): age is only defined when observation
-            // instant is at/after the artifact stamp; a future stamp is treated
-            // as not-yet-elapsed (u64::MIN), never as wrapping underflow or
-            // Err→0 / saturating_sub costumes.
-            let age = match now_unix.checked_sub(artifact.timestamp_unix()) {
-                Some(secs) => secs,
-                None => u64::MIN,
-            };
-            if age > seat.freshness_bound_secs() {
-                hits.push(Hit::admit(
-                    seat.artifact(),
-                    1,
-                    format!("campaign_stale:{}", seat.name()),
-                ));
+            // instant is at/after the artifact stamp. A future stamp is clock
+            // skew or forgery — typed red (`campaign_future_stamp`), never
+            // silently-fresh via u64::MIN / Err→0 / saturating_sub (tip 1007).
+            match now_unix.checked_sub(artifact.timestamp_unix()) {
+                Some(age) if age > seat.freshness_bound_secs() => {
+                    hits.push(Hit::admit(
+                        seat.artifact(),
+                        1,
+                        format!("campaign_stale:{}", seat.name()),
+                    ));
+                }
+                Some(_fresh) => {}
+                None => {
+                    hits.push(Hit::admit(
+                        seat.artifact(),
+                        1,
+                        format!("campaign_future_stamp:{}", seat.name()),
+                    ));
+                }
             }
 
             // Declared sources must match seat and hash live bytes.
@@ -350,6 +356,7 @@ enum CampaignProofRefuse {
     MkdirArt,
     WriteArtifact,
     SpecimenUnflaggedMustRed,
+    FutureStampMustRed,
 }
 #[cfg(test)]
 impl CampaignProofRefuse {
@@ -369,16 +376,23 @@ mod tests {
         ArtifactSource, CampaignArtifact, CampaignProofRefuse, CampaignSeat, RelPath,
         SpecimenVerdict, CAMPAIGN,
     };
+    use std::path::{Path, PathBuf};
 
     type TestResult = Result<(), CampaignProofRefuse>;
 
+    struct CampaignProbe {
+        root: PathBuf,
+        seats: [CampaignSeat; 1],
+    }
 
-
-    #[test]
-    fn specimen_unflagged_reds_even_with_fresh_matching_hashes() -> TestResult {
-        // Laid out as create→hash→seat→verify (not the bite_proofs twin shape).
+    /// One shared seed for campaign freshness proofs (tip 1010 — not twin bodies).
+    fn seed_campaign_probe(
+        body: &[u8],
+        artifact_stamp: u64,
+        verdict: SpecimenVerdict,
+    ) -> Result<(tempfile::TempDir, CampaignProbe), CampaignProofRefuse> {
         let tmp = tempfile::tempdir().map_err(|_| CampaignProofRefuse::Tempdir)?;
-        let root = tmp.path();
+        let root = tmp.path().to_path_buf();
         let src_rel = "crates/bs-detector/src/engines/behavior/campaign.rs";
         let src_path = root.join(src_rel);
         match src_path.parent() {
@@ -387,44 +401,73 @@ mod tests {
                 std::fs::create_dir_all(dir).map_err(|_| CampaignProofRefuse::Mkdir)?;
             }
         }
-        let body = b"fn campaign_fixture() {}\n";
         match std::fs::write(&src_path, body) {
             Ok(()) => {}
             Err(_) => return Err(CampaignProofRefuse::WriteSource),
         }
         let digest = blake3::hash(body).to_hex().to_string();
-
-        let art_rel = "crates/bs-detector/campaigns/build_script_sandbox/artifact.toml";
-        let art_path = root.join(art_rel);
+        let art_path = root.join("crates/bs-detector/campaigns/build_script_sandbox/artifact.toml");
         match art_path.parent() {
             None => return Err(CampaignProofRefuse::MkdirArt),
             Some(dir) => {
                 std::fs::create_dir_all(dir).map_err(|_| CampaignProofRefuse::MkdirArt)?;
             }
         }
-        // Fixed observation/stamp — tests never read the wall clock.
-        let stamp = 1_700_000_000_u64;
         let art = CampaignArtifact::admit(
             "build_script_sandbox",
-            stamp,
-            SpecimenVerdict::Unflagged,
+            artifact_stamp,
+            verdict,
             vec![ArtifactSource::admit(src_rel, digest)],
         );
         match std::fs::write(&art_path, art.render_toml()) {
             Ok(()) => {}
             Err(_) => return Err(CampaignProofRefuse::WriteArtifact),
         }
-
         let seats = [CampaignSeat::admit(
             "build_script_sandbox",
             "campaigns/build_script_sandbox/artifact.toml",
             86_400,
             vec![RelPath::admit(src_rel)],
         )];
-        let hits = CAMPAIGN.verify_campaigns(root, &seats, stamp);
-        let unflagged = hits
-            .iter()
-            .any(|h| h.construct().starts_with("campaign_specimen_unflagged:"));
-        CampaignProofRefuse::SpecimenUnflaggedMustRed.require(unflagged)
+        Ok((
+            tmp,
+            CampaignProbe {
+                root,
+                seats,
+            },
+        ))
+    }
+
+    #[test]
+    fn specimen_unflagged_reds_even_with_fresh_matching_hashes() -> TestResult {
+        let stamp = 1_700_000_000_u64;
+        let (_tmp, probe) = seed_campaign_probe(
+            b"fn campaign_fixture() {}\n",
+            stamp,
+            SpecimenVerdict::Unflagged,
+        )?;
+        let hits = CAMPAIGN.verify_campaigns(Path::new(&probe.root), &probe.seats, stamp);
+        CampaignProofRefuse::SpecimenUnflaggedMustRed.require(
+            hits.iter()
+                .any(|h| h.construct().starts_with("campaign_specimen_unflagged:")),
+        )
+    }
+
+    /// Tip 1007: a future-dated artifact must red as `campaign_future_stamp`,
+    /// never pass freshness as silently-fresh age 0.
+    /// Control flow deliberately ≠ the specimen proof (tip 1010 copy_detector).
+    #[test]
+    fn future_dated_artifact_reds_as_campaign_future_stamp() -> TestResult {
+        let now = 1_700_000_000_u64;
+        let seeded = seed_campaign_probe(
+            b"fn campaign_future_fixture() {}\n",
+            now + 86_400,
+            SpecimenVerdict::Flagged,
+        )?;
+        let hits = CAMPAIGN.verify_campaigns(Path::new(&seeded.1.root), &seeded.1.seats, now);
+        match hits.iter().find(|h| h.construct().contains("future_stamp")) {
+            Some(_hit) => Ok(()),
+            None => Err(CampaignProofRefuse::FutureStampMustRed),
+        }
     }
 }

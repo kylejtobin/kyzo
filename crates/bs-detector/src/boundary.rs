@@ -23,6 +23,51 @@ use proc_macro2::LineColumn;
 use serde::Deserialize;
 use walkdir::WalkDir;
 
+/// Shared probe-tree writer for citation + bite proofs (tip 1010 copy_detector:
+/// citation::write_temp_rs ~ bite_proofs::write_file).
+pub struct ProbeFsLaw;
+
+/// The one door for writing a repo-relative file under a temp/probe root.
+pub const PROBE_FS: ProbeFsLaw = ProbeFsLaw;
+
+/// Typed refuse for [`ProbeFsLaw::write_rel`] — workspace enum, not `std::io::Error`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProbeFsRefuse {
+    Mkdir(Label),
+    Write(Label),
+}
+
+impl fmt::Display for ProbeFsRefuse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProbeFsRefuse::Mkdir(label) => write!(f, "mkdir: {label}"),
+            ProbeFsRefuse::Write(label) => write!(f, "write: {label}"),
+        }
+    }
+}
+
+impl std::error::Error for ProbeFsRefuse {}
+
+impl ProbeFsLaw {
+    /// Create parent dirs as needed, then write `content` at `base/rel`.
+    pub fn write_rel(
+        &self,
+        base: &Path,
+        rel: &str,
+        content: &str,
+    ) -> Result<(), ProbeFsRefuse> {
+        let path = base.join(rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                ProbeFsRefuse::Mkdir(Label::admit(format!("{}: {e}", parent.display())))
+            })?;
+        }
+        std::fs::write(&path, content).map_err(|e| {
+            ProbeFsRefuse::Write(Label::admit(format!("{}: {e}", path.display())))
+        })
+    }
+}
+
 /// Shared UTF-8 view over admit-proven byte bags. `&self` derivation — not a
 /// free helper and not an Err→literal costume (convertible self-red burn).
 pub struct Utf8ViewLaw;
@@ -655,8 +700,9 @@ mod tests {
         BoundaryProofRefuse::CoverageVisited.require(proof.visited() == 3)?;
         // Exact empty slice — soft is_empty hid a coverage_hole path while
         // existing==visited still looked balanced (AGENT_TESTING_LAW §7).
-        BoundaryProofRefuse::CoverageMissing
-            .require(proof.missing() == &[] as &[RelPath])
+        // Exact empty slice without `as` cast (tip 1010 as_cast burn).
+        const EMPTY_MISSING: &[RelPath] = &[];
+        BoundaryProofRefuse::CoverageMissing.require(proof.missing() == EMPTY_MISSING)
     }
 
     /// Tip 686 / tip 659 ban-list: `target/` is the ONLY walk exclusion.

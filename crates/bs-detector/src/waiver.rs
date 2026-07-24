@@ -38,6 +38,33 @@ use serde::Deserialize;
 use crate::boundary::{HexDigest, Label, RelPath, Text};
 use crate::citation::Citation;
 
+/// Canonical TOML basic-string escaper — one authority for waiver + meta proofs
+/// (tip 1010 copy_detector: meta::toml_basic_escape ~ waiver::toml_escape).
+pub struct TomlEscapeLaw;
+
+/// The one production door for TOML basic-string quoting.
+pub const TOML_ESCAPE: TomlEscapeLaw = TomlEscapeLaw;
+
+impl TomlEscapeLaw {
+    /// Quote `s` as a TOML basic string (escapes `\`, `"`, and controls).
+    pub fn basic_string(&self, s: &str) -> String {
+        let mut out = String::from('"');
+        for c in s.chars() {
+            match c {
+                '\\' => out.push_str("\\\\"),
+                '"' => out.push_str("\\\""),
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                c if c.is_control() => out.push_str(&format!("\\u{:04x}", c as u32)),
+                c => out.push(c),
+            }
+        }
+        out.push('"');
+        out
+    }
+}
+
 /// Canonical attestation template embedded from the file beside this schema.
 const ATTESTATION_TEMPLATE_TOML: &str = include_str!("../attestation_template.toml");
 
@@ -675,20 +702,7 @@ mod tests {
         }
 
         fn toml_escape(&self, s: &str) -> String {
-            let mut out = String::from('"');
-            for c in s.chars() {
-                match c {
-                    '\\' => out.push_str("\\\\"),
-                    '"' => out.push_str("\\\""),
-                    '\n' => out.push_str("\\n"),
-                    '\r' => out.push_str("\\r"),
-                    '\t' => out.push_str("\\t"),
-                    c if c.is_control() => out.push_str(&format!("\\u{:04x}", c as u32)),
-                    c => out.push(c),
-                }
-            }
-            out.push('"');
-            out
+            crate::waiver::TOML_ESCAPE.basic_string(s)
         }
 
         fn waiver_toml(&self, why: &str, extra: &str) -> String {
