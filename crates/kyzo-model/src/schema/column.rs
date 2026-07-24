@@ -17,7 +17,6 @@ use miette::{Diagnostic, Result, bail, ensure};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
-use crate::data_value_any;
 use crate::envelope::json_from_serde;
 use crate::program::expr::Expr;
 use crate::value::json_convert::to_json;
@@ -339,7 +338,20 @@ impl NullableColType {
         Ok(match &self.coltype {
             ColType::Any => match data {
                 DataValue::Set(s) => DataValue::List(s.into_iter().collect::<Vec<_>>()),
-                d @ (data_value_any!()) => d,
+                d @ (DataValue::Null
+                    | DataValue::Bool(_)
+                    | DataValue::Num(_)
+                    | DataValue::Str(_)
+                    | DataValue::Bytes(_)
+                    | DataValue::Uuid(_)
+                    | DataValue::Regex(_)
+                    | DataValue::Json(_)
+                    | DataValue::Vector(_)
+                    | DataValue::List(_)
+                    | DataValue::Set(_)
+                    | DataValue::Validity(_)
+                    | DataValue::Interval(_)
+                    | DataValue::Geometry(_)) => d,
             },
             ColType::Bool => DataValue::from(data.get_bool().ok_or_else(make_err)?),
             ColType::Int => DataValue::from(data.get_int().ok_or_else(make_err)?),
@@ -363,7 +375,20 @@ impl NullableColType {
                         .map_err(|e| BadBase64EncodedString(e.to_string()))?;
                     DataValue::Bytes(b)
                 }
-                data_value_any!() => bail!(make_err()),
+                DataValue::Null
+                    | DataValue::Bool(_)
+                    | DataValue::Num(_)
+                    | DataValue::Str(_)
+                    | DataValue::Bytes(_)
+                    | DataValue::Uuid(_)
+                    | DataValue::Regex(_)
+                    | DataValue::Json(_)
+                    | DataValue::Vector(_)
+                    | DataValue::List(_)
+                    | DataValue::Set(_)
+                    | DataValue::Validity(_)
+                    | DataValue::Interval(_)
+                    | DataValue::Geometry(_) => bail!(make_err()),
             },
             ColType::Uuid => match data {
                 u @ DataValue::Uuid(_) => u,
@@ -372,7 +397,20 @@ impl NullableColType {
                 DataValue::Str(ref s) => {
                     DataValue::uuid(uuid::Uuid::try_parse(s).map_err(|_| make_err())?)
                 }
-                data_value_any!() => bail!(make_err()),
+                DataValue::Null
+                    | DataValue::Bool(_)
+                    | DataValue::Num(_)
+                    | DataValue::Str(_)
+                    | DataValue::Bytes(_)
+                    | DataValue::Uuid(_)
+                    | DataValue::Regex(_)
+                    | DataValue::Json(_)
+                    | DataValue::Vector(_)
+                    | DataValue::List(_)
+                    | DataValue::Set(_)
+                    | DataValue::Validity(_)
+                    | DataValue::Interval(_)
+                    | DataValue::Geometry(_) => bail!(make_err()),
             },
             ColType::List { eltype, len } => {
                 if let DataValue::List(l) = data {
@@ -472,7 +510,20 @@ impl NullableColType {
                     };
                     DataValue::Vector(Vector::try_new(collected).ok_or_else(|| make_err())?)
                 }
-                data_value_any!() => bail!(make_err()),
+                DataValue::Null
+                    | DataValue::Bool(_)
+                    | DataValue::Num(_)
+                    | DataValue::Str(_)
+                    | DataValue::Bytes(_)
+                    | DataValue::Uuid(_)
+                    | DataValue::Regex(_)
+                    | DataValue::Json(_)
+                    | DataValue::Vector(_)
+                    | DataValue::List(_)
+                    | DataValue::Set(_)
+                    | DataValue::Validity(_)
+                    | DataValue::Interval(_)
+                    | DataValue::Geometry(_) => bail!(make_err()),
             },
             ColType::Tuple(typ) => {
                 if let DataValue::List(l) = data {
@@ -554,7 +605,20 @@ impl NullableColType {
                         }
                         bail!(InvalidValidity(DataValue::List(l)))
                     }
-                    v @ (data_value_any!()) => bail!(InvalidValidity(v)),
+                    v @ (DataValue::Null
+                        | DataValue::Bool(_)
+                        | DataValue::Num(_)
+                        | DataValue::Str(_)
+                        | DataValue::Bytes(_)
+                        | DataValue::Uuid(_)
+                        | DataValue::Regex(_)
+                        | DataValue::Json(_)
+                        | DataValue::Vector(_)
+                        | DataValue::List(_)
+                        | DataValue::Set(_)
+                        | DataValue::Validity(_)
+                        | DataValue::Interval(_)
+                        | DataValue::Geometry(_)) => bail!(InvalidValidity(v)),
                 }
             }
             ColType::Json => {
@@ -570,7 +634,7 @@ impl NullableColType {
 mod tests {
     use super::*;
     use crate::value::{RegexFlags, RegexSource, ValidityTs};
-    use miette::{IntoDiagnostic, Result};
+    use miette::Result;
 
     #[test]
     fn json_coerce_preserves_regex_flags_via_to_json() -> Result<()> {

@@ -50,7 +50,6 @@ use super::canonical::{DecodeError, decode_one};
 use super::code::StampedCode;
 use super::column::{AdmittedCodes, CodeColumn, Domain};
 use super::{DataValue, ScanBound};
-use crate::data_value_any;
 
 /// A stream of tuples, each fallibly produced (a storage read can fail mid-stream).
 pub type TupleIter<'a> = Box<dyn Iterator<Item = miette::Result<super::Tuple>> + 'a>;
@@ -728,7 +727,20 @@ mod tests {
                     super::super::DataValue::Num(n) => {
                         n.as_int().ok_or_else(|| miette!("int domain"))?
                     }
-                    other @ (data_value_any!()) => {
+                    other @ (DataValue::Null
+                        | DataValue::Bool(_)
+                        | DataValue::Num(_)
+                        | DataValue::Str(_)
+                        | DataValue::Bytes(_)
+                        | DataValue::Uuid(_)
+                        | DataValue::Regex(_)
+                        | DataValue::Json(_)
+                        | DataValue::Vector(_)
+                        | DataValue::List(_)
+                        | DataValue::Set(_)
+                        | DataValue::Validity(_)
+                        | DataValue::Interval(_)
+                        | DataValue::Geometry(_)) => {
                         return Err(miette!("wrong kind: {other:?}"));
                     }
                 };

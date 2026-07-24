@@ -1128,7 +1128,7 @@ mod tests {
     #[test]
     fn law_num_partial_ord_is_total_no_nan_hole() {
         let mut c = corpus();
-        extend_random(&mut c, 200, 0xBAD_70_E1);
+        extend_random(&mut c, 200, 0x0BAD_70E1);
         // Inject many raw NaN bit patterns; construction collapses them.
         for bits in [
             0x7FF8_0000_0000_0000u64,

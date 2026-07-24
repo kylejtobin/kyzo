@@ -56,7 +56,6 @@
 use flatbuffers::{FlatBufferBuilder, UOffsetT, WIPOffset};
 use miette::{Result, bail};
 
-use crate::data_value_any;
 use crate::value::{DataValue, NumRepr, Tuple};
 
 /// One export column, decided once from its values: a uniform typed
@@ -90,7 +89,20 @@ impl ColumnVec {
                 },
                 DataValue::Bool(_) => Fit::Bool,
                 DataValue::Str(_) => Fit::Str,
-                data_value_any!() => return ColumnVec::Mixed(values),
+                DataValue::Null
+                    | DataValue::Bool(_)
+                    | DataValue::Num(_)
+                    | DataValue::Str(_)
+                    | DataValue::Bytes(_)
+                    | DataValue::Uuid(_)
+                    | DataValue::Regex(_)
+                    | DataValue::Json(_)
+                    | DataValue::Vector(_)
+                    | DataValue::List(_)
+                    | DataValue::Set(_)
+                    | DataValue::Validity(_)
+                    | DataValue::Interval(_)
+                    | DataValue::Geometry(_) => return ColumnVec::Mixed(values),
             };
             match fit {
                 None => fit = Some(this),
@@ -134,7 +146,20 @@ impl ColumnVec {
                 for v in &values {
                     match v {
                         DataValue::Str(s) => out.push(s.clone()),
-                        data_value_any!() => return ColumnVec::Mixed(values),
+                        DataValue::Null
+                    | DataValue::Bool(_)
+                    | DataValue::Num(_)
+                    | DataValue::Str(_)
+                    | DataValue::Bytes(_)
+                    | DataValue::Uuid(_)
+                    | DataValue::Regex(_)
+                    | DataValue::Json(_)
+                    | DataValue::Vector(_)
+                    | DataValue::List(_)
+                    | DataValue::Set(_)
+                    | DataValue::Validity(_)
+                    | DataValue::Interval(_)
+                    | DataValue::Geometry(_) => return ColumnVec::Mixed(values),
                     }
                 }
                 ColumnVec::Str(out)
@@ -453,7 +478,20 @@ fn plan_mixed_column(values: &[DataValue]) -> Result<PlannedColumn> {
             DataValue::Bool(_) => Kind::Bool,
             DataValue::Str(_) => Kind::Str,
             DataValue::Bytes(_) => Kind::Binary,
-            other @ (data_value_any!()) => bail!(
+            other @ (DataValue::Null
+                | DataValue::Bool(_)
+                | DataValue::Num(_)
+                | DataValue::Str(_)
+                | DataValue::Bytes(_)
+                | DataValue::Uuid(_)
+                | DataValue::Regex(_)
+                | DataValue::Json(_)
+                | DataValue::Vector(_)
+                | DataValue::List(_)
+                | DataValue::Set(_)
+                | DataValue::Validity(_)
+                | DataValue::Interval(_)
+                | DataValue::Geometry(_)) => bail!(
                 "Arrow export: column value {other:?} has no Arrow mapping in this encoder \
                  (supported: null, int, float, bool, str, bytes)"
             ),
@@ -528,7 +566,20 @@ fn plan_mixed_column(values: &[DataValue]) -> Result<PlannedColumn> {
                         };
                         vals.push(f);
                     }
-                    data_value_any!() => {
+                    DataValue::Null
+                        | DataValue::Bool(_)
+                        | DataValue::Num(_)
+                        | DataValue::Str(_)
+                        | DataValue::Bytes(_)
+                        | DataValue::Uuid(_)
+                        | DataValue::Regex(_)
+                        | DataValue::Json(_)
+                        | DataValue::Vector(_)
+                        | DataValue::List(_)
+                        | DataValue::Set(_)
+                        | DataValue::Validity(_)
+                        | DataValue::Interval(_)
+                        | DataValue::Geometry(_) => {
                         miette::bail!("Arrow float column saw non-float non-null value");
                     }
                 }
@@ -556,7 +607,20 @@ fn plan_mixed_column(values: &[DataValue]) -> Result<PlannedColumn> {
             let empty = String::new();
             let (offsets, data) = offsets_and_values(values.iter().map(|v| match v {
                 DataValue::Str(s) => s.as_bytes(),
-                data_value_any!() => empty.as_bytes(),
+                DataValue::Null
+                    | DataValue::Bool(_)
+                    | DataValue::Num(_)
+                    | DataValue::Str(_)
+                    | DataValue::Bytes(_)
+                    | DataValue::Uuid(_)
+                    | DataValue::Regex(_)
+                    | DataValue::Json(_)
+                    | DataValue::Vector(_)
+                    | DataValue::List(_)
+                    | DataValue::Set(_)
+                    | DataValue::Validity(_)
+                    | DataValue::Interval(_)
+                    | DataValue::Geometry(_) => empty.as_bytes(),
             }))?;
             Ok(PlannedColumn {
                 arrow_type: PlannedArrowType::Utf8,
@@ -569,7 +633,20 @@ fn plan_mixed_column(values: &[DataValue]) -> Result<PlannedColumn> {
             let empty: Vec<u8> = Vec::new();
             let (offsets, data) = offsets_and_values(values.iter().map(|v| match v {
                 DataValue::Bytes(b) => b.as_slice(),
-                data_value_any!() => empty.as_slice(),
+                DataValue::Null
+                    | DataValue::Bool(_)
+                    | DataValue::Num(_)
+                    | DataValue::Str(_)
+                    | DataValue::Bytes(_)
+                    | DataValue::Uuid(_)
+                    | DataValue::Regex(_)
+                    | DataValue::Json(_)
+                    | DataValue::Vector(_)
+                    | DataValue::List(_)
+                    | DataValue::Set(_)
+                    | DataValue::Validity(_)
+                    | DataValue::Interval(_)
+                    | DataValue::Geometry(_) => empty.as_slice(),
             }))?;
             Ok(PlannedColumn {
                 arrow_type: PlannedArrowType::Binary,
@@ -762,7 +839,7 @@ pub fn encode_stream(batch: &ColumnBatch, names: &[&str]) -> Result<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use miette::{IntoDiagnostic, Result, miette};
+    use miette::{Result, miette};
 
     use super::*;
     use crate::value::Num;

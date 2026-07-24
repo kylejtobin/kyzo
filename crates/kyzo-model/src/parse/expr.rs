@@ -33,13 +33,6 @@ use crate::value::DataValue;
 
 use super::{ExtractSpan, IntoChildren, Pair, Rule, UnexpectedRule};
 
-fn init_pratt_parser(
-    build: impl FnOnce(PrattParser<Rule>) -> PrattParser<Rule>,
-) -> &'static PrattParser<Rule> {
-    static PARSER: std::sync::OnceLock<PrattParser<Rule>> = std::sync::OnceLock::new();
-    PARSER.get_or_init(|| build(PrattParser::new()))
-}
-
 /// One Pratt seat: expression arithmetic/logic ladder and FTS boolean ladder
 /// are arms of the same builder — not two copy-pasted authorities.
 fn build_pratt(which: PrattKind, p: PrattParser<Rule>) -> PrattParser<Rule> {
@@ -75,13 +68,15 @@ enum PrattKind {
 }
 
 fn pratt_parser() -> &'static PrattParser<Rule> {
-    init_pratt_parser(|p| build_pratt(PrattKind::Expr, p))
+    static PARSER: OnceLock<PrattParser<Rule>> = OnceLock::new();
+    PARSER.get_or_init(|| build_pratt(PrattKind::Expr, PrattParser::new()))
 }
 
-/// FTS boolean precedence: `NOT` tightest, then `AND`, then `OR` — shared
-/// OnceLock shell lives here; the search seat calls this door.
+/// FTS boolean precedence: `NOT` tightest, then `AND`, then `OR` — own
+/// OnceLock; must not share the expression Pratt seat's static.
 pub(crate) fn fts_pratt_parser() -> &'static PrattParser<Rule> {
-    init_pratt_parser(|p| build_pratt(PrattKind::Fts, p))
+    static PARSER: OnceLock<PrattParser<Rule>> = OnceLock::new();
+    PARSER.get_or_init(|| build_pratt(PrattKind::Fts, PrattParser::new()))
 }
 
 #[derive(Debug, Error, Diagnostic)]

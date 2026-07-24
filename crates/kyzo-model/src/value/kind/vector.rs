@@ -82,7 +82,7 @@ pub struct VectorDimension(u32);
 impl VectorDimension {
     /// Prove a component length fits the wire dimension (`u32`).
     pub fn try_from_len(len: usize) -> Option<VectorDimension> {
-        (match u32::try_from(len) { Ok(v) => Some(VectorDimension(v)), Err(_overflow) => None })
+        match u32::try_from(len) { Ok(v) => Some(VectorDimension(v)), Err(_overflow) => None }
     }
 
     /// Post-proof mint: length already proven at [`Vector::try_new`].

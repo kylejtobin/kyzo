@@ -198,7 +198,7 @@ fn hilbert_decode(mut d: u64) -> (u32, u32) {
 
 #[cfg(test)]
 mod tests {
-    use miette::{IntoDiagnostic, Result, miette};
+    use miette::{IntoDiagnostic, Result};
 
     use super::*;
     use crate::value::DataValue;

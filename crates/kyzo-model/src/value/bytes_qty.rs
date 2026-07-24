@@ -39,7 +39,7 @@ impl ByteLen {
     /// `Span` passes through here, so the stored field can never silently
     /// truncate.
     pub(super) fn from_usize(n: usize) -> Option<ByteLen> {
-        (match u32::try_from(n) { Ok(v) => Some(ByteLen(v)), Err(_overflow) => None })
+        match u32::try_from(n) { Ok(v) => Some(ByteLen(v)), Err(_overflow) => None }
     }
 
     /// [`TryFrom`] door — same refusal as [`from_usize`].
@@ -80,7 +80,7 @@ impl ByteOff {
 
     /// Construct from a `usize`; `None` if `n > u32::MAX`.
     pub(super) fn from_usize(n: usize) -> Option<ByteOff> {
-        (match u32::try_from(n) { Ok(v) => Some(ByteOff(v)), Err(_overflow) => None })
+        match u32::try_from(n) { Ok(v) => Some(ByteOff(v)), Err(_overflow) => None }
     }
 
     /// [`TryFrom`] door — same refusal as [`from_usize`].
@@ -112,7 +112,7 @@ pub(super) struct ChunkId(u32);
 impl ChunkId {
     /// Construct from a `usize`; `None` if `n > u32::MAX`.
     pub(super) fn from_usize(n: usize) -> Option<ChunkId> {
-        (match u32::try_from(n) { Ok(v) => Some(ChunkId(v)), Err(_overflow) => None })
+        match u32::try_from(n) { Ok(v) => Some(ChunkId(v)), Err(_overflow) => None }
     }
 
     /// [`TryFrom`] door — same refusal as [`from_usize`].

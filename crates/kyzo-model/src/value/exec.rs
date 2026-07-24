@@ -33,7 +33,6 @@ use super::arity::Arity;
 use super::code::Code;
 use super::column::Domain;
 use super::row::{AdmittedRows, Rows};
-use crate::data_value_any;
 
 /// Which input a projected output column is copied from.
 #[derive(Clone, Copy, Debug)]
@@ -598,7 +597,20 @@ mod tests {
     fn decode_int(bytes: &[u8]) -> Result<i64> {
         match super::super::canonical::decode(bytes).into_diagnostic()? {
             DataValue::Num(n) => Ok(n.as_int().ok_or_else(|| miette!("int"))?),
-            other @ (data_value_any!()) => {
+            other @ (DataValue::Null
+                | DataValue::Bool(_)
+                | DataValue::Num(_)
+                | DataValue::Str(_)
+                | DataValue::Bytes(_)
+                | DataValue::Uuid(_)
+                | DataValue::Regex(_)
+                | DataValue::Json(_)
+                | DataValue::Vector(_)
+                | DataValue::List(_)
+                | DataValue::Set(_)
+                | DataValue::Validity(_)
+                | DataValue::Interval(_)
+                | DataValue::Geometry(_)) => {
                 return Err(miette!("not an int: {other:?}"));
             }
         }

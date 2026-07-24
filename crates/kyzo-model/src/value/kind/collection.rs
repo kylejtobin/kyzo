@@ -23,7 +23,6 @@ mod tests {
     use super::super::super::DataValue;
     use super::super::super::canonical::{Datum, decode, encode};
     use super::super::super::number::Num;
-    use crate::data_value_any;
 
     #[test]
     fn nested_collection_identity_round_trips() -> Result<()> {
@@ -40,7 +39,19 @@ mod tests {
                 assert!(matches!(&items[1], DataValue::List(l)
                     if matches!(&l[0], DataValue::Num(n) if *n == Num::int(2))));
             }
-            other @ (data_value_any!()) => {
+            other @ (DataValue::Null
+                | DataValue::Bool(_)
+                | DataValue::Num(_)
+                | DataValue::Str(_)
+                | DataValue::Bytes(_)
+                | DataValue::Uuid(_)
+                | DataValue::Regex(_)
+                | DataValue::Json(_)
+                | DataValue::Vector(_)
+                | DataValue::Set(_)
+                | DataValue::Validity(_)
+                | DataValue::Interval(_)
+                | DataValue::Geometry(_)) => {
                 return Err(miette!("wrong shape: {other:?}"));
             }
         }
