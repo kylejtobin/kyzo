@@ -384,3 +384,26 @@ FALSE. Evidence, each anchor checkable:
   R-int.
 If any sentence above is false, I am lying to you deliberately and at
 length, in a repo whose recorded failure mode is exactly that.
+
+### 3. Build Attestation
+
+BUILD ATTESTATION — item 3
+law: commit 4e4c070d1cf9b47fcc4562f80f60b5072d7cd386 | build: commit 380b5844da1fb563b9f0e8a6fdfd896e16eef792
+
+I attest my implementation of item 3 matches this document, at the law
+commit above, at audited strength. TRUE or FALSE: there exists an input —
+any code shape, any file, any reading of the law text — on which my
+implementation passes where the law says red, or goes red where the law
+says pass.
+
+FALSE. Evidence, each anchor checkable:
+- Deny fixtures executed red: crates/bs-detector/fixtures/{newtype-scalar,sealed-struct,sum-type}.deny.rs — test classify::fixture_tests::every_construct_pass_classifies_and_deny_is_refused_by_its_own_rule ... ok; item_3_proof_multi_field_tuple_and_pub_field_are_red ... ok.
+- Pass fixtures classified as their construct: crates/bs-detector/fixtures/{newtype-scalar,sealed-struct,unit-marker,sum-type}.pass.rs — same every_construct_pass… test ... ok; item_3_anti_fraud_struct_matches_at_most_one_construct ... ok; item_3_classification_emits_unique_construct_name ... ok.
+- The weakest satisfier I personally constructed against my own build
+  was: a grammar.toml declaring two constructs both bound to
+  named-all-private-no-string-terminal (sealed-struct + sealed-struct-twin)
+  — and Grammar::load refuses (item_3_proof_two_named_all_private_struct_rules_is_a_load_error ... ok).
+- My implementation is weaker than this document's text in exactly:
+  NONE.
+If any sentence above is false, I am lying to you deliberately and at
+length, in a repo whose recorded failure mode is exactly that.
