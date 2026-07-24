@@ -40,7 +40,9 @@
 //! (fixed corpus). The remaining breadth — a **generative** corpus through
 //! the public path (magic-vs-bypass over generated programs, the issue-#29
 //! NoREC-analog) — stays open and named. See
-//! [`demand_rewriter_generative_magic_vs_bypass`] (disclosed `#[ignore]`).
+//! Cap1's RuleBody seam is post-stratification; generative magic-vs-bypass
+//! returns when `oracle_harness` exports stratified_magic_compile (deleted
+//! until that seat exists — tip 262/298 M4).
 //!
 //! The prior issue-#29 magic-sets NoREC gauntlet that occupied this seat
 //! is not adapted here (session/`Db`/`parse` surfaces + `crate::` in-tree
@@ -1435,42 +1437,3 @@ fn in_flight_probe_refuses_in_flight_derivations() {
     );
 }
 
-/// Generative magic-vs-bypass (demand rewriter) — standing disclosed red.
-///
-/// Cap1's [`RuleBody`] seam is post-stratification and does not exercise
-/// magic-set demand rewriting. Fixed-corpus differential lives at the
-/// session seam. Generative breadth needs either:
-/// - `stratified_magic_compile` / adornment-rewrite exported on
-///   `kyzo::oracle_harness`, or
-/// - an Engine/`run_script` generative path that toggles magic vs bypass
-///   over this lane's generator vocabulary.
-#[test]
-#[ignore = "unbuilt seat: kyzo::oracle_harness lacks stratified_magic_compile/magic_rewrite; generative magic-vs-bypass needs that public door or Engine script generative path (demand-rewriter-generative-gap)"]
-fn demand_rewriter_generative_magic_vs_bypass() {
-    let seed_vocab = generate(0xDE_9A_7D);
-    let Generated {
-        program,
-        entry,
-        entry_arity,
-    } = seed_vocab;
-    // Generator vocabulary the unbuilt magic-vs-bypass arm must reuse — keep
-    // these typed so the ignored seat cannot silently drift off Cap1's shape.
-    assert_eq!(
-        entry.as_ref(),
-        "path",
-        "demand-rewriter generative arm reuses Cap1 entry vocabulary"
-    );
-    assert_eq!(
-        entry_arity, 2,
-        "demand-rewriter generative arm reuses Cap1 binary entry arity"
-    );
-    assert!(
-        !program.rules.is_empty(),
-        "demand-rewriter generative arm needs a non-empty Cap1 rule corpus"
-    );
-    assert!(
-        false,
-        "demand-rewriter generative arm: wire oracle_harness magic compile \
-         or Engine generative magic-vs-bypass before un-ignoring"
-    );
-}

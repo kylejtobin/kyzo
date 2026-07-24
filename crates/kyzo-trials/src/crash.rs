@@ -516,12 +516,13 @@ mod fuse_crash_matrix {
     /// every recorded journal segment. Vendor rotation has no sub-64 MiB
     /// production door — this is necessarily a slow write campaign.
     ///
-    /// Run (kyzo-dev, needs `/dev/fuse`):
-    /// `cargo test -p kyzo --lib \
+    /// Scheduled slow lane (`slow-crash-campaigns` feature) — not default
+    /// `cargo test --lib`. Needs `/dev/fuse`:
+    /// `cargo test -p kyzo --lib --features slow-crash-campaigns -- \
     ///   store::sweep::crash::fuse_crash_matrix::multi_journal_segment_crash_matrix_at_journaling_floor \
-    ///   -- --ignored --nocapture`
+    ///   --nocapture`
+    #[cfg(feature = "slow-crash-campaigns")]
     #[test]
-    #[ignore = "slow: multi-jnl — writes past one 64 MiB journal segment"]
     fn multi_journal_segment_crash_matrix_at_journaling_floor() {
         require_live_mount().expect("live FUSE mount required");
 
