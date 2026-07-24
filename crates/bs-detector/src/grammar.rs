@@ -358,6 +358,10 @@ pub struct ConstructDef {
     pub name: String,
     pub kind: ConstructFamily,
     pub rule: StructuralRule,
+    /// Construct-scoped bans (TRUTH item 5 jurisdiction (c)). Empty by
+    /// default; attributed by span containment in `run.rs`.
+    #[serde(default)]
+    pub bans: Vec<String>,
 }
 
 /// One declared receiverless-fn seat: file + fn path + site hash, all
@@ -415,6 +419,7 @@ struct SeatsSection {
 struct GrammarFile {
     bans_absolute: Vec<String>,
     bans: Vec<String>,
+    bans_attribute: Vec<String>,
     kinds: KindsSection,
     construct: Vec<ConstructDef>,
     seats: SeatsSection,
@@ -430,10 +435,12 @@ pub enum Disposition<'a> {
 
 /// The loaded, validated grammar.
 pub struct Grammar {
-    /// Banned shapes no waiver can cover.
+    /// Banned shapes no waiver can cover (expression jurisdiction).
     pub bans_absolute: Vec<String>,
-    /// Banned shapes a waiver may cover, one entry per hit.
+    /// Banned shapes a waiver may cover, one entry per hit (expression).
     pub bans: Vec<String>,
+    /// Attribute-jurisdiction bans (item- and crate-level attributes).
+    pub bans_attribute: Vec<String>,
     pub constructs: Vec<ConstructDef>,
     pub condemned: BTreeSet<KindName>,
     pub seated: BTreeMap<KindName, Vec<String>>,
@@ -444,22 +451,59 @@ pub struct Grammar {
 
 impl Grammar {
     /// Load and validate. Refuses: a ban with no registered matcher or no
-    /// `bite_<name>` detonation; a name in both ban lists; a duplicate or
-    /// orphaned construct; an empty section; a kind neither seated nor
-    /// condemned (or in both lists); a seat naming an unknown construct or
-    /// one from the wrong family; a condemned kind with no registered law
-    /// name; a malformed fn seat; and any fixture-law violation (missing
-    /// pass/deny fixture, unexpected file in `fixtures/`).
+    /// `bite_<name>` detonation; a name in two ban jurisdictions; a matcher
+    /// in no jurisdiction (TRUTH item 5); a duplicate or orphaned construct;
+    /// an empty section; a kind neither seated nor condemned (or in both
+    /// lists); a seat naming an unknown construct or one from the wrong
+    /// family; a condemned kind with no registered law name; a malformed
+    /// fn seat; and any fixture-law violation (missing pass/deny fixture,
+    /// unexpected file in `fixtures/`).
     pub fn load(path: &Path, bite_src: &str, fixtures_dir: &Path) -> Result<Grammar> {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("reading {}", path.display()))?;
         let parsed: GrammarFile =
             toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
-        if parsed.bans.is_empty() || parsed.bans_absolute.is_empty() || parsed.construct.is_empty()
+        if parsed.bans.is_empty()
+            || parsed.bans_absolute.is_empty()
+            || parsed.bans_attribute.is_empty()
+            || parsed.construct.is_empty()
         {
             bail!("grammar with an empty section certifies nothing — refuse to load");
         }
-        for name in parsed.bans_absolute.iter().chain(parsed.bans.iter()) {
+
+        // Item 5: every ban in exactly one jurisdiction. The same name on
+        // two constructs is still one jurisdiction (construct.bans); a
+        // second *kind* of seat is the soft drain.
+        let mut jurisdiction: BTreeMap<String, &'static str> = BTreeMap::new();
+        let mut place = |name: &str, seat: &'static str| -> Result<()> {
+            match jurisdiction.get(name) {
+                Some(prior) if *prior != seat => {
+                    bail!(
+                        "ban `{name}` is in both `{prior}` and `{seat}` — one ban, one jurisdiction"
+                    );
+                }
+                Some(_) => Ok(()),
+                None => {
+                    jurisdiction.insert(name.to_string(), seat);
+                    Ok(())
+                }
+            }
+        };
+        for name in &parsed.bans_absolute {
+            place(name.as_str(), "bans_absolute")?;
+        }
+        for name in &parsed.bans {
+            place(name.as_str(), "bans")?;
+        }
+        for name in &parsed.bans_attribute {
+            place(name.as_str(), "bans_attribute")?;
+        }
+        for c in &parsed.construct {
+            for name in &c.bans {
+                place(name.as_str(), "construct.bans")?;
+            }
+        }
+        for name in jurisdiction.keys() {
             if shape::matcher_by_name(name).is_none() {
                 bail!("ban `{name}` has no registered matcher — a law that cannot fire");
             }
@@ -467,9 +511,15 @@ impl Grammar {
                 bail!("ban `{name}` has no bite proof — an unproven law may not run");
             }
         }
-        for name in &parsed.bans_absolute {
-            if parsed.bans.contains(name) {
-                bail!("ban `{name}` is in both lists — absolute and waivable cannot both hold");
+        // Every registered matcher is a ban somewhere, or the matcher is
+        // ambient law with no jurisdiction (item 5 Proof: nested_place_assign
+        // in no list → load Err).
+        for m in shape::MATCHERS {
+            if !jurisdiction.contains_key(m.name) {
+                bail!(
+                    "ban `{}` is in no list — ambient scope is forbidden; refuse to load",
+                    m.name
+                );
             }
         }
 
@@ -641,12 +691,16 @@ impl Grammar {
         }
 
         // Fixture law: pass+deny per construct (zero-freedom cells are
-        // deny-exempt), deny per condemned kind, nothing unrecognized.
+        // deny-exempt), deny per condemned kind, deny per construct-scoped
+        // ban (item 5), nothing unrecognized.
         let mut expected: BTreeSet<String> = BTreeSet::new();
         for c in &parsed.construct {
             expected.insert(format!("{}.pass.rs", c.name));
             if !c.rule.deny_exempt() {
                 expected.insert(format!("{}.deny.rs", c.name));
+            }
+            for ban in &c.bans {
+                expected.insert(format!("{ban}.deny.rs"));
             }
         }
         for kind in &condemned {
@@ -673,6 +727,7 @@ impl Grammar {
         Ok(Grammar {
             bans_absolute: parsed.bans_absolute,
             bans: parsed.bans,
+            bans_attribute: parsed.bans_attribute,
             constructs: parsed.construct,
             condemned,
             seated: parsed.kinds.seated,
@@ -880,6 +935,34 @@ mod tests {
             std::fs::write(dir.join("rogue.rs"), "fn smuggled() {}\n").expect("write rogue");
         });
         assert!(e.is_err(), "a file the fixture law does not expect must refuse");
+    }
+
+    #[test]
+    fn item_5_proof_nested_place_assign_in_no_list_is_a_load_error() {
+        // TRUTH item 5 Proof: nested_place_assign in no jurisdiction → load Err.
+        let text = real_grammar_text().replace("bans = [\"nested_place_assign\"]\n", "");
+        let e = load_text(&text);
+        assert!(e.is_err(), "ambient nested_place_assign must refuse to load");
+        let msg = format!("{:?}", e.err());
+        assert!(
+            msg.contains("nested_place_assign") && msg.contains("no list"),
+            "refusal names the jurisdiction law: {msg}"
+        );
+    }
+
+    #[test]
+    fn item_5_proof_ban_in_two_jurisdictions_is_a_load_error() {
+        let text = real_grammar_text().replace(
+            "bans_attribute = [\n  \"allow_dead_code\",",
+            "bans_attribute = [\n  \"unwrap\",\n  \"allow_dead_code\",",
+        );
+        let e = load_text(&text);
+        assert!(e.is_err(), "dual jurisdiction must refuse");
+        let msg = format!("{:?}", e.err());
+        assert!(
+            msg.contains("both") || msg.contains("unwrap"),
+            "refusal names the dual seat: {msg}"
+        );
     }
 
     #[test]

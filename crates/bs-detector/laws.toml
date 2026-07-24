@@ -93,27 +93,27 @@ caught_by = "grammar ban `capacity_min_cap` — matcher and bite proof unchanged
 [[law]]
 name = "allow_dead_code"
 law = "dead code silenced instead of deleted — unreachable law is not law"
-caught_by = "grammar ban `allow_dead_code` — matcher and bite proof unchanged"
+caught_by = "grammar bans_attribute `allow_dead_code` — matcher and bite proof; item- and crate-level"
 
 [[law]]
 name = "allow_unused"
 law = "unused warnings silenced instead of resolved — the compiler was telling the truth"
-caught_by = "grammar ban `allow_unused` — matcher and bite proof unchanged"
+caught_by = "grammar bans_attribute `allow_unused` — matcher and bite proof; item- and crate-level"
 
 [[law]]
 name = "allow_clippy"
 law = "a clippy lint silenced at the site instead of the defect being fixed"
-caught_by = "grammar ban `allow_clippy` — matcher and bite proof unchanged"
+caught_by = "grammar bans_attribute `allow_clippy` — matcher and bite proof; item- and crate-level"
 
 [[law]]
 name = "allow_missing_docs"
 law = "missing documentation silenced instead of written"
-caught_by = "grammar ban `allow_missing_docs` — matcher and bite proof unchanged"
+caught_by = "grammar bans_attribute `allow_missing_docs` — matcher and bite proof; item- and crate-level"
 
 [[law]]
 name = "allow_private"
 law = "private-interface leakage silenced instead of the visibility being fixed"
-caught_by = "grammar ban `allow_private` — matcher and bite proof unchanged"
+caught_by = "grammar bans_attribute `allow_private` — matcher and bite proof; item- and crate-level"
 
 [[law]]
 name = "allow_unsafe"
@@ -153,12 +153,12 @@ caught_by = "grammar absolute ban `test_err_early_return` — no waiver can cove
 [[law]]
 name = "ignore_test"
 law = "an ignored test is law on the books that no court ever hears"
-caught_by = "grammar ban `ignore_test` — matcher and bite proof unchanged"
+caught_by = "grammar bans_attribute `ignore_test` — matcher and bite proof; item- and crate-level"
 
 [[law]]
 name = "should_panic"
 law = "should_panic passes on ANY panic, certifying nothing about which law fired"
-caught_by = "grammar ban `should_panic` — matcher and bite proof unchanged"
+caught_by = "grammar bans_attribute `should_panic` — matcher and bite proof; item- and crate-level"
 
 [[law]]
 name = "process_exit"
@@ -173,7 +173,17 @@ caught_by = "grammar ban `sleep_sync` — matcher and bite proof unchanged"
 [[law]]
 name = "serde_default_skip"
 law = "serde(default)/serde(skip) lets a wire field silently vanish or self-invent"
-caught_by = "grammar ban `serde_default_skip` — matcher and bite proof unchanged"
+caught_by = "grammar bans_attribute `serde_default_skip` — matcher and bite proof; item- and crate-level"
+
+[[law]]
+name = "path"
+law = "#[path = …] spoofs file identity — the module's on-disk seat is no longer its source path"
+caught_by = "grammar bans_attribute `path` — matcher and bite proof at every attribute position; ModuleNoPathAttr still refuses classification"
+
+[[law]]
+name = "nested_place_assign"
+law = "assignment through a nested place (self.a.b = …) inside a transition or consuming-verb — the construct's field write must be shallow"
+caught_by = "grammar construct.bans `nested_place_assign` on transition/consuming-verb; span containment in run.rs; deny fixture nested_place_assign.deny.rs"
 
 [[law]]
 name = "nondeterminism"

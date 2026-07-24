@@ -1,9 +1,15 @@
 # The gate grammar — the one law seat for the default-deny gate.
 # Operator-approved data; agents propose changes in chat, never edit.
 #
-# [bans_absolute]: banned-shape predicates no waiver can cover.
-# [bans]: banned-shape predicates a waiver may cover, one entry per hit,
-#   granted only by the kyzo-waiver agent.
+# Ban jurisdictions (TRUTH item 5) — every ban in exactly one:
+# [bans_absolute] / [bans]: expression jurisdiction; every expression
+#   position; absolute = no waiver; bans = waivable one entry per hit.
+# [bans_attribute]: attribute jurisdiction; every attribute position,
+#   item- and crate-level (`#![…]` and `#[…]`).
+# [[construct]].bans: construct-scoped; attributed by span containment
+#   in run.rs; deny fixture per scoped ban name.
+# A ban in no list, in two lists, or a matcher with no jurisdiction →
+# load Err.
 # [kinds]: TRUTH item 1's totality proof. Every `syn::Item` kind, and every
 #   impl/trait interior kind, is either `condemned` (red on sight, its own
 #   laws.toml entry) or `seated` (may classify only as one of the named
@@ -44,26 +50,30 @@ bans = [
   "as_cast",
   "unchecked_arith",
   "capacity_min_cap",
-  "allow_dead_code",
-  "allow_unused",
-  "allow_clippy",
-  "allow_missing_docs",
-  "allow_private",
   "catchall_arm",
   "default_derive",
   "default_impl",
   "construction_door",
   "naked_array_sig",
-  "ignore_test",
-  "should_panic",
   "process_exit",
   "sleep_sync",
-  "serde_default_skip",
   "nondeterminism",
   "peer_dial",
   "unsafe_token",
   "assert_bang",
   "hand_layout",
+]
+
+bans_attribute = [
+  "allow_dead_code",
+  "allow_unused",
+  "allow_clippy",
+  "allow_missing_docs",
+  "allow_private",
+  "ignore_test",
+  "should_panic",
+  "serde_default_skip",
+  "path",
 ]
 
 [kinds]
@@ -165,11 +175,13 @@ rule = "derivation-bans"
 name = "transition"
 kind = "fn"
 rule = "transition-bans"
+bans = ["nested_place_assign"]
 
 [[construct]]
 name = "consuming-verb"
 kind = "fn"
 rule = "consuming-verb-bans"
+bans = ["nested_place_assign"]
 
 [[construct]]
 name = "admission-door"

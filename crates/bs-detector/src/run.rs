@@ -13,7 +13,7 @@
 //! counts artifact; hooks/CI parse those artifacts and never re-derive
 //! them.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -73,12 +73,13 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     let mut raw_by_check: Vec<(String, Vec<Hit>)> = vec![];
 
-    // The fixed pass list. Order is report order; every entry must hold a
-    // law in laws.toml or the run refuses before any verdict exists.
+    // Expression + attribute jurisdictions (item 5 a/b). Construct-scoped
+    // bans run after classify so span containment can see construct shapes.
     let ban_names: Vec<&str> = grammar
         .bans_absolute
         .iter()
         .chain(grammar.bans.iter())
+        .chain(grammar.bans_attribute.iter())
         .map(|s| s.as_str())
         .collect();
 
@@ -114,14 +115,25 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
         .collect();
     let need_classify = run_pass("unclassified")
         || condemned_names.iter().any(|n| run_pass(n));
+    let all_files: Vec<&SourceFile> = b.files.iter().collect();
+    let aliases = if need_classify
+        || grammar.constructs.iter().any(|c| !c.bans.is_empty())
+    {
+        Some(
+            AliasTable::build(&all_files)
+                .with_context(|| "building item-4 workspace alias table")?,
+        )
+    } else {
+        None
+    };
     if need_classify {
-        let all_files: Vec<&SourceFile> = b.files.iter().collect();
-        let aliases = AliasTable::build(&all_files)
-            .with_context(|| "building item-4 workspace alias table")?;
+        let aliases = aliases
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("alias table required for classify — refuse"))?;
         let all: Vec<Hit> = b
             .files
             .iter()
-            .flat_map(|f| classify::classify_file(&grammar, f, &aliases))
+            .flat_map(|f| classify::classify_file(&grammar, f, aliases))
             .collect();
         let mut condemned_hits: BTreeMap<&str, Vec<Hit>> =
             condemned_names.iter().map(|n| (*n, Vec::new())).collect();
@@ -143,6 +155,47 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
                         "condemned hit bucket for `{name}` vanished post-partition — refuse"
                     )
                 })?;
+                passes.push((name, hits));
+            }
+        }
+    }
+    // Item 5 (c): construct-scoped bans — matcher hits kept only when the
+    // site line sits inside a shape-matched construct that lists the ban.
+    {
+        let mut scoped_ban_names: BTreeSet<&str> = BTreeSet::new();
+        for c in &grammar.constructs {
+            for ban in &c.bans {
+                scoped_ban_names.insert(ban.as_str());
+            }
+        }
+        if let Some(aliases) = aliases.as_ref() {
+            for name in scoped_ban_names {
+                if !run_pass(name) {
+                    continue;
+                }
+                let m = match shape::matcher_by_name(name) {
+                    Some(m) => m,
+                    None => anyhow::bail!("construct-scoped ban `{name}` vanished post-load"),
+                };
+                let scope = waivers.scope_for(name);
+                let in_scope = |file: &str| -> bool {
+                    scope.is_none_or(|s| s.scope.iter().any(|p| file.starts_with(p.as_str())))
+                };
+                let mut hits = Vec::new();
+                for f in b.files.iter().filter(|f| in_scope(&f.rel_path)) {
+                    let spans = classify::scoped_construct_spans(&grammar, f, aliases);
+                    let raw = shape::run_matcher(m, f);
+                    for h in raw {
+                        let inside = spans.iter().any(|s| {
+                            s.bans.iter().any(|b| b == name)
+                                && h.line >= s.start_line
+                                && h.line <= s.end_line
+                        });
+                        if inside {
+                            hits.push(h);
+                        }
+                    }
+                }
                 passes.push((name, hits));
             }
         }

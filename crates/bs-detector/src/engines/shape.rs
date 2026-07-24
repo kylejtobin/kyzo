@@ -805,6 +805,78 @@ fn m_should_panic(f: &SourceFile) -> Vec<Hit> {
     attr_sites(f, "should_panic", "should_panic")
 }
 
+/// `#[path = "…"]` / `#![path = "…"]` — file-identity spoof at any
+/// attribute position (item 5 attribute jurisdiction).
+fn m_path(f: &SourceFile) -> Vec<Hit> {
+    attr_sites(f, "path", "path")
+}
+
+/// Nested place assign: `self.a.b = …` (depth > 1) or a non-self place.
+/// Construct-scoped (item 5); run.rs keeps hits only inside constructs
+/// that list this ban.
+fn m_nested_place_assign(f: &SourceFile) -> Vec<Hit> {
+    use syn::spanned::Spanned;
+    fn self_place_depth(expr: &syn::Expr) -> Option<usize> {
+        match expr {
+            syn::Expr::Path(p) if p.path.is_ident("self") => Some(0),
+            syn::Expr::Field(fld) => self_place_depth(&fld.base).map(|d| d + 1),
+            _not_a_self_place => None,
+        }
+    }
+    fn is_nested(lhs: &syn::Expr) -> bool {
+        self_place_depth(lhs).is_none_or(|depth| depth > 1)
+    }
+    fn is_compound_assign(op: &syn::BinOp) -> bool {
+        matches!(
+            op,
+            syn::BinOp::AddAssign(_)
+                | syn::BinOp::SubAssign(_)
+                | syn::BinOp::MulAssign(_)
+                | syn::BinOp::DivAssign(_)
+                | syn::BinOp::RemAssign(_)
+                | syn::BinOp::BitXorAssign(_)
+                | syn::BinOp::BitAndAssign(_)
+                | syn::BinOp::BitOrAssign(_)
+                | syn::BinOp::ShlAssign(_)
+                | syn::BinOp::ShrAssign(_)
+        )
+    }
+    struct V<'a> {
+        rel: &'a str,
+        hits: Vec<Hit>,
+    }
+    impl<'ast, 'a> Visit<'ast> for V<'a> {
+        fn visit_expr_assign(&mut self, node: &'ast syn::ExprAssign) {
+            if is_nested(&node.left) {
+                push(
+                    &mut self.hits,
+                    self.rel,
+                    span_line(&node.eq_token.span),
+                    "nested_place_assign",
+                );
+            }
+            visit::visit_expr_assign(self, node);
+        }
+        fn visit_expr_binary(&mut self, node: &'ast syn::ExprBinary) {
+            if is_compound_assign(&node.op) && is_nested(&node.left) {
+                push(
+                    &mut self.hits,
+                    self.rel,
+                    span_line(&node.op.span()),
+                    "nested_place_assign",
+                );
+            }
+            visit::visit_expr_binary(self, node);
+        }
+    }
+    let mut v = V {
+        rel: &f.rel_path,
+        hits: vec![],
+    };
+    v.visit_file(&f.ast);
+    v.hits
+}
+
 /// AST attribute scan: a bare `#[name]`/`#[name = …]` or a
 /// `#[cfg_attr(…, name…)]` smuggle both count — placement and line
 /// formatting cannot hide an attribute from a parsed walk.
@@ -1265,6 +1337,8 @@ pub const MATCHERS: &[Matcher] = &[
     Matcher { name: "test_err_early_return", class: ScanClass::Everything, run: m_test_err_early_return },
     Matcher { name: "ignore_test", class: ScanClass::Everything, run: m_ignore_test },
     Matcher { name: "should_panic", class: ScanClass::Everything, run: m_should_panic },
+    Matcher { name: "path", class: ScanClass::Everything, run: m_path },
+    Matcher { name: "nested_place_assign", class: ScanClass::Everything, run: m_nested_place_assign },
     Matcher { name: "err_costume", class: ScanClass::Everything, run: m_err_costume },
     Matcher { name: "process_exit", class: ScanClass::Everything, run: m_process_exit },
     Matcher { name: "sleep_sync", class: ScanClass::Everything, run: m_sleep_sync },

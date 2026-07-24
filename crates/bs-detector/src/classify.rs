@@ -48,6 +48,138 @@ pub fn classify_file(grammar: &Grammar, file: &SourceFile, aliases: &AliasTable)
     hits
 }
 
+/// Inclusive line span of one construct instance that declares construct-scoped bans.
+#[derive(Clone, Debug)]
+pub struct ScopedConstructSpan {
+    pub start_line: usize,
+    pub end_line: usize,
+    pub bans: Vec<String>,
+}
+
+/// Spans of fn items whose *shape* matches a construct that lists construct-scoped
+/// bans. Body bans attributed by run.rs span containment are ignored here
+/// (shape-only), so a nested-place assign still sits inside its construct's span.
+pub fn scoped_construct_spans(
+    grammar: &Grammar,
+    file: &SourceFile,
+    aliases: &AliasTable,
+) -> Vec<ScopedConstructSpan> {
+    let mut out = vec![];
+    let ctx = Ctx {
+        rel: &file.rel_path,
+        grammar,
+        aliases,
+        self_ty: None,
+        in_container: false,
+    };
+    collect_scoped_spans_items(&ctx, &file.ast.items, &mut out);
+    out
+}
+
+fn collect_scoped_spans_items(ctx: &Ctx, items: &[syn::Item], out: &mut Vec<ScopedConstructSpan>) {
+    for item in items {
+        match item {
+            syn::Item::Fn(f) => {
+                push_scoped_fn_span(ctx, &f.sig, f, out);
+                collect_scoped_spans_block(ctx, &f.block, out);
+            }
+            syn::Item::Impl(im) => {
+                let inner = Ctx {
+                    rel: ctx.rel,
+                    grammar: ctx.grammar,
+                    aliases: ctx.aliases,
+                    self_ty: Some(&im.self_ty),
+                    in_container: true,
+                };
+                for it in &im.items {
+                    if let syn::ImplItem::Fn(f) = it {
+                        push_scoped_fn_span(&inner, &f.sig, f, out);
+                        collect_scoped_spans_block(&inner, &f.block, out);
+                    }
+                }
+            }
+            syn::Item::Trait(t) => {
+                let inner = Ctx {
+                    rel: ctx.rel,
+                    grammar: ctx.grammar,
+                    aliases: ctx.aliases,
+                    self_ty: None,
+                    in_container: true,
+                };
+                for it in &t.items {
+                    if let syn::TraitItem::Fn(f) = it {
+                        push_scoped_fn_span(&inner, &f.sig, f, out);
+                        if let Some(block) = &f.default {
+                            collect_scoped_spans_block(&inner, block, out);
+                        }
+                    }
+                }
+            }
+            syn::Item::Mod(m) => {
+                if let Some((_, items)) = &m.content {
+                    collect_scoped_spans_items(ctx, items, out);
+                }
+            }
+            _other => {}
+        }
+    }
+}
+
+fn collect_scoped_spans_block(ctx: &Ctx, block: &syn::Block, out: &mut Vec<ScopedConstructSpan>) {
+    for stmt in &block.stmts {
+        if let syn::Stmt::Item(it) = stmt {
+            collect_scoped_spans_items(ctx, std::slice::from_ref(it), out);
+        }
+    }
+}
+
+fn push_scoped_fn_span<T: syn::spanned::Spanned>(
+    ctx: &Ctx,
+    sig: &syn::Signature,
+    whole: &T,
+    out: &mut Vec<ScopedConstructSpan>,
+) {
+    for c in &ctx.grammar.constructs {
+        if c.bans.is_empty() {
+            continue;
+        }
+        if !shape_only_fn_matches(c.rule, sig, ctx) {
+            continue;
+        }
+        let span = whole.span();
+        out.push(ScopedConstructSpan {
+            start_line: crate::boundary::span_line(&span),
+            end_line: span.end().line,
+            bans: c.bans.clone(),
+        });
+    }
+}
+
+/// Receiver/async/return shape of a construct rule, ignoring body bans that
+/// live in `construct.bans` (those fire via run.rs span containment).
+fn shape_only_fn_matches(rule: StructuralRule, sig: &syn::Signature, ctx: &Ctx) -> bool {
+    let receiver = receiver_form(sig);
+    match rule {
+        StructuralRule::TransitionBans => {
+            receiver == Receiver::RefMutSelf && sig.asyncness.is_none()
+        }
+        StructuralRule::ConsumingVerbBans => {
+            receiver == Receiver::ByValueSelf
+                && sig.asyncness.is_none()
+                && !return_resolves_to_self(&sig.output, ctx.self_ty, false)
+        }
+        StructuralRule::DerivationBans => {
+            receiver == Receiver::RefSelf && sig.asyncness.is_none()
+        }
+        StructuralRule::AdmissionDoorBans => {
+            is_admission_door_shape(sig, ctx) && sig.asyncness.is_none()
+        }
+        StructuralRule::CompositionRootBody => is_composition_root_shape(sig, ctx) && sig.asyncness.is_none(),
+        StructuralRule::DeclaredFnSeat => receiver == Receiver::None,
+        _rule_not_fn_scoped => false,
+    }
+}
+
 struct Ctx<'a> {
     rel: &'a str,
     grammar: &'a Grammar,

@@ -188,6 +188,8 @@ fn bite_capacity_min_cap_hoisted() {
 #[test]
 fn bite_allow_dead_code() {
     assert_eq!(detonates("allow_dead_code", "#[allow(dead_code)]\nfn f() {}"), Some(1));
+    // Item 5 Proof: crate-level #![allow(dead_code)] → hit.
+    assert_eq!(detonates("allow_dead_code", "#![allow(dead_code)]\nfn f() {}"), Some(1));
 }
 
 #[test]
@@ -285,6 +287,22 @@ fn bite_ignore_test() {
 #[test]
 fn bite_should_panic() {
     assert_eq!(detonates("should_panic", "#[should_panic]\nfn t() {}"), Some(1));
+}
+
+#[test]
+fn bite_path() {
+    assert_eq!(detonates("path", "#[path = \"x.rs\"]\nmod m;"), Some(1));
+}
+
+#[test]
+fn bite_nested_place_assign() {
+    assert_eq!(
+        detonates(
+            "nested_place_assign",
+            "impl S { fn nest(&mut self) { self.a.b = 1; } }"
+        ),
+        Some(1)
+    );
 }
 
 // --- process and scheduling dishonesty ------------------------------------------------
@@ -422,7 +440,7 @@ fn the_real_grammar_and_laws_load_and_bind_to_this_file() {
         Err(e) => panic!("grammar.toml must be lawful: {e:#}"),
     };
     assert!(
-        g.bans.len() + g.bans_absolute.len() >= 40,
+        g.bans.len() + g.bans_absolute.len() + g.bans_attribute.len() >= 40,
         "every banned shape stays registered"
     );
     assert_eq!(g.condemned.len(), 8, "item 1: exactly eight condemned kinds");
@@ -430,7 +448,14 @@ fn the_real_grammar_and_laws_load_and_bind_to_this_file() {
         Ok(l) => l,
         Err(e) => panic!("laws.toml must be lawful: {e:#}"),
     };
-    for name in g.bans_absolute.iter().chain(g.bans.iter()) {
+    let construct_bans = g.constructs.iter().flat_map(|c| c.bans.iter());
+    for name in g
+        .bans_absolute
+        .iter()
+        .chain(g.bans.iter())
+        .chain(g.bans_attribute.iter())
+        .chain(construct_bans)
+    {
         if laws.require(name).is_err() {
             panic!("ban `{name}` has no retained law — coverage proof broken");
         }
