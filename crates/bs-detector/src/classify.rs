@@ -19,10 +19,10 @@
 //! (`unknown-syn-*-kind`), not a silent catch-all.
 //!
 //! Recursion scope: every top-level item, every inline `mod { .. }` item,
-//! every impl/trait interior item, and item statements declared directly
-//! inside a fn body block. Item declarations nested inside expression
-//! bodies (`if true { struct X; }`) are outside this walk's scope — a
-//! documented, narrow residual, not a silent hole in the kind table.
+//! every impl/trait interior item, and every item declaration reachable
+//! through statement and expression nesting (fn bodies, blocks, if/match
+//! arms, loops, closures). Tip 641/650: no soft residual that hides an
+//! unseated item inside an expression body.
 
 use quote::ToTokens;
 use syn::visit::{self, Visit};
@@ -341,10 +341,28 @@ fn recurse_into_item(ctx: &Ctx, item: &syn::Item, hits: &mut Vec<Hit>) {
 }
 
 fn classify_block_items(ctx: &Ctx, block: &syn::Block, hits: &mut Vec<Hit>) {
-    for stmt in &block.stmts {
-        if let syn::Stmt::Item(it) = stmt {
-            classify_item(ctx, it, hits);
+    struct Nested<'a, 'c> {
+        ctx: &'a Ctx<'c>,
+        hits: &'a mut Vec<Hit>,
+    }
+    impl<'ast> Visit<'ast> for Nested<'_, '_> {
+        fn visit_item(&mut self, node: &'ast syn::Item) {
+            classify_item(self.ctx, node, self.hits);
+            // classify_item already recurses containers; do not
+            // visit_item default-recurse or items double-fire.
         }
+        fn visit_stmt(&mut self, node: &'ast syn::Stmt) {
+            match node {
+                syn::Stmt::Item(it) => {
+                    classify_item(self.ctx, it, self.hits);
+                }
+                other => visit::visit_stmt(self, other),
+            }
+        }
+    }
+    let mut v = Nested { ctx, hits };
+    for stmt in &block.stmts {
+        v.visit_stmt(stmt);
     }
 }
 
@@ -1404,7 +1422,18 @@ mod fixture_tests {
         assert_unclassified("use std::string::String as Text; struct T { t: Text }");
     }
 
+    
     #[test]
+    fn item_650_proof_expression_nested_item_is_classified() {
+        // Tip 650: an item nested in an expression body must not be a soft hole.
+        let hits = classify_src("fn f() { if true { struct NestedHide; } }");
+        assert!(
+            hits.iter().any(|h| h.construct().contains("unclassified")),
+            "expression-nested item must classify (hard): {hits:?}"
+        );
+    }
+
+#[test]
     fn item_4_proof_restrict_struct_is_clean() {
         assert_hit_count("struct R { r: Restrict }", 0);
     }
