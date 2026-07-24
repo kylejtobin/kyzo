@@ -1535,18 +1535,50 @@ mod fixture_tests {
         assert_unclassified("use std::string::String as Text; struct T { t: Text }");
     }
 
-    
+    /// Adversary 6a: expression-nested FREE FN — unit struct was a false
+    /// specimen (unit-marker seats green). A receiverless nested fn cannot
+    /// seat; if the if-body walk is blind, this is []. Exact construct only.
     #[test]
-    fn item_650_proof_expression_nested_item_is_classified() {
-        // Tip 650: an item nested in an expression body must not be a soft hole.
-        let hits = classify_src("fn f() { if true { struct NestedHide; } }");
+    fn anti_fraud_expression_nested_fn_must_be_exact_unclassified() {
+        let hits = classify_src("fn f() { if true { fn nested_hide() {} } }");
+        let nested = hit_constructs_for(&hits, "nested_hide");
+        assert_eq!(
+            nested,
+            vec!["unclassified-fn:nested_hide".to_string()],
+            "if-body fn must be exactly unclassified-fn:nested_hide (walk blind or soft seat): {nested:?} full={hits:?}"
+        );
         assert!(
-            hits.iter().any(|h| h.construct().contains("unclassified")),
-            "expression-nested item must classify (hard): {hits:?}"
+            hits.iter().any(|h| h.construct() == "unclassified-fn:f"),
+            "outer free fn f must be unclassified-fn:f: {hits:?}"
         );
     }
 
-#[test]
+    /// Adversary 6b: expression-nested STRING STRUCT — cannot seat as
+    /// sealed/newtype/unit. Exact construct; detonates on walk blindness.
+    #[test]
+    fn anti_fraud_expression_nested_string_struct_must_be_exact_unclassified() {
+        let hits = classify_src("fn f() { if true { struct NestedHide { name: String } } }");
+        let nested = hit_constructs_for(&hits, "NestedHide");
+        assert_eq!(
+            nested,
+            vec!["unclassified-struct:NestedHide".to_string()],
+            "if-body String struct must be exactly unclassified-struct:NestedHide: {nested:?} full={hits:?}"
+        );
+    }
+
+    /// Adversary 6c: FALSE SPECIMEN LOCK — unit struct in if-body IS
+    /// unit-marker (lawful green). If this goes red, we over-fixed.
+    #[test]
+    fn anti_fraud_expression_nested_unit_struct_still_seats_as_unit_marker() {
+        let hits = classify_src("fn f() { if true { struct NestedHide; } }");
+        let nested = hit_constructs_for(&hits, "NestedHide");
+        assert!(
+            nested.is_empty(),
+            "unit struct NestedHide must remain unit-marker green, not red: {nested:?} full={hits:?}"
+        );
+    }
+
+    #[test]
     fn item_4_proof_restrict_struct_is_clean() {
         assert_hit_count("struct R { r: Restrict }", 0);
     }
