@@ -114,12 +114,41 @@ pub struct CargoMetaLaw;
 /// The one production door for cargo-metadata field lifts.
 pub const CARGO_META: CargoMetaLaw = CargoMetaLaw;
 
+/// Refuse reasons for cargo-metadata field lifts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CargoMetaRefuse {
+    MissingField { key: Label },
+    NotString { key: Label, got: Label },
+}
+
+impl std::fmt::Display for CargoMetaRefuse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CargoMetaRefuse::MissingField { key } => {
+                write!(f, "missing field `{}`", key.as_str())
+            }
+            CargoMetaRefuse::NotString { key, got } => {
+                write!(f, "{} must be a string, got {}", key.as_str(), got.as_str())
+            }
+        }
+    }
+}
+
 impl CargoMetaLaw {
-    fn take_string(&self, map: &mut Map<String, Value>, key: &str) -> Result<String, String> {
+    fn take_string(
+        &self,
+        map: &mut Map<String, Value>,
+        key: &str,
+    ) -> Result<String, CargoMetaRefuse> {
         match map.remove(key) {
             Some(Value::String(s)) => Ok(s),
-            Some(other) => Err(format!("{key} must be a string, got {other}")),
-            None => Err(format!("missing field `{key}`")),
+            Some(other) => Err(CargoMetaRefuse::NotString {
+                key: Label::admit(key),
+                got: Label::admit(other.to_string()),
+            }),
+            None => Err(CargoMetaRefuse::MissingField {
+                key: Label::admit(key),
+            }),
         }
     }
 
@@ -127,11 +156,14 @@ impl CargoMetaLaw {
         &self,
         map: &mut Map<String, Value>,
         key: &str,
-    ) -> Result<String, String> {
+    ) -> Result<String, CargoMetaRefuse> {
         match map.remove(key) {
             None | Some(Value::Null) => Ok(String::new()),
             Some(Value::String(s)) => Ok(s),
-            Some(other) => Err(format!("{key} must be a string, got {other}")),
+            Some(other) => Err(CargoMetaRefuse::NotString {
+                key: Label::admit(key),
+                got: Label::admit(other.to_string()),
+            }),
         }
     }
 }

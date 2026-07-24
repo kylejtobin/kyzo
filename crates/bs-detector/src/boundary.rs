@@ -187,7 +187,7 @@ impl std::error::Error for LabelParseRefuse {}
 impl std::str::FromStr for Label {
     type Err = LabelParseRefuse;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> Result<Self, LabelParseRefuse> {
         Ok(Self::admit(s))
     }
 }

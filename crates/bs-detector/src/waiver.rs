@@ -49,6 +49,75 @@ enum TemplateSegment {
     Slot { name: Label },
 }
 
+/// Refuse reasons for attestation segment/fill.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AttestationRefuse {
+    BytesOutsideSlots { count: usize, after: usize },
+    FixedPastEnd { index: usize, pos: usize },
+    FixedMismatch { index: usize, pos: usize },
+    SlotNoDelimiter { name: Label },
+    SlotPastEnd { name: Label, pos: usize },
+    SlotDelimiterMissing { name: Label },
+    SlotEmpty { name: Label },
+    MissingSlotValue { name: Label },
+    SlotOrder { expected: Label, got: Label },
+    SlotMustBeNonEmpty { name: Label },
+    ExtraSlotValues { got: usize, template: usize },
+}
+
+impl std::fmt::Display for AttestationRefuse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AttestationRefuse::BytesOutsideSlots { count, after } => write!(
+                f,
+                "attestation has {count} byte(s) outside every slot (after byte {after})"
+            ),
+            AttestationRefuse::FixedPastEnd { index, pos } => write!(
+                f,
+                "attestation fixed segment {index}: position {pos} past end of why"
+            ),
+            AttestationRefuse::FixedMismatch { index, pos } => write!(
+                f,
+                "attestation fixed segment {index} mismatch at byte {pos}"
+            ),
+            AttestationRefuse::SlotNoDelimiter { name } => write!(
+                f,
+                "attestation slot `{}` has no following fixed delimiter",
+                name.as_str()
+            ),
+            AttestationRefuse::SlotPastEnd { name, pos } => write!(
+                f,
+                "attestation slot `{}`: position {pos} past end of why",
+                name.as_str()
+            ),
+            AttestationRefuse::SlotDelimiterMissing { name } => write!(
+                f,
+                "attestation slot `{}`: following fixed delimiter not found",
+                name.as_str()
+            ),
+            AttestationRefuse::SlotEmpty { name } => {
+                write!(f, "attestation slot `{}` is empty", name.as_str())
+            }
+            AttestationRefuse::MissingSlotValue { name } => {
+                write!(f, "missing slot value for `{}`", name.as_str())
+            }
+            AttestationRefuse::SlotOrder { expected, got } => write!(
+                f,
+                "slot order: expected `{}`, got `{}`",
+                expected.as_str(),
+                got.as_str()
+            ),
+            AttestationRefuse::SlotMustBeNonEmpty { name } => {
+                write!(f, "slot `{}` must be non-empty", name.as_str())
+            }
+            AttestationRefuse::ExtraSlotValues { got, template } => write!(
+                f,
+                "extra slot values: got {got}, template has {template}"
+            ),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TemplateFile {
@@ -113,7 +182,7 @@ impl AttestationTemplate {
 
     /// Segment `why` against this template. Full coverage, non-empty slots,
     /// or a named refusal. Any leftover byte is outside every slot.
-    pub fn segment(&self, why: &str) -> Result<Vec<(String, String)>, String> {
+    pub fn segment(&self, why: &str) -> Result<Vec<(String, String)>, AttestationRefuse> {
         self.segment_at(why, 0, 0, Vec::new())
     }
 
@@ -123,27 +192,23 @@ impl AttestationTemplate {
         pos: usize,
         i: usize,
         filled: Vec<(String, String)>,
-    ) -> Result<Vec<(String, String)>, String> {
+    ) -> Result<Vec<(String, String)>, AttestationRefuse> {
         let Some(seg) = self.segments.get(i) else {
             if pos != why.len() {
-                return Err(format!(
-                    "attestation has {} byte(s) outside every slot (after byte {pos})",
-                    why.len() - pos
-                ));
+                return Err(AttestationRefuse::BytesOutsideSlots {
+                    count: why.len() - pos,
+                    after: pos,
+                });
             }
             return Ok(filled);
         };
         match seg {
             TemplateSegment::Fixed { text } => {
                 let Some(rest) = why.get(pos..) else {
-                    return Err(format!(
-                        "attestation fixed segment {i}: position {pos} past end of why"
-                    ));
+                    return Err(AttestationRefuse::FixedPastEnd { index: i, pos });
                 };
                 if !rest.starts_with(text.as_str()) {
-                    return Err(format!(
-                        "attestation fixed segment {i} mismatch at byte {pos}"
-                    ));
+                    return Err(AttestationRefuse::FixedMismatch { index: i, pos });
                 }
                 self.segment_at(why, pos + text.as_str().len(), i + 1, filled)
             }
@@ -151,26 +216,20 @@ impl AttestationTemplate {
                 let delim = match self.segments.get(i + 1) {
                     Some(TemplateSegment::Fixed { text }) => text.as_str(),
                     Some(TemplateSegment::Slot { .. }) | None => {
-                        return Err(format!(
-                            "attestation slot `{}` has no following fixed delimiter",
-                            name.as_str()
-                        ));
+                        return Err(AttestationRefuse::SlotNoDelimiter { name: name.clone() });
                     }
                 };
                 let Some(rest) = why.get(pos..) else {
-                    return Err(format!(
-                        "attestation slot `{}`: position {pos} past end of why",
-                        name.as_str()
-                    ));
+                    return Err(AttestationRefuse::SlotPastEnd {
+                        name: name.clone(),
+                        pos,
+                    });
                 };
                 let Some(rel) = rest.find(delim) else {
-                    return Err(format!(
-                        "attestation slot `{}`: following fixed delimiter not found",
-                        name.as_str()
-                    ));
+                    return Err(AttestationRefuse::SlotDelimiterMissing { name: name.clone() });
                 };
                 if rel == 0 {
-                    return Err(format!("attestation slot `{}` is empty", name.as_str()));
+                    return Err(AttestationRefuse::SlotEmpty { name: name.clone() });
                 }
                 let content = &rest[..rel];
                 let mut next_filled = filled;
@@ -182,13 +241,13 @@ impl AttestationTemplate {
     }
 
     /// Fill the canonical template with non-empty slot values (test/helper).
-    pub fn fill(&self, slots: &[(&str, &str)]) -> Result<String, String> {
+    pub fn fill(&self, slots: &[(&str, &str)]) -> Result<String, AttestationRefuse> {
         let (out, slot_i) = self.fill_at(0, slots, 0, String::new())?;
         if slot_i != slots.len() {
-            return Err(format!(
-                "extra slot values: got {}, template has {slot_i}",
-                slots.len()
-            ));
+            return Err(AttestationRefuse::ExtraSlotValues {
+                got: slots.len(),
+                template: slot_i,
+            });
         }
         // Refuse fill values that would break delimiter scan.
         self.segment(&out)?;
@@ -201,7 +260,7 @@ impl AttestationTemplate {
         slots: &[(&str, &str)],
         slot_i: usize,
         out: String,
-    ) -> Result<(String, usize), String> {
+    ) -> Result<(String, usize), AttestationRefuse> {
         let Some(seg) = self.segments.get(seg_i) else {
             return Ok((out, slot_i));
         };
@@ -213,16 +272,16 @@ impl AttestationTemplate {
             }
             TemplateSegment::Slot { name } => {
                 let Some((n, v)) = slots.get(slot_i) else {
-                    return Err(format!("missing slot value for `{}`", name.as_str()));
+                    return Err(AttestationRefuse::MissingSlotValue { name: name.clone() });
                 };
                 if *n != name.as_str() {
-                    return Err(format!(
-                        "slot order: expected `{}`, got `{n}`",
-                        name.as_str()
-                    ));
+                    return Err(AttestationRefuse::SlotOrder {
+                        expected: name.clone(),
+                        got: Label::admit(*n),
+                    });
                 }
                 if v.is_empty() {
-                    return Err(format!("slot `{}` must be non-empty", name.as_str()));
+                    return Err(AttestationRefuse::SlotMustBeNonEmpty { name: name.clone() });
                 }
                 let mut next = out;
                 next.push_str(v);
@@ -303,10 +362,26 @@ impl Waiver {
     /// `WaiverFile::load`'s attestation-form gate — deserialize is the
     /// sole field door; one argument, no clippy allow.
     #[cfg(test)]
-    pub(crate) fn admit_row(row: &str) -> Result<Self, toml::de::Error> {
-        toml::from_str(row)
+    pub(crate) fn admit_row(row: &str) -> Result<Self, WaiverRowRefuse> {
+        toml::from_str(row).map_err(|e| WaiverRowRefuse::Toml(Label::admit(e.to_string())))
     }
 
+}
+
+/// Test-only refuse for [`Waiver::admit_row`].
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum WaiverRowRefuse {
+    Toml(Label),
+}
+
+#[cfg(test)]
+impl std::fmt::Display for WaiverRowRefuse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WaiverRowRefuse::Toml(label) => write!(f, "toml: {label}"),
+        }
+    }
 }
 
 /// The single lawful narrow scope: a check whose boundary is less than all

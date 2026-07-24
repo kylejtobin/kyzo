@@ -212,6 +212,26 @@ pub enum ConstructFamily {
     TraitContainer,
 }
 
+/// Refuse reasons for [`StructuralRule::disjoint_with`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DisjointRefuse {
+    IdenticalRules,
+    UnprovenPair,
+}
+
+impl std::fmt::Display for DisjointRefuse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DisjointRefuse::IdenticalRules => {
+                f.write_str("identical rules share every parse fact — not disjoint")
+            }
+            DisjointRefuse::UnprovenPair => f.write_str(
+                "no disjointness proof for this same-kind rule pair — grow the match or refuse the grammar",
+            ),
+        }
+    }
+}
+
 /// The structural rule a construct demands. Closed sum; each variant has
 /// exactly one implementation in `classify.rs` and an executed deny
 /// fixture proving its in-cell refusal — except zero-freedom cells,
@@ -326,14 +346,14 @@ impl StructuralRule {
     /// Same-kind pairs only: a pair without a proof case is a load Err —
     /// two constructs that can both match one item is the soft drain.
     /// Identical rules are never disjoint.
-    pub fn disjoint_with(self, other: Self) -> Result<(), &'static str> {
+    pub fn disjoint_with(self, other: Self) -> Result<(), DisjointRefuse> {
         use StructuralRule::{
             AdmissionDoorBans, CompositionRootBody, ConsumingVerbBans, DeclaredFnSeat,
             DerivationBans, NamedAllPrivateNoStringTerminal, TransitionBans,
             TupleSinglePrivateField, UnitStruct,
         };
         if self == other {
-            return Err("identical rules share every parse fact — not disjoint");
+            return Err(DisjointRefuse::IdenticalRules);
         }
         match (self, other) {
             // Struct partition: tuple / named / unit are mutually exclusive
@@ -383,9 +403,7 @@ impl StructuralRule {
             // skip unequal ConstructFamily. Same-family singles (one enum
             // rule, one alias rule, …) never reach a pair. Anything else
             // same-family without a case above is an unproven overlap.
-            _unproven_same_kind_pair => Err(
-                "no disjointness proof for this same-kind rule pair — grow the match or refuse the grammar",
-            ),
+            _unproven_same_kind_pair => Err(DisjointRefuse::UnprovenPair),
         }
     }
 }

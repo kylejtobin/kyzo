@@ -39,28 +39,72 @@ pub enum Citation {
     DecisionsSeat(u32),
 }
 
+/// Refuse reasons for [`Citation::parse`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CitationRefuse {
+    Empty,
+    DecisionsSeatNotNumber { rest: Label },
+    DecisionsSeatZero,
+    FileItemMalformed { raw: Label },
+    TestFnMalformed { raw: Label },
+    UnknownForm { raw: Label },
+}
+
+impl std::fmt::Display for CitationRefuse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CitationRefuse::Empty => f.write_str("citation is empty"),
+            CitationRefuse::DecisionsSeatNotNumber { rest } => write!(
+                f,
+                "decisions.md seat id must be a number, got `{}`",
+                rest.as_str()
+            ),
+            CitationRefuse::DecisionsSeatZero => {
+                f.write_str("decisions.md seat id must be >= 1")
+            }
+            CitationRefuse::FileItemMalformed { raw } => {
+                write!(f, "file#item-path malformed: `{}`", raw.as_str())
+            }
+            CitationRefuse::TestFnMalformed { raw } => write!(
+                f,
+                "test fn path must be `path/to/file.rs::fn_name`, got `{}`",
+                raw.as_str()
+            ),
+            CitationRefuse::UnknownForm { raw } => write!(
+                f,
+                "citation `{}` matches none of: laws.toml law name, file#item-path, file.rs::fn, decisions.md#N",
+                raw.as_str()
+            ),
+        }
+    }
+}
+
 impl Citation {
     /// Parse the citation grammar. Empty / ambiguous forms refuse.
-    pub fn parse(raw: &str) -> Result<Citation, String> {
+    pub fn parse(raw: &str) -> Result<Citation, CitationRefuse> {
         let s = raw.trim();
         if s.is_empty() {
-            return Err("citation is empty".into());
+            return Err(CitationRefuse::Empty);
         }
         if let Some(rest) = s.strip_prefix("decisions.md#") {
-            let n: u32 = rest
-                .parse()
-                .map_err(|_| format!("decisions.md seat id must be a number, got `{rest}`"))?;
+            let n: u32 = rest.parse().map_err(|_| CitationRefuse::DecisionsSeatNotNumber {
+                rest: Label::admit(rest),
+            })?;
             if n == 0 {
-                return Err("decisions.md seat id must be >= 1".into());
+                return Err(CitationRefuse::DecisionsSeatZero);
             }
             return Ok(Citation::DecisionsSeat(n));
         }
         if s.contains('#') {
             let Some((file, item)) = s.split_once('#') else {
-                return Err(format!("file#item-path malformed: {s}"));
+                return Err(CitationRefuse::FileItemMalformed {
+                    raw: Label::admit(s),
+                });
             };
             if file.is_empty() || item.is_empty() {
-                return Err(format!("file#item-path malformed: `{s}`"));
+                return Err(CitationRefuse::FileItemMalformed {
+                    raw: Label::admit(s),
+                });
             }
             return Ok(Citation::FileItem {
                 file: Label::admit(file),
@@ -68,13 +112,15 @@ impl Citation {
             });
         }
         if s.contains("::") {
-            let (file, name) = s
-                .rsplit_once("::")
-                .ok_or_else(|| format!("test fn path malformed: `{s}`"))?;
+            let Some((file, name)) = s.rsplit_once("::") else {
+                return Err(CitationRefuse::TestFnMalformed {
+                    raw: Label::admit(s),
+                });
+            };
             if !file.ends_with(".rs") || name.is_empty() || name.contains(':') {
-                return Err(format!(
-                    "test fn path must be `path/to/file.rs::fn_name`, got `{s}`"
-                ));
+                return Err(CitationRefuse::TestFnMalformed {
+                    raw: Label::admit(s),
+                });
             }
             return Ok(Citation::TestFn {
                 file: Label::admit(file),
@@ -88,9 +134,9 @@ impl Citation {
         {
             return Ok(Citation::LawName(Label::admit(s)));
         }
-        Err(format!(
-            "citation `{s}` matches none of: laws.toml law name, file#item-path, file.rs::fn, decisions.md#N"
-        ))
+        Err(CitationRefuse::UnknownForm {
+            raw: Label::admit(s),
+        })
     }
 }
 

@@ -511,6 +511,24 @@ impl GraphLaw {
         self.path_last_ident(&tp.path).is_some_and(|name| enums.contains(&Label::admit(name)))
     }
 
+    /// `D::Error` / single-letter generic `T::Err` — Error associated types
+    /// owned by a foreign trait impl's type parameter, not a kyzo refusal.
+    fn error_ty_is_foreign_assoc(&self, ty: &syn::Type) -> bool {
+        let syn::Type::Path(tp) = ty else {
+            return false;
+        };
+        if tp.qself.is_some() {
+            return false;
+        }
+        if tp.path.segments.len() != 2 {
+            return false;
+        }
+        let param = tp.path.segments[0].ident.to_string();
+        let assoc = tp.path.segments[1].ident.to_string();
+        let param_is_generic = param.len() == 1 && param.chars().all(|c| c.is_ascii_uppercase());
+        param_is_generic && (assoc == "Error" || assoc == "Err")
+    }
+
     /// Every `Result<_, E>` in the workspace: E must be a workspace enum.
     /// `String`, `anyhow::*`, and `Box<dyn …>` are red by name.
     pub fn total_refusal(&self, files: &[&SourceFile]) -> Vec<Hit> {
@@ -532,7 +550,14 @@ impl GraphLaw {
             impl<'ast, 'a> Visit<'ast> for V<'a> {
                 fn visit_type(&mut self, node: &'ast syn::Type) {
                     if let Some(err) = GRAPH.result_error_type(node) {
-                        let reason = if let Some(tag) = GRAPH.type_is_explicitly_banned_error(err) {
+                        // Foreign trait obligations (serde::Deserialize's
+                        // `D::Error`, etc.) are not kyzo refusal seats — the
+                        // trait owns the Error associated type. Skip those;
+                        // still red every Result we author with String/anyhow/
+                        // Box<dyn Error>/non-enum paths.
+                        let reason = if GRAPH.error_ty_is_foreign_assoc(err) {
+                            None
+                        } else if let Some(tag) = GRAPH.type_is_explicitly_banned_error(err) {
                             Some(tag.to_string())
                         } else if GRAPH.looks_like_box_dyn(err) {
                             Some("Box<dyn Error>".to_string())

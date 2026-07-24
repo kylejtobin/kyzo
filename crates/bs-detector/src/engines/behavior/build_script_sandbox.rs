@@ -131,6 +131,12 @@ enum NetSandbox {
     NetOnly,
 }
 
+/// Refuse for a sandboxed/plain cargo build run (output retained for meta).
+#[derive(Debug)]
+enum BuildRunRefuse {
+    Failed { output: Label },
+}
+
 impl NetSandbox {
     fn unshare_args(self) -> &'static [&'static str] {
         match self {
@@ -480,7 +486,7 @@ impl BuildScriptSandboxGate {
         repo_root: &Path,
         owned_target: &Path,
         sandbox: NetSandbox,
-    ) -> Result<String, String> {
+    ) -> Result<Label, BuildRunRefuse> {
         let mut cmd = Command::new("unshare");
         cmd.args(sandbox.unshare_args())
             .args(["cargo", "build", "--workspace", "--all-targets"])
@@ -488,23 +494,34 @@ impl BuildScriptSandboxGate {
         self.scoped_env(&mut cmd, owned_target);
         let output = cmd.output();
         match output {
-            Ok(o) if o.status.success() => Ok(self.combined_output(&o)),
-            Ok(o) => Err(self.combined_output(&o)),
-            Err(e) => Err(format!("failed to spawn sandboxed build: {e}")),
+            Ok(o) if o.status.success() => Ok(Label::admit(self.combined_output(&o))),
+            Ok(o) => Err(BuildRunRefuse::Failed {
+                output: Label::admit(self.combined_output(&o)),
+            }),
+            Err(e) => Err(BuildRunRefuse::Failed {
+                output: Label::admit(format!("failed to spawn sandboxed build: {e}")),
+            }),
         }
     }
 
-
-    fn run_plain_build(&self, repo_root: &Path, owned_target: &Path) -> Result<String, String> {
+    fn run_plain_build(
+        &self,
+        repo_root: &Path,
+        owned_target: &Path,
+    ) -> Result<Label, BuildRunRefuse> {
         let mut cmd = Command::new("cargo");
         cmd.args(["build", "--workspace", "--all-targets"])
             .current_dir(repo_root);
         self.scoped_env(&mut cmd, owned_target);
         let output = cmd.output();
         match output {
-            Ok(o) if o.status.success() => Ok(self.combined_output(&o)),
-            Ok(o) => Err(self.combined_output(&o)),
-            Err(e) => Err(format!("failed to spawn control build: {e}")),
+            Ok(o) if o.status.success() => Ok(Label::admit(self.combined_output(&o))),
+            Ok(o) => Err(BuildRunRefuse::Failed {
+                output: Label::admit(self.combined_output(&o)),
+            }),
+            Err(e) => Err(BuildRunRefuse::Failed {
+                output: Label::admit(format!("failed to spawn control build: {e}")),
+            }),
         }
     }
 
@@ -536,7 +553,7 @@ impl BuildScriptSandboxGate {
     fn snapshot_dir(&self, 
         root: &Path,
         skip_dirnames: &[&str],
-    ) -> Result<HashMap<PathBuf, (u64, Option<u64>)>, std::io::Error> {
+    ) -> Result<HashMap<PathBuf, (u64, Option<u64>)>, BuildScriptSandboxError> {
         let mut out = HashMap::new();
         let walker = WalkDir::new(root).into_iter().filter_entry(|e| {
             if e.depth() == 0 {
@@ -555,7 +572,11 @@ impl BuildScriptSandboxGate {
                 {
                     continue;
                 }
-                Err(e) => return Err(std::io::Error::other(e)),
+                Err(e) => {
+                    return Err(BuildScriptSandboxError::Snapshot {
+                        reason: Label::admit(format!("{e}")),
+                    });
+                }
             };
             if !entry.file_type().is_file() {
                 continue;
@@ -568,7 +589,11 @@ impl BuildScriptSandboxGate {
                 {
                     continue;
                 }
-                Err(e) => return Err(std::io::Error::other(e)),
+                Err(e) => {
+                    return Err(BuildScriptSandboxError::Snapshot {
+                        reason: Label::admit(format!("{e}")),
+                    });
+                }
             };
             let rel = match entry.path().strip_prefix(root) {
                 Ok(rel) => rel.to_path_buf(),
@@ -790,30 +815,15 @@ impl BuildScriptSandboxGate {
         self.reset_owned_target(owned_target)?;
 
         let skip = ["target", ".git"];
-        let src_before =
-            self.snapshot_dir(workspace_root, &skip).map_err(|e| BuildScriptSandboxError::Snapshot {
-                reason: Label::admit(format!("workspace source tree (pre-build): {e}")),
-            })?;
-        let target_before =
-            self.snapshot_dir(owned_target, &[]).map_err(|e| BuildScriptSandboxError::Snapshot {
-                reason: Label::admit(format!("check-owned target directory (pre-build): {e}")),
-            })?;
+        let src_before = self.snapshot_dir(workspace_root, &skip)?;
+        let target_before = self.snapshot_dir(owned_target, &[])?;
 
         let sandboxed = self.run_sandboxed_build(repo_root, owned_target, sandbox);
 
         let result = match sandboxed {
             Ok(_sandboxed_output) => {
-                let src_after = self.snapshot_dir(workspace_root, &skip).map_err(|e| {
-                    BuildScriptSandboxError::Snapshot {
-                        reason: Label::admit(format!("workspace source tree (post-build): {e}")),
-                    }
-                })?;
-                let target_after =
-                    self.snapshot_dir(owned_target, &[]).map_err(|e| BuildScriptSandboxError::Snapshot {
-                        reason: Label::admit(format!(
-                            "check-owned target directory (post-build): {e}"
-                        )),
-                    })?;
+                let src_after = self.snapshot_dir(workspace_root, &skip)?;
+                let target_after = self.snapshot_dir(owned_target, &[])?;
 
                 let src_violations: Vec<PathBuf> = self.diff_paths(&src_before, &src_after)
                     .into_iter()
@@ -848,7 +858,9 @@ impl BuildScriptSandboxGate {
                 }
                 Ok(())
             }
-            Err(sandboxed_output) => {
+            Err(BuildRunRefuse::Failed {
+                output: sandboxed_output,
+            }) => {
                 // The sandboxed build failed. That is expected of a build script
                 // that needs the network — but it is also what an ordinary build
                 // defect looks like. Reset and rebuild once, plainly, to tell
@@ -856,10 +868,12 @@ impl BuildScriptSandboxGate {
                 self.reset_owned_target(owned_target)?;
                 match self.run_plain_build(repo_root, owned_target) {
                     Ok(_) => Err(BuildScriptSandboxError::NetworkAccessAttempted {
-                        sandboxed_output: Label::admit(sandboxed_output),
+                        sandboxed_output,
                     }),
-                    Err(control_output) => Err(BuildScriptSandboxError::ControlBuildFailed {
-                        output: Label::admit(control_output),
+                    Err(BuildRunRefuse::Failed {
+                        output: control_output,
+                    }) => Err(BuildScriptSandboxError::ControlBuildFailed {
+                        output: control_output,
                     }),
                 }
             }
