@@ -32,7 +32,7 @@ pub fn coverage(b: &Boundary) -> Vec<Hit> {
 }
 
 pub fn unparsed(b: &Boundary) -> Vec<Hit> {
-    b.unparsed
+    b.unparsed()
         .iter()
         .map(|u| Hit {
             file: u.rel_path.clone(),
@@ -71,7 +71,7 @@ pub fn stale_waivers(
 /// scripts — each is its own crate root where the forbid must live.
 pub fn forbid_roots(b: &Boundary) -> Vec<Hit> {
     let mut hits = vec![];
-    for f in &b.files {
+    for f in b.files() {
         let is_root = f.rel_path().ends_with("/src/lib.rs")
             || f.rel_path().ends_with("/src/main.rs")
             || f.rel_path().contains("/src/bin/")
@@ -233,11 +233,15 @@ why_not_sabotage = {why}
 
     #[test]
     fn root_without_forbid_detonates() {
-        let b = Boundary {
-            files: vec![SourceFile::admit("crates/x/src/lib.rs".to_string(), "pub fn f() {}\n".to_string(), syn::parse_file("pub fn f() {}\n").expect("parses"))],
-            unparsed: vec![],
-            existing: vec!["crates/x/src/lib.rs".to_string()],
-        };
+        let b = Boundary::admit(
+            vec![SourceFile::admit(
+                "crates/x/src/lib.rs".to_string(),
+                "pub fn f() {}\n".to_string(),
+                syn::parse_file("pub fn f() {}\n").expect("parses"),
+            )],
+            vec![],
+            vec!["crates/x/src/lib.rs".to_string()],
+        );
         assert_eq!(forbid_roots(&b).len(), 1);
     }
 }

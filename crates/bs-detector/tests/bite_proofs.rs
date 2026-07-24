@@ -399,24 +399,20 @@ fn bite_agreement_registry() {
 
 #[test]
 fn bite_coverage() {
-    let b = Boundary {
-        files: vec![],
-        unparsed: vec![],
-        existing: vec!["crates/x/src/lib.rs".to_string()],
-    };
+    let b = Boundary::admit(vec![], vec![], vec!["crates/x/src/lib.rs".to_string()]);
     assert_eq!(meta::coverage(&b).len(), 1, "an unvisited existing file is a hole");
 }
 
 #[test]
 fn bite_unparsed() {
-    let b = Boundary {
-        files: vec![],
-        unparsed: vec![UnparsedFile {
+    let b = Boundary::admit(
+        vec![],
+        vec![UnparsedFile {
             rel_path: "crates/x/src/broken.rs".to_string(),
             error: "expected `{`".to_string(),
         }],
-        existing: vec!["crates/x/src/broken.rs".to_string()],
-    };
+        vec!["crates/x/src/broken.rs".to_string()],
+    );
     assert_eq!(meta::unparsed(&b).len(), 1, "an unparseable file is reported, never skipped");
 }
 
@@ -426,11 +422,7 @@ fn bite_forbid_roots() {
         Some(f) => f,
         None => panic!("fixture parses"),
     };
-    let b = Boundary {
-        existing: vec![f.rel_path().to_string()],
-        files: vec![f],
-        unparsed: vec![],
-    };
+    let b = Boundary::admit(vec![f], vec![], vec!["crates/x/src/lib.rs".to_string()]);
     assert_eq!(meta::forbid_roots(&b).len(), 1);
 }
 

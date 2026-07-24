@@ -105,7 +105,7 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
             scope.is_none_or(|s| s.scope.iter().any(|p| file.starts_with(p.as_str())))
         };
         let scoped: Vec<&SourceFile> =
-            b.files.iter().filter(|f| in_scope(f.rel_path())).collect();
+            b.files().iter().filter(|f| in_scope(f.rel_path())).collect();
         let hits: Vec<Hit> = scoped.iter().flat_map(|f| shape::run_matcher(m, f)).collect();
         passes.push((name, hits));
     }
@@ -120,7 +120,7 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
         .collect();
     let need_classify = run_pass("unclassified")
         || condemned_names.iter().any(|n| run_pass(n));
-    let all_files: Vec<&SourceFile> = b.files.iter().collect();
+    let all_files: Vec<&SourceFile> = b.files().iter().collect();
     let aliases = if need_classify
         || grammar.constructs().iter().any(|c| !c.bans.is_empty())
     {
@@ -136,7 +136,7 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("alias table required for classify — refuse"))?;
         let all: Vec<Hit> = b
-            .files
+            .files()
             .iter()
             .flat_map(|f| classify::classify_file(&grammar, f, aliases))
             .collect();
@@ -187,7 +187,7 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
                     scope.is_none_or(|s| s.scope.iter().any(|p| file.starts_with(p.as_str())))
                 };
                 let mut hits = Vec::new();
-                for f in b.files.iter().filter(|f| in_scope(f.rel_path())) {
+                for f in b.files().iter().filter(|f| in_scope(f.rel_path())) {
                     let spans = classify::scoped_construct_spans(&grammar, f, aliases);
                     let raw = shape::run_matcher(m, f);
                     for h in raw {
@@ -205,7 +205,7 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
             }
         }
     }
-    let all: Vec<&SourceFile> = b.files.iter().collect();
+    let all: Vec<&SourceFile> = b.files().iter().collect();
     if run_pass("derive_bypass") {
         passes.push(("derive_bypass", graph::derive_bypass(&all)));
     }
@@ -258,7 +258,7 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
                 .filter(|h| {
                     let found = entries.iter().enumerate().find(|(i, w)| {
                         !consumed[*i]
-                            && identity::waiver_matches_hit(w, h, &b.files)
+                            && identity::waiver_matches_hit(w, h, b.files())
                             // TRUTH item 7: a dead citation stops the waiver
                             // from applying (in addition to reporting it).
                             && citation::citation_live(root, &laws, w)
@@ -285,7 +285,7 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
     }
 
     if only.is_none() {
-        let stale = meta::stale_waivers(&waivers, &raw_by_check, &b.files);
+        let stale = meta::stale_waivers(&waivers, &raw_by_check, b.files());
         laws.require("stale_waivers")?;
         if !stale.is_empty() {
             failed.push("stale_waivers".to_string());

@@ -67,12 +67,15 @@ pub struct UnparsedFile {
 /// The whole boundary, walked once: every `.rs` file under `crates/`
 /// (sources, integration tests, benches, examples — everything that is
 /// code), excluding only build artifacts (`target/`).
+///
+/// Fields are private (TRUTH item 9). Sole production admission is
+/// [`Boundary::walk`]; tests use [`Boundary::admit`].
 pub struct Boundary {
-    pub files: Vec<SourceFile>,
-    pub unparsed: Vec<UnparsedFile>,
+    files: Vec<SourceFile>,
+    unparsed: Vec<UnparsedFile>,
     /// Every `.rs` path that exists in the boundary right now, whether or
     /// not it parsed — the denominator of the coverage proof.
-    pub existing: Vec<String>,
+    existing: Vec<String>,
 }
 
 /// The proof a run saw the whole boundary: files that exist vs files the
@@ -84,6 +87,31 @@ pub struct CoverageProof {
 }
 
 impl Boundary {
+    /// Test/harness admission — the only non-walk constructor.
+    pub fn admit(
+        files: Vec<SourceFile>,
+        unparsed: Vec<UnparsedFile>,
+        existing: Vec<String>,
+    ) -> Self {
+        Self {
+            files,
+            unparsed,
+            existing,
+        }
+    }
+
+    pub fn files(&self) -> &[SourceFile] {
+        &self.files
+    }
+
+    pub fn unparsed(&self) -> &[UnparsedFile] {
+        &self.unparsed
+    }
+
+    pub fn existing(&self) -> &[String] {
+        &self.existing
+    }
+
     /// Walk all of `crates/` under `root`. The only exclusion is `target/`
     /// build output — never a crate, never a directory of meaning.
     pub fn walk(root: &Path) -> Result<Boundary> {
@@ -117,11 +145,7 @@ impl Boundary {
                 }),
             }
         }
-        Ok(Boundary {
-            files,
-            unparsed,
-            existing,
-        })
+        Ok(Boundary::admit(files, unparsed, existing))
     }
 
     /// The coverage proof for this walk: every existing file is either a
@@ -181,9 +205,9 @@ mod tests {
         std::fs::write(root.join("crates/a/target/debug/gen.rs"), "fn x() {}\n").expect("write");
 
         let b = Boundary::walk(root).expect("walk");
-        assert_eq!(b.files.len(), 2, "lib.rs and tests/t.rs parse");
-        assert_eq!(b.unparsed.len(), 1, "broken.rs is REPORTED, not skipped");
-        assert_eq!(b.existing.len(), 3, "target/ is excluded from existence");
+        assert_eq!(b.files().len(), 2, "lib.rs and tests/t.rs parse");
+        assert_eq!(b.unparsed().len(), 1, "broken.rs is REPORTED, not skipped");
+        assert_eq!(b.existing().len(), 3, "target/ is excluded from existence");
         let proof = b.coverage_proof();
         assert_eq!(proof.existing, 3);
         assert_eq!(proof.visited, 3);
