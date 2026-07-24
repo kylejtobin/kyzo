@@ -164,7 +164,6 @@ pub(crate) mod probe {
     use std::sync::Mutex;
     use std::time::Duration;
 
-    #[derive(Default)]
     struct State {
         dist_calls: u64,
         /// Query-to-candidate distances: [`super::VectorCache::v_dist`].
@@ -180,8 +179,8 @@ pub(crate) mod probe {
         entry_point_dur: Duration,
     }
 
-    fn state() -> &'static Mutex<State> {
-        static S: Mutex<State> = Mutex::new(State {
+    impl State {
+        const ZERO: Self = Self {
             dist_calls: 0,
             v_dist_calls: 0,
             k_dist_calls: 0,
@@ -191,7 +190,11 @@ pub(crate) mod probe {
             neighbours_dur: Duration::ZERO,
             entry_point_calls: 0,
             entry_point_dur: Duration::ZERO,
-        });
+        };
+    }
+
+    fn state() -> &'static Mutex<State> {
+        static S: Mutex<State> = Mutex::new(State::ZERO);
         &S
     }
 
@@ -234,7 +237,7 @@ pub(crate) mod probe {
 
     #[cfg(test)]
     pub(crate) fn reset() {
-        with_state(|s| *s = State::default());
+        with_state(|s| *s = State::ZERO);
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -1779,8 +1782,10 @@ fn entry_point(
     .next();
     #[cfg(test)]
     probe::add_entry_point_dur(std::time::Duration::from_nanos(
-        u64::try_from(crate::session::host_clock::mono_nanos().saturating_sub(t0))
-            .unwrap_or(u64::MAX),
+        match crate::session::host_clock::mono_nanos().checked_sub(t0) {
+            Some(d) => u64::try_from(d).unwrap_or(u64::MAX),
+            None => 0,
+        },
     ));
     match first {
         None => Ok(None),
@@ -1849,8 +1854,10 @@ fn neighbours(
         let n = u64::try_from(ret.len()).unwrap_or(u64::MAX);
         probe::add_neighbours_rows(n);
         probe::add_neighbours_dur(std::time::Duration::from_nanos(
-            u64::try_from(crate::session::host_clock::mono_nanos().saturating_sub(t0))
-                .unwrap_or(u64::MAX),
+            match crate::session::host_clock::mono_nanos().checked_sub(t0) {
+                Some(d) => u64::try_from(d).unwrap_or(u64::MAX),
+                None => 0,
+            },
         ));
     }
     Ok(ret)
@@ -4073,7 +4080,10 @@ mod tests {
             )?;
             assert!(hnsw_put(&mut tx, &m, &base, &idx, None, r.as_slice())?);
         }
-        let elapsed = (crate::session::host_clock::mono_nanos().saturating_sub(t0) as f64) / 1e9;
+        let elapsed = match crate::session::host_clock::mono_nanos().checked_sub(t0) {
+            Some(d) => (d as f64) / 1e9,
+            None => 0.0,
+        };
         let snap = probe::snapshot();
         tx.commit().map_err(|e| miette!("{e}"))?;
         Ok((elapsed, snap))
