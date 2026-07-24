@@ -49,18 +49,14 @@ impl LineIndex {
     pub(crate) fn position(&self, text: &str, byte_offset: usize) -> Position {
         let byte_offset = byte_offset.min(text.len());
         // line_starts always begins at byte 0, so partition_point is ≥ 1 for any
-        // in-range offset; checked_sub maps the empty-prefix edge to line 0.
-        let line = match self
+        // in-range offset; idx == 0 is the empty-index edge (line 0).
+        let idx = self
             .line_starts
-            .partition_point(|&s| s <= byte_offset)
-            .checked_sub(1)
-        {
-            Some(n) => n,
-            None => 0,
-        };
+            .partition_point(|&s| s <= byte_offset);
+        let line = if idx == 0 { 0 } else { idx - 1 };
         let line_start = self.line_starts[line];
-        // Count UTF-16 units in u32 — LSP positions are u32; a line wider than
-        // u32::MAX columns is unrepresentable on the wire (ceiling).
+        // Count UTF-16 units in u32 — LSP positions are u32; stop at the last
+        // representable column instead of Err→MAX costume.
         let mut character = 0u32;
         for ch in text[line_start..byte_offset].chars() {
             let width = match ch.len_utf16() {
@@ -68,14 +64,18 @@ impl LineIndex {
                 2 => 2u32,
                 _ => 1u32, // Unicode scalar UTF-16 width is only 1 or 2
             };
-            character = match character.checked_add(width) {
-                Some(c) => c,
-                None => u32::MAX,
-            };
+            match character.checked_add(width) {
+                Some(c) => character = c,
+                None => break,
+            }
         }
         let line_u32 = match u32::try_from(line) {
             Ok(n) => n,
-            Err(_) => u32::MAX,
+            Err(_) => {
+                std::panic::resume_unwind(Box::new(
+                    "LSP line index exceeds u32 (uninhabited for real documents)",
+                ))
+            }
         };
         Position::new(line_u32, character)
     }

@@ -696,8 +696,7 @@ impl Filesystem for PassthroughFs {
             // The power cut lands at this fsync boundary: nothing queued
             // since the last real fsync reaches the backing file.
             handle.pending.clear();
-            reply.ok();
-            return;
+            return reply.ok();
         }
         for pw in handle.pending.drain(..) {
             let write_result = match pw.outcome {
@@ -720,7 +719,7 @@ impl Filesystem for PassthroughFs {
             reply.error(io_errno(e));
             return;
         }
-        reply.ok();
+        reply.ok()
     }
 
     fn flush(
@@ -733,7 +732,7 @@ impl Filesystem for PassthroughFs {
     ) {
         // flush() (close(2)/dup path) carries no durability guarantee in
         // POSIX and none in this model either: only fsync materializes.
-        reply.ok();
+        reply.ok()
     }
 
     fn release(
@@ -787,7 +786,7 @@ impl Filesystem for PassthroughFs {
                 }
             }
         }
-        reply.ok();
+        reply.ok()
     }
 
     fn opendir(&self, _req: &Request, _ino: INodeNo, _flags: fuser::OpenFlags, reply: ReplyOpen) {
@@ -872,7 +871,7 @@ impl Filesystem for PassthroughFs {
                 break;
             }
         }
-        reply.ok();
+        reply.ok()
     }
 
     fn mkdir(
@@ -960,7 +959,7 @@ impl Filesystem for PassthroughFs {
             return;
         };
         inodes.rename(&old_rel, &new_rel);
-        reply.ok();
+        reply.ok()
     }
 
     /// Grant every lock/unlock request unconditionally. This injector's
@@ -983,6 +982,6 @@ impl Filesystem for PassthroughFs {
         _sleep: bool,
         reply: ReplyEmpty,
     ) {
-        reply.ok();
+        reply.ok()
     }
 }

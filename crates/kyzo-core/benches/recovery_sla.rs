@@ -205,7 +205,11 @@ fn sample_real_replay(seed: u64, target_bytes: u64) -> Sample {
     black_box(recovered);
     let recovery_time_ns = match u64_from_u128(match mono_nanos().checked_sub(start) {
         Some(n) => n,
-        None => 0,
+        None => {
+            std::panic::resume_unwind(Box::new(
+                "mono Instant moved backwards during recovery sample",
+            ))
+        }
     }) {
         Ok(n) => n,
         Err(e) => refuse_width("recovery_time_ns", e),
