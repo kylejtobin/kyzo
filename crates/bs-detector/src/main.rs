@@ -21,6 +21,10 @@ use std::process::ExitCode;
 use anyhow::{Context, Result};
 use clap::Parser;
 
+use bs_detector::boundary::Label;
+
+/// CLI door — fields private (TRUTH item 9). Sole admission is [`Cli::parse`]
+/// (clap). `only` is [`Label`], never `String`.
 #[derive(Parser)]
 #[command(about = "the bullshit detector: default deny, one door, zero baseline")]
 struct Cli {
@@ -28,8 +32,8 @@ struct Cli {
     #[arg(long, default_value = ".")]
     root: PathBuf,
     /// Run only this check (a ban name or pass name).
-    #[arg(long)]
-    only: Option<String>,
+    #[arg(long, value_parser = parse_label)]
+    only: Option<Label>,
     /// Gate log path (line 1 is the verdict header).
     #[arg(long, default_value = "crates/xtask/gate.log")]
     log: PathBuf,
@@ -39,6 +43,10 @@ struct Cli {
     /// Print findings without writing the log/counts artifacts.
     #[arg(long)]
     dry_run: bool,
+}
+
+fn parse_label(s: &str) -> Result<Label, String> {
+    Ok(Label::admit(s))
 }
 
 fn main() -> ExitCode {
@@ -58,7 +66,8 @@ fn try_main() -> Result<ExitCode> {
         .canonicalize()
         .with_context(|| format!("resolving root {}", cli.root.display()))?;
 
-    let v = bs_detector::run::run(&root, cli.only.as_deref())?;
+    let only = cli.only.as_ref().map(|l| l.as_str());
+    let v = bs_detector::run::run(&root, only)?;
 
     println!("{}", v.header());
     print!("{}", v.report());
