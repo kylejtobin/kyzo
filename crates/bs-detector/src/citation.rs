@@ -304,7 +304,12 @@ mod tests {
             Citation::parse("decisions.md#2").unwrap(),
             Citation::DecisionsSeat(2)
         );
+        assert_eq!(
+            Citation::parse("R-citation-prose").unwrap(),
+            Citation::LawName("R-citation-prose".into())
+        );
         assert!(Citation::parse("crates/x/src/a.rs#").is_err());
+        assert!(Citation::parse("not a form !!!").is_err());
         assert!(Citation::parse("").is_err());
     }
 
