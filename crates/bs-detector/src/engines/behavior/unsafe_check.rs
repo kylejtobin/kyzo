@@ -33,22 +33,26 @@ const ENGINE_CRATES: &[(&str, &str)] = &[
 /// A real attribute line only — not prose comments that mention the
 /// attribute. `(?m)` makes `^` match at each line start, matching grep's
 /// per-line semantics without pre-splitting the file ourselves.
-fn static_regex(pattern: &'static str) -> Regex {
-    match Regex::new(pattern) {
+static ALLOW_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    match Regex::new(r"(?m)^[[:space:]]*#!?\[allow\(unsafe_code\)\]") {
         Ok(r) => r,
-        Err(e) => std::panic::resume_unwind(Box::new(format!("static regex `{pattern}`: {e}"))),
+        Err(e) => std::panic::resume_unwind(Box::new(format!(
+            "static regex `ALLOW_PATTERN`: {e}"
+        ))),
     }
-}
-
-static ALLOW_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| static_regex(r"(?m)^[[:space:]]*#!?\[allow\(unsafe_code\)\]"));
+});
 
 /// Docs that claim an unsafe exception that does not exist — a lying guard
 /// is worse than no guard.
 static LIAR_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    static_regex(
+    match Regex::new(
         r"(?i)germanstr[^a-z]*unsafe|unsafe[- ]exception|reviewed exception|Miri-audited exception",
-    )
+    ) {
+        Ok(r) => r,
+        Err(e) => std::panic::resume_unwind(Box::new(format!(
+            "static regex `LIAR_PATTERN`: {e}"
+        ))),
+    }
 });
 
 #[derive(Debug)]

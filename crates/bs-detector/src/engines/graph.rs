@@ -789,6 +789,17 @@ impl GraphProofRefuse {
     }
 }
 
+#[cfg(test)]
+struct GraphProofs;
+
+#[cfg(test)]
+impl GraphProofs {
+    fn parse(&self, rel: &str, src: &str) -> Result<SourceFile, GraphProofRefuse> {
+        let ast = syn::parse_file(src).map_err(|_| GraphProofRefuse::Parse)?;
+        Ok(SourceFile::admit(rel.to_string(), src.to_string(), ast))
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -796,14 +807,11 @@ mod tests {
 
     type TestResult = Result<(), GraphProofRefuse>;
 
-    fn parse(rel: &str, src: &str) -> Result<SourceFile, GraphProofRefuse> {
-        let ast = syn::parse_file(src).map_err(|_| GraphProofRefuse::Parse)?;
-        Ok(SourceFile::admit(rel.to_string(), src.to_string(), ast))
-    }
+    const PROOFS: GraphProofs = GraphProofs;
 
     #[test]
     fn derive_bypass_detonates_on_the_historical_shape() -> TestResult {
-        let f = parse(
+        let f = PROOFS.parse(
             "crates/x/src/a.rs",
             "#[derive(Default)] struct Interval(u8);\n impl Interval { fn new(x: u8) -> Result<Interval, ()> { if x > 0 { Ok(Interval(x)) } else { Err(()) } } }",
         )?;
@@ -814,8 +822,8 @@ mod tests {
     #[test]
     fn copy_detector_detonates_on_a_renamed_copy() -> TestResult {
         let body = "{ let mut acc = 0; for i in 0..100 { if i % 2 == 0 { acc += i * 3 + 7; } else { acc -= i / 2 + 11; } while acc > 500 { acc /= 2; } match acc { 0 => acc = 1, 1 => acc = 2, other => acc = other - 1, } } acc }";
-        let a = parse("crates/x/src/a.rs", &format!("fn alpha() -> i64 {body}"))?;
-        let b = parse("crates/y/src/b.rs", &format!("fn beta() -> i64 {body}"))?;
+        let a = PROOFS.parse("crates/x/src/a.rs", &format!("fn alpha() -> i64 {body}"))?;
+        let b = PROOFS.parse("crates/y/src/b.rs", &format!("fn beta() -> i64 {body}"))?;
         let hits = copy_detector(&[&a, &b]);
         GraphProofRefuse::CopyDetectorHitCount.require_eq(hits.len(), 1)?;
         GraphProofRefuse::CopyDetectorConstruct.require_eq(hits[0].construct(), "crates/x/src/a.rs::alpha ~ crates/y/src/b.rs::beta")
@@ -823,7 +831,7 @@ mod tests {
 
     #[test]
     fn agreement_registry_detonates_on_drift() -> TestResult {
-        let f = parse("crates/x/src/a.rs", "fn law_alive() {}")?;
+        let f = PROOFS.parse("crates/x/src/a.rs", "fn law_alive() {}")?;
         let reg = "[[agreement]]\ntest_fn = \"law_alive\"\n[[agreement]]\ntest_fn = \"law_deleted\"\n";
         let hits = agreement_registry(&[&f], reg);
         GraphProofRefuse::AgreementHitCount.require_eq(hits.len(), 1)?;
@@ -832,8 +840,8 @@ mod tests {
 
     #[test]
     fn total_refusal_reds_string_anyhow_and_box_dyn() -> TestResult {
-        let enums = parse("crates/x/src/e.rs", "enum E { A }")?;
-        let bad = parse(
+        let enums = PROOFS.parse("crates/x/src/e.rs", "enum E { A }")?;
+        let bad = PROOFS.parse(
             "crates/x/src/a.rs",
             "fn a() -> Result<(), String> { Ok(()) }\n\
              fn b() -> Result<(), anyhow::Error> { Ok(()) }\n\
@@ -851,7 +859,7 @@ mod tests {
 
     #[test]
     fn sealed_public_door_reds_import_outside_allowlist() -> TestResult {
-        let f = parse(
+        let f = PROOFS.parse(
             "crates/kyzo-bin/src/main.rs",
             "use std::process::ExitCode;\nuse crate::engine::Engine;\nuse kyzo_core::Db;\n",
         )?;
@@ -867,7 +875,7 @@ mod tests {
 
     #[test]
     fn config_once_demands_exactly_one_site_in_declared_ctor() -> TestResult {
-        let good = parse(
+        let good = PROOFS.parse(
             "crates/xtask/src/host_env.rs",
             "fn read(name: &str) -> Option<String> { std::env::var(name).ok() }",
         )?;
@@ -875,7 +883,7 @@ mod tests {
         let hits = config_once(&[&good], &seats);
         GraphProofRefuse::ConfigOnceDeclaredPass.require(hits.is_empty())?;
 
-        let two = parse(
+        let two = PROOFS.parse(
             "crates/xtask/src/host_env.rs",
             "fn read(name: &str) -> Option<String> { std::env::var(name).ok() }\n\
              fn other() { let _ = std::env::var(\"X\"); }",

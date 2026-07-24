@@ -144,6 +144,20 @@ impl IdentityProofRefuse {
     }
 }
 
+#[cfg(test)]
+struct IdentityProofs;
+
+#[cfg(test)]
+impl IdentityProofs {
+    fn item(&self, src: &str) -> Result<syn::Item, IdentityProofRefuse> {
+        syn::parse_str(src).map_err(|_| IdentityProofRefuse::Parse)
+    }
+
+    fn file(&self, src: &str) -> Result<syn::File, IdentityProofRefuse> {
+        syn::parse_file(src).map_err(|_| IdentityProofRefuse::Parse)
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -151,40 +165,32 @@ mod tests {
 
     type TestResult = Result<(), IdentityProofRefuse>;
 
-
-
-    fn item(src: &str) -> Result<syn::Item, IdentityProofRefuse> {
-        syn::parse_str(src).map_err(|_| IdentityProofRefuse::Parse)
-    }
-
-    fn file(src: &str) -> Result<syn::File, IdentityProofRefuse> {
-        syn::parse_file(src).map_err(|_| IdentityProofRefuse::Parse)
-    }
+    const PROOFS: IdentityProofs = IdentityProofs;
 
     #[test]
     fn layout_change_keeps_identity_and_content_change_breaks_it() -> TestResult {
-        let a = site_hash(&item("fn f(x: u64) -> u64 { x }")?);
-        let b = site_hash(&item("fn f(x: u64)  ->\n    u64 { x }")?);
+        let a = site_hash(&PROOFS.item("fn f(x: u64) -> u64 { x }")?);
+        let b = site_hash(&PROOFS.item("fn f(x: u64)  ->\n    u64 { x }")?);
         IdentityProofRefuse::LayoutBreaksIdentity.require(a == b)?;
 
-        let c = site_hash(&item("fn f(y: u64) -> u64 { y }")?);
+        let c = site_hash(&PROOFS.item("fn f(y: u64) -> u64 { y }")?);
         IdentityProofRefuse::RenameKeepsIdentity.require(a != c)?;
 
-        let d = site_hash(&item("/// documented\nfn f(x: u64) -> u64 { x }")?);
+        let d = site_hash(&PROOFS.item("/// documented\nfn f(x: u64) -> u64 { x }")?);
         IdentityProofRefuse::DocKeepsIdentity.require(a != d)
     }
 
     #[test]
     fn item_6_proof_rename_local_changes_site_hash() -> TestResult {
-        let before = site_hash(&item("fn f() { let x = 1; x }")?);
-        let after = site_hash(&item("fn f() { let y = 1; y }")?);
+        let before = site_hash(&PROOFS.item("fn f() { let x = 1; x }")?);
+        let after = site_hash(&PROOFS.item("fn f() { let y = 1; y }")?);
         IdentityProofRefuse::LocalRenameKeepsIdentity.require(before != after)
     }
 
     #[test]
     fn item_6_proof_line_comment_above_item_keeps_site_hash() -> TestResult {
-        let bare = file("fn f() { let x = 1; x }")?;
-        let with_noise = file("// noise above the item\nfn f() { let x = 1; x }")?;
+        let bare = PROOFS.file("fn f() { let x = 1; x }")?;
+        let with_noise = PROOFS.file("// noise above the item\nfn f() { let x = 1; x }")?;
         let bare_item = bare.items.first().ok_or(IdentityProofRefuse::MissingItem)?;
         let noise_item = with_noise
             .items
@@ -202,8 +208,8 @@ mod tests {
     fn item_6_identity_keeps_identifiers_verbatim_unlike_clone_normalize() -> TestResult {
         // graph::normalize_tokens collapses idents to "id" for clone shingles.
         // Identity must NOT: two rename-apart bodies must differ here.
-        let a = identity_tokens(&item("fn f() { let alpha = 1; alpha }")?);
-        let b = identity_tokens(&item("fn f() { let beta = 1; beta }")?);
+        let a = identity_tokens(&PROOFS.item("fn f() { let alpha = 1; alpha }")?);
+        let b = identity_tokens(&PROOFS.item("fn f() { let beta = 1; beta }")?);
         IdentityProofRefuse::IdentityNormalizesIdents.require(a != b)?;
         IdentityProofRefuse::IdentsNotVerbatim.require(a.contains("alpha") && b.contains("beta"))
     }
@@ -211,7 +217,7 @@ mod tests {
     #[test]
     fn item_6_waiver_matches_by_site_hash_not_line() -> TestResult {
         let src = "// shift\nfn f() { let x = 1; x }";
-        let ast = file(src)?;
+        let ast = PROOFS.file(src)?;
         let (item_line, hash) = {
             let first = ast.items.first().ok_or(IdentityProofRefuse::MissingItem)?;
             (first.span().start().line, site_hash(first))

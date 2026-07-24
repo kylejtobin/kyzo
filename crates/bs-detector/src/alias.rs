@@ -458,6 +458,17 @@ impl AliasProofRefuse {
     }
 }
 
+#[cfg(test)]
+struct AliasProofs;
+
+#[cfg(test)]
+impl AliasProofs {
+    fn file(&self, src: &str) -> Result<SourceFile, AliasProofRefuse> {
+        let ast = syn::parse_file(src).map_err(|_| AliasProofRefuse::Parse)?;
+        Ok(SourceFile::admit("crates/probe/src/lib.rs", src, ast))
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -465,16 +476,11 @@ mod tests {
 
     type TestResult = Result<(), AliasProofRefuse>;
 
-
-
-    fn file(src: &str) -> Result<SourceFile, AliasProofRefuse> {
-        let ast = syn::parse_file(src).map_err(|_| AliasProofRefuse::Parse)?;
-        Ok(SourceFile::admit("crates/probe/src/lib.rs", src, ast))
-    }
+    const PROOFS: AliasProofs = AliasProofs;
 
     #[test]
     fn item_4_proof_type_alias_to_string_carries() -> TestResult {
-        let f = file("type Name = String;")?;
+        let f = PROOFS.file("type Name = String;")?;
         let t = AliasTable::build(&[&f]).map_err(|_| AliasProofRefuse::Build)?;
         let ty: syn::Type = syn::parse_str("Name").map_err(|_| AliasProofRefuse::Type)?;
         AliasProofRefuse::MustCarry.require(t.type_carries_string(f.rel_path(), &ty))
@@ -482,7 +488,7 @@ mod tests {
 
     #[test]
     fn item_4_proof_use_as_string_carries() -> TestResult {
-        let f = file("use std::string::String as Text;")?;
+        let f = PROOFS.file("use std::string::String as Text;")?;
         let t = AliasTable::build(&[&f]).map_err(|_| AliasProofRefuse::Build)?;
         let ty: syn::Type = syn::parse_str("Text").map_err(|_| AliasProofRefuse::Type)?;
         AliasProofRefuse::MustCarry.require(t.type_carries_string(f.rel_path(), &ty))
@@ -497,7 +503,7 @@ mod tests {
 
     #[test]
     fn item_4_proof_alias_cycle_is_a_load_error() -> TestResult {
-        let f = file("type A = B; type B = A;")?;
+        let f = PROOFS.file("type A = B; type B = A;")?;
         let e = AliasTable::build(&[&f]);
         AliasProofRefuse::CycleSilent.require(e.is_err())?;
         let msg = format!("{:?}", e.err());

@@ -27,25 +27,36 @@ use crate::cargo_meta::CargoMetadata;
 /// defense in depth (ported verbatim from the script's own comment): each
 /// also pulls `cc`, but a named hit reads as "wrong TLS/codec stack" instead
 /// of a bare toolchain violation.
-fn static_regex(pattern: &'static str) -> Regex {
-    match Regex::new(pattern) {
-        Ok(r) => r,
-        Err(e) => std::panic::resume_unwind(Box::new(format!("static regex `{pattern}`: {e}"))),
-    }
-}
-
 static BANNED_RE: LazyLock<Regex> = LazyLock::new(|| {
-    static_regex(
+    match Regex::new(
         r"^(?:cc|cmake|cxx|cxx-build|bindgen|pkg-config|sqlite3-src|libsqlite3-sys|rusqlite|librocksdb-sys|rocksdb|cozorocks|ring|aws-lc-rs|aws-lc-sys|aws-lc-fips-sys|openssl|openssl-sys|openssl-src|native-tls|zstd|zstd-sys|zstd-safe|libz-sys|libz-ng-sys|lzma-sys|bzip2-sys) ",
-    )
+    ) {
+        Ok(r) => r,
+        Err(e) => std::panic::resume_unwind(Box::new(format!(
+            "static regex `BANNED_RE`: {e}"
+        ))),
+    }
 });
 /// Any `*-sys` crate is, by convention, a binding to a native library —
 /// caught as a class so a new C binding can't slip in under an unlisted name.
-static BANNED_SUFFIX_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"-sys v"));
+static BANNED_SUFFIX_RE: LazyLock<Regex> = LazyLock::new(|| {
+    match Regex::new(r"-sys v") {
+        Ok(r) => r,
+        Err(e) => std::panic::resume_unwind(Box::new(format!(
+            "static regex `BANNED_SUFFIX_RE`: {e}"
+        ))),
+    }
+});
 /// The two `-sys`-by-name crates that are pure Rust: syscall/ABI metadata
 /// only, no C source, no cc/bindgen.
-static PURE_SYS_RE: LazyLock<Regex> =
-    LazyLock::new(|| static_regex(r"^(?:linux-raw-sys|windows-sys) "));
+static PURE_SYS_RE: LazyLock<Regex> = LazyLock::new(|| {
+    match Regex::new(r"^(?:linux-raw-sys|windows-sys) ") {
+        Ok(r) => r,
+        Err(e) => std::panic::resume_unwind(Box::new(format!(
+            "static regex `PURE_SYS_RE`: {e}"
+        ))),
+    }
+});
 
 #[derive(Debug)]
 pub enum PureRustError {

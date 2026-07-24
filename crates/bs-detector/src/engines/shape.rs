@@ -537,36 +537,109 @@ fn m_allow_unsafe(f: &SourceFile) -> Vec<Hit> {
     allow_attrs(f, &["unsafe_code"], "allow_unsafe")
 }
 
+/// Which match-arm shape a matcher hunts — one enum, one walker.
+enum ArmSiteKind {
+    Catchall,
+    TestErrEarlyReturn,
+    ErrCostume,
+}
+
+impl ArmSiteKind {
+    fn site(&self, arm: &syn::Arm) -> Option<(usize, &'static str)> {
+        match self {
+            ArmSiteKind::Catchall => {
+                if let syn::Pat::Wild(w) = &arm.pat {
+                    Some((span_line(&w.underscore_token.span), "catchall_arm"))
+                } else {
+                    None
+                }
+            }
+            ArmSiteKind::TestErrEarlyReturn => {
+                if !arm.pat.to_token_stream().to_string().starts_with("Err") {
+                    return None;
+                }
+                let line = span_line(&arm.fat_arrow_token.spans[0]);
+                if let syn::Expr::Return(r) = &*arm.body {
+                    if r.expr.is_none() {
+                        return Some((line, "test_err_early_return"));
+                    }
+                }
+                // `Err(_) => {}` — the error evaporates and the test proceeds
+                // as if proof happened.
+                if let syn::Expr::Block(b) = &*arm.body {
+                    if b.block.stmts.is_empty() {
+                        return Some((line, "test_err_early_return"));
+                    }
+                }
+                None
+            }
+            ArmSiteKind::ErrCostume => {
+                let pat = arm.pat.to_token_stream().to_string();
+                if !(pat.starts_with("Err") || pat == "None") {
+                    return None;
+                }
+                let line = span_line(&arm.fat_arrow_token.spans[0]);
+                let body = &arm.body;
+                let s = body.to_token_stream().to_string();
+                let t = s.trim();
+                let name = if t.ends_with(":: Null") || t == "Null" {
+                    Some("err_to_null_costume")
+                } else if t == "0" || t == "0.0" || t.ends_with("from (0)") {
+                    Some("err_to_zero_costume")
+                } else if t.ends_with(":: MAX") {
+                    Some("err_to_max_costume")
+                } else if t == "& []" || t == "&[]" {
+                    Some("empty_slice_costume")
+                } else if matches!(&**body, syn::Expr::Lit(_)) {
+                    Some("err_to_literal_costume")
+                } else if let syn::Expr::Unary(u) = &**body {
+                    if matches!(&*u.expr, syn::Expr::Lit(_)) {
+                        Some("err_to_literal_costume")
+                    } else {
+                        None
+                    }
+                } else if let syn::Expr::Call(c) = &**body {
+                    if c.args.is_empty() {
+                        Some("err_to_constructor_costume")
+                    } else {
+                        None
+                    }
+                } else if t == "vec ! []" || t.starts_with("Default :: default") {
+                    Some("err_to_constructor_costume")
+                } else if matches!(&**body, syn::Expr::Continue(_)) {
+                    Some("err_flow_swallow")
+                } else {
+                    None
+                };
+                name.map(|construct| (line, construct))
+            }
+        }
+    }
+}
+
 /// `_ =>` / `_ if` match arms swallowing unenumerated variants.
 fn m_catchall_arm(f: &SourceFile) -> Vec<Hit> {
-    fn pick(node: &syn::Arm) -> Option<(usize, &'static str)> {
-        if let syn::Pat::Wild(w) = &node.pat {
-            return Some((span_line(&w.underscore_token.span), "catchall_arm"));
-        }
-        None
-    }
-    arm_sites(f, pick)
+    arm_sites(f, ArmSiteKind::Catchall)
 }
 
 /// The one match-arm walker: every matcher that judges a `match` arm rides
-/// this shell, so arm traversal has a single authority. The picker returns
-/// the site line and the construct name for a violating arm.
-fn arm_sites(f: &SourceFile, pick: fn(&syn::Arm) -> Option<(usize, &'static str)>) -> Vec<Hit> {
+/// this shell, so arm traversal has a single authority.
+fn arm_sites(f: &SourceFile, kind: ArmSiteKind) -> Vec<Hit> {
     struct V<'a> {
-        pick: fn(&syn::Arm) -> Option<(usize, &'static str)>,
+        kind: ArmSiteKind,
         rel: &'a str,
         hits: Vec<Hit>,
     }
     impl<'ast, 'a> Visit<'ast> for V<'a> {
         fn visit_arm(&mut self, node: &'ast syn::Arm) {
-            if let Some((line, construct)) = (self.pick)(node) {
+            if let Some((line, construct)) = self.kind.site(node) {
                 push(&mut self.hits, self.rel, line, construct);
             }
             visit::visit_arm(self, node);
         }
     }
     let mut v = V {
-        pick,
+        kind,
         rel: f.rel_path(),
         hits: vec![],
     };
@@ -684,26 +757,7 @@ fn m_test_err_early_return(f: &SourceFile) -> Vec<Hit> {
         }
         false
     }
-    fn pick(node: &syn::Arm) -> Option<(usize, &'static str)> {
-        if !node.pat.to_token_stream().to_string().starts_with("Err") {
-            return None;
-        }
-        let line = span_line(&node.fat_arrow_token.spans[0]);
-        if let syn::Expr::Return(r) = &*node.body {
-            if r.expr.is_none() {
-                return Some((line, "test_err_early_return"));
-            }
-        }
-        // `Err(_) => {}` — the error evaporates and the test proceeds
-        // as if proof happened.
-        if let syn::Expr::Block(b) = &*node.body {
-            if b.block.stmts.is_empty() {
-                return Some((line, "test_err_early_return"));
-            }
-        }
-        None
-    }
-    let mut hits = arm_sites(f, pick);
+    let mut hits = arm_sites(f, ArmSiteKind::TestErrEarlyReturn);
     struct V<'a> {
         rel: &'a str,
         hits: Vec<Hit>,
@@ -757,6 +811,26 @@ fn m_path(f: &SourceFile) -> Vec<Hit> {
 }
 
 /// Nested place assign: `self.a.b = …` (depth > 1) or a non-self place.
+struct BinOpRef<'a>(&'a syn::BinOp);
+
+impl BinOpRef<'_> {
+    fn is_compound_assign(&self) -> bool {
+        matches!(
+            self.0,
+            syn::BinOp::AddAssign(_)
+                | syn::BinOp::SubAssign(_)
+                | syn::BinOp::MulAssign(_)
+                | syn::BinOp::DivAssign(_)
+                | syn::BinOp::RemAssign(_)
+                | syn::BinOp::BitXorAssign(_)
+                | syn::BinOp::BitAndAssign(_)
+                | syn::BinOp::BitOrAssign(_)
+                | syn::BinOp::ShlAssign(_)
+                | syn::BinOp::ShrAssign(_)
+        )
+    }
+}
+
 /// Construct-scoped (item 5); run.rs keeps hits only inside constructs
 /// that list this ban.
 fn m_nested_place_assign(f: &SourceFile) -> Vec<Hit> {
@@ -770,21 +844,6 @@ fn m_nested_place_assign(f: &SourceFile) -> Vec<Hit> {
     }
     fn is_nested(lhs: &syn::Expr) -> bool {
         self_place_depth(lhs).is_none_or(|depth| depth > 1)
-    }
-    fn is_compound_assign(op: &syn::BinOp) -> bool {
-        matches!(
-            op,
-            syn::BinOp::AddAssign(_)
-                | syn::BinOp::SubAssign(_)
-                | syn::BinOp::MulAssign(_)
-                | syn::BinOp::DivAssign(_)
-                | syn::BinOp::RemAssign(_)
-                | syn::BinOp::BitXorAssign(_)
-                | syn::BinOp::BitAndAssign(_)
-                | syn::BinOp::BitOrAssign(_)
-                | syn::BinOp::ShlAssign(_)
-                | syn::BinOp::ShrAssign(_)
-        )
     }
     struct V<'a> {
         rel: &'a str,
@@ -803,7 +862,7 @@ fn m_nested_place_assign(f: &SourceFile) -> Vec<Hit> {
             visit::visit_expr_assign(self, node);
         }
         fn visit_expr_binary(&mut self, node: &'ast syn::ExprBinary) {
-            if is_compound_assign(&node.op) && is_nested(&node.left) {
+            if BinOpRef(&node.op).is_compound_assign() && is_nested(&node.left) {
                 push(
                     &mut self.hits,
                     self.rel,
@@ -825,21 +884,6 @@ fn m_nested_place_assign(f: &SourceFile) -> Vec<Hit> {
 /// Any assignment / compound-assign (construct-scoped on derivation).
 fn m_assignment(f: &SourceFile) -> Vec<Hit> {
     use syn::spanned::Spanned;
-    fn is_compound_assign(op: &syn::BinOp) -> bool {
-        matches!(
-            op,
-            syn::BinOp::AddAssign(_)
-                | syn::BinOp::SubAssign(_)
-                | syn::BinOp::MulAssign(_)
-                | syn::BinOp::DivAssign(_)
-                | syn::BinOp::RemAssign(_)
-                | syn::BinOp::BitXorAssign(_)
-                | syn::BinOp::BitAndAssign(_)
-                | syn::BinOp::BitOrAssign(_)
-                | syn::BinOp::ShlAssign(_)
-                | syn::BinOp::ShrAssign(_)
-        )
-    }
     struct V<'a> {
         rel: &'a str,
         hits: Vec<Hit>,
@@ -855,7 +899,7 @@ fn m_assignment(f: &SourceFile) -> Vec<Hit> {
             visit::visit_expr_assign(self, node);
         }
         fn visit_expr_binary(&mut self, node: &'ast syn::ExprBinary) {
-            if is_compound_assign(&node.op) {
+            if BinOpRef(&node.op).is_compound_assign() {
                 push(
                     &mut self.hits,
                     self.rel,
@@ -935,57 +979,7 @@ fn attr_sites(f: &SourceFile, name: &str, construct: &str) -> Vec<Hit> {
 /// arm whose body is a costume value (`Json::Null`, `0`, `0.0`, `T::MAX`,
 /// `&[]`, `String::new()`).
 fn m_err_costume(f: &SourceFile) -> Vec<Hit> {
-    fn costume_of(body: &syn::Expr) -> Option<&'static str> {
-        let s = body.to_token_stream().to_string();
-        let t = s.trim();
-        if t.ends_with(":: Null") || t == "Null" {
-            return Some("err_to_null_costume");
-        }
-        if t == "0" || t == "0.0" || t.ends_with("from (0)") {
-            return Some("err_to_zero_costume");
-        }
-        if t.ends_with(":: MAX") {
-            return Some("err_to_max_costume");
-        }
-        if t == "& []" || t == "&[]" {
-            return Some("empty_slice_costume");
-        }
-        // Any bare literal is a costume: the error became a number, a
-        // string, a bool — a value the caller cannot tell from truth.
-        if matches!(body, syn::Expr::Lit(_)) {
-            return Some("err_to_literal_costume");
-        }
-        if let syn::Expr::Unary(u) = body {
-            if matches!(&*u.expr, syn::Expr::Lit(_)) {
-                return Some("err_to_literal_costume");
-            }
-        }
-        // A bare no-arg constructor is a costume: Vec::new(), String::new(),
-        // Default::default(), T::empty() — a fabricated blank.
-        if let syn::Expr::Call(c) = body {
-            if c.args.is_empty() {
-                return Some("err_to_constructor_costume");
-            }
-        }
-        if t == "vec ! []" || t.starts_with("Default :: default") {
-            return Some("err_to_constructor_costume");
-        }
-        // Silent control flow: the error becomes a skipped iteration.
-        if matches!(body, syn::Expr::Continue(_)) {
-            return Some("err_flow_swallow");
-        }
-        None
-    }
-    fn pick(node: &syn::Arm) -> Option<(usize, &'static str)> {
-        let pat = node.pat.to_token_stream().to_string();
-        if !(pat.starts_with("Err") || pat == "None") {
-            return None;
-        }
-        // `spans` is a fixed [Span; 2]; indexing is total.
-        let line = span_line(&node.fat_arrow_token.spans[0]);
-        costume_of(&node.body).map(|name| (line, name))
-    }
-    arm_sites(f, pick)
+    arm_sites(f, ArmSiteKind::ErrCostume)
 }
 
 /// Every `exit`/`abort` path ident. Wide on purpose: an imported
@@ -1401,6 +1395,25 @@ impl ShapeProofRefuse {
     }
 }
 
+#[cfg(test)]
+struct ShapeProofs;
+
+#[cfg(test)]
+impl ShapeProofs {
+    fn parse(&self, rel: &str, src: &str) -> Result<SourceFile, ShapeProofRefuse> {
+        let ast = syn::parse_file(src).map_err(|_| ShapeProofRefuse::Parse)?;
+        Ok(SourceFile::admit(rel, src, ast))
+    }
+
+    fn run(&self, name: &str, src: &str) -> Result<Vec<Hit>, ShapeProofRefuse> {
+        let m = matcher_by_name(name).ok_or(ShapeProofRefuse::MatcherMissing)?;
+        Ok(run_matcher(m, &self.parse("crates/x/src/probe.rs", src)?))
+    }
+}
+
+#[cfg(test)]
+const SHAPE_PROOFS: ShapeProofs = ShapeProofs;
+
 
 #[cfg(test)]
 mod tests {
@@ -1408,18 +1421,8 @@ mod tests {
 
     type TestResult = Result<(), ShapeProofRefuse>;
 
-    fn parse(rel: &str, src: &str) -> Result<SourceFile, ShapeProofRefuse> {
-        let ast = syn::parse_file(src).map_err(|_| ShapeProofRefuse::Parse)?;
-        Ok(SourceFile::admit(rel, src, ast))
-    }
-
-    fn run(name: &str, src: &str) -> Result<Vec<Hit>, ShapeProofRefuse> {
-        let m = matcher_by_name(name).ok_or(ShapeProofRefuse::MatcherMissing)?;
-        Ok(run_matcher(m, &parse("crates/x/src/probe.rs", src)?))
-    }
-
     fn must_hit(name: &str, src: &str, want: usize, refuse: ShapeProofRefuse) -> TestResult {
-        refuse.require_eq(run(name, src)?.len(), want)
+        refuse.require_eq(SHAPE_PROOFS.run(name, src)?.len(), want)
     }
 
     #[test]
@@ -1537,7 +1540,7 @@ mod tests {
 
     #[test]
     fn anti_fraud_cfg_test_nondeterminism_must_be_counted() -> TestResult {
-        let hits = run(
+        let hits = SHAPE_PROOFS.run(
             "nondeterminism",
             "#[cfg(test)] mod tests { fn f() { let _t = std::time::Instant::now(); } }",
         )?;
@@ -1610,13 +1613,13 @@ mod tests {
     /// Proven RED against pre-fix line scanner (0 hits); AST walk closes it.
     #[test]
     fn anti_fraud_multiline_default_derive_must_be_counted() -> TestResult {
-        let hits = run(
+        let hits = SHAPE_PROOFS.run(
             "default_derive",
             "#[derive(\n    Debug,\n    Default,\n)]\nstruct S;",
         )?;
         ShapeProofRefuse::MultilineDefaultDerive.require_eq(hits.len(), 1)?;
         ShapeProofRefuse::Construct.require_eq(hits[0].construct(), "default_derive")?;
-        let smuggled = run(
+        let smuggled = SHAPE_PROOFS.run(
             "default_derive",
             "#[cfg_attr(feature = \"x\", derive(Default))]\nstruct T;",
         )?;
