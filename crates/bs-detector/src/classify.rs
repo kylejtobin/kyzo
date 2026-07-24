@@ -1708,6 +1708,7 @@ mod fixture_tests {
         );
     }
 
+    #[test]
     fn item_4_proof_restrict_struct_is_clean() {
         assert_hit_count("struct R { r: Restrict }", 0);
     }
