@@ -613,7 +613,7 @@ impl Grammar {
             }
         }
         for name in jurisdiction.keys() {
-            if shape::matcher_by_name(name).is_none() {
+            if shape::MATCHER_LOOKUP.by_name(name).is_none() {
                 bail!("ban `{name}` has no registered matcher — a law that cannot fire");
             }
             // Exact door: `fn bite_{name}(` on a trimmed line. Soft

@@ -193,7 +193,7 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
                 continue;
             }
         }
-        let m = match shape::matcher_by_name(name) {
+        let m = match shape::MATCHER_LOOKUP.by_name(name) {
             Some(m) => m,
             None => anyhow::bail!("ban `{name}` vanished post-load"),
         };
@@ -204,7 +204,7 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
         };
         let scoped: Vec<&SourceFile> =
             b.files().iter().filter(|f| in_scope(f.rel_path())).collect();
-        let hits: Vec<Hit> = scoped.iter().flat_map(|f| shape::run_matcher(m, f)).collect();
+        let hits: Vec<Hit> = scoped.iter().flat_map(|f| m.run(f)).collect();
         passes.push(((*name).to_string(), hits));
     }
     let run_pass = |name: &str| only.is_none() || only == Some(name);
@@ -281,7 +281,7 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
                 if !run_pass(name) {
                     continue;
                 }
-                let m = match shape::matcher_by_name(name) {
+                let m = match shape::MATCHER_LOOKUP.by_name(name) {
                     Some(m) => m,
                     None => anyhow::bail!("construct-scoped ban `{name}` vanished post-load"),
                 };
@@ -292,7 +292,7 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
                 let mut hits = Vec::new();
                 for f in b.files().iter().filter(|f| in_scope(f.rel_path())) {
                     let spans = classify::scoped_construct_spans(&grammar, f, aliases);
-                    let raw = shape::run_matcher(m, f);
+                    let raw = m.run(f);
                     for h in raw {
                         let inside = spans.iter().any(|s| {
                             s.bans().iter().any(|b| b == name)

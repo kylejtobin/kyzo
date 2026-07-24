@@ -1636,14 +1636,14 @@ mod fixture_tests {
     fn item_1_proof_path_attr_mod_is_denied() -> TestResult {
         // Item 5: #[path] is bans_attribute only — module still seats;
         // the attribute matcher is the one door.
-        let m = crate::engines::shape::matcher_by_name("path")
+        let m = crate::engines::shape::MATCHER_LOOKUP.by_name("path")
             .ok_or(ClassifyProofRefuse::PathMatcher)?;
         let f = SourceFile::admit(
             "crates/probe/src/lib.rs".to_string(),
             "#[path = \"x.rs\"]\nmod m;".to_string(),
             parse_file("#[path = \"x.rs\"]\nmod m;")?,
         );
-        let hits = crate::engines::shape::run_matcher(m, &f);
+        let hits = m.run(&f);
         ClassifyProofRefuse::PathAttrMustHit.require(hits.len() == 1)?;
         ClassifyProofRefuse::PathModuleMustSeat.require(classify_src("#[path = \"x.rs\"] mod m;")?.len() == 0)
     }
@@ -1728,9 +1728,9 @@ mod fixture_tests {
             let first = ast.items.first().ok_or(ClassifyProofRefuse::MissingItem)?;
             ClassifyProofRefuse::ScopedBanMustSeat.require(probe_matches(&grammar, "crates/probe/src/lib.rs", rule, first))?;
         }
-        let m_await = crate::engines::shape::matcher_by_name("await")
+        let m_await = crate::engines::shape::MATCHER_LOOKUP.by_name("await")
             .ok_or(ClassifyProofRefuse::AwaitMatcher)?;
-        let m_nest = crate::engines::shape::matcher_by_name("nested_place_assign")
+        let m_nest = crate::engines::shape::MATCHER_LOOKUP.by_name("nested_place_assign")
             .ok_or(ClassifyProofRefuse::NestMatcher)?;
         let f_await = SourceFile::admit(
             "crates/probe/src/lib.rs".to_string(),
@@ -1742,8 +1742,8 @@ mod fixture_tests {
             nest_src.to_string(),
             parse_file(nest_src)?,
         );
-        ClassifyProofRefuse::AwaitMatcherHit.require(crate::engines::shape::run_matcher(m_await, &f_await).len() == 1)?;
-        ClassifyProofRefuse::NestMatcherHit.require(crate::engines::shape::run_matcher(m_nest, &f_nest).len() == 1)
+        ClassifyProofRefuse::AwaitMatcherHit.require(m_await.run(&f_await).len() == 1)?;
+        ClassifyProofRefuse::NestMatcherHit.require(m_nest.run(&f_nest).len() == 1)
     }
 
     #[test]

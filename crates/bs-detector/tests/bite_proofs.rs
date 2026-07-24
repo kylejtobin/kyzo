@@ -58,9 +58,9 @@ fn parsed(rel: &str, src: &str) -> Result<SourceFile, BiteProofRefuse> {
 }
 
 fn shape_hits(name: &str, src: &str) -> Result<Vec<Hit>, BiteProofRefuse> {
-    let m = shape::matcher_by_name(name).ok_or(BiteProofRefuse::MatcherMissing)?;
+    let m = shape::MATCHER_LOOKUP.by_name(name).ok_or(BiteProofRefuse::MatcherMissing)?;
     let f = parsed("crates/probe/src/probe.rs", src)?;
-    Ok(shape::run_matcher(m, &f))
+    Ok(m.run(&f))
 }
 
 /// Hit count for a matcher+fixture. MatcherMissing/Parse refuse — a broken
@@ -876,9 +876,9 @@ fn bite_hand_layout() -> BiteOutcome {
     require_eq(hits.len(), 1, BiteProofRefuse::HitCount)?;
     // No file is exempt — the canonical constructor's own sites are entered in
     // waivers.toml like everyone else's.
-    let m = shape::matcher_by_name("hand_layout").ok_or(BiteProofRefuse::MatcherMissing)?;
+    let m = shape::MATCHER_LOOKUP.by_name("hand_layout").ok_or(BiteProofRefuse::MatcherMissing)?;
     let f = parsed("crates/kyzo-core/src/store/transcript.rs", src)?;
-    require_eq(shape::run_matcher(m, &f).len(), 1, BiteProofRefuse::HitCount)?;
+    require_eq(m.run(&f).len(), 1, BiteProofRefuse::HitCount)?;
     Ok(())
 }
 
