@@ -15,14 +15,22 @@
 //!   normalized token-shingle similarity — second authority by copy.
 //! - `agreement_registry`: every test named in `crates/xtask/agreements.toml`
 //!   must still exist as a `fn` in the tree.
+//! - `total_refusal` (item 2): every workspace `Result` error position
+//!   resolves to a workspace enum; `String` / `anyhow` / `Box<dyn Error>` red.
+//! - `sealed_public_door` (item 2): per-host-crate allowed-import list;
+//!   an import outside it is red.
+//! - `config_once` (item 2): env/args call sites per binary — exactly one,
+//!   inside the declared config constructor.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use quote::ToTokens;
+use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 
 use crate::boundary::{SourceFile, span_line};
 use crate::engines::Hit;
+use crate::grammar::{ConfigOnceSeat, HostDoor};
 
 // ---------------------------------------------------------------------------
 // derive_bypass
@@ -379,6 +387,366 @@ pub fn agreement_registry(files: &[&SourceFile], registry_text: &str) -> Vec<Hit
         .collect()
 }
 
+// ---------------------------------------------------------------------------
+// total_refusal (item 2 relational)
+// ---------------------------------------------------------------------------
+
+fn path_last_ident(path: &syn::Path) -> Option<String> {
+    path.segments.last().map(|s| s.ident.to_string())
+}
+
+fn type_is_explicitly_banned_error(ty: &syn::Type) -> Option<&'static str> {
+    match ty {
+        syn::Type::Path(tp) => {
+            let segs: Vec<String> = tp
+                .path
+                .segments
+                .iter()
+                .map(|s| s.ident.to_string())
+                .collect();
+            if segs.last().is_some_and(|s| s == "String") {
+                return Some("String");
+            }
+            if segs.iter().any(|s| s == "anyhow") {
+                return Some("anyhow");
+            }
+            None
+        }
+        syn::Type::TraitObject(_) => Some("dyn-error"),
+        syn::Type::Paren(p) => type_is_explicitly_banned_error(&p.elem),
+        syn::Type::Group(g) => type_is_explicitly_banned_error(&g.elem),
+        syn::Type::Reference(r) => type_is_explicitly_banned_error(&r.elem),
+        _not_a_named_banned_shape => None,
+    }
+}
+
+fn result_error_type(ty: &syn::Type) -> Option<&syn::Type> {
+    let syn::Type::Path(tp) = ty else {
+        return None;
+    };
+    let seg = tp.path.segments.last()?;
+    if seg.ident != "Result" {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
+        return None;
+    };
+    let mut types = args.args.iter().filter_map(|a| match a {
+        syn::GenericArgument::Type(t) => Some(t),
+        _ => None,
+    });
+    let _ok = types.next()?;
+    types.next()
+}
+
+fn error_ty_is_workspace_enum(ty: &syn::Type, enums: &BTreeSet<String>) -> bool {
+    let syn::Type::Path(tp) = ty else {
+        return false;
+    };
+    // Box<dyn Error> / aliased wrappers handled by banned check first.
+    if let syn::PathArguments::AngleBracketed(args) = &tp.path.segments.last().unwrap().arguments {
+        // Box<dyn …> — Path with one type arg that is TraitObject.
+        if tp.path.segments.last().is_some_and(|s| s.ident == "Box") {
+            return false;
+        }
+        let _ = args;
+    }
+    path_last_ident(&tp.path).is_some_and(|name| enums.contains(&name))
+}
+
+/// Every `Result<_, E>` in the workspace: E must be a workspace enum.
+/// `String`, `anyhow::*`, and `Box<dyn …>` are red by name.
+pub fn total_refusal(files: &[&SourceFile]) -> Vec<Hit> {
+    let mut enums: BTreeSet<String> = BTreeSet::new();
+    for f in files {
+        for item in &f.ast.items {
+            if let syn::Item::Enum(e) = item {
+                enums.insert(e.ident.to_string());
+            }
+        }
+    }
+    let mut hits = vec![];
+    for f in files {
+        struct V<'a> {
+            rel: &'a str,
+            enums: &'a BTreeSet<String>,
+            hits: &'a mut Vec<Hit>,
+        }
+        impl<'ast, 'a> Visit<'ast> for V<'a> {
+            fn visit_type(&mut self, node: &'ast syn::Type) {
+                if let Some(err) = result_error_type(node) {
+                    let reason = if let Some(tag) = type_is_explicitly_banned_error(err) {
+                        Some(tag.to_string())
+                    } else if looks_like_box_dyn(err) {
+                        Some("Box<dyn Error>".to_string())
+                    } else if !error_ty_is_workspace_enum(err, self.enums) {
+                        Some(format!(
+                            "not-workspace-enum:{}",
+                            err.to_token_stream()
+                        ))
+                    } else {
+                        None
+                    };
+                    if let Some(reason) = reason {
+                        self.hits.push(Hit {
+                            file: self.rel.to_string(),
+                            line: span_line(&node.span()),
+                            construct: format!("result-error:{reason}"),
+                        });
+                    }
+                }
+                visit::visit_type(self, node);
+            }
+        }
+        let mut v = V {
+            rel: &f.rel_path,
+            enums: &enums,
+            hits: &mut hits,
+        };
+        v.visit_file(&f.ast);
+    }
+    hits
+}
+
+fn looks_like_box_dyn(ty: &syn::Type) -> bool {
+    let syn::Type::Path(tp) = ty else {
+        return false;
+    };
+    let Some(seg) = tp.path.segments.last() else {
+        return false;
+    };
+    if seg.ident != "Box" {
+        return false;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
+        return false;
+    };
+    args.args.iter().any(|a| matches!(a, syn::GenericArgument::Type(syn::Type::TraitObject(_))))
+}
+
+// ---------------------------------------------------------------------------
+// sealed_public_door (item 2 relational)
+// ---------------------------------------------------------------------------
+
+fn use_tree_roots(tree: &syn::UseTree, out: &mut Vec<(String, proc_macro2::Span)>) {
+    match tree {
+        syn::UseTree::Path(p) => {
+            out.push((p.ident.to_string(), p.ident.span()));
+        }
+        syn::UseTree::Name(n) => {
+            out.push((n.ident.to_string(), n.ident.span()));
+        }
+        syn::UseTree::Rename(r) => {
+            out.push((r.ident.to_string(), r.ident.span()));
+        }
+        syn::UseTree::Glob(g) => {
+            // Glob without a path prefix is illegal rust at item level for
+            // `use *`; nested globs are reached via Path. Record as `*`.
+            out.push(("*".to_string(), g.star_token.spans[0]));
+        }
+        syn::UseTree::Group(g) => {
+            for item in &g.items {
+                use_tree_roots(item, out);
+            }
+        }
+    }
+}
+
+/// Per-host allowed-import list: a `use` whose first segment is outside
+/// `{crate, super, self} ∪ allowed_imports` is red.
+pub fn sealed_public_door(files: &[&SourceFile], hosts: &[HostDoor]) -> Vec<Hit> {
+    let mut hits = vec![];
+    for f in files {
+        let Some(host) = hosts.iter().find(|h| f.rel_path.starts_with(&h.path)) else {
+            continue;
+        };
+        let allowed: BTreeSet<&str> = host.allowed_imports.iter().map(|s| s.as_str()).collect();
+        for item in &f.ast.items {
+            let syn::Item::Use(u) = item else {
+                continue;
+            };
+            let mut roots = vec![];
+            use_tree_roots(&u.tree, &mut roots);
+            for (root, span) in roots {
+                if root == "crate" || root == "super" || root == "self" {
+                    continue;
+                }
+                if allowed.contains(root.as_str()) {
+                    continue;
+                }
+                hits.push(Hit {
+                    file: f.rel_path.clone(),
+                    line: span_line(&span),
+                    construct: format!("import-outside-door:{root}"),
+                });
+            }
+        }
+    }
+    hits
+}
+
+// ---------------------------------------------------------------------------
+// config_once (item 2 relational)
+// ---------------------------------------------------------------------------
+
+fn is_env_or_args_path(path: &syn::Path) -> bool {
+    let segs: Vec<String> = path.segments.iter().map(|s| s.ident.to_string()).collect();
+    let Some(last) = segs.last() else {
+        return false;
+    };
+    let is_env_fn = matches!(
+        last.as_str(),
+        "var" | "var_os" | "vars" | "vars_os" | "args" | "args_os"
+    );
+    if !is_env_fn {
+        return false;
+    }
+    // …::env::var / env::var / std::env::args
+    segs.iter().any(|s| s == "env")
+}
+
+struct EnvSite {
+    line: usize,
+    /// Module path of the enclosing fn, e.g. `host_env::read` or `main`.
+    fn_path: String,
+}
+
+fn collect_env_sites(file: &SourceFile) -> Vec<EnvSite> {
+    // File-path module prefix: `crates/xtask/src/host_env.rs` → `host_env`,
+    // `crates/xtask/src/a/b.rs` → `a::b`, `.../main.rs`/`lib.rs`/`mod.rs` → ∅.
+    let file_mod_prefix: Vec<String> = {
+        let marker = "/src/";
+        if let Some(idx) = file.rel_path.find(marker) {
+            let rest = &file.rel_path[idx + marker.len()..];
+            if let Some(stem) = rest.strip_suffix(".rs") {
+                if matches!(stem, "main" | "lib" | "mod") {
+                    vec![]
+                } else {
+                    stem.split('/')
+                        .filter(|s| *s != "mod")
+                        .map(|s| s.to_string())
+                        .collect()
+                }
+            } else {
+                vec![]
+            }
+        } else {
+            vec![]
+        }
+    };
+    struct V<'a> {
+        mod_stack: Vec<String>,
+        fn_stack: Vec<String>,
+        sites: &'a mut Vec<EnvSite>,
+    }
+    impl V<'_> {
+        fn current_fn_path(&self) -> String {
+            let mut parts = self.mod_stack.clone();
+            if let Some(f) = self.fn_stack.last() {
+                parts.push(f.clone());
+            }
+            parts.join("::")
+        }
+    }
+    impl<'ast> Visit<'ast> for V<'_> {
+        fn visit_item_mod(&mut self, node: &'ast syn::ItemMod) {
+            self.mod_stack.push(node.ident.to_string());
+            visit::visit_item_mod(self, node);
+            self.mod_stack.pop();
+        }
+        fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
+            self.fn_stack.push(node.sig.ident.to_string());
+            visit::visit_item_fn(self, node);
+            self.fn_stack.pop();
+        }
+        fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
+            self.fn_stack.push(node.sig.ident.to_string());
+            visit::visit_impl_item_fn(self, node);
+            self.fn_stack.pop();
+        }
+        fn visit_expr_path(&mut self, node: &'ast syn::ExprPath) {
+            // Bare path expressions are not call sites; calls are handled
+            // in visit_expr_call. Still walk children.
+            visit::visit_expr_path(self, node);
+        }
+        fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
+            if let syn::Expr::Path(p) = &*node.func {
+                if is_env_or_args_path(&p.path) && !self.fn_stack.is_empty() {
+                    self.sites.push(EnvSite {
+                        line: span_line(&p.path.span()),
+                        fn_path: self.current_fn_path(),
+                    });
+                }
+            }
+            visit::visit_expr_call(self, node);
+        }
+    }
+    let mut sites = vec![];
+    let mut v = V {
+        mod_stack: file_mod_prefix,
+        fn_stack: vec![],
+        sites: &mut sites,
+    };
+    v.visit_file(&file.ast);
+    sites
+}
+
+/// Env/args call sites under each declared binary path: exactly one, and
+/// it must sit inside the declared `fn_path` constructor.
+pub fn config_once(files: &[&SourceFile], seats: &[ConfigOnceSeat]) -> Vec<Hit> {
+    let mut hits = vec![];
+    for seat in seats {
+        let scoped: Vec<&&SourceFile> = files
+            .iter()
+            .filter(|f| f.rel_path.starts_with(&seat.path))
+            .collect();
+        // Skip test/bite fixtures under the host when they are not the
+        // binary's production tree? No — law is absolute over the path.
+        let mut sites: Vec<(&str, EnvSite)> = vec![];
+        for f in &scoped {
+            for s in collect_env_sites(f) {
+                sites.push((f.rel_path.as_str(), s));
+            }
+        }
+        if sites.len() != 1 {
+            hits.push(Hit {
+                file: seat.path.trim_end_matches('/').to_string(),
+                line: 0,
+                construct: format!(
+                    "config-once-count:{} (want 1 in `{}`)",
+                    sites.len(),
+                    seat.fn_path
+                ),
+            });
+            for (file, s) in &sites {
+                if s.fn_path != seat.fn_path {
+                    hits.push(Hit {
+                        file: (*file).to_string(),
+                        line: s.line,
+                        construct: format!(
+                            "config-once-outside-ctor:{} (want `{}`)",
+                            s.fn_path, seat.fn_path
+                        ),
+                    });
+                }
+            }
+            continue;
+        }
+        let (file, s) = &sites[0];
+        if s.fn_path != seat.fn_path {
+            hits.push(Hit {
+                file: (*file).to_string(),
+                line: s.line,
+                construct: format!(
+                    "config-once-outside-ctor:{} (want `{}`)",
+                    s.fn_path, seat.fn_path
+                ),
+            });
+        }
+    }
+    hits
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -421,5 +789,90 @@ mod tests {
         let hits = agreement_registry(&[&f], reg);
         assert_eq!(hits.len(), 1);
         assert!(hits[0].construct.contains("law_deleted"));
+    }
+
+    #[test]
+    fn total_refusal_reds_string_anyhow_and_box_dyn() {
+        let enums = parse("crates/x/src/e.rs", "enum E { A }");
+        let bad = parse(
+            "crates/x/src/a.rs",
+            "fn a() -> Result<(), String> { Ok(()) }\n\
+             fn b() -> Result<(), anyhow::Error> { Ok(()) }\n\
+             fn c() -> Result<(), Box<dyn std::error::Error>> { Ok(()) }\n\
+             fn d() -> Result<(), u8> { Ok(()) }\n\
+             fn e() -> Result<(), E> { Ok(()) }",
+        );
+        let hits = total_refusal(&[&enums, &bad]);
+        assert!(
+            hits.iter().any(|h| h.construct.contains("String")),
+            "String error must red: {hits:?}"
+        );
+        assert!(
+            hits.iter().any(|h| h.construct.contains("anyhow")),
+            "anyhow must red: {hits:?}"
+        );
+        assert!(
+            hits.iter().any(|h| h.construct.contains("Box")),
+            "Box<dyn Error> must red: {hits:?}"
+        );
+        assert!(
+            hits.iter().any(|h| h.construct.contains("not-workspace-enum")),
+            "u8 must red: {hits:?}"
+        );
+        assert_eq!(
+            hits.len(),
+            4,
+            "exactly String/anyhow/Box/u8 must red; workspace enum E must pass: {hits:?}"
+        );
+    }
+
+    #[test]
+    fn sealed_public_door_reds_import_outside_allowlist() {
+        let f = parse(
+            "crates/kyzo-bin/src/main.rs",
+            "use std::process::ExitCode;\nuse crate::engine::Engine;\nuse kyzo_core::Db;\n",
+        );
+        let hosts = vec![HostDoor {
+            path: "crates/kyzo-bin/".to_string(),
+            allowed_imports: vec!["kyzo_core".to_string()],
+        }];
+        let hits = sealed_public_door(&[&f], &hosts);
+        assert!(
+            hits.iter().any(|h| h.construct.contains("import-outside-door:std")),
+            "std outside allowlist must red: {hits:?}"
+        );
+        assert!(
+            !hits.iter().any(|h| h.construct.contains("kyzo_core")),
+            "allowed import must pass: {hits:?}"
+        );
+        assert!(
+            !hits.iter().any(|h| h.construct.contains("crate")),
+            "crate:: imports are internal: {hits:?}"
+        );
+    }
+
+    #[test]
+    fn config_once_demands_exactly_one_site_in_declared_ctor() {
+        let good = parse(
+            "crates/xtask/src/host_env.rs",
+            "fn read(name: &str) -> Option<String> { std::env::var(name).ok() }",
+        );
+        let seats = vec![ConfigOnceSeat {
+            path: "crates/xtask/".to_string(),
+            fn_path: "host_env::read".to_string(),
+        }];
+        let hits = config_once(&[&good], &seats);
+        assert!(hits.is_empty(), "one site in declared ctor must pass: {hits:?}");
+
+        let two = parse(
+            "crates/xtask/src/host_env.rs",
+            "fn read(name: &str) -> Option<String> { std::env::var(name).ok() }\n\
+             fn other() { let _ = std::env::var(\"X\"); }",
+        );
+        let hits = config_once(&[&two], &seats);
+        assert!(
+            hits.iter().any(|h| h.construct.contains("config-once-count:2")),
+            "two sites must red: {hits:?}"
+        );
     }
 }

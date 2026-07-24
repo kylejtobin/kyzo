@@ -284,3 +284,33 @@ caught_by = "grammar.toml [kinds].condemned; classify.rs reports it under this n
 name = "trait_item_macro"
 law = "TRUTH item 1: a macro invocation inside a trait block's interior — the same escape, trait-scoped"
 caught_by = "grammar.toml [kinds].condemned; classify.rs reports it under this name directly"
+
+[[law]]
+name = "total_refusal"
+law = "TRUTH item 2 relational: every workspace Result error position must resolve to a workspace enum; String, anyhow, Box<dyn Error> are red"
+caught_by = "relational pass total_refusal in engines/graph.rs"
+
+[[law]]
+name = "sealed_public_door"
+law = "TRUTH item 2 relational: a host-crate use whose first path segment is outside that host's allowed_imports list is red"
+caught_by = "relational pass sealed_public_door in engines/graph.rs over grammar.toml [seats].hosts"
+
+[[law]]
+name = "config_once"
+law = "TRUTH item 2 relational: env/args call sites per binary must number exactly one and sit inside the declared config constructor"
+caught_by = "relational pass config_once in engines/graph.rs over grammar.toml [seats].config_once"
+
+[[law]]
+name = "R-int"
+law = "TRUTH item 2 residual: interior mutation via method call (self.vec.push, self.cell.borrow_mut()) is invisible to assignment-shape analysis, in every cell"
+caught_by = "named residual only — no matcher; stated so the attestation weaker-than-law slot cites a laws.toml entry, not prose"
+
+[[law]]
+name = "R-string-direct"
+law = "TRUTH item 1 residual pending item 4: string-carrying judgment uses direct terminal names only; the alias-fixpoint walk is unbuilt"
+caught_by = "named residual — classify.rs type_is_string_terminal; item 4 closes it"
+
+[[law]]
+name = "R-verbatim-presence"
+law = "TRUTH item 1 residual: verbatim.deny.rs is presence-only because a true Item::Verbatim cannot be authored in a file syn::parse_file accepts"
+caught_by = "named residual — classify::fixture_tests::every_condemned_kind_deny_fixture_is_red_under_its_own_law"

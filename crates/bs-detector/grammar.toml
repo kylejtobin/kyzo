@@ -13,10 +13,10 @@
 #   matching none of them is a violation ("unclassified") by default — deny
 #   is the default, silence certifies nothing.
 # [seats]: declared receiverless-fn seats (item 2's declared-fn skeleton),
-#   each binding file + fn path + a blake3 site hash (item 6). Empty today —
-#   no receiverless fn in the tree has been individually declared yet, so
-#   every one is `unclassified` until a future seat names it. No
-#   grandfathering.
+#   each binding file + fn path + a blake3 site hash (item 6); plus
+#   [seats.hosts] sealed-public-door allowlists and [seats.config_once]
+#   env/args constructor seats. Empty hosts/config_once refuse to load.
+#   No grandfathering.
 # Every ban must resolve to a registered matcher and a bite proof named
 # bite_<ban> in tests/bite_proofs.rs, or the gate refuses to run.
 
@@ -197,3 +197,49 @@ file = "crates/bs-detector/fixtures/declared-fn.deny.rs"
 fn_path = "proof_fn"
 site_hash = "0000000000000000000000000000000000000000000000000000000000000000"
 io = false
+
+# Item 2 relational: sealed-public-door hosts. Empty allowed_imports means
+# every non-crate/super/self import in the host is red until the operator
+# names the sealed surface. No grandfathering.
+[[seats.hosts]]
+path = "crates/kyzo-bin/"
+allowed_imports = []
+
+[[seats.hosts]]
+path = "crates/kyzo-lsp/"
+allowed_imports = []
+
+[[seats.hosts]]
+path = "crates/bs-detector/"
+allowed_imports = []
+
+[[seats.hosts]]
+path = "crates/xtask/"
+allowed_imports = []
+
+[[seats.hosts]]
+path = "crates/kyzo-trials/"
+allowed_imports = []
+
+# Item 2 relational: config-once per binary crate. fn_path is the ONE
+# lawful home of env/args reads. Names that do not yet exist keep every
+# env/args site red (count ≠ 1 or wrong home) — loud, not soft.
+[[seats.config_once]]
+path = "crates/kyzo-bin/"
+fn_path = "UNDECLARED_CONFIG_CONSTRUCTOR"
+
+[[seats.config_once]]
+path = "crates/kyzo-lsp/"
+fn_path = "UNDECLARED_CONFIG_CONSTRUCTOR"
+
+[[seats.config_once]]
+path = "crates/bs-detector/"
+fn_path = "UNDECLARED_CONFIG_CONSTRUCTOR"
+
+[[seats.config_once]]
+path = "crates/xtask/"
+fn_path = "host_env::read"
+
+[[seats.config_once]]
+path = "crates/kyzo-trials/"
+fn_path = "host_env::read"

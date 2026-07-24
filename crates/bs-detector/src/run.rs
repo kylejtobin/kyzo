@@ -153,6 +153,21 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
             .with_context(|| "reading agreements.toml — a missing registry is drift, not a pass")?;
         passes.push(("agreement_registry", graph::agreement_registry(&all, &text)));
     }
+    if run_pass("total_refusal") {
+        passes.push(("total_refusal", graph::total_refusal(&all)));
+    }
+    if run_pass("sealed_public_door") {
+        passes.push((
+            "sealed_public_door",
+            graph::sealed_public_door(&all, &grammar.hosts),
+        ));
+    }
+    if run_pass("config_once") {
+        passes.push((
+            "config_once",
+            graph::config_once(&all, &grammar.config_once),
+        ));
+    }
     if run_pass("coverage") {
         passes.push(("coverage", meta::coverage(&b)));
     }

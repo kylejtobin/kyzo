@@ -1,5 +1,4 @@
 fn main() {
-    if true {
-        return;
-    }
+    let x = 1;
+    finish(x)
 }

@@ -276,32 +276,46 @@ fn classify_trait_item(ctx: &Ctx, item: &syn::TraitItem, hits: &mut Vec<Hit>) {
 }
 
 // ---------------------------------------------------------------------------
-// seat matching: does ANY named construct's rule match this item?
+// seat matching: EXACTLY ONE named construct's rule matches (item 2: every
+// fn classifies as exactly one skeleton; a second match is a soft drain).
 // ---------------------------------------------------------------------------
 
 fn construct_rule<'a>(grammar: &'a Grammar, name: &str) -> Option<StructuralRule> {
     grammar.constructs.iter().find(|c| c.name == name).map(|c| c.rule)
 }
 
+fn exactly_one(matches: impl Iterator<Item = bool>) -> bool {
+    let mut seen = false;
+    for m in matches {
+        if m {
+            if seen {
+                return false;
+            }
+            seen = true;
+        }
+    }
+    seen
+}
+
 fn seat_matches_item(ctx: &Ctx, item: &syn::Item, seats: &[String]) -> bool {
-    seats.iter().any(|name| match construct_rule(ctx.grammar, name) {
+    exactly_one(seats.iter().map(|name| match construct_rule(ctx.grammar, name) {
         Some(rule) => rule_matches_item(ctx, rule, item),
         None => false,
-    })
+    }))
 }
 
 fn seat_matches_impl_item(ctx: &Ctx, item: &syn::ImplItem, seats: &[String]) -> bool {
-    seats.iter().any(|name| match construct_rule(ctx.grammar, name) {
+    exactly_one(seats.iter().map(|name| match construct_rule(ctx.grammar, name) {
         Some(rule) => rule_matches_impl_item(ctx, rule, item),
         None => false,
-    })
+    }))
 }
 
 fn seat_matches_trait_item(ctx: &Ctx, item: &syn::TraitItem, seats: &[String]) -> bool {
-    seats.iter().any(|name| match construct_rule(ctx.grammar, name) {
+    exactly_one(seats.iter().map(|name| match construct_rule(ctx.grammar, name) {
         Some(rule) => rule_matches_trait_item(ctx, rule, item),
         None => false,
-    })
+    }))
 }
 
 fn rule_matches_item(ctx: &Ctx, rule: StructuralRule, item: &syn::Item) -> bool {
@@ -662,6 +676,66 @@ fn contains_nested_place_assign(block: &syn::Block) -> bool {
     v.found
 }
 
+/// A call expression, optionally wrapped in `?` / parens / group — the only
+/// RHS / tail shape composition-root's POSITIVE body law admits.
+fn is_call_expr(expr: &syn::Expr) -> bool {
+    match expr {
+        syn::Expr::Call(_) | syn::Expr::MethodCall(_) => true,
+        syn::Expr::Try(t) => is_call_expr(&t.expr),
+        syn::Expr::Paren(p) => is_call_expr(&p.expr),
+        syn::Expr::Group(g) => is_call_expr(&g.expr),
+        _not_a_call => false,
+    }
+}
+
+/// Composition-root POSITIVE body law (item 2): let-bindings of calls (with
+/// optional `?`), then exactly one tail call. `if`/`match`/`loop`/`while`/
+/// `for`/`await` are red. A body that merely lacks control flow but holds a
+/// non-call expression is the soft drain this law closes.
+fn composition_root_body_ok(block: &syn::Block) -> bool {
+    if contains_control_flow(block) || contains_await(block) {
+        return false;
+    }
+    let Some((last, prefix)) = block.stmts.split_last() else {
+        return false;
+    };
+    for stmt in prefix {
+        let syn::Stmt::Local(local) = stmt else {
+            return false;
+        };
+        let Some(init) = &local.init else {
+            return false;
+        };
+        // `let ... = ... else { ... }` is control flow in costume.
+        if init.diverge.is_some() {
+            return false;
+        }
+        if !is_call_expr(&init.expr) {
+            return false;
+        }
+    }
+    match last {
+        syn::Stmt::Expr(expr, None) => is_call_expr(expr),
+        _not_a_tail_call => false,
+    }
+}
+
+/// Path+name shape of composition-root, before body judgment — used to keep
+/// declared-fn from absorbing a failed `main` (item 2: no soft drain cell).
+fn is_composition_root_shape(sig: &syn::Signature, ctx: &Ctx) -> bool {
+    receiver_form(sig) == Receiver::None
+        && !ctx.in_container
+        && sig.ident == "main"
+        && (ctx.rel.ends_with("/src/main.rs") || ctx.rel.contains("/src/bin/"))
+}
+
+/// Admission-door shape by receiver+return, before body judgment.
+fn is_admission_door_shape(sig: &syn::Signature, ctx: &Ctx) -> bool {
+    receiver_form(sig) == Receiver::None
+        && ctx.in_container
+        && return_resolves_to_self(&sig.output, ctx.self_ty, true)
+}
+
 fn type_matches_self(ty: &syn::Type, self_ty: Option<&syn::Type>) -> bool {
     let syn::Type::Path(tp) = ty else {
         return false;
@@ -716,16 +790,33 @@ fn return_resolves_to_self(
 /// Declared-fn seat lookup (item 6 forward-bound): file + fn_path + a
 /// blake3 site hash that must match the item's CURRENT identity tokens
 /// exactly, or the seat has drifted and the fn is red. `io = true` is the
-/// only lawful home for `async`.
-fn declared_fn_matches(sig: &syn::Signature, whole: &dyn ToTokens, ctx: &Ctx) -> bool {
+/// only lawful home for `async`/`await` (every other skeleton cell bans
+/// await; this cell bans it too unless the seat says `io = true`).
+fn declared_fn_matches(
+    sig: &syn::Signature,
+    block: Option<&syn::Block>,
+    whole: &dyn ToTokens,
+    ctx: &Ctx,
+) -> bool {
+    // Discriminator exclusivity: composition-root shape and admission-door
+    // shape are claimed by those cells even when their body bans fire —
+    // declared-fn must not be the drain they pour into.
+    if is_composition_root_shape(sig, ctx) || is_admission_door_shape(sig, ctx) {
+        return false;
+    }
     let Some(seat) = ctx.grammar.fn_seat(ctx.rel, &sig.ident.to_string()) else {
         return false;
     };
     if crate::identity::site_hash(whole) != seat.site_hash {
         return false;
     }
-    if sig.asyncness.is_some() && !seat.io {
-        return false;
+    if !seat.io {
+        if sig.asyncness.is_some() {
+            return false;
+        }
+        if !ok_or_bodyless(block, |b| !contains_await(b)) {
+            return false;
+        }
     }
     true
 }
@@ -740,11 +831,11 @@ fn fn_matches(
     let receiver = receiver_form(sig);
     match rule {
         StructuralRule::CompositionRootBody => {
-            receiver == Receiver::None
-                && !ctx.in_container
-                && sig.ident == "main"
-                && (ctx.rel.ends_with("/src/main.rs") || ctx.rel.contains("/src/bin/"))
-                && ok_or_bodyless(block, |b| !contains_control_flow(b))
+            // Body is mandatory: a bodyless `main` cannot satisfy the
+            // positive let/call/tail law (ok_or_bodyless would soft-pass).
+            is_composition_root_shape(sig, ctx)
+                && sig.asyncness.is_none()
+                && block.is_some_and(composition_root_body_ok)
         }
         StructuralRule::DerivationBans => {
             receiver == Receiver::RefSelf
@@ -759,20 +850,20 @@ fn fn_matches(
                 && ok_or_bodyless(block, |b| !contains_nested_place_assign(b) && !contains_await(b))
         }
         StructuralRule::ConsumingVerbBans => {
+            // self-by-value returning Self is a builder chain — red: it
+            // matches NO skeleton (this arm demands return ≠ Self).
             receiver == Receiver::ByValueSelf
                 && sig.asyncness.is_none()
                 && !return_resolves_to_self(&sig.output, ctx.self_ty, false)
                 && ok_or_bodyless(block, |b| !contains_nested_place_assign(b) && !contains_await(b))
         }
         StructuralRule::AdmissionDoorBans => {
-            receiver == Receiver::None
-                && ctx.in_container
+            is_admission_door_shape(sig, ctx)
                 && sig.asyncness.is_none()
-                && return_resolves_to_self(&sig.output, ctx.self_ty, true)
                 && ok_or_bodyless(block, |b| !contains_await(b))
         }
         StructuralRule::DeclaredFnSeat => {
-            receiver == Receiver::None && declared_fn_matches(sig, whole, ctx)
+            receiver == Receiver::None && declared_fn_matches(sig, block, whole, ctx)
         }
         _rule_not_for_fn => false,
     }
@@ -1007,5 +1098,191 @@ mod fixture_tests {
         };
         let hits = classify_file(&grammar, &f);
         assert_eq!(hits.len(), 1, "a String-carrying named struct must be denied, not absorbed by a neighbor: {hits:?}");
+    }
+
+    // -----------------------------------------------------------------------
+    // item 2 proofs (executed — presence is not proof)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn item_2_proof_box_self_receiver_is_red() {
+        let grammar = real_grammar();
+        let src = "impl S { fn f(self: Box<Self>) {} }";
+        let f = SourceFile {
+            rel_path: "crates/probe/src/lib.rs".to_string(),
+            text: src.to_string(),
+            ast: syn::parse_file(src).expect("parses"),
+        };
+        let hits = classify_file(&grammar, &f);
+        assert!(
+            hits.iter().any(|h| h.construct.contains("unclassified")),
+            "fn f(self: Box<Self>) must be red: {hits:?}"
+        );
+    }
+
+    #[test]
+    fn item_2_proof_ref_self_await_is_red() {
+        let grammar = real_grammar();
+        let src = "impl S { fn get(&self) -> u64 { self.x.await } }";
+        let f = SourceFile {
+            rel_path: "crates/probe/src/lib.rs".to_string(),
+            text: src.to_string(),
+            ast: syn::parse_file(src).expect("parses"),
+        };
+        let hits = classify_file(&grammar, &f);
+        assert!(
+            hits.iter().any(|h| h.construct.contains("unclassified")),
+            "&self fn containing await must be red: {hits:?}"
+        );
+    }
+
+    #[test]
+    fn item_2_proof_builder_chain_self_by_value_returning_self_is_red() {
+        let grammar = real_grammar();
+        let src = "impl S { fn with_x(mut self) -> Self { self.x = 1; self } }";
+        let f = SourceFile {
+            rel_path: "crates/probe/src/lib.rs".to_string(),
+            text: src.to_string(),
+            ast: syn::parse_file(src).expect("parses"),
+        };
+        let hits = classify_file(&grammar, &f);
+        assert!(
+            hits.iter().any(|h| h.construct.contains("unclassified")),
+            "fn with_x(mut self) -> Self must be red (builder): {hits:?}"
+        );
+    }
+
+    #[test]
+    fn item_2_proof_consuming_verb_nested_place_assign_is_red() {
+        let grammar = real_grammar();
+        let src = "impl S { fn into_x(mut self) -> u64 { self.a.b = 1; self.x } }";
+        let f = SourceFile {
+            rel_path: "crates/probe/src/lib.rs".to_string(),
+            text: src.to_string(),
+            ast: syn::parse_file(src).expect("parses"),
+        };
+        let hits = classify_file(&grammar, &f);
+        assert!(
+            hits.iter().any(|h| h.construct.contains("unclassified")),
+            "consuming-verb with nested place assign must be red: {hits:?}"
+        );
+    }
+
+    #[test]
+    fn item_2_proof_receiverless_absent_from_seats_is_red() {
+        let grammar = real_grammar();
+        let src = "fn smuggled() {}";
+        let f = SourceFile {
+            rel_path: "crates/probe/src/lib.rs".to_string(),
+            text: src.to_string(),
+            ast: syn::parse_file(src).expect("parses"),
+        };
+        let hits = classify_file(&grammar, &f);
+        assert!(
+            hits.iter().any(|h| h.construct.contains("unclassified")),
+            "receiverless fn absent from [seats].fns must be red: {hits:?}"
+        );
+    }
+
+    #[test]
+    fn item_2_proof_declared_fn_hash_drift_is_red() {
+        // The deny fixture is seated with a deliberately wrong hash.
+        let grammar = real_grammar();
+        let path = crate_dir().join("fixtures/declared-fn.deny.rs");
+        let src = std::fs::read_to_string(&path).expect("deny fixture");
+        let f = SourceFile {
+            rel_path: "crates/bs-detector/fixtures/declared-fn.deny.rs".to_string(),
+            text: src.clone(),
+            ast: syn::parse_file(&src).expect("parses"),
+        };
+        let hits = classify_file(&grammar, &f);
+        assert!(
+            hits.iter().any(|h| h.construct.contains("unclassified")),
+            "declared fn whose body hash drifted must be red: {hits:?}"
+        );
+    }
+
+    #[test]
+    fn item_2_proof_async_fn_without_io_seat_is_red() {
+        let grammar = real_grammar();
+        let src = "async fn bare_async() {}";
+        let f = SourceFile {
+            rel_path: "crates/probe/src/lib.rs".to_string(),
+            text: src.to_string(),
+            ast: syn::parse_file(src).expect("parses"),
+        };
+        let hits = classify_file(&grammar, &f);
+        assert!(
+            hits.iter().any(|h| h.construct.contains("unclassified")),
+            "async fn without an io=true seat must be red: {hits:?}"
+        );
+    }
+
+    #[test]
+    fn item_2_proof_admission_door_classifies() {
+        let grammar = real_grammar();
+        let src = "impl S { fn new() -> Result<Self, ()> { Ok(S) } }";
+        let rel = "crates/probe/src/lib.rs";
+        let ast = syn::parse_file(src).expect("parses");
+        let first = ast.items.first().expect("item");
+        assert!(
+            probe_matches(&grammar, rel, StructuralRule::AdmissionDoorBans, first),
+            "fn new() -> Result<Self, E> in an impl must classify as admission-door"
+        );
+        let f = SourceFile {
+            rel_path: rel.to_string(),
+            text: src.to_string(),
+            ast,
+        };
+        let hits = classify_file(&grammar, &f);
+        assert!(
+            hits.is_empty(),
+            "admission-door pass shape must not be unclassified: {hits:?}"
+        );
+    }
+
+    #[test]
+    fn item_2_proof_composition_root_positive_body_refuses_non_call_let() {
+        // The honesty gap closed here: negative-only (!control_flow) would
+        // green `let x = 1; finish(x)`. Positive law reds it.
+        let grammar = real_grammar();
+        let src = "fn main() { let x = 1; finish(x) }";
+        let rel = "crates/probe/src/main.rs";
+        let ast = syn::parse_file(src).expect("parses");
+        let first = ast.items.first().expect("item");
+        assert!(
+            !probe_matches(&grammar, rel, StructuralRule::CompositionRootBody, first),
+            "composition-root must refuse a non-call let RHS under the positive body law"
+        );
+    }
+
+    #[test]
+    fn item_2_anti_fraud_fn_matches_at_most_one_skeleton() {
+        let grammar = real_grammar();
+        let cases = [
+            ("crates/probe/src/main.rs", "fn main() { let x = prep(); finish(x) }"),
+            ("crates/probe/src/lib.rs", "impl S { fn get(&self) -> u64 { 0 } }"),
+            ("crates/probe/src/lib.rs", "impl S { fn set(&mut self, v: u64) { self.x = v; } }"),
+            ("crates/probe/src/lib.rs", "impl S { fn into_x(self) -> u64 { self.x } }"),
+            ("crates/probe/src/lib.rs", "impl S { fn new() -> Result<Self, ()> { Ok(S) } }"),
+        ];
+        let fn_rules: Vec<StructuralRule> = grammar
+            .constructs
+            .iter()
+            .filter(|c| matches!(c.kind, crate::grammar::ConstructFamily::Fn))
+            .map(|c| c.rule)
+            .collect();
+        for (rel, src) in cases {
+            let ast = syn::parse_file(src).expect("parses");
+            let first = ast.items.first().expect("item");
+            let n = fn_rules
+                .iter()
+                .filter(|r| probe_matches(&grammar, rel, **r, first))
+                .count();
+            assert_eq!(
+                n, 1,
+                "exactly one skeleton must match `{src}` at {rel}, got {n}"
+            );
+        }
     }
 }

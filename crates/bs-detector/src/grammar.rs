@@ -239,7 +239,7 @@ pub enum StructuralRule {
     /// interior kinds (macro, verbatim) red inside the container.
     InteriorsClassify,
     /// composition-root: `main` body is let-bindings of calls, `?`, one
-    /// tail call; `if`/`match`/`loop` red.
+    /// tail call (POSITIVE body law); `if`/`match`/`loop`/`await` red.
     CompositionRootBody,
     /// derivation (`&self`): assignment, `await`/`async`, `unsafe` red.
     DerivationBans,
@@ -309,6 +309,27 @@ pub struct FnSeat {
     pub io: bool,
 }
 
+/// A host crate's sealed-public-door import allowlist (item 2 relational).
+/// Every `use` whose first path segment is not `crate`/`super`/`self` must
+/// name a segment in `allowed_imports`, or it is red.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostDoor {
+    /// Repo-root-relative directory prefix, e.g. `crates/kyzo-bin/`.
+    pub path: String,
+    pub allowed_imports: Vec<String>,
+}
+
+/// Config-once seat for one binary crate (item 2 relational): env/args
+/// call sites under `path` must number exactly one, and that one must
+/// sit inside the fn named by `fn_path` (module::fn or bare fn ident).
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigOnceSeat {
+    pub path: String,
+    pub fn_path: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct KindsSection {
@@ -320,6 +341,10 @@ struct KindsSection {
 #[serde(deny_unknown_fields)]
 struct SeatsSection {
     fns: Vec<FnSeat>,
+    #[serde(default)]
+    hosts: Vec<HostDoor>,
+    #[serde(default)]
+    config_once: Vec<ConfigOnceSeat>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -350,6 +375,8 @@ pub struct Grammar {
     pub condemned: BTreeSet<KindName>,
     pub seated: BTreeMap<KindName, Vec<String>>,
     pub fn_seats: Vec<FnSeat>,
+    pub hosts: Vec<HostDoor>,
+    pub config_once: Vec<ConfigOnceSeat>,
 }
 
 impl Grammar {
@@ -488,6 +515,49 @@ impl Grammar {
             }
         }
 
+        // Item 2 relational seats: empty host/config_once lists are silence
+        // (sealed-public-door and config-once would never fire). Refuse.
+        if parsed.seats.hosts.is_empty() {
+            bail!(
+                "[seats].hosts is empty — sealed-public-door with no host is a silent law; refuse"
+            );
+        }
+        if parsed.seats.config_once.is_empty() {
+            bail!(
+                "[seats].config_once is empty — config-once with no binary is a silent law; refuse"
+            );
+        }
+        let mut host_paths: BTreeSet<&str> = BTreeSet::new();
+        for h in &parsed.seats.hosts {
+            if h.path.trim().is_empty() {
+                bail!("a [seats].hosts entry with an empty path matches nothing");
+            }
+            if !h.path.ends_with('/') {
+                bail!(
+                    "host path `{}` must end in `/` — a prefix without a slash silently overlaps neighbors",
+                    h.path
+                );
+            }
+            if !host_paths.insert(h.path.as_str()) {
+                bail!("duplicate [seats].hosts path `{}`", h.path);
+            }
+        }
+        let mut cfg_paths: BTreeSet<&str> = BTreeSet::new();
+        for c in &parsed.seats.config_once {
+            if c.path.trim().is_empty() || c.fn_path.trim().is_empty() {
+                bail!("a [seats].config_once entry with an empty path or fn_path matches nothing");
+            }
+            if !c.path.ends_with('/') {
+                bail!(
+                    "config_once path `{}` must end in `/`",
+                    c.path
+                );
+            }
+            if !cfg_paths.insert(c.path.as_str()) {
+                bail!("duplicate [seats].config_once path `{}`", c.path);
+            }
+        }
+
         // Fixture law: pass+deny per construct (zero-freedom cells are
         // deny-exempt), deny per condemned kind, nothing unrecognized.
         let mut expected: BTreeSet<String> = BTreeSet::new();
@@ -525,6 +595,8 @@ impl Grammar {
             condemned,
             seated: parsed.kinds.seated,
             fn_seats: parsed.seats.fns,
+            hosts: parsed.seats.hosts,
+            config_once: parsed.seats.config_once,
         })
     }
 
