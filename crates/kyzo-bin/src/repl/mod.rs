@@ -50,33 +50,34 @@ mod fetch;
 mod render;
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use clap::Args;
 use kyzo::{DataValue, Engine, FjallStorage};
 use miette::{IntoDiagnostic, Result};
 use rustyline::history::DefaultHistory;
 
-use crate::engine::{self, StorageArgs};
+use crate::engine::{self, EngineKind, StorageArgs};
 use editor::Indented;
 
 #[derive(Args, Debug)]
 pub(crate) struct ReplArgs {
     /// Storage engine: `fjall` (persistent, at `--path`) or `mem`
     /// (ephemeral, discarded on exit). See `engine.rs`.
-    #[clap(short, long, default_value = "mem")]
-    engine: String,
+    #[clap(short, long, default_value = "mem", value_enum)]
+    engine: EngineKind,
 
     /// Path to the directory to store the database (only used by `fjall`).
     #[clap(short, long, default_value = "kyzo.db")]
-    path: String,
+    path: PathBuf,
 
     #[clap(flatten)]
     storage: StorageArgs,
 }
 
 pub(crate) fn repl_main(args: ReplArgs) -> Result<()> {
-    let handle = engine::open(&args.engine, &args.path, args.storage)?;
-    let db = handle.db;
+    let handle = engine::open(args.engine, &args.path, args.storage)?;
+    let (db, storage, _lease) = handle.into_parts();
 
     ctrlc::set_handler(|| {
         eprintln!(
@@ -105,9 +106,7 @@ pub(crate) fn repl_main(args: ReplArgs) -> Result<()> {
         let readline = rl.readline("=> ");
         match readline {
             Ok(line) => {
-                if let Err(err) =
-                    process_line(&line, &db, &handle.storage, &mut params, &mut save_next)
-                {
+                if let Err(err) = process_line(&line, &db, &storage, &mut params, &mut save_next) {
                     eprintln!("{err:?}");
                 }
                 if let Err(err) = rl.add_history_entry(line) {

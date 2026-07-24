@@ -303,6 +303,7 @@ pub(crate) mod store;
 
 pub use data::json::JsonData;
 pub use data::json::format_error_as_json;
+pub use kyzo_model::{HostText, TextRef};
 pub use kyzo_model::value::{
     Arity, AsOf, DataValue, NonFiniteJsonNumber, Num, RegexSource, RelationId, StorageKey, Tuple,
     TupleKey, TupleT, UuidWrapper, Validity, ValiditySlot, ValidityTs, Vector,

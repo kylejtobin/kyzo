@@ -273,7 +273,7 @@ fn atom_interval_derivation(atom: &InputAtom) -> Option<String> {
             inner: InputNamedFieldRelationApplyAtom { name, validity, .. },
         } => match validity {
             Some(ValidityClause::Spans { .. } | ValidityClause::Delta { .. }) => {
-                Some(name.name.to_string())
+                Some(name.name().to_string())
             }
             Some(ValidityClause::At(_)) | None => None,
         },

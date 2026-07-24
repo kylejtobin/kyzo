@@ -48,6 +48,8 @@ use std::sync::Arc;
 
 use miette::{IntoDiagnostic, Result, bail, miette};
 
+use kyzo::HostText;
+
 /// Redirects are real (an import URL is commonly a redirecting shortlink),
 /// but must terminate: this is the same conservative cap most HTTP client
 /// libraries default to.
@@ -102,9 +104,9 @@ fn fetch(url: &str, redirects_left: u32) -> Result<String> {
 /// brackets).
 struct Target {
     https: bool,
-    host: String,
+    host: HostText,
     port: u16,
-    path_and_query: String,
+    path_and_query: HostText,
 }
 
 impl Target {
@@ -118,17 +120,17 @@ impl Target {
             other => bail!("unsupported URL scheme '{other}' in {url}: only http/https"),
         };
         let (authority, path_and_query) = match rest.find('/') {
-            Some(i) => (&rest[..i], rest[i..].to_string()),
-            None => (rest, "/".to_string()),
+            Some(i) => (&rest[..i], HostText::new(&rest[i..])),
+            None => (rest, HostText::new("/")),
         };
         let (host, port) = match authority.rsplit_once(':') {
             Some((h, p)) => (
-                h.to_string(),
+                HostText::new(h),
                 p.parse()
                     .into_diagnostic()
                     .map_err(|e| miette!("bad port in {url}: {e}"))?,
             ),
-            None => (authority.to_string(), if https { 443 } else { 80 }),
+            None => (HostText::new(authority), if https { 443 } else { 80 }),
         };
         Ok(Target {
             https,
@@ -169,7 +171,7 @@ impl Target {
                 .with_root_certificates(root_store)
                 .with_no_client_auth();
         let server_name: rustls::pki_types::ServerName<'static> =
-            self.host.clone().try_into().into_diagnostic()?;
+            self.host.as_str().to_owned().try_into().into_diagnostic()?;
         let conn =
             rustls::ClientConnection::new(Arc::new(config), server_name).into_diagnostic()?;
         Ok(Transport::Tls(Box::new(rustls::StreamOwned::new(

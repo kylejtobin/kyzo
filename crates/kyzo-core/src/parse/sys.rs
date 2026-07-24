@@ -149,7 +149,7 @@ impl FtsConfigBuilder<Unset> {
                 index_name,
                 extractor: Expr::Const {
                     val: DataValue::Null,
-                    span: SourceSpan(0, 0),
+                    span: SourceSpan::new(0, 0),
                 },
                 tokenizer: TokenizerConfig::simple(),
                 filters: vec![],
@@ -259,7 +259,7 @@ impl MinHashLshConfigBuilder<Unset> {
                 index_name,
                 extractor: Expr::Const {
                     val: DataValue::Null,
-                    span: SourceSpan(0, 0),
+                    span: SourceSpan::new(0, 0),
                 },
                 tokenizer: TokenizerConfig::simple(),
                 filters: vec![],
@@ -725,7 +725,7 @@ mod tests {
     fn fts_and_lsh_staged_builders_carry_the_extractor() {
         let ex = || Expr::Const {
             val: DataValue::from(true),
-            span: SourceSpan(0, 0),
+            span: SourceSpan::new(0, 0),
         };
         let fts = FtsConfigBuilder::new("docs".into(), "by_text".into())
             .extractor(ex())

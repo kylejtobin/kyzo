@@ -232,13 +232,13 @@ fn stored_read_set(prog: &InputProgram) -> BTreeSet<SmartString<LazyCompact>> {
     fn collect_atom(atom: &InputAtom, out: &mut BTreeSet<SmartString<LazyCompact>>) {
         match atom {
             InputAtom::Relation { inner } => {
-                out.insert(inner.name.name.clone());
+                out.insert(inner.name.name().clone());
             }
             InputAtom::NamedFieldRelation { inner } => {
-                out.insert(inner.name.name.clone());
+                out.insert(inner.name.name().clone());
             }
             InputAtom::Search { inner } => {
-                out.insert(inner.relation.name.clone());
+                out.insert(inner.relation.name().clone());
             }
             InputAtom::Negation { inner, .. } => collect_atom(inner, out),
             InputAtom::Conjunction { inner, .. } | InputAtom::Disjunction { inner, .. } => {
@@ -267,7 +267,7 @@ fn stored_read_set(prog: &InputProgram) -> BTreeSet<SmartString<LazyCompact>> {
                     match arg {
                         FixedRuleArg::Stored { name, .. }
                         | FixedRuleArg::NamedStored { name, .. } => {
-                            out.insert(name.name.clone());
+                            out.insert(name.name().clone());
                         }
                         FixedRuleArg::InMem { .. } => {}
                     }
@@ -361,7 +361,7 @@ impl<S: Storage> Engine<S> {
         options: &ScriptOptions,
     ) -> Result<NamedRows> {
         let fixed = self.fixed_rules()?;
-        let constraint = ConstraintRef::parse(name.name.clone(), source, &fixed, cur_vld)?;
+        let constraint = ConstraintRef::parse(name.name().clone(), source, &fixed, cur_vld)?;
         validate_constraint_purity(constraint.name(), constraint.program().out_opts())?;
         let read_set = stored_read_set(constraint.program());
         if read_set.is_empty() {
@@ -405,7 +405,11 @@ impl<S: Storage> Engine<S> {
     ) -> std::result::Result<NamedRows, RetryError> {
         // Constraint names are one global namespace: scan the catalog.
         for handle in list_relations(&tx.store).map_err(RetryError::session_report)? {
-            if let Some(c) = handle.constraints.iter().find(|c| c.name() == &name.name) {
+            if let Some(c) = handle
+                .constraints
+                .iter()
+                .find(|c| c.name().as_str() == name.name().as_str())
+            {
                 return Err(RetryError::session(ConstraintNameTaken(
                     c.name().to_string(),
                     handle.name.to_string(),
@@ -495,7 +499,10 @@ impl<S: Storage> Engine<S> {
         let mut found = false;
         for mut handle in list_relations(&tx.store).map_err(RetryError::session_report)? {
             let before = handle.constraints.len();
-            if handle.constraints.iter().any(|c| c.name() == &name.name)
+            if handle
+                .constraints
+                .iter()
+                .any(|c| c.name().as_str() == name.name().as_str())
                 && handle.access_level < AccessLevel::Protected
             {
                 return Err(RetryError::session(InsufficientAccessLevel(
@@ -504,7 +511,9 @@ impl<S: Storage> Engine<S> {
                     handle.access_level,
                 )));
             }
-            handle.constraints.retain(|c| c.name() != &name.name);
+            handle
+                .constraints
+                .retain(|c| c.name().as_str() != name.name().as_str());
             if handle.constraints.len() != before {
                 found = true;
                 write_relation_row(&mut tx.store, &handle).map_err(RetryError::session_report)?;

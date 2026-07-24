@@ -1370,7 +1370,7 @@ mod tests {
             )?;
             let tokenizer = m.tokenizer.build(&m.filters)?;
             let extractor = Expr::Binding {
-                var: Symbol::new("v", SourceSpan(0, 0)),
+                var: Symbol::new("v", SourceSpan::new(0, 0)),
                 tuple_pos: BindingPos::Resolved(1),
             };
             let perms = m.get_hash_perms()?;
@@ -1380,7 +1380,7 @@ mod tests {
                     &mut tx,
                     &row,
                     kyzo_model::value::ValidityTs::of_micros(0),
-                    SourceSpan(0, 0),
+                    SourceSpan::new(0, 0),
                 )?;
                 lsh_put(
                     &mut tx,
@@ -1513,7 +1513,7 @@ mod tests {
         let tokenizer = manifest.tokenizer.build(&manifest.filters)?;
         // The compiled extractor: project the text column (position 1).
         let extractor = Expr::Binding {
-            var: Symbol::new("v", SourceSpan(0, 0)),
+            var: Symbol::new("v", SourceSpan::new(0, 0)),
             tuple_pos: BindingPos::Resolved(1),
         };
         let perms = manifest.get_hash_perms()?;
@@ -1523,7 +1523,7 @@ mod tests {
                 &mut tx,
                 &row,
                 kyzo_model::value::ValidityTs::of_micros(0),
-                SourceSpan(0, 0),
+                SourceSpan::new(0, 0),
             )?;
             lsh_put(
                 &mut tx,
@@ -1687,10 +1687,10 @@ mod tests {
         let mut tx = db.write_tx()?;
         let inv_key = f
             .inv
-            .encode_key_for_store(&[DataValue::from(1)], SourceSpan(0, 0))?;
+            .encode_key_for_store(&[DataValue::from(1)], SourceSpan::new(0, 0))?;
         let bad_val = f
             .inv
-            .encode_val_only_for_store(&[DataValue::from("not a chunk list")], SourceSpan(0, 0))?;
+            .encode_val_only_for_store(&[DataValue::from("not a chunk list")], SourceSpan::new(0, 0))?;
         tx.put(&inv_key, &bad_val).map_err(|e| miette!("{e}"))?;
         tx.commit().map_err(|e| miette!("{e}"))?;
 

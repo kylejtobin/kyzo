@@ -29,6 +29,25 @@ use std::path::Path;
 use kyzo::{Catalog, Engine, FjallStorage, StorageOptions, new_fjall_storage_with};
 use miette::{IntoDiagnostic, Result, miette};
 
+/// Which storage posture the host opens. One closed vocabulary — never a
+/// free `String` engine name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum EngineKind {
+    /// Ephemeral fjall store in a process-owned temp directory.
+    Mem,
+    /// Persistent fjall store at `--path`.
+    Fjall,
+}
+
+impl EngineKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EngineKind::Mem => "mem",
+            EngineKind::Fjall => "fjall",
+        }
+    }
+}
+
 /// Resource knobs exposed on the CLI, passed straight through to
 /// [`StorageOptions`]. Kept as a plain struct (rather than threading two
 /// `Option` parameters) so `main.rs`'s `clap::Args` flattens into it and
@@ -41,11 +60,11 @@ use miette::{IntoDiagnostic, Result, miette};
 pub struct StorageArgs {
     /// Block/blob cache size in bytes. Unset uses fjall's own default.
     #[clap(long)]
-    pub cache_size_bytes: Option<u64>,
+    cache_size_bytes: Option<u64>,
     /// Background worker threads (flush/compaction). Unset uses fjall's own
     /// default.
     #[clap(long)]
-    pub worker_threads: Option<usize>,
+    worker_threads: Option<usize>,
 }
 
 impl StorageArgs {
@@ -72,6 +91,12 @@ impl From<StorageArgs> for StorageOptions {
     }
 }
 
+/// Holds the ephemeral directory open for the process lifetime in `mem`
+/// mode. Dropping it deletes the directory. Never read — only held.
+pub struct EphemeralDirLease {
+    _ephemeral_dir: Option<tempfile::TempDir>,
+}
+
 /// A running database plus everything needed to keep it alive and to reach
 /// its storage directly for whole-store dump/restore/verify — operations
 /// that take `&FjallStorage`, not `&Engine<_>` (`Engine`'s `store` field is
@@ -80,29 +105,47 @@ impl From<StorageArgs> for StorageOptions {
 /// one shared store), so kyzo-bin keeps its own clone from before handing
 /// one to `Engine::compose` instead of asking kyzo-core to expose an accessor.
 pub struct DbHandle {
-    pub db: Engine<FjallStorage>,
-    pub storage: FjallStorage,
+    db: Engine<FjallStorage>,
+    storage: FjallStorage,
     /// Holds the ephemeral directory open for the process lifetime in `mem`
     /// mode; `None` for a `fjall` engine opened at a caller-given path. Never
     /// read, only held — dropping it deletes the directory.
     _ephemeral_dir: Option<tempfile::TempDir>,
 }
 
+impl DbHandle {
+    /// Split into engine, storage handle, and the lease that keeps an
+    /// ephemeral dir alive for `mem` mode.
+    pub fn into_parts(self) -> (Engine<FjallStorage>, FjallStorage, EphemeralDirLease) {
+        (
+            self.db,
+            self.storage,
+            EphemeralDirLease {
+                _ephemeral_dir: self._ephemeral_dir,
+            },
+        )
+    }
+
+    pub fn db(&self) -> &Engine<FjallStorage> {
+        &self.db
+    }
+
+    pub fn storage(&self) -> &FjallStorage {
+        &self.storage
+    }
+}
+
 /// Open (or create) the database this process will serve, per the CLI's
 /// `--engine`/`--path` choice.
-///
-/// `engine` is `"mem"` or `"fjall"`; any other value is a refusal, not a
-/// silent fallback — the CozoDB original's `DbInstance::new` had the same
-/// posture toward an unrecognized engine name.
 ///
 /// Persistent (`fjall`) opens go through the restore-completeness gate: a
 /// store still carrying the in-progress mark refuses IncompleteRestore
 /// rather than presenting a partial restore as a smaller complete store
 /// (seat 26 / #375 T2).
-pub fn open(engine: &str, path: impl AsRef<Path>, opts: StorageArgs) -> Result<DbHandle> {
+pub fn open(engine: EngineKind, path: &Path, opts: StorageArgs) -> Result<DbHandle> {
     let storage_opts: StorageOptions = opts.into();
     let (storage, ephemeral_dir) = match engine {
-        "mem" => {
+        EngineKind::Mem => {
             let dir = tempfile::tempdir().into_diagnostic()?;
             // Ephemeral path: still admit (empty store is complete) so mem and
             // fjall share one completeness law.
@@ -110,16 +153,9 @@ pub fn open(engine: &str, path: impl AsRef<Path>, opts: StorageArgs) -> Result<D
             kyzo::admit_complete_store!(storage)?;
             (storage, Some(dir))
         }
-        "fjall" => {
+        EngineKind::Fjall => {
             let storage = kyzo::open_complete_store_with!(path, storage_opts)?;
             (storage, None)
-        }
-        other => {
-            return Err(miette!(
-                "unknown engine '{other}': KyzoDB has exactly one storage backend (fjall); \
-                 use `--engine fjall` for a persistent store at `--path`, or `--engine mem` \
-                 for an ephemeral store that is discarded when the process exits"
-            ));
         }
     };
 
@@ -133,7 +169,7 @@ pub fn open(engine: &str, path: impl AsRef<Path>, opts: StorageArgs) -> Result<D
 
 #[cfg(test)]
 mod restore_completeness {
-    use super::{StorageArgs, open};
+    use super::{EngineKind, StorageArgs, open};
     use kyzo::{Storage, WriteTx, dump_storage, new_fjall_storage, restore_storage};
     use miette::{Result, miette};
 
@@ -196,7 +232,7 @@ mod restore_completeness {
         }
 
         // PRODUCTION entry point — not open_complete_store / admit alone.
-        let open_err = match open("fjall", &tgt_path, StorageArgs::unset()) {
+        let open_err = match open(EngineKind::Fjall, &tgt_path, StorageArgs::unset()) {
             Err(e) => e,
             Ok(_) => {
                 return Err(miette!(

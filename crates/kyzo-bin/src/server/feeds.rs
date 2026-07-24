@@ -33,8 +33,8 @@ use serde_json::{Value as JsonValue, json};
 use tokio::task::spawn_blocking;
 
 use kyzo::{
-    CallbackId, DataValue, Engine, FjallStorage, NamedRows, NonFiniteJsonNumber, SignedFact,
-    StandingQuery, Storage, Tuple,
+    CallbackId, DataValue, Engine, FjallStorage, HostText, NamedRows, NonFiniteJsonNumber,
+    SignedFact, StandingQuery, Storage, Tuple,
 };
 
 use super::DbState;
@@ -53,7 +53,7 @@ pub(super) async fn observe_changes(
     struct Guard {
         id: CallbackId,
         db: Engine<FjallStorage>,
-        relation: String,
+        relation: HostText,
     }
 
     impl Drop for Guard {
@@ -74,7 +74,11 @@ pub(super) async fn observe_changes(
     });
     let stream = async_stream::stream! {
         info!("starting changes SSE {}: {}", relation, id.get());
-        let _guard = Guard {id, db: st.db, relation};
+        let _guard = Guard {
+            id,
+            db: st.db,
+            relation: HostText::new(relation),
+        };
         while let Some(event) = receiver.recv().await {
             let (Ok(new_rows), Ok(old_rows)) = (
                 NamedRows::into_json(event.new_rows),
@@ -116,11 +120,11 @@ pub(super) async fn observe_changes(
 /// GET query: `query` required; `params` absent means empty string (no JSON
 /// object), handled at [`parse_params`] — never a serde Default invent.
 pub(super) struct StandingQueryParams {
-    query: String,
+    query: HostText,
     /// A JSON object, URL-encoded like `query` — the same "JSON in"
     /// convention `run_script_json` uses, adapted to a query-string
     /// parameter since GET has no body.
-    params: String,
+    params: HostText,
 }
 
 impl<'de> serde::Deserialize<'de> for StandingQueryParams {
@@ -145,7 +149,10 @@ impl<'de> serde::Deserialize<'de> for StandingQueryParams {
                     "query",
                     String::new(),
                 )?;
-                Ok(StandingQueryParams { query, params })
+                Ok(StandingQueryParams {
+                    query: HostText::new(query),
+                    params: HostText::new(params),
+                })
             }
         }
         deserializer.deserialize_map(V)
@@ -211,13 +218,14 @@ pub(super) async fn observe_standing(
     State(st): State<DbState>,
     Query(q): Query<StandingQueryParams>,
 ) -> Response {
-    let params = match parse_params(&q.params) {
+    let params = match parse_params(q.params.as_str()) {
         Ok(p) => p,
         Err(message) => return error_response(StatusCode::BAD_REQUEST, message),
     };
 
     let query_text = q.query.clone();
-    let registered = spawn_blocking(move || st.db.register_standing(&query_text, params)).await;
+    let registered =
+        spawn_blocking(move || st.db.register_standing(query_text.as_str(), params)).await;
     let sq = match registered {
         Ok(Ok(sq)) => sq,
         // A refused query (recursion, a fixed rule, a construct the

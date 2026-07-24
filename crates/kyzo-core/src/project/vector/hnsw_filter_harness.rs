@@ -181,7 +181,7 @@ fn hsetup(
             &mut tx,
             r.as_slice(),
             kyzo_model::value::ValidityTs::of_micros(0),
-            SourceSpan(0, 0),
+            SourceSpan::new(0, 0),
         )?;
         hnsw_put(&mut tx, &m, &base, &idx, None, r.as_slice())?;
     }
@@ -230,7 +230,7 @@ impl FilterSpec {
     /// Expr filter over the ENGINE's appended output row. Binding
     /// `tuple_pos = 0` is the key column `k`, at position 0 (base keys first).
     fn filter_expr(&self) -> Expr {
-        let span = SourceSpan(0, 0);
+        let span = SourceSpan::new(0, 0);
         let k = Symbol::new("k", span);
         let binding = Expr::Binding {
             var: k,
@@ -2155,7 +2155,7 @@ fn t13_connectivity_under_interleaved_insert_delete_reopen() -> Result<()> {
                 &mut tx,
                 new_row.as_slice(),
                 kyzo_model::value::ValidityTs::of_micros(0),
-                SourceSpan(0, 0),
+                SourceSpan::new(0, 0),
             )?;
             hnsw_put(&mut tx, &m, &base, &idx, None, new_row.as_slice())?;
             tx.commit().map_err(|e| miette!("commit insert: {e:?}"))?;

@@ -16,6 +16,7 @@
 #![forbid(unsafe_code)]
 
 pub mod envelope;
+pub mod host_text;
 /// One-law encoding battery seat (`format/tests.rs`: law1/2/3 corpus).
 /// Compiled under `cfg(test)` so the migration re-point cannot leave the
 /// corpus dead again — production encode/decode stays in `value::canonical`.
@@ -26,6 +27,8 @@ pub mod program;
 pub mod schema;
 pub mod typestate;
 pub mod value;
+
+pub use host_text::{HostText, TextRef};
 
 pub use envelope::{
     JsonData, JsonValue, datavalue_to_json, json_from_serde, json_to_datavalue, serde_from_json,

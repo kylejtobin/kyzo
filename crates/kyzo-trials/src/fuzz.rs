@@ -68,9 +68,9 @@ pub fn law5_corrupt_dictionary_sweep_never_panics() {
             DataValue::from(1i64),
             DataValue::List(vec![DataValue::List(vec![DataValue::from("x")])]),
         ];
-        let key = must_ok(dict.encode_key_for_store(&bad, SourceSpan(0, 0)), "encode_key");
+        let key = must_ok(dict.encode_key_for_store(&bad, SourceSpan::new(0, 0)), "encode_key");
         let val = must_ok(dict
-            .encode_val_only_for_store(&bad, SourceSpan(0, 0)), "encode_val");
+            .encode_val_only_for_store(&bad, SourceSpan::new(0, 0)), "encode_val");
         must_ok(tx.put(&key, &val), "put");
         must_ok(tx.commit(), "commit");
         let rtx = must_ok(db.read_tx(), "read_tx");
@@ -102,7 +102,7 @@ pub fn law5_corrupt_dictionary_sweep_never_panics() {
                     &mut tx,
                     &row,
                     kyzo_model::value::ValidityTs::of_micros(0),
-                    SourceSpan(0, 0),
+                    SourceSpan::new(0, 0),
                 ), "put_fact");
             }
             must_ok(tx.commit(), "commit");

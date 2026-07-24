@@ -117,12 +117,12 @@ pub(crate) fn eval_expr(expr: &Expr, bindings: impl AsRef<[DataValue]>) -> Resul
     match expr {
         Expr::Binding { var, tuple_pos, .. } => match tuple_pos {
             BindingPos::Unresolved => {
-                bail!(UnboundVariableError(var.name.to_string(), var.span))
+                bail!(UnboundVariableError(var.name().to_string(), var.span()))
             }
             BindingPos::Resolved(i) => Ok(bindings
                 .get(*i)
                 .ok_or_else(|| {
-                    TupleTooShortError(var.name.to_string(), *i, bindings.len(), var.span)
+                    TupleTooShortError(var.name().to_string(), *i, bindings.len(), var.span())
                 })?
                 .clone()),
         },
@@ -270,16 +270,16 @@ fn eval_node(expr: &Expr, sel: &Selection, state: &mut BatchEval<'_>) -> Result<
         Expr::Binding { var, tuple_pos, .. } => match tuple_pos {
             BindingPos::Unresolved => {
                 use kyzo_model::program::expr::UnboundVariableError;
-                Err(UnboundVariableError(var.name.to_string(), var.span).into())
+                Err(UnboundVariableError(var.name().to_string(), var.span()).into())
             }
             BindingPos::Resolved(i) => {
                 if *i >= state.batch.width() {
                     use kyzo_model::program::expr::TupleTooShortError;
                     return Err(TupleTooShortError(
-                        var.name.to_string(),
+                        var.name().to_string(),
                         *i,
                         state.batch.width(),
-                        var.span,
+                        var.span(),
                     )
                     .into());
                 }

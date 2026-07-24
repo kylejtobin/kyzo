@@ -311,7 +311,7 @@ fn fit_u32_i64(n: i64) -> u32 {
 // ═════════════════════════════════════════════════════════════════════════
 
 fn sp() -> SourceSpan {
-    SourceSpan(0, 0)
+    SourceSpan::new(0, 0)
 }
 fn sym(name: &str) -> Symbol {
     Symbol::new(name, sp())

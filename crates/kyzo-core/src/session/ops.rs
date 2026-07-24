@@ -452,17 +452,17 @@ impl<T: WriteTx> SessionTx<T> {
         for col in cols {
             let pos = all_cols
                 .iter()
-                .position(|c| c.name == col.name)
+                .position(|c| c.name.as_str() == col.name().as_str())
                 .ok_or_else(|| {
                     IndexLifecycleError(format!(
                         "relation '{rel}' has no column '{}' to index",
-                        col.name
+                        col.name()
                     ))
                 })?;
             if mapper.contains(&pos) {
                 bail!(IndexLifecycleError(format!(
                     "column '{}' appears twice in the index specification",
-                    col.name
+                    col.name()
                 )));
             }
             mapper.push(pos);
@@ -709,7 +709,7 @@ impl<S: Storage> Engine<S> {
         let root = match rel {
             None => crate::store::merkle::state_root(&rtx, ceiling)?,
             Some(name) => {
-                let id = get_relation(&rtx, &name.name)?.id;
+                let id = get_relation(&rtx, &name.name())?.id;
                 crate::store::merkle::relation_root(&rtx, id, ceiling)?
             }
         };
@@ -722,7 +722,7 @@ impl<S: Storage> Engine<S> {
     /// `::indices` — list index names and kinds on a relation.
     pub(crate) fn sys_list_indices(&self, name: &Symbol) -> Result<NamedRows> {
         let tx = SessionTx::new_read(self.store.read_tx()?, ScriptOptions::new());
-        let handle = get_relation(&tx.store, &name.name)?;
+        let handle = get_relation(&tx.store, &name.name())?;
         let rows = handle
             .indices
             .iter()
@@ -753,7 +753,7 @@ impl<S: Storage> Engine<S> {
         name: &Symbol,
         cols: &[Symbol],
     ) -> Result<NamedRows> {
-        self.sys_write(|tx| tx.create_plain_index(&rel.name, &name.name, cols))
+        self.sys_write(|tx| tx.create_plain_index(&rel.name(), &name.name(), cols))
     }
 
     /// `::hnsw create`.
@@ -782,7 +782,7 @@ impl<S: Storage> Engine<S> {
 
     /// `::index drop`.
     pub(crate) fn sys_remove_index(&self, rel: &Symbol, idx: &Symbol) -> Result<NamedRows> {
-        self.sys_write(|tx| tx.remove_index(&rel.name, &idx.name))
+        self.sys_write(|tx| tx.remove_index(&rel.name(), &idx.name()))
     }
 }
 

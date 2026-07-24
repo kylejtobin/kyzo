@@ -565,7 +565,7 @@ fn adorn_fixed_rule_apply(
                     .collect();
                 for k in bindings.keys() {
                     ensure!(
-                        fields.contains(k.name.as_str()),
+                        fields.contains(k.name().as_str()),
                         NamedFieldNotFound(name.clone(), k.clone(), *span,)
                     );
                 }
@@ -982,7 +982,7 @@ fn magic_rewrite_ruleset(
 ) -> Result<()> {
     let rule_name = rule_head.as_plain_symbol().clone();
     let adornment: Adornment = rule_head.adornment().to_vec();
-    let head_span = rule_name.span;
+    let head_span = rule_name.span();
     let out_head = rule_head.to_magic_symbol();
 
     // Can only be true if the head is Magic and not all positions are free.
@@ -1177,14 +1177,14 @@ mod tests {
     // ── construction helpers ────────────────────────────────────────────
 
     fn sym(name: &str) -> Symbol {
-        Symbol::new(name, SourceSpan(0, 0))
+        Symbol::new(name, SourceSpan::new(0, 0))
     }
 
     fn rule_app(name: &str, args: &[&str]) -> NormalFormAtom {
         NormalFormAtom::Rule(NormalFormRuleApplyAtom {
             name: sym(name),
             args: args.iter().map(|a| sym(a)).collect(),
-            span: SourceSpan(0, 0),
+            span: SourceSpan::new(0, 0),
         })
     }
 
@@ -1193,7 +1193,7 @@ mod tests {
             name: sym(name),
             args: args.iter().map(|a| sym(a)).collect(),
             validity: None,
-            span: SourceSpan(0, 0),
+            span: SourceSpan::new(0, 0),
         })
     }
 
@@ -1202,10 +1202,10 @@ mod tests {
             binding: sym(binding),
             expr: Expr::Const {
                 val: DataValue::from(val),
-                span: SourceSpan(0, 0),
+                span: SourceSpan::new(0, 0),
             },
             one_many_unif: false,
-            span: SourceSpan(0, 0),
+            span: SourceSpan::new(0, 0),
         })
     }
 
@@ -1217,7 +1217,7 @@ mod tests {
                 tuple_pos: BindingPos::Unresolved,
             },
             one_many_unif: false,
-            span: SourceSpan(0, 0),
+            span: SourceSpan::new(0, 0),
         })
     }
 
@@ -1233,7 +1233,7 @@ mod tests {
         let mut stratum = NormalFormStratum::empty();
         for (name, rules) in defs {
             let key = if name == "?" {
-                Symbol::prog_entry(SourceSpan(0, 1))
+                Symbol::prog_entry(SourceSpan::new(0, 1))
             } else {
                 sym(name)
             };
@@ -1791,12 +1791,12 @@ mod tests {
                 name: sym("edges"),
                 bindings: bindings.iter().map(|(k, v)| (sym(k), sym(v))).collect(),
                 as_of: None,
-                span: SourceSpan(0, 0),
+                span: SourceSpan::new(0, 0),
             }],
             options: FixedRuleOptions::empty(),
             head: vec![],
             arity: 1,
-            span: SourceSpan(0, 0),
+            span: SourceSpan::new(0, 0),
             trivia: Trivia::empty(),
         };
 
@@ -1836,12 +1836,12 @@ mod tests {
                 name: sym("edges"),
                 bindings: vec![sym("x")],
                 as_of: Some(AsOf::current(ValidityTs::of_micros(0))),
-                span: SourceSpan(0, 0),
+                span: SourceSpan::new(0, 0),
             }],
             options: FixedRuleOptions::empty(),
             head: vec![],
             arity: 1,
-            span: SourceSpan(0, 0),
+            span: SourceSpan::new(0, 0),
             trivia: Trivia::empty(),
         };
 

@@ -76,7 +76,7 @@ fn to_engine_aggr(slot: &kyzo_oracle::HeadAggr) -> HeadAggrSlot {
 
 #[cfg(test)]
 fn sp() -> SourceSpan {
-    SourceSpan(0, 0)
+    SourceSpan::new(0, 0)
 }
 #[cfg(test)]
 fn sym(name: &str) -> Symbol {

@@ -1519,7 +1519,7 @@ impl<T: WriteTx> SessionTx<T> {
             if trigger_depth > 0 {
                 bail!(ReplaceInTrigger(meta.name.to_string()))
             }
-            if let Ok(old_handle) = self.get_relation(&meta.name.name) {
+            if let Ok(old_handle) = self.get_relation(&meta.name.name()) {
                 if !old_handle.has_no_index() {
                     bail!(ReplaceRelationWithIndices(old_handle.name.to_string()))
                 }
@@ -1562,13 +1562,13 @@ impl<T: WriteTx> SessionTx<T> {
                 }
                 // In-transaction destruction: catalog row and keyspace go
                 // together; an abort rolls both back (no deferred ranges).
-                self.destroy_relation(&meta.name.name)?;
+                self.destroy_relation(&meta.name.name())?;
             }
         }
         let mut relation_store = if op == RelationOp::Replace || op == RelationOp::Create {
             self.create_relation(meta.clone(), KeyspaceKind::Facts)?
         } else {
-            self.get_relation(&meta.name.name)?
+            self.get_relation(&meta.name.name())?
         };
         if let Some((old_put, old_retract)) = replaced_old_triggers {
             relation_store.put_triggers = old_put;
@@ -2213,13 +2213,13 @@ impl<T: WriteTx> SessionTx<T> {
                 target_collector.push((
                     CallbackOp::Rm,
                     NamedRows::try_new(
-                        k_bindings.into_iter().map(|k| k.name.to_string()).collect(),
+                        k_bindings.into_iter().map(|k| k.name().to_string()).collect(),
                         new_tuples,
                     )?,
                     NamedRows::try_new(
                         kv_bindings
                             .into_iter()
-                            .map(|k| k.name.to_string())
+                            .map(|k| k.name().to_string())
                             .collect(),
                         old_tuples,
                     )?,
@@ -2490,7 +2490,7 @@ impl<T: WriteTx> SessionTx<T> {
                 .or_default();
             let headers: Vec<String> = kv_bindings
                 .into_iter()
-                .map(|k| k.name.to_string())
+                .map(|k| k.name().to_string())
                 .collect();
             target_collector.push((
                 CallbackOp::Put,

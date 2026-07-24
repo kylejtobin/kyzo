@@ -102,6 +102,7 @@ mod rules;
 
 use std::collections::BTreeMap;
 use std::net::{Ipv6Addr, SocketAddr};
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::atomic::AtomicU32;
 use std::sync::mpsc::SyncSender;
@@ -120,20 +121,20 @@ use tower_http::auth::AsyncRequireAuthorizationLayer;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::{Any, CorsLayer};
 
-use kyzo::{Engine, FjallStorage, NamedRows};
+use kyzo::{Engine, FjallStorage, HostText, NamedRows};
 
-use crate::engine::{self, StorageArgs};
+use crate::engine::{self, EngineKind, StorageArgs};
 use auth::MyAuth;
 
 #[derive(Args, Debug)]
 pub(crate) struct ServerArgs {
     /// Storage engine: `fjall` (persistent, at `--path`) or `mem` (ephemeral).
-    #[clap(short, long, default_value = "mem")]
-    engine: String,
+    #[clap(short, long, default_value = "mem", value_enum)]
+    engine: EngineKind,
 
     /// Path to the directory to store the database (only used by `fjall`).
     #[clap(short, long, default_value = "kyzo.db")]
-    path: String,
+    path: PathBuf,
 
     #[clap(flatten)]
     storage: StorageArgs,
@@ -142,11 +143,11 @@ pub(crate) struct ServerArgs {
     /// The target engine/path must be empty (`kyzo::restore_storage`'s
     /// contract).
     #[clap(long)]
-    restore: Option<String>,
+    restore: Option<PathBuf>,
 
     /// Address to bind the service to.
     #[clap(short, long, default_value = "127.0.0.1")]
-    bind: String,
+    bind: HostText,
 
     /// Port to use.
     #[clap(short = 'P', long, default_value_t = 9070)]
@@ -155,7 +156,7 @@ pub(crate) struct ServerArgs {
     /// When set, the content of the named relation is used as a token
     /// table: a row `{token: <str>}` in it authorizes that token.
     #[clap(long)]
-    token_table: Option<String>,
+    token_table: Option<HostText>,
 
     /// Maximum request body size for `PUT /import` (the bulk relation-data
     /// endpoint), in mebibytes. Every other route keeps axum's own default
@@ -178,15 +179,16 @@ struct DbState {
 }
 
 pub(crate) async fn server_main(args: ServerArgs) -> miette::Result<()> {
-    let handle = match engine::open(&args.engine, &args.path, args.storage) {
+    let handle = match engine::open(args.engine, &args.path, args.storage) {
         Ok(h) => h,
         Err(err) => {
             error!("{err}");
             return Err(miette::miette!("cannot open database: {err}"));
         }
     };
+    let (db, storage, _lease) = handle.into_parts();
     if let Some(p) = &args.restore
-        && let Err(err) = kyzo::restore_storage(&handle.storage, p)
+        && let Err(err) = kyzo::restore_storage(&storage, p)
     {
         error!("{err}");
         return Err(miette::miette!(
@@ -194,24 +196,28 @@ pub(crate) async fn server_main(args: ServerArgs) -> miette::Result<()> {
         ));
     }
 
-    let skip_auth = args.bind == "127.0.0.1";
+    let skip_auth = args.bind.as_str() == "127.0.0.1";
 
     let conf_path = if skip_auth {
-        String::new()
+        HostText::new("")
     } else {
-        format!("{}.{}.kyzo_auth", args.path, args.engine)
+        HostText::new(format!(
+            "{}.{}.kyzo_auth",
+            args.path.display(),
+            args.engine.as_str()
+        ))
     };
     let auth_guard = if skip_auth {
-        String::new()
+        HostText::new("")
     } else {
-        match tokio::fs::read_to_string(&conf_path).await {
-            Ok(s) => s.trim().to_string(),
+        match tokio::fs::read_to_string(conf_path.as_str()).await {
+            Ok(s) => HostText::new(s.trim()),
             Err(_) => {
                 let s = Alphanumeric.sample_string(&mut rand::rng(), 64);
-                tokio::fs::write(&conf_path, &s).await.map_err(|err| {
+                tokio::fs::write(conf_path.as_str(), &s).await.map_err(|err| {
                     miette::miette!("failed to write auth token file {conf_path}: {err}")
                 })?;
-                s
+                HostText::new(s)
             }
         }
     };
@@ -219,12 +225,12 @@ pub(crate) async fn server_main(args: ServerArgs) -> miette::Result<()> {
     let auth_obj = MyAuth::new(
         skip_auth,
         auth_guard,
-        args.token_table.map(|t| Arc::new((t, handle.db.clone()))),
+        args.token_table.map(|t| Arc::new((t, db.clone()))),
     );
 
     let state = DbState {
-        db: handle.db,
-        storage: handle.storage,
+        db,
+        storage,
         rule_senders: Default::default(),
         rule_counter: Default::default(),
     };
@@ -272,7 +278,7 @@ pub(crate) async fn server_main(args: ServerArgs) -> miette::Result<()> {
         .layer(cors)
         .layer(CompressionLayer::new());
 
-    let addr = if Ipv6Addr::from_str(&args.bind).is_ok() {
+    let addr = if Ipv6Addr::from_str(args.bind.as_str()).is_ok() {
         SocketAddr::from_str(&format!("[{}]:{}", args.bind, args.port)).map_err(|err| {
             miette::miette!(
                 "invalid bind address '[{}]:{}': {err}",
@@ -286,14 +292,15 @@ pub(crate) async fn server_main(args: ServerArgs) -> miette::Result<()> {
         })?
     };
 
-    if args.bind != "127.0.0.1" {
+    if args.bind.as_str() != "127.0.0.1" {
         warn!("{}", include_str!("../security.txt"));
         info!("The auth token is in the file: {conf_path}");
     }
 
     info!(
         "Starting KyzoDB ({}-backed) API at http://{}",
-        args.engine, addr
+        args.engine.as_str(),
+        addr
     );
 
     let listener = TcpListener::bind(&addr)

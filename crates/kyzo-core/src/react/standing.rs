@@ -185,7 +185,7 @@ impl<S: Storage> StandingQuery<S> {
 
         let mut subscriptions = BTreeMap::new();
         for rel in &edb {
-            let (id, receiver) = db.register_callback(rel.name.as_str())?;
+            let (id, receiver) = db.register_callback(rel.name().as_str())?;
             // `key_arity` is filled in below, once the same relation's
             // handle is fetched to snapshot its rows — a placeholder here
             // would just be the same lookup done twice.
@@ -203,7 +203,7 @@ impl<S: Storage> StandingQuery<S> {
         {
             let tx = db.store.read_tx()?;
             for rel in &edb {
-                let handle = get_relation(&tx, rel.name.as_str())?;
+                let handle = get_relation(&tx, rel.name().as_str())?;
                 let key_arity = handle.metadata.keys.len();
                 let rows: BTreeSet<Tuple> = handle.scan_all(&tx).collect::<Result<_>>()?;
                 ensure!(

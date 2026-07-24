@@ -128,10 +128,10 @@ pub(crate) fn build_expr(pair: Pair<'_>, param_pool: &BTreeMap<String, DataValue
 
 fn build_expr_infix(lhs: Result<Expr>, op: Pair<'_>, rhs: Result<Expr>) -> Result<Expr> {
     let args = [lhs?, rhs?];
-    let start = args[0].span().0;
-    let end = args[1].span().0 + args[1].span().1;
+    let start = args[0].span().offset();
+    let end = args[1].span().offset() + args[1].span().length();
     let length = end - start;
-    let span = SourceSpan(start, length);
+    let span = SourceSpan::new(start, length);
     Ok(match op.as_rule() {
         Rule::op_or => Expr::Lazy {
             op: LazyOp::Or,

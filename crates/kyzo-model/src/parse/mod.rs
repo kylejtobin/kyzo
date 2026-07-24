@@ -177,8 +177,8 @@ pub(crate) struct UnexpectedRule(#[label] pub(crate) SourceSpan);
 /// Map a pest parse failure into the spanned [`ParseError`].
 fn pest_to_parse_error(err: pest::error::Error<Rule>) -> ParseError {
     let span = match err.location {
-        InputLocation::Pos(p) => SourceSpan(p, 0),
-        InputLocation::Span((start, end)) => SourceSpan(start, end - start),
+        InputLocation::Pos(p) => SourceSpan::new(p, 0),
+        InputLocation::Span((start, end)) => SourceSpan::new(start, end - start),
     };
     ParseError { span }
 }
@@ -291,7 +291,7 @@ impl ExtractSpan for Pair<'_> {
         let span = self.as_span();
         let start = span.start();
         let end = span.end();
-        SourceSpan(start, end - start)
+        SourceSpan::new(start, end - start)
     }
 }
 

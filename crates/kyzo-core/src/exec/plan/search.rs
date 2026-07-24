@@ -417,11 +417,11 @@ pub(crate) fn resolve_search(
     cancel: crate::rules::contract::CancelFlag,
 ) -> Result<SearchAtom> {
     let span = inp.span;
-    let base = handle(&inp.relation.name)?;
+    let base = handle(&inp.relation.name())?;
     let idx_ref = base
         .indices
         .iter()
-        .find(|r| r.name == inp.index.name)
+        .find(|r| r.name.as_str() == inp.index.name().as_str())
         .ok_or_else(|| {
             SearchIndexNotFound(
                 Symbol::new(base.name.clone(), span),

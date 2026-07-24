@@ -817,7 +817,7 @@ mod tests {
     /// The compiled extractor: project the text column (position 1).
     fn extractor() -> Expr {
         Expr::Binding {
-            var: Symbol::new("v", SourceSpan(0, 0)),
+            var: Symbol::new("v", SourceSpan::new(0, 0)),
             tuple_pos: BindingPos::Resolved(1),
         }
     }
@@ -1088,7 +1088,7 @@ mod tests {
         let a = analyzer()?;
         // Extractor projects the INT key column (position 0): not a string.
         let bad_extractor = Expr::Binding {
-            var: Symbol::new("k", SourceSpan(0, 0)),
+            var: Symbol::new("k", SourceSpan::new(0, 0)),
             tuple_pos: BindingPos::Resolved(0),
         };
         let row = vec![DataValue::from(1), DataValue::from("text")];
@@ -1176,7 +1176,7 @@ mod tests {
             &mut tx,
             &row,
             kyzo_model::value::ValidityTs::of_micros(0),
-            SourceSpan(0, 0),
+            SourceSpan::new(0, 0),
         )?;
         fts_put(&mut tx, &row, &ex, &a, &base, &idx)?;
         tx.commit().map_err(|e| miette!("{e}"))?;
@@ -1245,7 +1245,7 @@ mod tests {
                 &mut tx,
                 &row,
                 kyzo_model::value::ValidityTs::of_micros(0),
-                SourceSpan(0, 0),
+                SourceSpan::new(0, 0),
             )?;
             fts_put(&mut tx, &row, &ex, &a, &base, &idx)?;
         }
@@ -1287,7 +1287,7 @@ mod tests {
         // Always-true filter: the constant `true`.
         let filter = Expr::Const {
             val: DataValue::from(true),
-            span: SourceSpan(0, 0),
+            span: SourceSpan::new(0, 0),
         };
         let p = params(0, FtsScoreKind::Tf);
         let with_filter = fts_rows!(

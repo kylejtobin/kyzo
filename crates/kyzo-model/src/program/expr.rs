@@ -345,7 +345,7 @@ impl Display for Expr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Expr::Binding { var, .. } => {
-                write!(f, "{}", var.name)
+                write!(f, "{}", var.name())
             }
             Expr::Const { val, .. } => {
                 write!(f, "{val}")
@@ -441,7 +441,7 @@ fn walk_expr_children(
 impl Expr {
     pub fn span(&self) -> SourceSpan {
         match self {
-            Expr::Binding { var, .. } => var.span,
+            Expr::Binding { var, .. } => var.span(),
             Expr::Const { span, .. }
             | Expr::Apply { span, .. }
             | Expr::Cond { span, .. }
@@ -516,7 +516,7 @@ impl Expr {
 
                 let found_idx = *binding_map
                     .get(var)
-                    .ok_or_else(|| BadBindingError(var.to_string(), var.span))?;
+                    .ok_or_else(|| BadBindingError(var.to_string(), var.span()))?;
                 *tuple_pos = BindingPos::Resolved(found_idx)
             }
             Expr::Const { .. } => {}
@@ -736,7 +736,7 @@ impl Expr {
                             #[diagnostic(help("A string argument is required"))]
                             struct StrRangeScanError(DataValue, #[label] SourceSpan);
 
-                            StrRangeScanError(val.clone(), symb.span)
+                            StrRangeScanError(val.clone(), symb.span())
                         })?;
                         let lower = ScanBound::Value(DataValue::from(s));
                         let mut upper = s.to_string();
@@ -785,7 +785,7 @@ impl Expr {
                     let mut collected = vec![];
                     for field in args.iter() {
                         match field {
-                            Expr::Binding { var, .. } => collected.push(var.name.clone()),
+                            Expr::Binding { var, .. } => collected.push(var.name().clone()),
                             Expr::Const { .. }
                             | Expr::Apply { .. }
                             | Expr::UnboundApply { .. }
@@ -802,7 +802,7 @@ impl Expr {
                     Ok(collected)
                 }
             }
-            Expr::Binding { var, .. } => Ok(vec![var.name.clone()]),
+            Expr::Binding { var, .. } => Ok(vec![var.name().clone()]),
             Expr::Const { .. }
             | Expr::UnboundApply { .. }
             | Expr::Cond { .. }

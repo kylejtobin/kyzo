@@ -1344,7 +1344,7 @@ fn mid_epoch_in_flight_ceiling_refuses_before_barrier() {
             .map(|s| s.as_plain_symbol().name.as_str()),
         Some("?")
     );
-    assert_eq!(refusal.span, Some(SourceSpan(0, 0)));
+    assert_eq!(refusal.span, Some(SourceSpan::new(0, 0)));
     // Spend crossed the ceiling but only within one stride of slack.
     assert!(refusal.spent > CEILING, "spent {} > ceiling", refusal.spent);
     assert!(

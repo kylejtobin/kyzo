@@ -3923,7 +3923,7 @@ mod tests {
                 &mut tx,
                 r.as_slice(),
                 kyzo_model::value::ValidityTs::of_micros(0),
-                SourceSpan(0, 0),
+                SourceSpan::new(0, 0),
             )?;
             assert!(hnsw_put(&mut tx, &m, &base, &idx, None, r.as_slice())?);
         }
@@ -4029,7 +4029,7 @@ mod tests {
                 &mut tx,
                 r.as_slice(),
                 kyzo_model::value::ValidityTs::of_micros(0),
-                SourceSpan(0, 0),
+                SourceSpan::new(0, 0),
             )?;
             assert!(hnsw_put(&mut tx, &m, &base, &idx, None, r.as_slice())?);
         }
@@ -4181,7 +4181,7 @@ mod tests {
                 &mut tx,
                 r.as_slice(),
                 kyzo_model::value::ValidityTs::of_micros(0),
-                SourceSpan(0, 0),
+                SourceSpan::new(0, 0),
             )?;
             assert!(hnsw_put(&mut tx, &m, &base, &idx, None, r.as_slice())?);
         }
@@ -4440,7 +4440,7 @@ mod tests {
             &mut tx,
             zrow.as_slice(),
             kyzo_model::value::ValidityTs::of_micros(0),
-            SourceSpan(0, 0),
+            SourceSpan::new(0, 0),
         )?;
         assert!(hnsw_put(
             &mut tx,
@@ -4550,7 +4550,7 @@ mod tests {
             &mut tx,
             moved.as_slice(),
             kyzo_model::value::ValidityTs::of_micros(0),
-            SourceSpan(0, 0),
+            SourceSpan::new(0, 0),
         )?;
         assert!(hnsw_put(&mut tx, &m, &base, &idx, None, moved.as_slice())?);
         tx.commit().map_err(|e| miette!("{e}"))?;
@@ -4823,7 +4823,7 @@ mod tests {
                 &mut tx,
                 r.as_slice(),
                 kyzo_model::value::ValidityTs::of_micros(0),
-                SourceSpan(0, 0),
+                SourceSpan::new(0, 0),
             )?;
         }
         let refs: Vec<&[DataValue]> = rows.iter().map(|r| r.as_slice()).collect();
@@ -5047,7 +5047,7 @@ mod tests {
                 &mut tx,
                 r.as_slice(),
                 kyzo_model::value::ValidityTs::of_micros(0),
-                SourceSpan(0, 0),
+                SourceSpan::new(0, 0),
             )?;
             if !hnsw_put(&mut tx, &m, &base, &idx, None, r.as_slice())? {
                 bail!("hnsw_put refused a finite L2 vector");

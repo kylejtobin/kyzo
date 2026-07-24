@@ -407,7 +407,7 @@ mod tests {
                 &mut tx,
                 &row,
                 kyzo_model::value::ValidityTs::of_micros(0),
-                SourceSpan(0, 0),
+                SourceSpan::new(0, 0),
             )?;
         }
         tx.commit().map_err(|e| miette!("{e}"))?;
@@ -799,7 +799,7 @@ mod tests {
             &mut tx,
             &row,
             kyzo_model::value::ValidityTs::of_micros(0),
-            SourceSpan(0, 0),
+            SourceSpan::new(0, 0),
         )?;
         tx.commit().map_err(|e| miette!("{e}"))?;
 
@@ -830,7 +830,7 @@ mod tests {
             &mut tx,
             &bad,
             kyzo_model::value::ValidityTs::of_micros(1),
-            SourceSpan(0, 0),
+            SourceSpan::new(0, 0),
         )?;
         tx.commit().map_err(|e| miette!("{e}"))?;
 

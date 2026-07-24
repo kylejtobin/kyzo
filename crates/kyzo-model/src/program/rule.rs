@@ -323,8 +323,8 @@ impl FixedRuleOptions {
     ) -> std::result::Result<(), UnknownFixedRuleOption> {
         if resolve_fixed_rule_option(&name).is_none() {
             return Err(UnknownFixedRuleOption {
-                name: name.name.to_string(),
-                span: name.span,
+                name: name.name().to_string(),
+                span: name.span(),
             });
         }
         self.entries.insert(name, value);
@@ -836,8 +836,8 @@ impl SearchModalityOptions {
     ) -> std::result::Result<(), UnknownSearchModalityOption> {
         if resolve_search_modality_option(&name).is_none() {
             return Err(UnknownSearchModalityOption {
-                name: name.name.to_string(),
-                span: name.span,
+                name: name.name().to_string(),
+                span: name.span(),
             });
         }
         self.entries.insert(name, value);
@@ -1153,11 +1153,11 @@ pub fn collect_trivia_anchors<'a>(
     match ruleset {
         InputInlineRulesOrFixed::Rules { rules } => {
             for rule in rules {
-                anchors.push((rule.span.0, &mut rule.trivia));
+                anchors.push((rule.span.offset(), &mut rule.trivia));
             }
         }
         InputInlineRulesOrFixed::Fixed { fixed } => {
-            anchors.push((fixed.span.0, &mut fixed.trivia));
+            anchors.push((fixed.span.offset(), &mut fixed.trivia));
         }
     }
 }
@@ -1190,14 +1190,14 @@ impl InputProgram {
             if let InputInlineRulesOrFixed::Rules { rules } = ruleset
                 && rules.is_empty()
             {
-                bail!(EmptyRuleSet(name.to_string(), name.span));
+                bail!(EmptyRuleSet(name.to_string(), name.span()));
             }
         }
         let (entry_name, entry) = prog
             .remove_entry(&Symbol::prog_entry(SourceSpan::empty()))
             .ok_or_else(|| {
                 let span = match prog.keys().next() {
-                    Some(s) => s.span,
+                    Some(s) => s.span(),
                     None => {
                         // Empty program — span-less refuse.
                         let empty_program_span = SourceSpan::empty();
@@ -1234,10 +1234,10 @@ impl InputProgram {
         anchors.sort_by_key(|(start, _)| *start);
 
         for comment in comments {
-            if shares_a_line_with_preceding_content(src, comment.span.0) {
+            if shares_a_line_with_preceding_content(src, comment.span.offset()) {
                 if let Some(idx) = anchors
                     .iter()
-                    .rposition(|(start, _)| *start <= comment.span.0)
+                    .rposition(|(start, _)| *start <= comment.span.offset())
                 {
                     anchors[idx].1.trailing.push(comment);
                     continue;
@@ -1247,7 +1247,7 @@ impl InputProgram {
             }
             match anchors
                 .iter()
-                .position(|(start, _)| *start > comment.span.0)
+                .position(|(start, _)| *start > comment.span.offset())
             {
                 Some(idx) => anchors[idx].1.leading.push(comment),
                 None => self.trailing_trivia.push(comment),
@@ -1290,7 +1290,7 @@ impl InputProgram {
     pub fn needs_write_lock(&self) -> Option<SmartString<LazyCompact>> {
         if let Some((h, _, _, _)) = &self.out_opts.store_relation {
             if !h.name.is_temp_relation_name() {
-                Some(h.name.name.clone())
+                Some(h.name.name().clone())
             } else {
                 None
             }
@@ -1317,7 +1317,7 @@ impl InputProgram {
             Err(_) => {
                 let arity = self.get_entry_arity()?;
                 Ok((0..arity)
-                    .map(|i| Symbol::new(format!("_{i}"), self.entry_name.span))
+                    .map(|i| Symbol::new(format!("_{i}"), self.entry_name.span()))
                     .collect())
             }
         }
@@ -1334,7 +1334,7 @@ impl InputProgram {
                 let mut ret = Vec::with_capacity(last_rule.head.len());
                 for (symb, aggr) in last_rule.head.iter().zip(last_rule.aggr.iter()) {
                     if let Some((aggr, _)) = aggr.as_aggregated() {
-                        ret.push(Symbol::new(format!("{}({})", aggr.name, symb), symb.span))
+                        ret.push(Symbol::new(format!("{}({})", aggr.name, symb), symb.span()))
                     } else {
                         ret.push(symb.clone())
                     }
@@ -1346,7 +1346,7 @@ impl InputProgram {
                     bail!(EntryHeadNotExplicitlyDefined(
                         match self.entry.first_span() {
                             Some(s) => s,
-                            None => self.entry_name.span,
+                            None => self.entry_name.span(),
                         }
                     ))
                 } else {

@@ -65,7 +65,7 @@ where
             tx,
             &row,
             kyzo_model::value::ValidityTs::of_micros(0),
-            SourceSpan(0, 0),
+            SourceSpan::new(0, 0),
         )?;
         index_put(tx, &row, base, idx)?;
     }

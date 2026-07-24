@@ -33,7 +33,7 @@ use log::{error, info};
 use miette::miette;
 use serde_json::{Value as JsonValue, json};
 
-use kyzo::{Engine, FjallStorage, NamedRows, SimpleFixedRule};
+use kyzo::{Engine, FjallStorage, HostText, NamedRows, SimpleFixedRule};
 
 use super::DbState;
 
@@ -189,14 +189,14 @@ pub(super) async fn register_rule(
     }
 
     struct Guard {
-        name: String,
+        name: HostText,
         db: Engine<FjallStorage>,
     }
 
     impl Drop for Guard {
         fn drop(&mut self) {
             info!("dropping rules SSE {}", self.name);
-            self.db.unregister_fixed_rule(&self.name);
+            self.db.unregister_fixed_rule(self.name.as_str());
         }
     }
 
@@ -209,7 +209,10 @@ pub(super) async fn register_rule(
             }
         } else {
             info!("starting rule SSE {}", name);
-            let _guard = Guard {db: st.db, name};
+            let _guard = Guard {
+                db: st.db,
+                name: HostText::new(name),
+            };
             while let Some((id, inputs, options)) = down_receiver.recv().await {
                 let item = json!({"type": "request", "id": id, "inputs": inputs, "options": options});
                 match Event::default().json_data(item) {

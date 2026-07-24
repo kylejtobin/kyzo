@@ -546,7 +546,7 @@ pub enum TranslationRejection {
 /// differently-adorned versions of the same rule name the DISTINCT
 /// relations they are.
 fn magic_symbol_to_symbol(m: &MagicSymbol) -> Symbol {
-    Symbol::new(format!("{m:?}"), m.as_plain_symbol().span)
+    Symbol::new(format!("{m:?}"), m.as_plain_symbol().span())
 }
 
 /// Fold every constant-valued `Unification` atom in `body` into a

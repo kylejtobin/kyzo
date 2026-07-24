@@ -21,12 +21,14 @@ use serde::de::{MapAccess, Visitor};
 use serde_json::Value as JsonValue;
 use tokio::task::spawn_blocking;
 
+use kyzo::HostText;
+
 use super::{DbState, internal_error, wrap_json};
 
 /// POST body: `script` required; `params` absent means JSON null (same as
 /// the former serde Default for [`JsonValue`]), never a silent object invent.
 pub(super) struct QueryPayload {
-    script: String,
+    script: HostText,
     params: JsonValue,
 }
 
@@ -45,7 +47,10 @@ impl<'de> Deserialize<'de> for QueryPayload {
                     "script",
                     JsonValue::Null,
                 )?;
-                Ok(QueryPayload { script, params })
+                Ok(QueryPayload {
+                    script: HostText::new(script),
+                    params,
+                })
             }
         }
         deserializer.deserialize_map(V)
@@ -57,7 +62,8 @@ pub(super) async fn text_query(
     Json(payload): Json<QueryPayload>,
 ) -> (StatusCode, Json<JsonValue>) {
     let result =
-        spawn_blocking(move || st.db.run_script_json(&payload.script, &payload.params)).await;
+        spawn_blocking(move || st.db.run_script_json(payload.script.as_str(), &payload.params))
+            .await;
     match result {
         Ok(envelope) => wrap_json(envelope),
         Err(err) => internal_error(err),

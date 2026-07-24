@@ -584,7 +584,7 @@ impl InterruptTicker<'_> {
                         spent: u64::MAX,
                         ceiling,
                         rule: Some(self.rule.clone()),
-                        span: Some(symb.span),
+                        span: Some(symb.span()),
                     }
                     .into());
                 };
@@ -595,7 +595,7 @@ impl InterruptTicker<'_> {
                         spent,
                         ceiling,
                         rule: Some(self.rule.clone()),
-                        span: Some(symb.span),
+                        span: Some(symb.span()),
                     }
                     .into());
                 }

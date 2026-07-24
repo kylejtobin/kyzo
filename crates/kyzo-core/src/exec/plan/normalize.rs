@@ -252,7 +252,7 @@ pub(crate) fn convert_named_field_relation(
     schema_of: &SchemaLookup<'_>,
 ) -> Result<InputRelationApplyAtom> {
     use crate::exec::plan::magic::NamedFieldNotFound;
-    let metadata = schema_of(&name.name)?;
+    let metadata = schema_of(&name.name())?;
     let fields: std::collections::BTreeSet<_> = metadata
         .keys
         .iter()
@@ -260,7 +260,7 @@ pub(crate) fn convert_named_field_relation(
         .map(|col| &col.name)
         .collect();
     for k in args.keys() {
-        if !fields.contains(&k.name) {
+        if !fields.contains(&k.name()) {
             bail!(NamedFieldNotFound(name.clone(), k.clone(), span));
         }
     }
@@ -301,11 +301,11 @@ pub(crate) fn normalize_args(
                     var.kind(),
                     SymbolKind::Ignored | SymbolKind::GeneratedIgnored
                 ) {
-                    out_args.push(symb_gen.next_ignored(var.span));
+                    out_args.push(symb_gen.next_ignored(var.span()));
                 } else if seen_variables.insert(var.clone()) {
                     out_args.push(var);
                 } else {
-                    let dup = symb_gen.next(var.span);
+                    let dup = symb_gen.next(var.span());
                     unifs.push(NormalFormAtom::Unification(Unification {
                         binding: dup.clone(),
                         expr: Expr::Binding {
@@ -313,7 +313,7 @@ pub(crate) fn normalize_args(
                             tuple_pos: BindingPos::Unresolved,
                         },
                         one_many_unif: false,
-                        span: dup.span,
+                        span: dup.span(),
                     }));
                     out_args.push(dup);
                 }

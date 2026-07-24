@@ -659,7 +659,7 @@ impl RelationHandle {
         keyspace_kind: KeyspaceKind,
     ) -> Self {
         RelationHandle {
-            name: input.name.name,
+            name: input.name.name().clone(),
             id,
             metadata: input.metadata,
             put_triggers: vec![],
@@ -1415,7 +1415,7 @@ pub fn create_relation(
     if input.name.is_temp_relation_name() {
         bail!(TempRelationNotRoutable(input.name.to_string()));
     }
-    let row_key = SystemKey::Relation(&input.name.name).encode();
+    let row_key = SystemKey::Relation(&input.name.name()).encode();
     if tx.exists(&row_key)? {
         bail!(RelNameConflictError(input.name.to_string()));
     }
@@ -1536,9 +1536,9 @@ pub(crate) fn rename_relation(tx: &mut impl WriteTx, old: &Symbol, new: &Symbol)
     if old.is_temp_relation_name() || new.is_temp_relation_name() {
         bail!(TempRelationNotRoutable(format!("{old} -> {new}")));
     }
-    let new_row_key = SystemKey::Relation(&new.name).encode();
+    let new_row_key = SystemKey::Relation(&new.name()).encode();
     if tx.exists(&new_row_key)? {
-        bail!(RelNameConflictError(new.name.to_string()));
+        bail!(RelNameConflictError(new.name().to_string()));
     }
     let mut rel = get_relation(tx, old)?;
     if !rel.has_no_index() {
@@ -1558,8 +1558,8 @@ pub(crate) fn rename_relation(tx: &mut impl WriteTx, old: &Symbol, new: &Symbol)
             rel.access_level
         ));
     }
-    rel.name = new.name.clone();
-    tx.del(&SystemKey::Relation(&old.name).encode())?;
+    rel.name = new.name().clone();
+    tx.del(&SystemKey::Relation(&old.name()).encode())?;
     tx.put(&new_row_key, &rel.encode()?)
 }
 
@@ -1591,7 +1591,7 @@ impl<S: Storage> Engine<S> {
     /// `::columns` — list key/non-key columns of a relation.
     pub(crate) fn sys_list_columns(&self, name: &Symbol) -> Result<NamedRows> {
         let tx = SessionTx::new_read(self.store.read_tx()?, ScriptOptions::new());
-        let handle = get_relation(&tx.store, &name.name)?;
+        let handle = get_relation(&tx.store, &name.name())?;
         let mut rows = vec![];
         for col in handle
             .metadata
@@ -1624,7 +1624,7 @@ impl<S: Storage> Engine<S> {
     /// `::show_triggers` — put/rm/replace trigger sources on a relation.
     pub(crate) fn sys_show_trigger(&self, name: &Symbol) -> Result<NamedRows> {
         let tx = SessionTx::new_read(self.store.read_tx()?, ScriptOptions::new());
-        let handle = get_relation(&tx.store, &name.name)?;
+        let handle = get_relation(&tx.store, &name.name())?;
         let mut rows = vec![];
         for (kind, src) in handle
             .put_triggers
@@ -1648,7 +1648,7 @@ impl<S: Storage> Engine<S> {
     pub(crate) fn sys_remove_relation(&self, names: Vec<Symbol>) -> Result<NamedRows> {
         self.sys_write(|tx| {
             for name in &names {
-                tx.destroy_relation(&name.name)?;
+                tx.destroy_relation(&name.name())?;
             }
             Ok(status_ok())
         })
@@ -1667,7 +1667,7 @@ impl<S: Storage> Engine<S> {
     /// `::describe` — set a relation's description.
     pub(crate) fn sys_describe_relation(&self, name: &Symbol, desc: &str) -> Result<NamedRows> {
         self.sys_write(|tx| {
-            describe_relation(&mut tx.store, &name.name, desc)?;
+            describe_relation(&mut tx.store, &name.name(), desc)?;
             Ok(status_ok())
         })
     }
@@ -1695,7 +1695,7 @@ impl<S: Storage> Engine<S> {
         let level = map_access_level(level);
         self.sys_write(move |tx| {
             for name in &names {
-                set_access_level(&mut tx.store, &name.name, level)?;
+                set_access_level(&mut tx.store, &name.name(), level)?;
             }
             Ok(status_ok())
         })
@@ -1803,7 +1803,7 @@ mod tests {
         );
 
         // Write and read a row through the handle.
-        let span = SourceSpan(0, 0);
+        let span = SourceSpan::new(0, 0);
         let row: Tuple = Tuple::from_vec(vec![DataValue::from(1), DataValue::from("one")]);
         let mut tx = db.write_tx()?;
         a.put_fact(&mut tx, row.as_slice(), ValidityTs::of_micros(0), span)?;
@@ -1900,7 +1900,7 @@ mod tests {
         let db = new_fjall_storage(dir.path())?;
         let mut tx = db.write_tx()?;
         let rel = create_relation(&mut tx, simple_input("fleeting"), KeyspaceKind::Facts)?;
-        let span = SourceSpan(0, 0);
+        let span = SourceSpan::new(0, 0);
         let row = vec![DataValue::from(9), DataValue::from("gone")];
         rel.put_fact(&mut tx, row.as_slice(), ValidityTs::of_micros(0), span)?;
         destroy_relation(&mut tx, "fleeting")?;
@@ -2004,7 +2004,7 @@ mod tests {
         // ReadOnly < Protected: trigger changes refused.
         let err = set_relation_triggers(
             &mut tx,
-            &Symbol::new("guarded", SourceSpan(0, 0)),
+            &Symbol::new("guarded", SourceSpan::new(0, 0)),
             &[],
             &[],
             &[],
@@ -2014,8 +2014,8 @@ mod tests {
         // Renaming refused too.
         let err = rename_relation(
             &mut tx,
-            &Symbol::new("guarded", SourceSpan(0, 0)),
-            &Symbol::new("freed", SourceSpan(0, 0)),
+            &Symbol::new("guarded", SourceSpan::new(0, 0)),
+            &Symbol::new("freed", SourceSpan::new(0, 0)),
         )
         .unwrap_err();
         assert!(err.downcast_ref::<InsufficientAccessLevel>().is_some());
@@ -2082,13 +2082,13 @@ mod tests {
         let db = new_fjall_storage(dir.path())?;
         let mut tx = db.write_tx()?;
         let rel = create_relation(&mut tx, simple_input("before"), KeyspaceKind::Facts)?;
-        let span = SourceSpan(0, 0);
+        let span = SourceSpan::new(0, 0);
         let row: Tuple = Tuple::from_vec(vec![DataValue::from(5), DataValue::from("five")]);
         rel.put_fact(&mut tx, row.as_slice(), ValidityTs::of_micros(0), span)?;
         rename_relation(
             &mut tx,
-            &Symbol::new("before", SourceSpan(0, 0)),
-            &Symbol::new("after", SourceSpan(0, 0)),
+            &Symbol::new("before", SourceSpan::new(0, 0)),
+            &Symbol::new("after", SourceSpan::new(0, 0)),
         )?;
         tx.commit()?;
 
@@ -2116,8 +2116,8 @@ mod tests {
         let vts_of = |ts: i64| ValidityTs::of_micros(ts);
         // k=1 asserted at valid t=10, retracted at valid t=20, through
         // the handle's own fact writers.
-        rel.put_fact(&mut tx, &[DataValue::from(1)], vts_of(10), SourceSpan(0, 0))?;
-        rel.retract_fact(&mut tx, &[DataValue::from(1)], vts_of(20), SourceSpan(0, 0))?;
+        rel.put_fact(&mut tx, &[DataValue::from(1)], vts_of(10), SourceSpan::new(0, 0))?;
+        rel.retract_fact(&mut tx, &[DataValue::from(1)], vts_of(20), SourceSpan::new(0, 0))?;
         tx.commit()?;
 
         let rtx = db.read_tx()?;
@@ -2194,7 +2194,7 @@ mod tests {
         let mut tx = db.write_tx()?;
         set_relation_triggers(
             &mut tx,
-            &Symbol::new("t", SourceSpan(0, 0)),
+            &Symbol::new("t", SourceSpan::new(0, 0)),
             &["this ][ is not valid kyzoscript".to_string()],
             &[],
             &[],
@@ -2215,7 +2215,7 @@ mod tests {
         let mut tx = db.write_tx()?;
         set_relation_triggers(
             &mut tx,
-            &Symbol::new("t", SourceSpan(0, 0)),
+            &Symbol::new("t", SourceSpan::new(0, 0)),
             &["?[k, v] := *t[k, v]".to_string()],
             &[],
             &[],
@@ -2321,7 +2321,7 @@ mod tests {
             &mut tx,
             &[DataValue::from(1), DataValue::from("retro")],
             ValidityTs::of_micros(150),
-            SourceSpan(0, 0),
+            SourceSpan::new(0, 0),
         )?;
         tx.commit()?;
         let now = crate::session::current_validity()?.raw();

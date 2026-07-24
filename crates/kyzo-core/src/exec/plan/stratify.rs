@@ -239,7 +239,7 @@ fn convert_normal_form_program_to_graph(
                                     if poisoned {
                                         poison_spans
                                             .entry((k, found_key))
-                                            .or_insert(found_key.span);
+                                            .or_insert(found_key.span());
                                     }
                                     e.insert(poisoned);
                                 }
@@ -263,7 +263,7 @@ fn convert_normal_form_program_to_graph(
                                     if new_val && !old {
                                         poison_spans
                                             .entry((k, found_key))
-                                            .or_insert(found_key.span);
+                                            .or_insert(found_key.span());
                                     }
                                     e.insert(old || new_val);
                                 }
@@ -279,7 +279,7 @@ fn convert_normal_form_program_to_graph(
                     match rel {
                         FixedRuleArg::InMem { name, .. } => {
                             ret.insert(name, true);
-                            poison_spans.entry((k, name)).or_insert(name.span);
+                            poison_spans.entry((k, name)).or_insert(name.span());
                         }
                         FixedRuleArg::Stored { .. } | FixedRuleArg::NamedStored { .. } => {}
                     }
@@ -321,7 +321,7 @@ fn verify_no_cycle(
                             scc: scc.iter().map(|s| (*s).clone()).collect(),
                             span: match poison_spans.get(&(*k, *v)).copied() {
                                 Some(s) => s,
-                                None => v.span,
+                                None => v.span(),
                             },
                         }
                     );
@@ -535,7 +535,7 @@ mod tests {
     use kyzo_model::program::symbol::SymbolKind;
 
     fn sym(name: &str) -> Symbol {
-        Symbol::new(name, SourceSpan(0, 0))
+        Symbol::new(name, SourceSpan::new(0, 0))
     }
 
     /// A positive read of rule `name` in a body.
@@ -544,7 +544,7 @@ mod tests {
             inner: InputRuleApplyAtom {
                 name: sym(name),
                 args: vec![],
-                span: SourceSpan(0, 0),
+                span: SourceSpan::new(0, 0),
             },
         }
     }
@@ -553,7 +553,7 @@ mod tests {
     fn neg_dep(name: &str) -> InputAtom {
         InputAtom::Negation {
             inner: Box::new(dep(name)),
-            span: SourceSpan(0, 0),
+            span: SourceSpan::new(0, 0),
         }
     }
 
@@ -657,7 +657,7 @@ mod tests {
                 head: head_syms,
                 aggr,
                 body,
-                span: SourceSpan(0, 0),
+                span: SourceSpan::new(0, 0),
                 trivia: Trivia::empty(),
             };
             match self
@@ -684,13 +684,13 @@ mod tests {
                     .map(|name| FixedRuleArg::InMem {
                         name: sym(name),
                         bindings: vec![],
-                        span: SourceSpan(0, 0),
+                        span: SourceSpan::new(0, 0),
                     })
                     .collect(),
                 options: FixedRuleOptions::empty(),
                 head: vec![],
                 arity: 1,
-                span: SourceSpan(0, 0),
+                span: SourceSpan::new(0, 0),
                 trivia: Trivia::empty(),
             };
             let prev = self
@@ -957,7 +957,7 @@ mod tests {
     /// the forbidden cycle, so the diagnostic can point at it.
     #[test]
     fn the_refusal_points_at_the_offending_dependency() -> Result<()> {
-        let offending = SourceSpan(42, 7);
+        let offending = SourceSpan::new(42, 7);
         let err = Prog::empty()
             .rule(
                 "p",
@@ -1002,8 +1002,8 @@ mod tests {
     /// positive read whose symbol happens to hold the map key.
     #[test]
     fn the_refusal_points_at_the_poisoning_atom_not_the_first_read() -> Result<()> {
-        let positive = SourceSpan(10, 1);
-        let poisoning = SourceSpan(42, 7);
+        let positive = SourceSpan::new(10, 1);
+        let poisoning = SourceSpan::new(42, 7);
         let dep_at = |name: &str, span: SourceSpan| InputAtom::Rule {
             inner: InputRuleApplyAtom {
                 name: Symbol::new(name, span),

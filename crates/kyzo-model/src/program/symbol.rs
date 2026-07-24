@@ -75,8 +75,8 @@ pub enum SymbolKind {
 /// [`SourceSpan::empty`] at this boundary — no serde(default)/skip costume.
 #[derive(Clone)]
 pub struct Symbol {
-    pub name: SmartString<LazyCompact>,
-    pub span: SourceSpan,
+    name: SmartString<LazyCompact>,
+    span: SourceSpan,
 }
 
 impl Serialize for Symbol {
@@ -108,6 +108,19 @@ impl Symbol {
             name: name.into(),
             span,
         }
+    }
+
+    pub fn name(&self) -> &SmartString<LazyCompact> {
+        &self.name
+    }
+
+    pub fn span(&self) -> SourceSpan {
+        self.span
+    }
+
+    /// Rename in place — compiler-generated binding rewrites only.
+    pub fn set_name(&mut self, name: impl AsRef<str>) {
+        self.name = name.as_ref().into();
     }
 
     /// The entry symbol `?`. The one constructor for it: call sites never
@@ -144,12 +157,21 @@ impl Symbol {
     /// used in returned headers.
     pub fn ensure_valid_field(&self) -> Result<()> {
         if self.name.contains('(') || self.name.contains(')') {
-            #[derive(Debug, Error, Diagnostic)]
-            #[error("The symbol {0} is not valid as a field")]
-            #[diagnostic(code(parser::symbol_invalid_as_field))]
-            struct SymbolInvalidAsField(String, #[label] SourceSpan);
+            use crate::host_text::HostText;
 
-            bail!(SymbolInvalidAsField(self.name.to_string(), self.span))
+            #[derive(Debug, Error, Diagnostic)]
+            #[error("The symbol {} is not valid as a field", .name)]
+            #[diagnostic(code(parser::symbol_invalid_as_field))]
+            struct SymbolInvalidAsField {
+                name: HostText,
+                #[label]
+                span: SourceSpan,
+            }
+
+            bail!(SymbolInvalidAsField {
+                name: HostText::new(self.name.to_string()),
+                span: self.span,
+            })
         }
         Ok(())
     }
@@ -206,7 +228,7 @@ mod tests {
     use super::*;
 
     fn sym(name: &str) -> Symbol {
-        Symbol::new(name, SourceSpan(0, 0))
+        Symbol::new(name, SourceSpan::new(0, 0))
     }
 
     /// The variable-namespace classification table. In particular, `_x` is
@@ -239,8 +261,8 @@ mod tests {
 
     #[test]
     fn prog_entry_is_the_entry() {
-        let entry = Symbol::prog_entry(SourceSpan(0, 0));
-        assert_eq!(entry.name.as_str(), PROG_ENTRY);
+        let entry = Symbol::prog_entry(SourceSpan::new(0, 0));
+        assert_eq!(entry.name().as_str(), PROG_ENTRY);
         assert_eq!(entry.kind(), SymbolKind::Entry);
     }
 

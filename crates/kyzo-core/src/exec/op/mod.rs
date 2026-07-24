@@ -1084,7 +1084,7 @@ mod tests {
     use kyzo_model::value::{DataValue, ValidityTs};
 
     fn sp() -> SourceSpan {
-        SourceSpan(0, 0)
+        SourceSpan::new(0, 0)
     }
     fn sym(name: &str) -> Symbol {
         Symbol::new(name, sp())

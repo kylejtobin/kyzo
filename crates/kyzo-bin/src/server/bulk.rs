@@ -23,7 +23,7 @@ use itertools::Itertools;
 use serde_json::{Value as JsonValue, json};
 use tokio::task::spawn_blocking;
 
-use kyzo::NamedRows;
+use kyzo::{HostText, NamedRows};
 
 use super::{DbState, internal_error};
 use crate::bulk;
@@ -96,14 +96,15 @@ pub(super) async fn import_relations(
 
 #[derive(serde_derive::Deserialize)]
 pub(super) struct BackupPayload {
-    path: String,
+    path: HostText,
 }
 
 pub(super) async fn backup(
     State(st): State<DbState>,
     Json(payload): Json<BackupPayload>,
 ) -> (StatusCode, Json<JsonValue>) {
-    let result = spawn_blocking(move || kyzo::dump_storage(&st.storage, payload.path)).await;
+    let result =
+        spawn_blocking(move || kyzo::dump_storage(&st.storage, payload.path.as_str())).await;
     match result {
         Ok(Ok(())) => (StatusCode::OK, json!({"ok": true}).into()),
         Ok(Err(err)) => (

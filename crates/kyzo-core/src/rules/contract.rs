@@ -260,7 +260,7 @@ impl<'a> FixedRuleInputRelation<'a> {
                 let store = self.stores.get(name).ok_or_else(|| {
                     RuleNotFoundError(
                         name.as_plain_symbol().to_string(),
-                        name.as_plain_symbol().span,
+                        name.as_plain_symbol().span(),
                     )
                 })?;
                 Box::new(
@@ -281,7 +281,7 @@ impl<'a> FixedRuleInputRelation<'a> {
                 let store = self.stores.get(name).ok_or_else(|| {
                     RuleNotFoundError(
                         name.as_plain_symbol().to_string(),
-                        name.as_plain_symbol().span,
+                        name.as_plain_symbol().span(),
                     )
                 })?;
                 let t: Tuple = Tuple::from_vec(vec![prefix.clone()]);
@@ -323,7 +323,7 @@ impl<'a> FixedRuleInputRelation<'a> {
         BTreeMap<DataValue, u32>,
     )> {
         let weight_span = match self.arg_manifest.bindings().get(2) {
-            Some(s) => s.span,
+            Some(s) => s.span(),
             None => self.span(),
         };
         as_directed_weighted_graph(self, undirected, allow_negative_weights, weight_span)
@@ -731,7 +731,7 @@ mod fixed_rule_output_budget_tests {
 
     #[test]
     fn budgeted_output_refuses_mid_run() -> Result<()> {
-        let mut out = FixedRuleOutput::new_budgeted(2, SourceSpan(3, 5), 0, Some(10));
+        let mut out = FixedRuleOutput::new_budgeted(2, SourceSpan::new(3, 5), 0, Some(10));
         let mut err = None;
         for i in 0..1_000 {
             if let Err(e) = out.put(row(i)) {
@@ -747,17 +747,17 @@ mod fixed_rule_output_budget_tests {
         assert_eq!(refusal.ceiling, 10);
         assert!(refusal.spent > 10);
         assert!(refusal.spent <= 10 + u64::from(OUTPUT_STRIDE));
-        assert_eq!(refusal.span, Some(SourceSpan(3, 5)));
+        assert_eq!(refusal.span, Some(SourceSpan::new(3, 5)));
         Ok(())
     }
 
     #[test]
     fn small_and_unbudgeted_outputs_never_refuse() -> Result<()> {
-        let mut small = FixedRuleOutput::new_budgeted(2, SourceSpan(0, 0), 0, Some(3));
+        let mut small = FixedRuleOutput::new_budgeted(2, SourceSpan::new(0, 0), 0, Some(3));
         for i in 0..5 {
             small.put(row(i))?;
         }
-        let mut unbudgeted = FixedRuleOutput::new(2, SourceSpan(0, 0));
+        let mut unbudgeted = FixedRuleOutput::new(2, SourceSpan::new(0, 0));
         for i in 0..500 {
             unbudgeted.put(row(i))?;
         }
@@ -977,7 +977,7 @@ impl<B: SimpleRuleBody> FixedRule for SimpleFixedRule<B> {
                     .arg_manifest
                     .bindings()
                     .iter()
-                    .map(|s| s.name.to_string())
+                    .map(|s| s.name().to_string())
                     .collect_vec();
                 let l = headers.len();
                 let m = input.arity()?;
@@ -1357,7 +1357,7 @@ impl MagicFixedRuleRuleArg {
                 let store = stores.get(name).ok_or_else(|| {
                     RuleNotFoundError(
                         name.as_plain_symbol().to_string(),
-                        name.as_plain_symbol().span,
+                        name.as_plain_symbol().span(),
                     )
                 })?;
                 store.arity

@@ -295,7 +295,7 @@ fn k_zero_filter_path_returns_zero_rows() -> Result<()> {
     // Always-true filter: the constant `true`.
     let filter = Expr::Const {
         val: DataValue::from(true),
-        span: SourceSpan(0, 0),
+        span: SourceSpan::new(0, 0),
     };
     let p = SparseSearchParams {
         k: 0,

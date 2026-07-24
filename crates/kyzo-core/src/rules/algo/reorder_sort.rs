@@ -79,7 +79,7 @@ impl FixedRule for ReorderSort {
             "sort_by",
             Some(Expr::Const {
                 val: DataValue::Null,
-                span: SourceSpan(0, 0),
+                span: SourceSpan::new(0, 0),
             }),
         )?;
         let sort_descending = payload.bool_option("descending", Some(false))?;

@@ -147,12 +147,12 @@ pub(crate) use rng_door::Rng;
 
 pub(crate) fn muggle(rel: impl AsRef<str>) -> MagicSymbol {
     MagicSymbol::Muggle {
-        inner: Symbol::new(rel.as_ref(), SourceSpan(0, 0)),
+        inner: Symbol::new(rel.as_ref(), SourceSpan::new(0, 0)),
     }
 }
 pub(crate) fn entry_symbol() -> MagicSymbol {
     MagicSymbol::Muggle {
-        inner: Symbol::prog_entry(SourceSpan(0, 0)),
+        inner: Symbol::prog_entry(SourceSpan::new(0, 0)),
     }
 }
 

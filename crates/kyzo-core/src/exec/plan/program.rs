@@ -130,7 +130,7 @@ pub(crate) fn normalize_ruleset(
                         Entry::Occupied(mut e) => {
                             // `***n` is `*`-prefixed: SymbolKind::Generated,
                             // so it cannot collide with a user name.
-                            let new_symb = Symbol::new(format!("***{dup_counter}"), symb.span);
+                            let new_symb = Symbol::new(format!("***{dup_counter}"), symb.span());
                             dup_counter += 1;
                             e.get_mut().push(new_symb.clone());
                             new_head.push(new_symb);
@@ -147,7 +147,7 @@ pub(crate) fn normalize_ruleset(
                                     tuple_pos: BindingPos::Unresolved,
                                 },
                                 one_many_unif: false,
-                                span: new_symb.span,
+                                span: new_symb.span(),
                             }))
                         }
                     }
@@ -503,9 +503,9 @@ impl Display for MagicSymbol {
 impl Debug for MagicSymbol {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            MagicSymbol::Muggle { inner } => write!(f, "{}", inner.name),
+            MagicSymbol::Muggle { inner } => write!(f, "{}", inner.name()),
             MagicSymbol::Magic { inner, adornment } => {
-                write!(f, "{}|M", inner.name)?;
+                write!(f, "{}|M", inner.name())?;
                 for m in adornment {
                     match m {
                         AdornmentMark::Bound => write!(f, "b")?,
@@ -515,7 +515,7 @@ impl Debug for MagicSymbol {
                 Ok(())
             }
             MagicSymbol::Input { inner, adornment } => {
-                write!(f, "{}|I", inner.name)?;
+                write!(f, "{}|I", inner.name())?;
                 for m in adornment {
                     match m {
                         AdornmentMark::Bound => write!(f, "b")?,
@@ -530,7 +530,7 @@ impl Debug for MagicSymbol {
                 rule_idx,
                 sup_idx,
             } => {
-                write!(f, "{}|S.{}.{}", inner.name, rule_idx, sup_idx)?;
+                write!(f, "{}|S.{}.{}", inner.name(), rule_idx, sup_idx)?;
                 for m in adornment {
                     match m {
                         AdornmentMark::Bound => write!(f, "b")?,
@@ -883,7 +883,7 @@ mod tests {
     use kyzo_model::program::rule::{HeadAggrSlot, InputInlineRule, InputInlineRulesOrFixed, Trivia};
 
     fn sym(name: &str) -> Symbol {
-        Symbol::new(name, SourceSpan(0, 0))
+        Symbol::new(name, SourceSpan::new(0, 0))
     }
 
     fn rule(head: &[&str]) -> InputInlineRule {
@@ -891,7 +891,7 @@ mod tests {
             head: head.iter().map(|h| sym(h)).collect(),
             aggr: head.iter().map(|_| HeadAggrSlot::Plain).collect(),
             body: vec![],
-            span: SourceSpan(0, 0),
+            span: SourceSpan::new(0, 0),
             trivia: Trivia::empty(),
         }
     }
@@ -923,7 +923,7 @@ mod tests {
     fn normalization_deduplicates_head_variables() -> Result<()>  {
         let mut prog = BTreeMap::new();
         prog.insert(
-            Symbol::prog_entry(SourceSpan(0, 1)),
+            Symbol::prog_entry(SourceSpan::new(0, 1)),
             rules_def(vec![rule(&["a", "a"])]),
         );
         let p = InputProgram::new(prog, QueryOutOptions::empty(), false).map_err(|e| miette!("valid program: {e}"))?;
@@ -972,14 +972,14 @@ mod tests {
     fn normalization_carries_the_entry_field() -> Result<()>  {
         let mut prog = BTreeMap::new();
         prog.insert(
-            Symbol::prog_entry(SourceSpan(3, 1)),
+            Symbol::prog_entry(SourceSpan::new(3, 1)),
             rules_def(vec![rule(&["x"])]),
         );
         prog.insert(sym("r"), rules_def(vec![rule(&["y"])]));
         let p = InputProgram::new(prog, QueryOutOptions::empty(), true).map_err(|e| miette!("valid program: {e}"))?;
         let (normalized, _) =
             into_normalized_program(p, &mut TrivialNormalizer).map_err(|e| miette!("normalizes: {e}"))?;
-        assert_eq!(normalized.entry_name().span, SourceSpan(3, 1));
+        assert_eq!(normalized.entry_name().span, SourceSpan::new(3, 1));
         assert!(normalized.disable_magic_rewrite());
         assert_eq!(normalized.rules().len(), 1);
         assert_eq!(normalized.iter_all().count(), 2);
@@ -990,7 +990,7 @@ mod tests {
         let mut stratum = NormalFormStratum::empty();
         for name in names {
             let key = if *name == "?" {
-                Symbol::prog_entry(SourceSpan(0, 1))
+                Symbol::prog_entry(SourceSpan::new(0, 1))
             } else {
                 sym(name)
             };
@@ -1085,7 +1085,7 @@ mod tests {
         let mut entry_stratum = MagicProgram::empty();
         entry_stratum.prog.insert(
             MagicSymbol::Muggle {
-                inner: Symbol::prog_entry(SourceSpan(0, 1)),
+                inner: Symbol::prog_entry(SourceSpan::new(0, 1)),
             },
             MagicRulesOrFixed::Rules {
                 rules: vec![MagicInlineRule {
@@ -1128,10 +1128,10 @@ mod tests {
     #[test]
     fn adorned_entry_is_not_the_entry() -> Result<()>  {
         let muggle = MagicSymbol::Muggle {
-            inner: Symbol::prog_entry(SourceSpan(0, 1)),
+            inner: Symbol::prog_entry(SourceSpan::new(0, 1)),
         };
         let magic = MagicSymbol::Magic {
-            inner: Symbol::prog_entry(SourceSpan(0, 1)),
+            inner: Symbol::prog_entry(SourceSpan::new(0, 1)),
             adornment: vec![AdornmentMark::Bound],
         };
         assert!(muggle.is_prog_entry());
@@ -1207,10 +1207,10 @@ mod tests {
                 name: sym("edges"),
                 bindings: vec![sym("a"), sym("b")],
                 as_of: None,
-                span: SourceSpan(0, 0),
+                span: SourceSpan::new(0, 0),
             }],
             options: FixedRuleOptions::empty(),
-            span: SourceSpan(0, 0),
+            span: SourceSpan::new(0, 0),
             arity: 1,
             fixed_impl: Arc::new(NoRule),
         };

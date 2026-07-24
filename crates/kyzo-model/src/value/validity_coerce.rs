@@ -85,7 +85,7 @@ mod tests {
         // seek/spec coordinate (same as "END"). Refusal of assert+MAX lives
         // on ValidityTs::for_assertion / Validity::new — pinned here so a
         // future "tighten coerce" PR cannot silently shrink the law.
-        let span = SourceSpan(0, 0);
+        let span = SourceSpan::new(0, 0);
         let cur = ValidityTs::of_micros(1);
         let got = data_value_to_vld_spec(DataValue::from(i64::MAX), span, cur)?;
         assert_eq!(got, MAX_VALIDITY_TS);
@@ -97,7 +97,7 @@ mod tests {
 
     #[test]
     fn now_and_end_strings_and_finite_micros() -> Result<()> {
-        let span = SourceSpan(0, 0);
+        let span = SourceSpan::new(0, 0);
         let cur = ValidityTs::of_micros(42);
         assert_eq!(
             data_value_to_vld_spec(DataValue::from("NOW"), span, cur)?,

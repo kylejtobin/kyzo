@@ -61,7 +61,7 @@ pub(crate) fn sort_and_collect(
     for (k, dir) in sorters {
         match head_indices.get(k) {
             Some(idx) => idx_sorters.push((*idx, *dir)),
-            None => bail!(SorterNotInHead(k.to_string(), k.span)),
+            None => bail!(SorterNotInHead(k.to_string(), k.span())),
         }
     }
 
@@ -105,7 +105,7 @@ mod tests {
     }
 
     fn sym(s: &str) -> Symbol {
-        Symbol::new(s, SourceSpan(0, 0))
+        Symbol::new(s, SourceSpan::new(0, 0))
     }
 
     #[test]

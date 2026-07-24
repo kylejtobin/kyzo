@@ -980,7 +980,7 @@ fn parse_tokenizer_expr(expr: Expr) -> Result<TokenizerSpec> {
             })
         }
         Expr::Binding { var, .. } => Ok(TokenizerSpec {
-            name: var.name,
+            name: var.name().clone(),
             args: vec![],
             span,
         }),

@@ -465,8 +465,8 @@ pub fn parse_fts_query(q: &str) -> Result<FtsExpr> {
     let parsed = KyzoScriptParser::parse(Rule::fts_doc, q)
         .map_err(|err| {
             let span = match err.location {
-                InputLocation::Pos(p) => SourceSpan(p, 0),
-                InputLocation::Span((start, end)) => SourceSpan(start, end - start),
+                InputLocation::Pos(p) => SourceSpan::new(p, 0),
+                InputLocation::Span((start, end)) => SourceSpan::new(start, end - start),
             };
             ParseError { span }
         })?

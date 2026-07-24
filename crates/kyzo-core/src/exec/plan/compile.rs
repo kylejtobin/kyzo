@@ -303,7 +303,7 @@ impl CompiledInlineRules {
         for (other_aggr, rule) in iter {
             ensure!(
                 other_aggr == aggr,
-                RulesetHeadAggrMismatch(name.clone(), name.as_plain_symbol().span)
+                RulesetHeadAggrMismatch(name.clone(), name.as_plain_symbol().span())
             );
             rules.push(rule);
         }
@@ -527,7 +527,7 @@ pub(crate) fn compile_magic_rule_body(
     store_arities: &BTreeMap<MagicSymbol, usize>,
     ret_vars: &[Symbol],
 ) -> Result<RelAlgebra> {
-    let mut ret = RelAlgebra::unit(rule_name.as_plain_symbol().span);
+    let mut ret = RelAlgebra::unit(rule_name.as_plain_symbol().span());
     let mut seen_variables = BTreeSet::new();
     let mut serial_id = 0;
     let mut gen_symb = |span| {
@@ -551,7 +551,7 @@ pub(crate) fn compile_magic_rule_body(
             MagicAtom::Rule(rule_app) => {
                 let occurrence = next_occurrence();
                 let store_arity = store_arities.get(&rule_app.name).ok_or_else(|| {
-                    RuleNotFound(rule_app.name.clone(), rule_app.name.as_plain_symbol().span)
+                    RuleNotFound(rule_app.name.clone(), rule_app.name.as_plain_symbol().span())
                 })?;
 
                 ensure!(
@@ -570,7 +570,7 @@ pub(crate) fn compile_magic_rule_body(
                 for var in &rule_app.args {
                     if seen_variables.contains(var) {
                         prev_joiner_vars.push(var.clone());
-                        let rk = gen_symb(var.span);
+                        let rk = gen_symb(var.span());
                         right_vars.push(rk.clone());
                         right_joiner_vars.push(rk);
                     } else {
@@ -628,7 +628,7 @@ pub(crate) fn compile_magic_rule_body(
                 for (i, var) in rel_app.args.iter().enumerate() {
                     if seen_variables.contains(var) {
                         prev_joiner_vars.push(var.clone());
-                        let rk = gen_symb(var.span);
+                        let rk = gen_symb(var.span());
                         right_vars.push(rk.clone());
                         right_joiner_vars.push(rk);
                         right_joiner_vars_pos_rev[i] = Some(right_joiner_vars.len() - 1);
@@ -742,7 +742,7 @@ pub(crate) fn compile_magic_rule_body(
                                             "index mapper column beyond the relation's arity",
                                         ))?;
                                     // A fresh symbol for the index column.
-                                    let tv = gen_symb(orig_var.span);
+                                    let tv = gen_symb(orig_var.span());
                                     // If the column is a joiner, join the
                                     // index on it and mark it bound.
                                     if let Some(join_idx) = right_joiner_vars_pos_rev[orig_idx] {
@@ -818,7 +818,7 @@ pub(crate) fn compile_magic_rule_body(
                 // `delta_from` to its own right side).
                 let negated_occurrence = next_occurrence();
                 let store_arity = store_arities.get(&rule_app.name).ok_or_else(|| {
-                    RuleNotFound(rule_app.name.clone(), rule_app.name.as_plain_symbol().span)
+                    RuleNotFound(rule_app.name.clone(), rule_app.name.as_plain_symbol().span())
                 })?;
                 ensure!(
                     *store_arity == rule_app.args.len(),
@@ -837,7 +837,7 @@ pub(crate) fn compile_magic_rule_body(
                 for var in &rule_app.args {
                     if seen_variables.contains(var) {
                         prev_joiner_vars.push(var.clone());
-                        let rk = gen_symb(var.span);
+                        let rk = gen_symb(var.span());
                         right_vars.push(rk.clone());
                         right_joiner_vars.push(rk);
                     } else {
@@ -884,7 +884,7 @@ pub(crate) fn compile_magic_rule_body(
                 for var in rel_app.args.iter() {
                     if seen_variables.contains(var) {
                         prev_joiner_vars.push(var.clone());
-                        let rk = gen_symb(var.span);
+                        let rk = gen_symb(var.span());
                         right_vars.push(rk.clone());
                         right_joiner_vars.push(rk);
                         join_indices.push(IndexPositionUse::Join)
@@ -1068,7 +1068,7 @@ pub(crate) fn compile_magic_rule_body(
         // symbol; an empty difference would mean the subset invariant
         // broke (the original `unwrap`ped it away).
         match ret_vars_set.difference(&cur_ret_set).next() {
-            Some(unbound) => bail!(UnboundSymbolInRuleHead(unbound.clone(), unbound.span)),
+            Some(unbound) => bail!(UnboundSymbolInRuleHead(unbound.clone(), unbound.span())),
             None => bail!(PlanInvariantError(
                 "plan frame disagrees with the rule head without an unbound head symbol"
             )),

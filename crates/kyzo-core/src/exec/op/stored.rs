@@ -515,7 +515,7 @@ mod segment_gate_tests {
     use miette::{Result, miette};
 
     fn sp() -> SourceSpan {
-        SourceSpan(0, 0)
+        SourceSpan::new(0, 0)
     }
     fn sym(name: &str) -> Symbol {
         Symbol::new(name, sp())

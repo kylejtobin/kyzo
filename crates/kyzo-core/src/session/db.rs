@@ -544,7 +544,7 @@ impl<S: Storage> Engine<S> {
             && h.name.is_temp_relation_name()
         {
             bail!(EngineRefuse::TempRelationNotReachableError(
-                h.name.name.to_string(),
+                h.name.name().to_string(),
                 h.span
             ));
         }
@@ -754,19 +754,19 @@ impl<S: Storage> Engine<S> {
         let options = tx.options.clone();
         // Pre-mutation preconditions on the output relation.
         if let Some((meta, op, _, _)) = &program.out_opts().store_relation {
-            let exists = tx.get_relation(&meta.name.name).is_ok();
+            let exists = tx.get_relation(&meta.name.name()).is_ok();
             match op {
                 RelationOp::Create if exists => {
                     bail!(EngineRefuse::StoreRelationPrecondition(format!(
                         "cannot :create relation '{}': it already exists",
-                        meta.name.name
+                        meta.name.name()
                     )));
                 }
                 RelationOp::Create | RelationOp::Replace => {}
                 _other if !exists => {
                     bail!(EngineRefuse::StoreRelationPrecondition(format!(
                         "relation '{}' does not exist",
-                        meta.name.name
+                        meta.name.name()
                     )));
                 }
                 RelationOp::Put
@@ -796,7 +796,7 @@ impl<S: Storage> Engine<S> {
         match out_opts.store_relation {
             Some((meta, op, ret, write_vld)) => {
                 let force_collect = if ret == ReturnMutation::Returning {
-                    meta.name.name.as_str()
+                    meta.name.name().as_str()
                 } else {
                     ""
                 };
@@ -821,7 +821,7 @@ impl<S: Storage> Engine<S> {
                 // for the rows, which the mutation pipeline routed through the
                 // collector.
                 if ret == ReturnMutation::Returning {
-                    returning_rows(callback_collector, &meta.name.name)
+                    returning_rows(callback_collector, &meta.name.name())
                 } else {
                     Ok(status_ok())
                 }
@@ -988,7 +988,7 @@ pub(crate) fn build_budget(
 
 /// Materialize a row vector into a headered result.
 fn materialize(rows: Vec<Tuple>, head: &[Symbol]) -> Result<NamedRows> {
-    let headers = head.iter().map(|s| s.name.to_string()).collect();
+    let headers = head.iter().map(|s| s.name().to_string()).collect();
     Ok(NamedRows::try_new(headers, rows)?)
 }
 
@@ -1240,7 +1240,7 @@ impl<T: WriteTx> SessionTx<T> {
         input: kyzo_model::program::InputRelationHandle,
         keyspace_kind: KeyspaceKind,
     ) -> Result<RelationHandle> {
-        if input.name.name.starts_with('_') {
+        if input.name.name().starts_with('_') {
             create_relation(&mut self.temp, input, keyspace_kind)
         } else {
             create_relation(&mut self.store, input, keyspace_kind)
@@ -1376,18 +1376,18 @@ impl<T: ReadTx> StoredRelationSchemaSource for SessionView<'_, T> {
         name: &Symbol,
         _span: SourceSpan,
     ) -> Result<StoredRelationMetadata> {
-        Ok(self.handle(&name.name)?.metadata)
+        Ok(self.handle(&name.name())?.metadata)
     }
 }
 
 /// The fixed-rule payload's stored-input seam, served by the session view.
 impl<T: ReadTx> StoredInputSource for SessionView<'_, T> {
     fn stored_arity(&self, name: &Symbol) -> Result<usize> {
-        Ok(self.handle(&name.name)?.arity())
+        Ok(self.handle(&name.name())?.arity())
     }
 
     fn stored_scan_all<'b>(&'b self, name: &Symbol, as_of: Option<AsOf>) -> Result<TupleIter<'b>> {
-        let handle = self.handle(&name.name)?;
+        let handle = self.handle(&name.name())?;
         Ok(self.scan_all(&handle, as_of))
     }
 
@@ -1397,7 +1397,7 @@ impl<T: ReadTx> StoredInputSource for SessionView<'_, T> {
         prefix: &DataValue,
         as_of: Option<AsOf>,
     ) -> Result<TupleIter<'b>> {
-        let handle = self.handle(&name.name)?;
+        let handle = self.handle(&name.name())?;
         Ok(self.scan_prefix(&handle, &Tuple::from_vec(vec![prefix.clone()]), as_of))
     }
 }

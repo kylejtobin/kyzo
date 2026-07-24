@@ -599,7 +599,7 @@ pub(super) fn setup_sparse_docs(
                     tx,
                     &row,
                     kyzo_model::value::ValidityTs::of_micros(0),
-                    SourceSpan(0, 0),
+                    SourceSpan::new(0, 0),
                 )?;
                 sparse_put(tx, &row, vector, base, idx)?;
             }
@@ -1122,15 +1122,15 @@ mod tests {
             op: kyzo_model::program::op::OP_EQ,
             args: Box::new([
                 Expr::Binding {
-                    var: Symbol::new("tag", SourceSpan(0, 0)),
+                    var: Symbol::new("tag", SourceSpan::new(0, 0)),
                     tuple_pos: BindingPos::Resolved(1),
                 },
                 Expr::Const {
                     val: DataValue::from("keep"),
-                    span: SourceSpan(0, 0),
+                    span: SourceSpan::new(0, 0),
                 },
             ]),
-            span: SourceSpan(0, 0),
+            span: SourceSpan::new(0, 0),
         };
         let rtx = db.read_tx()?;
         let p = SparseSearchParams {

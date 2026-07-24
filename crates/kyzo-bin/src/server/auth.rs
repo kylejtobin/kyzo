@@ -28,21 +28,21 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{Request, Response, StatusCode};
 use futures::future::BoxFuture;
-use kyzo::{DataValue, Engine, FjallStorage};
+use kyzo::{DataValue, Engine, FjallStorage, HostText};
 use tower_http::auth::AsyncAuthorizeRequest;
 
 #[derive(Clone)]
 pub(super) struct MyAuth {
     skip_auth: bool,
-    auth_guard: String,
-    token_table: Option<Arc<(String, Engine<FjallStorage>)>>,
+    auth_guard: HostText,
+    token_table: Option<Arc<(HostText, Engine<FjallStorage>)>>,
 }
 
 impl MyAuth {
     pub(super) fn new(
         skip_auth: bool,
-        auth_guard: String,
-        token_table: Option<Arc<(String, Engine<FjallStorage>)>>,
+        auth_guard: HostText,
+        token_table: Option<Arc<(HostText, Engine<FjallStorage>)>>,
     ) -> Self {
         Self {
             skip_auth,
@@ -55,10 +55,12 @@ impl MyAuth {
     /// token-table relation? `false` on any error (a broken auth check
     /// refuses, it never fails open) — including an invalid relation name,
     /// which is an operator misconfiguration, not a request to satisfy.
-    fn token_table_authorizes(table: &(String, Engine<FjallStorage>), token: &str) -> bool {
+    fn token_table_authorizes(table: &(HostText, Engine<FjallStorage>), token: &str) -> bool {
         let (name, db) = table;
-        if crate::bulk::validate_identifier(name).is_err() {
-            eprintln!("token-table auth check failed: '{name}' is not a valid relation name");
+        if crate::bulk::validate_identifier(name.as_str()).is_err() {
+            eprintln!(
+                "token-table auth check failed: '{name}' is not a valid relation name"
+            );
             return false;
         }
         match db.run_script(
@@ -89,7 +91,7 @@ impl AsyncAuthorizeRequest<Body> for MyAuth {
             } else {
                 match request.headers().get("x-kyzo-auth") {
                     Some(v) => match v.to_str() {
-                        Ok(s) => s == auth_guard,
+                        Ok(s) => s == auth_guard.as_str(),
                         // Non-UTF8 header cannot equal the guard — refuse closed.
                         Err(_) => {
                             let non_utf8_header_refused = false;
@@ -103,7 +105,7 @@ impl AsyncAuthorizeRequest<Body> for MyAuth {
                             .into_iter()
                             .flat_map(|q| q.split('&'))
                             .filter_map(|pair| pair.split_once('='))
-                            .any(|(k, v)| k == "auth" && v == auth_guard);
+                            .any(|(k, v)| k == "auth" && v == auth_guard.as_str());
                         if via_query {
                             true
                         } else {
