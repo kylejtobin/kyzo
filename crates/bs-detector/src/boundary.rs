@@ -80,10 +80,36 @@ pub struct Boundary {
 
 /// The proof a run saw the whole boundary: files that exist vs files the
 /// walk delivered to the engines. `gap()` non-empty is a run-level red.
+///
+/// Fields are private (TRUTH item 9). [`CoverageProof::admit`] is the sole
+/// constructor.
 pub struct CoverageProof {
-    pub existing: usize,
-    pub visited: usize,
-    pub missing: Vec<String>,
+    existing: usize,
+    visited: usize,
+    missing: Vec<String>,
+}
+
+impl CoverageProof {
+    /// Sole admission constructor.
+    pub fn admit(existing: usize, visited: usize, missing: Vec<String>) -> Self {
+        Self {
+            existing,
+            visited,
+            missing,
+        }
+    }
+
+    pub fn existing(&self) -> usize {
+        self.existing
+    }
+
+    pub fn visited(&self) -> usize {
+        self.visited
+    }
+
+    pub fn missing(&self) -> &[String] {
+        &self.missing
+    }
 }
 
 impl Boundary {
@@ -165,11 +191,7 @@ impl Boundary {
             .filter(|e| visited.binary_search(&e.as_str()).is_err())
             .cloned()
             .collect();
-        CoverageProof {
-            existing: self.existing.len(),
-            visited: visited.len(),
-            missing,
-        }
+        CoverageProof::admit(self.existing.len(), visited.len(), missing)
     }
 }
 
@@ -209,8 +231,8 @@ mod tests {
         assert_eq!(b.unparsed().len(), 1, "broken.rs is REPORTED, not skipped");
         assert_eq!(b.existing().len(), 3, "target/ is excluded from existence");
         let proof = b.coverage_proof();
-        assert_eq!(proof.existing, 3);
-        assert_eq!(proof.visited, 3);
-        assert!(proof.missing.is_empty(), "no silent hole");
+        assert_eq!(proof.existing(), 3);
+        assert_eq!(proof.visited(), 3);
+        assert!(proof.missing().is_empty(), "no silent hole");
     }
 }

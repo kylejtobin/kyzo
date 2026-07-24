@@ -21,8 +21,9 @@ use crate::waiver::WaiverFile;
 
 pub fn coverage(b: &Boundary) -> Vec<Hit> {
     b.coverage_proof()
-        .missing
-        .into_iter()
+        .missing()
+        .iter()
+        .cloned()
         .map(|f| Hit::admit(f, 0, "coverage_hole".to_string()))
         .collect()
 }
