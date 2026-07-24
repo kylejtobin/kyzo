@@ -745,19 +745,7 @@ fn check_workspace(
     result
 }
 
-/// `check()`/`check_at()` (production) derive the check-owned directory as
-/// `<ambient target dir>/build-script-sandbox` — on the shared volume for
-/// speed, but created, diffed, and deleted only by this check. Tests call
-/// `check_at_scoped` with `Some(<a dir named "target" inside their own
-/// tempdir>)` ("target" so the source-tree snapshot's skip list ignores it),
-/// so a plant's reset+build cycle is fully isolated from every other
-/// concurrently-running plant and from the real workspace — never by
-/// serializing the test runner, which the container owns.
-pub fn check_at(repo_root: &Path) -> Result<String, BuildScriptSandboxError> {
-    check_at_scoped(repo_root, None)
-}
-
-pub fn check_at_scoped(
+fn check_at_scoped_body(
     repo_root: &Path,
     owned_target_override: Option<&Path>,
 ) -> Result<String, BuildScriptSandboxError> {
@@ -809,6 +797,31 @@ pub fn check_at_scoped(
             .collect::<String>()
     ))
 }
+
+/// Live build-script sandbox gate.
+pub struct BuildScriptSandboxGate;
+
+impl BuildScriptSandboxGate {
+    /// `check_at()` (production) derives the check-owned directory as
+    /// `<ambient target dir>/build-script-sandbox` — on the shared volume for
+    /// speed, but created, diffed, and deleted only by this check. Tests call
+    /// `check_at_scoped` with `Some(<a dir named "target" inside their own
+    /// tempdir>)` ("target" so the source-tree snapshot's skip list ignores it),
+    /// so a plant's reset+build cycle is fully isolated from every other
+    /// concurrently-running plant and from the real workspace — never by
+    /// serializing the test runner, which the container owns.
+    pub fn check_at(repo_root: &Path) -> Result<String, BuildScriptSandboxError> {
+        Self::check_at_scoped(repo_root, None)
+    }
+
+    pub fn check_at_scoped(
+        repo_root: &Path,
+        owned_target_override: Option<&Path>,
+    ) -> Result<String, BuildScriptSandboxError> {
+        check_at_scoped_body(repo_root, owned_target_override)
+    }
+}
+
 
 #[cfg(test)]
 #[derive(Debug)]
@@ -926,7 +939,10 @@ mod tests {
              }\n",
         )?;
 
-        let outcome = check_at_scoped(tmp.path(), Some(&tmp.path().join("target")));
+        let outcome = BuildScriptSandboxGate::check_at_scoped(
+            tmp.path(),
+            Some(&tmp.path().join("target")),
+        );
         if let Err(BuildScriptSandboxError::NetworkAccessAttempted { sandboxed_output }) = outcome
         {
             BuildScriptSandboxProofRefuse::SandboxedOutputEmpty.require(!sandboxed_output.is_empty())
@@ -954,7 +970,10 @@ mod tests {
              }\n",
         )?;
 
-        let outcome = check_at_scoped(tmp.path(), Some(&tmp.path().join("target")));
+        let outcome = BuildScriptSandboxGate::check_at_scoped(
+            tmp.path(),
+            Some(&tmp.path().join("target")),
+        );
         if let Err(BuildScriptSandboxError::WriteOutsideOutDir { package, paths }) = outcome {
             BuildScriptSandboxProofRefuse::AttributionMismatch.require_eq(package, Attribution::Attributed(crate_name.to_string()))?;
             BuildScriptSandboxProofRefuse::EscapedPathMissing.require(paths.iter().any(|p| p.contains("ESCAPED.txt")))
@@ -1044,7 +1063,8 @@ mod tests {
              }\n",
         )?;
 
-        let outcome = check_at_scoped(root, Some(&root.join("target")));
+        let outcome =
+            BuildScriptSandboxGate::check_at_scoped(root, Some(&root.join("target")));
         if let Err(BuildScriptSandboxError::WriteOutsideOutDir { package, paths }) = outcome {
             BuildScriptSandboxProofRefuse::AttributionMismatch.require_eq(package, Attribution::Attributed(violator_name.to_string()))?;
             BuildScriptSandboxProofRefuse::EscapedPathMissing.require(paths.iter().any(|p| p.contains("VIOLATOR_ESCAPED.txt")))?;

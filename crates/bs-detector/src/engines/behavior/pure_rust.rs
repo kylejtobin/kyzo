@@ -80,6 +80,15 @@ impl fmt::Display for PureRustError {
 
 impl std::error::Error for PureRustError {}
 
+/// Live pure-Rust dependency-tree gate (story #322).
+pub struct PureRustGate;
+
+impl PureRustGate {
+    pub fn check_at(repo_root: &Path) -> Result<String, PureRustError> {
+        check_at_body(repo_root)
+    }
+}
+
 fn run_cargo(repo_root: &Path, args: &[&str]) -> std::io::Result<std::process::Output> {
     Command::new("cargo")
         .args(args)
@@ -133,7 +142,7 @@ fn discover_roots(metadata: &CargoMetadata) -> Vec<String> {
 
 const KEEP_MANIFEST_OUTSIDE_WORKSPACE: bool = true;
 
-pub fn check_at(repo_root: &Path) -> Result<String, PureRustError> {
+fn check_at_body(repo_root: &Path) -> Result<String, PureRustError> {
     if !repo_root.join("Cargo.toml").is_file() {
         return Ok("pure-Rust gate: no Cargo workspace yet — armed but idle".to_string());
     }
@@ -456,7 +465,7 @@ mod tests {
         )?;
         plant_source(deps.path(), "planted-tool-dep/src/lib.rs", "")?;
 
-        let outcome = check_at(root);
+        let outcome = PureRustGate::check_at(root);
         if let Err(PureRustError::BannedCratesFound(hits)) = outcome {
             PureRustProofRefuse::PlantedCcMustHit.require(hits.iter().any(|h| h.starts_with("cc v")))?;
             PureRustProofRefuse::PlantedOpensslMustHit.require(hits.iter().any(|h| h.starts_with("openssl v")))?;

@@ -1298,21 +1298,16 @@ mod fixture_tests {
 
     type TestResult = std::result::Result<(), ClassifyProofRefuse>;
 
-
-
-    fn crate_dir() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-    }
-
     fn real_grammar() -> std::result::Result<Grammar, ClassifyProofRefuse> {
-        let text = std::fs::read_to_string(crate_dir().join("grammar.toml"))
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let text = std::fs::read_to_string(manifest.join("grammar.toml"))
             .map_err(|_| ClassifyProofRefuse::ReadGrammar)?;
-        let bite_src = std::fs::read_to_string(crate_dir().join("tests/bite_proofs.rs"))
+        let bite_src = std::fs::read_to_string(manifest.join("tests/bite_proofs.rs"))
             .map_err(|_| ClassifyProofRefuse::ReadBite)?;
         let mut f = tempfile::NamedTempFile::new().map_err(|_| ClassifyProofRefuse::Tempfile)?;
         std::io::Write::write_all(&mut f, text.as_bytes())
             .map_err(|_| ClassifyProofRefuse::WriteFixture)?;
-        Grammar::load(f.path(), &bite_src, &crate_dir().join("fixtures"))
+        Grammar::load(f.path(), &bite_src, &manifest.join("fixtures"))
             .map_err(|_| ClassifyProofRefuse::LoadGrammar)
     }
 
@@ -1430,13 +1425,14 @@ mod fixture_tests {
     #[test]
     fn every_construct_pass_classifies_and_deny_is_refused_by_its_own_rule() -> TestResult {
         let grammar = real_grammar()?;
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         for c in grammar.constructs() {
             let rel = if c.name() == "declared-fn" {
                 "crates/bs-detector/fixtures/declared-fn.pass.rs"
             } else {
                 rel_for(c.name())
             };
-            let pass_path = crate_dir().join("fixtures").join(format!("{}.pass.rs", c.name()));
+            let pass_path = manifest.join("fixtures").join(format!("{}.pass.rs", c.name()));
             let pass_src = std::fs::read_to_string(&pass_path)
                 .map_err(|_| ClassifyProofRefuse::PassFixtureReadable)?;
             let pass_ast = syn::parse_file(&pass_src)
@@ -1455,7 +1451,7 @@ mod fixture_tests {
             } else {
                 rel_for(c.name())
             };
-            let deny_path = crate_dir().join("fixtures").join(format!("{}.deny.rs", c.name()));
+            let deny_path = manifest.join("fixtures").join(format!("{}.deny.rs", c.name()));
             let deny_src = std::fs::read_to_string(&deny_path)
                 .map_err(|_| ClassifyProofRefuse::DenyFixtureReadable)?;
             let deny_ast = syn::parse_file(&deny_src)
@@ -1476,7 +1472,7 @@ mod fixture_tests {
     #[test]
     fn tip_689_every_unclassified_kind_deny_and_pass() -> TestResult {
         let grammar = real_grammar()?;
-        let fixtures = crate_dir().join("fixtures");
+        let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures");
 
         /// One seated kind's tip-689 proof pair.
         /// `deny` is `None` only when the seat is vacuous (check cannot fire).
@@ -1659,11 +1655,12 @@ mod fixture_tests {
     #[test]
     fn every_condemned_kind_deny_fixture_is_red_under_its_own_law() -> TestResult {
         let grammar = real_grammar()?;
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         for kind in grammar.condemned() {
             let law = kind
                 .condemned_law_name()
                 .ok_or(ClassifyProofRefuse::CondemnedLawMissing)?;
-            let path = crate_dir()
+            let path = manifest
                 .join("fixtures")
                 .join(format!("{}.deny.rs", kind.kebab()));
             let src = std::fs::read_to_string(&path)
@@ -1774,7 +1771,7 @@ mod fixture_tests {
             ClassifyProofRefuse::BareAsyncMustUnclass,
         )?;
         let grammar = real_grammar()?;
-        let path = crate_dir().join("fixtures/declared-fn.deny.rs");
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/declared-fn.deny.rs");
         let src = std::fs::read_to_string(&path)
             .map_err(|_| ClassifyProofRefuse::DeclaredFnDenyReadable)?;
         let f = SourceFile::admit(

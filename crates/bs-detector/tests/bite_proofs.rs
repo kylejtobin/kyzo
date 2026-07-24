@@ -464,7 +464,7 @@ fn bite_forbid_roots() -> BiteOutcome {
 
 #[test]
 fn bite_pure_rust() -> BiteOutcome {
-    use bs_detector::engines::behavior::pure_rust::{PureRustError, check_at};
+    use bs_detector::engines::behavior::pure_rust::{PureRustError, PureRustGate};
     let tmp = tempfile::tempdir().map_err(|_| BiteProofRefuse::Io)?;
     let root = tmp.path();
     let deps = tempfile::tempdir().map_err(|_| BiteProofRefuse::Io)?;
@@ -488,7 +488,7 @@ fn bite_pure_rust() -> BiteOutcome {
         "[package]\nname = \"cc\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
     )?;
     write_file(deps.path(), "planted-cc/src/lib.rs", "")?;
-    match check_at(root) {
+    match PureRustGate::check_at(root) {
         Err(PureRustError::BannedCratesFound(hits)) => {
             require(hits.iter().any(|h| h.starts_with("cc v")), BiteProofRefuse::Behavior)?;
         }
@@ -499,7 +499,7 @@ fn bite_pure_rust() -> BiteOutcome {
 
 #[test]
 fn bite_unsafe_check() -> BiteOutcome {
-    use bs_detector::engines::behavior::unsafe_check::{UnsafeCheckError, check_at};
+    use bs_detector::engines::behavior::unsafe_check::{UnsafeCheckError, UnsafeCheckGate};
     let tmp = tempfile::tempdir().map_err(|_| BiteProofRefuse::Io)?;
     let root = tmp.path();
     write_file(root, "Cargo.toml", "[workspace]\nresolver = \"2\"\nmembers = []\n")?;
@@ -508,7 +508,7 @@ fn bite_unsafe_check() -> BiteOutcome {
         "pub fn f() {}\n", // missing forbid
     )?;
     write_file(root, "crates/kyzo-bin/src/main.rs", "#![forbid(unsafe_code)]\nfn main() {}\n")?;
-    match check_at(root) {
+    match UnsafeCheckGate::check_at(root) {
         Err(UnsafeCheckError::MissingForbid { root }) => {
             require(root.contains("kyzo-core"), BiteProofRefuse::Behavior)?;
         }

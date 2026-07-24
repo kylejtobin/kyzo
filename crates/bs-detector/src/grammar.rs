@@ -1127,19 +1127,13 @@ mod tests {
 
     type TestResult = std::result::Result<(), GrammarProofRefuse>;
 
-
-
-    fn crate_dir() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-    }
-
     fn real_grammar_text() -> std::result::Result<String, GrammarProofRefuse> {
-        std::fs::read_to_string(crate_dir().join("grammar.toml"))
+        std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("grammar.toml"))
             .map_err(|_| GrammarProofRefuse::ReadGrammar)
     }
 
     fn real_bite_src() -> std::result::Result<String, GrammarProofRefuse> {
-        std::fs::read_to_string(crate_dir().join("tests/bite_proofs.rs"))
+        std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/bite_proofs.rs"))
             .map_err(|_| GrammarProofRefuse::ReadBite)
     }
 
@@ -1152,7 +1146,7 @@ mod tests {
         Ok(Grammar::load(
             f.path(),
             &real_bite_src()?,
-            &crate_dir().join("fixtures"),
+            &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures"),
         ))
     }
 
@@ -1173,8 +1167,9 @@ mod tests {
     fn probe_with_mutated_fixtures(
         mutate: impl FnOnce(&Path) -> TestResult,
     ) -> std::result::Result<Result<Grammar>, GrammarProofRefuse> {
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let dir = tempfile::tempdir().map_err(|_| GrammarProofRefuse::Tempdir)?;
-        for entry in std::fs::read_dir(crate_dir().join("fixtures"))
+        for entry in std::fs::read_dir(manifest.join("fixtures"))
             .map_err(|_| GrammarProofRefuse::FixturesDir)?
         {
             let entry = entry.map_err(|_| GrammarProofRefuse::FixtureEntry)?;
@@ -1234,8 +1229,9 @@ mod tests {
                 "name = \"sealed-struct\"\nkind = \"struct\"\nrule = \"named-all-private-no-string-terminal\"\n",
                 "name = \"sealed-struct\"\nkind = \"struct\"\nrule = \"named-all-private-no-string-terminal\"\n\n[[construct]]\nname = \"sealed-struct-twin\"\nkind = \"struct\"\nrule = \"named-all-private-no-string-terminal\"\n",
             );
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let dir = tempfile::tempdir().map_err(|_| GrammarProofRefuse::Tempdir)?;
-        for entry in std::fs::read_dir(crate_dir().join("fixtures"))
+        for entry in std::fs::read_dir(manifest.join("fixtures"))
             .map_err(|_| GrammarProofRefuse::FixturesDir)?
         {
             let entry = entry.map_err(|_| GrammarProofRefuse::FixtureEntry)?;
@@ -1243,12 +1239,12 @@ mod tests {
                 .map_err(|_| GrammarProofRefuse::FixtureCopy)?;
         }
         std::fs::copy(
-            crate_dir().join("fixtures/sealed-struct.pass.rs"),
+            manifest.join("fixtures/sealed-struct.pass.rs"),
             dir.path().join("sealed-struct-twin.pass.rs"),
         )
         .map_err(|_| GrammarProofRefuse::TwinPass)?;
         std::fs::copy(
-            crate_dir().join("fixtures/sealed-struct.deny.rs"),
+            manifest.join("fixtures/sealed-struct.deny.rs"),
             dir.path().join("sealed-struct-twin.deny.rs"),
         )
         .map_err(|_| GrammarProofRefuse::TwinDeny)?;
@@ -1345,7 +1341,11 @@ mod tests {
         let mut f = tempfile::NamedTempFile::new().map_err(|_| GrammarProofRefuse::Tempfile)?;
         f.write_all(real_grammar_text()?.as_bytes())
             .map_err(|_| GrammarProofRefuse::WriteFixture)?;
-        let e = Grammar::load(f.path(), "fn bite_nothing() {}", &crate_dir().join("fixtures"));
+        let e = Grammar::load(
+            f.path(),
+            "fn bite_nothing() {}",
+            &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures"),
+        );
         GrammarProofRefuse::MissingBiteSilent.require(e.is_err())
     }
 
@@ -1374,7 +1374,11 @@ mod tests {
         let mut f = tempfile::NamedTempFile::new().map_err(|_| GrammarProofRefuse::Tempfile)?;
         f.write_all(real_grammar_text()?.as_bytes())
             .map_err(|_| GrammarProofRefuse::WriteFixture)?;
-        let Err(err) = Grammar::load(f.path(), &bite, &crate_dir().join("fixtures")) else {
+        let Err(err) = Grammar::load(
+            f.path(),
+            &bite,
+            &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures"),
+        ) else {
             return Err(GrammarProofRefuse::PrefixBiteSilent);
         };
         GrammarProofRefuse::BiteMsgMismatch.require(format!("{err}") == "ban `unwrap` has no bite proof — an unproven law may not run")

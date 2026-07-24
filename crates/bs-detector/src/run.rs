@@ -479,18 +479,10 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
-    fn crate_dir() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-    }
-
-    /// Stage grammar/laws/waivers/fixtures/bite so `run` can load, plus one
-    /// probe crate whose free fn is unseated. Fixture `.rs` bodies are
-    /// replaced with a seated unit struct so Boundary walk does not inflate
-    /// `unclassified-fn` (filenames must still exist for Grammar::load).
     fn stage_root_with_free_fn(probe_src: &str) -> tempfile::TempDir {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path();
-        let src = crate_dir();
+        let src = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let det = root.join("crates/bs-detector");
         fs::create_dir_all(det.join("tests")).expect("mkdir tests");
         fs::create_dir_all(det.join("fixtures")).expect("mkdir fixtures");

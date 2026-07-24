@@ -83,7 +83,16 @@ impl fmt::Display for UnsafeCheckError {
 
 impl std::error::Error for UnsafeCheckError {}
 
-pub fn check_at(repo_root: &Path) -> Result<String, UnsafeCheckError> {
+/// Live unsafe-law gate (story #322).
+pub struct UnsafeCheckGate;
+
+impl UnsafeCheckGate {
+    pub fn check_at(repo_root: &Path) -> Result<String, UnsafeCheckError> {
+        check_at_body(repo_root)
+    }
+}
+
+fn check_at_body(repo_root: &Path) -> Result<String, UnsafeCheckError> {
     if !repo_root.join("Cargo.toml").is_file() {
         return Ok("unsafe gate: no Cargo workspace yet — armed but idle".to_string());
     }
