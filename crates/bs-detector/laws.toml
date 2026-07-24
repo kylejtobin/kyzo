@@ -306,9 +306,14 @@ law = "TRUTH item 2 residual: interior mutation via method call (self.vec.push, 
 caught_by = "named residual only — no matcher; stated so the attestation weaker-than-law slot cites a laws.toml entry, not prose"
 
 [[law]]
-name = "R-string-direct"
-law = "TRUTH item 1 residual pending item 4: string-carrying judgment uses direct terminal names only; the alias-fixpoint walk is unbuilt"
-caught_by = "named residual — classify.rs type_is_string_terminal; item 4 closes it"
+name = "R1"
+law = "TRUTH item 4 residual: aliases defined in external crates are invisible to the workspace alias table"
+caught_by = "named residual — AliasTable collects only boundary ItemType and use-as edges"
+
+[[law]]
+name = "R2"
+law = "TRUTH item 4 residual: macro-expanded code is unseen — condemning macro definitions (item 1) removes authored macros only; expression- and statement-position invocations (format!, vec!) still expand outside the walk"
+caught_by = "named residual — whole of R2 stated once; covers all macro-expansion escapes"
 
 [[law]]
 name = "R-verbatim-presence"

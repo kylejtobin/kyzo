@@ -12,6 +12,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod alias;
 pub mod boundary;
 pub mod classify;
 pub mod engines;

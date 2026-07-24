@@ -27,19 +27,18 @@
 use quote::ToTokens;
 use syn::visit::{self, Visit};
 
+use crate::alias::AliasTable;
 use crate::boundary::SourceFile;
 use crate::engines::Hit;
 use crate::grammar::{Disposition, Grammar, KindName, StructuralRule};
 
-/// Classify every item in `file`. Returns one hit per condemned-kind
-/// occurrence (`construct` = the condemned law name, exactly) and one hit
-/// per seated item matching no allowed construct (`construct` =
-/// `unclassified-<kind>:<label>`).
-pub fn classify_file(grammar: &Grammar, file: &SourceFile) -> Vec<Hit> {
+/// Classify every item in `file` under the workspace alias table (item 4).
+pub fn classify_file(grammar: &Grammar, file: &SourceFile, aliases: &AliasTable) -> Vec<Hit> {
     let mut hits = vec![];
     let ctx = Ctx {
         rel: &file.rel_path,
         grammar,
+        aliases,
         self_ty: None,
         in_container: false,
     };
@@ -52,6 +51,7 @@ pub fn classify_file(grammar: &Grammar, file: &SourceFile) -> Vec<Hit> {
 struct Ctx<'a> {
     rel: &'a str,
     grammar: &'a Grammar,
+    aliases: &'a AliasTable,
     self_ty: Option<&'a syn::Type>,
     in_container: bool,
 }
@@ -188,6 +188,7 @@ fn recurse_into_item(ctx: &Ctx, item: &syn::Item, hits: &mut Vec<Hit>) {
             let inner = Ctx {
                 rel: ctx.rel,
                 grammar: ctx.grammar,
+                aliases: ctx.aliases,
                 self_ty: Some(&i.self_ty),
                 in_container: true,
             };
@@ -199,6 +200,7 @@ fn recurse_into_item(ctx: &Ctx, item: &syn::Item, hits: &mut Vec<Hit>) {
             let inner = Ctx {
                 rel: ctx.rel,
                 grammar: ctx.grammar,
+                aliases: ctx.aliases,
                 self_ty: None,
                 in_container: true,
             };
@@ -353,10 +355,10 @@ fn seat_matches_trait_item<'a>(
 
 fn rule_matches_item(ctx: &Ctx, rule: StructuralRule, item: &syn::Item) -> bool {
     match item {
-        syn::Item::Struct(s) => struct_matches(rule, s),
-        syn::Item::Enum(e) => enum_matches(rule, e),
+        syn::Item::Struct(s) => struct_matches(ctx, rule, s),
+        syn::Item::Enum(e) => enum_matches(ctx, rule, e),
         syn::Item::Fn(f) => fn_matches(rule, &f.sig, Some(&f.block), f, ctx),
-        syn::Item::Type(t) => alias_matches(rule, &t.ty),
+        syn::Item::Type(t) => alias_matches(ctx, rule, &t.ty),
         syn::Item::Use(u) => import_matches(rule, u),
         syn::Item::Const(_) => constant_matches_non_static(rule),
         syn::Item::Static(s) => constant_matches_static(rule, s),
@@ -373,7 +375,7 @@ fn rule_matches_impl_item(ctx: &Ctx, rule: StructuralRule, item: &syn::ImplItem)
         return fn_matches(rule, &f.sig, Some(&f.block), f, ctx);
     }
     if let syn::ImplItem::Type(t) = item {
-        return alias_matches(rule, &t.ty);
+        return alias_matches(ctx, rule, &t.ty);
     }
     if let syn::ImplItem::Const(_) = item {
         return constant_matches_non_static(rule);
@@ -385,7 +387,7 @@ fn rule_matches_trait_item(ctx: &Ctx, rule: StructuralRule, item: &syn::TraitIte
     match item {
         syn::TraitItem::Fn(f) => fn_matches(rule, &f.sig, f.default.as_ref(), f, ctx),
         syn::TraitItem::Type(t) => match &t.default {
-            Some((_, ty)) => alias_matches(rule, ty),
+            Some((_, ty)) => alias_matches(ctx, rule, ty),
             None => matches!(rule, StructuralRule::AliasNoBannedTerminal),
         },
         syn::TraitItem::Const(_) => constant_matches_non_static(rule),
@@ -394,37 +396,15 @@ fn rule_matches_trait_item(ctx: &Ctx, rule: StructuralRule, item: &syn::TraitIte
 }
 
 // ---------------------------------------------------------------------------
-// item 4 (forward, minimal): direct string-terminal check. The full
-// alias-fixpoint table is item 4's own build; this direct terminal-name
-// check is real and sufficient to refuse the item-1 deny fixtures, and is
-// named here (not hidden) as narrower than item 4's eventual walk.
+// item 4: string-carrying decided by type structure + alias fixpoint.
 // ---------------------------------------------------------------------------
 
-fn type_is_string_terminal(ty: &syn::Type) -> bool {
-    match ty {
-        syn::Type::Reference(r) => type_is_string_terminal(&r.elem),
-        syn::Type::Paren(p) => type_is_string_terminal(&p.elem),
-        syn::Type::Group(g) => type_is_string_terminal(&g.elem),
-        syn::Type::Array(a) => type_is_string_terminal(&a.elem),
-        syn::Type::Slice(s) => type_is_string_terminal(&s.elem),
-        syn::Type::Tuple(t) => t.elems.iter().any(type_is_string_terminal),
-        syn::Type::Path(tp) => {
-            let Some(seg) = tp.path.segments.last() else {
-                return false;
-            };
-            if seg.ident == "String" || seg.ident == "str" {
-                return true;
-            }
-            let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
-                return false;
-            };
-            args.args.iter().any(|a| match a {
-                syn::GenericArgument::Type(t) => type_is_string_terminal(t),
-                _not_a_type_arg => false,
-            })
-        }
-        _not_walked_further => false,
-    }
+fn type_is_string_terminal(ctx: &Ctx<'_>, ty: &syn::Type) -> bool {
+    // Fail closed: a resolve error (should be impossible after AliasTable::build)
+    // treats the type as string-carrying so a soft drain cannot green.
+    ctx.aliases
+        .type_carries_string(ctx.rel, ty)
+        .unwrap_or(true)
 }
 
 // ---------------------------------------------------------------------------
@@ -435,7 +415,7 @@ fn fields_all_private(fields: &syn::Fields) -> bool {
     fields.iter().all(|f| matches!(f.vis, syn::Visibility::Inherited))
 }
 
-fn struct_matches(rule: StructuralRule, node: &syn::ItemStruct) -> bool {
+fn struct_matches(ctx: &Ctx<'_>, rule: StructuralRule, node: &syn::ItemStruct) -> bool {
     match rule {
         StructuralRule::TupleSinglePrivateField => {
             matches!(&node.fields, syn::Fields::Unnamed(u) if u.unnamed.len() == 1)
@@ -444,19 +424,19 @@ fn struct_matches(rule: StructuralRule, node: &syn::ItemStruct) -> bool {
         StructuralRule::NamedAllPrivateNoStringTerminal => {
             matches!(&node.fields, syn::Fields::Named(_))
                 && fields_all_private(&node.fields)
-                && node.fields.iter().all(|f| !type_is_string_terminal(&f.ty))
+                && node.fields.iter().all(|f| !type_is_string_terminal(ctx, &f.ty))
         }
         StructuralRule::UnitStruct => matches!(&node.fields, syn::Fields::Unit),
         _rule_not_for_struct => false,
     }
 }
 
-fn enum_matches(rule: StructuralRule, node: &syn::ItemEnum) -> bool {
+fn enum_matches(ctx: &Ctx<'_>, rule: StructuralRule, node: &syn::ItemEnum) -> bool {
     match rule {
         StructuralRule::NoStringVariantFields => node
             .variants
             .iter()
-            .all(|v| v.fields.iter().all(|f| !type_is_string_terminal(&f.ty))),
+            .all(|v| v.fields.iter().all(|f| !type_is_string_terminal(ctx, &f.ty))),
         _rule_not_for_enum => false,
     }
 }
@@ -465,9 +445,9 @@ fn enum_matches(rule: StructuralRule, node: &syn::ItemEnum) -> bool {
 // alias / import / constant / module (item 1's remaining named seats)
 // ---------------------------------------------------------------------------
 
-fn alias_matches(rule: StructuralRule, ty: &syn::Type) -> bool {
+fn alias_matches(ctx: &Ctx<'_>, rule: StructuralRule, ty: &syn::Type) -> bool {
     match rule {
-        StructuralRule::AliasNoBannedTerminal => !type_is_string_terminal(ty),
+        StructuralRule::AliasNoBannedTerminal => !type_is_string_terminal(ctx, ty),
         _rule_not_for_alias => false,
     }
 }
@@ -947,10 +927,12 @@ mod fixture_tests {
         // Container rules judge the Impl/Trait item itself. Fn-skeleton
         // rules that live inside an impl are probed against the first
         // interior fn (fixtures start with `struct …; impl … { fn … }`).
+        let empty = crate::alias::AliasTable::empty();
         if matches!(rule, StructuralRule::InteriorsClassify) {
             let ctx = Ctx {
                 rel,
                 grammar,
+                aliases: &empty,
                 self_ty: None,
                 in_container: false,
             };
@@ -961,6 +943,7 @@ mod fixture_tests {
                 let ctx = Ctx {
                     rel,
                     grammar,
+                    aliases: &empty,
                     self_ty: Some(&imp.self_ty),
                     in_container: true,
                 };
@@ -978,6 +961,7 @@ mod fixture_tests {
                 let ctx = Ctx {
                     rel,
                     grammar,
+                    aliases: &empty,
                     self_ty: None,
                     in_container: false,
                 };
@@ -1075,7 +1059,7 @@ mod fixture_tests {
                 text: src,
                 ast,
             };
-            let hits = classify_file(&grammar, &f);
+            let hits = classify_file(&grammar, &f, &crate::alias::AliasTable::build(&[&f]).expect("aliases"));
             assert!(
                 hits.iter().any(|h| h.construct == law),
                 "{} deny fixture must hit under `{law}`: {hits:?}",
@@ -1102,7 +1086,7 @@ mod fixture_tests {
             text: "static mut G: u64 = 0;".to_string(),
             ast: syn::parse_file("static mut G: u64 = 0;").expect("parses"),
         };
-        let hits = classify_file(&grammar, &f);
+        let hits = classify_file(&grammar, &f, &crate::alias::AliasTable::build(&[&f]).expect("aliases"));
         assert_eq!(hits.len(), 1, "static mut must be denied: {hits:?}");
     }
 
@@ -1141,7 +1125,8 @@ mod fixture_tests {
             text: src.to_string(),
             ast: syn::parse_file(src).expect("parses"),
         };
-        classify_file(&grammar, &f)
+        let aliases = crate::alias::AliasTable::build(&[&f]).expect("alias table");
+        classify_file(&grammar, &f, &aliases)
     }
 
     fn assert_hit_count(src: &str, n: usize) {
@@ -1183,7 +1168,7 @@ mod fixture_tests {
             text: src.clone(),
             ast: syn::parse_file(&src).expect("parses"),
         };
-        let hits = classify_file(&grammar, &f);
+        let hits = classify_file(&grammar, &f, &crate::alias::AliasTable::build(&[&f]).expect("aliases"));
         assert!(
             hits.iter().any(|h| h.construct.contains("unclassified")),
             "declared fn hash drift must be red: {hits:?}"
@@ -1206,7 +1191,7 @@ mod fixture_tests {
             text: src.to_string(),
             ast,
         };
-        let hits = classify_file(&grammar, &f);
+        let hits = classify_file(&grammar, &f, &crate::alias::AliasTable::build(&[&f]).expect("aliases"));
         assert!(
             hits.is_empty(),
             "admission-door pass shape must not be unclassified: {hits:?}"
@@ -1305,9 +1290,11 @@ mod fixture_tests {
         let src = "struct Newtype(u64);";
         let ast = syn::parse_file(src).expect("parses");
         let item = ast.items.first().expect("item");
+        let empty = crate::alias::AliasTable::empty();
         let ctx = Ctx {
             rel: "crates/probe/src/lib.rs",
             grammar: &grammar,
+            aliases: &empty,
             self_ty: None,
             in_container: false,
         };
@@ -1323,5 +1310,24 @@ mod fixture_tests {
             Some("newtype-scalar"),
             "classification must emit the unique construct name"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // item 4 proofs — string rule + alias fixpoint
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn item_4_proof_type_alias_to_string_struct_is_red() {
+        assert_unclassified("type Name = String; struct S { n: Name }");
+    }
+
+    #[test]
+    fn item_4_proof_use_as_string_struct_is_red() {
+        assert_unclassified("use std::string::String as Text; struct T { t: Text }");
+    }
+
+    #[test]
+    fn item_4_proof_restrict_struct_is_clean() {
+        assert_hit_count("struct R { r: Restrict }", 0);
     }
 }

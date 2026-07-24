@@ -18,6 +18,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
+use crate::alias::AliasTable;
 use crate::boundary::{Boundary, SourceFile};
 use crate::classify;
 use crate::engines::{Hit, graph, meta, shape};
@@ -114,10 +115,13 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
     let need_classify = run_pass("unclassified")
         || condemned_names.iter().any(|n| run_pass(n));
     if need_classify {
+        let all_files: Vec<&SourceFile> = b.files.iter().collect();
+        let aliases = AliasTable::build(&all_files)
+            .with_context(|| "building item-4 workspace alias table")?;
         let all: Vec<Hit> = b
             .files
             .iter()
-            .flat_map(|f| classify::classify_file(&grammar, f))
+            .flat_map(|f| classify::classify_file(&grammar, f, &aliases))
             .collect();
         let mut condemned_hits: BTreeMap<&str, Vec<Hit>> =
             condemned_names.iter().map(|n| (*n, Vec::new())).collect();
