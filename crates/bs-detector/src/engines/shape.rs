@@ -894,40 +894,67 @@ impl SelfPlaceAssign {
     }
 }
 
+/// Which assignment sites a matcher hunts — one walk authority (tip 851:
+/// `detect_nested_place_assign` / `detect_assignment` must not be twin bodies).
+#[derive(Clone, Copy)]
+enum AssignSiteKind {
+    /// Every `=` / compound-assign (construct-scoped on derivation).
+    Any,
+    /// Only nested `self.…` places (construct-scoped ban).
+    NestedPlace,
+}
+
+impl AssignSiteKind {
+    fn construct(self) -> &'static str {
+        match self {
+            Self::Any => "assignment",
+            Self::NestedPlace => "nested_place_assign",
+        }
+    }
+
+    fn wants(self, left: &syn::Expr) -> bool {
+        match self {
+            Self::Any => true,
+            Self::NestedPlace => SelfPlaceAssign.is_nested(left),
+        }
+    }
+}
+
 impl SourceFile {
-    /// Construct-scoped (item 5); run.rs keeps hits only inside constructs
-    /// that list this ban.
-    fn detect_nested_place_assign(&self) -> Vec<Hit> {
+    /// One assign/compound-assign walker — both matchers share this body.
+    fn assign_sites(&self, kind: AssignSiteKind) -> Vec<Hit> {
         use syn::spanned::Spanned;
         struct V<'a> {
+            kind: AssignSiteKind,
             rel: &'a str,
             hits: Vec<Hit>,
         }
         impl<'ast, 'a> Visit<'ast> for V<'a> {
             fn visit_expr_assign(&mut self, node: &'ast syn::ExprAssign) {
-                if SelfPlaceAssign.is_nested(&node.left) {
+                if self.kind.wants(&node.left) {
                     HIT_PUSH.push(
                         &mut self.hits,
                         self.rel,
                         span_line(&node.eq_token.span),
-                        "nested_place_assign",
+                        self.kind.construct(),
                     );
                 }
                 visit::visit_expr_assign(self, node);
             }
             fn visit_expr_binary(&mut self, node: &'ast syn::ExprBinary) {
-                if BinOpRef(&node.op).is_compound_assign() && SelfPlaceAssign.is_nested(&node.left) {
+                if BinOpRef(&node.op).is_compound_assign() && self.kind.wants(&node.left) {
                     HIT_PUSH.push(
                         &mut self.hits,
                         self.rel,
                         span_line(&node.op.span()),
-                        "nested_place_assign",
+                        self.kind.construct(),
                     );
                 }
                 visit::visit_expr_binary(self, node);
             }
         }
         let mut v = V {
+            kind,
             rel: self.rel_path(),
             hits: vec![],
         };
@@ -935,41 +962,15 @@ impl SourceFile {
         v.hits
     }
 
+    /// Construct-scoped (item 5); run.rs keeps hits only inside constructs
+    /// that list this ban.
+    fn detect_nested_place_assign(&self) -> Vec<Hit> {
+        self.assign_sites(AssignSiteKind::NestedPlace)
+    }
+
     /// Any assignment / compound-assign (construct-scoped on derivation).
     fn detect_assignment(&self) -> Vec<Hit> {
-        use syn::spanned::Spanned;
-        struct V<'a> {
-            rel: &'a str,
-            hits: Vec<Hit>,
-        }
-        impl<'ast, 'a> Visit<'ast> for V<'a> {
-            fn visit_expr_assign(&mut self, node: &'ast syn::ExprAssign) {
-                HIT_PUSH.push(
-                    &mut self.hits,
-                    self.rel,
-                    span_line(&node.eq_token.span),
-                    "assignment",
-                );
-                visit::visit_expr_assign(self, node);
-            }
-            fn visit_expr_binary(&mut self, node: &'ast syn::ExprBinary) {
-                if BinOpRef(&node.op).is_compound_assign() {
-                    HIT_PUSH.push(
-                        &mut self.hits,
-                        self.rel,
-                        span_line(&node.op.span()),
-                        "assignment",
-                    );
-                }
-                visit::visit_expr_binary(self, node);
-            }
-        }
-        let mut v = V {
-            rel: self.rel_path(),
-            hits: vec![],
-        };
-        v.visit_file(self.ast());
-        v.hits
+        self.assign_sites(AssignSiteKind::Any)
     }
 
     /// `.await` expression sites (construct-scoped on fn skeletons).
