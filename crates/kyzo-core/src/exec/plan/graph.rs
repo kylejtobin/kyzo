@@ -334,6 +334,7 @@ impl<'a> TarjanScc<'a> {
 mod tests {
     use miette::{Result, miette};
     use proptest::prelude::*;
+    use proptest::test_runner::{TestCaseError, TestRunner};
 
     use super::*;
 
@@ -485,94 +486,119 @@ mod tests {
         Ok(())
     }
 
-    proptest! {
+    #[test]
+    fn scc_matches_naive_reachability_oracle() {
         // The iterative Tarjan agrees with the naive reachability oracle
         // on random graphs: identical component partitions.
-        #[test]
-        fn scc_matches_naive_reachability_oracle(
-            n in 1usize..12,
-            edges in proptest::collection::vec((0usize..12, 0usize..12), 0..60)
-        ) {
-            let edges: Vec<(usize, usize)> = edges
-                .into_iter()
-                .map(|(a, b)| (a % n, b % n))
-                .collect();
-            let g = graph_of(&edges, n);
-            let got = match scc_partition(&g) {
-                Ok(v) => v,
-                Err(e) => {
-                    return Err(TestCaseError::fail(format!("{e}")));
-                }
-            };
-            prop_assert_eq!(got, naive_scc(&g, n));
-        }
+        let mut runner = TestRunner::default();
+        runner
+            .run(
+                &(
+                    1usize..12,
+                    proptest::collection::vec((0usize..12, 0usize..12), 0..60),
+                ),
+                |(n, edges)| {
+                    let edges: Vec<(usize, usize)> = edges
+                        .into_iter()
+                        .map(|(a, b)| (a % n, b % n))
+                        .collect();
+                    let g = graph_of(&edges, n);
+                    let got = match scc_partition(&g) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            return Err(TestCaseError::fail(format!("{e}")));
+                        }
+                    };
+                    prop_assert_eq!(got, naive_scc(&g, n));
+                    Ok(())
+                },
+            )
+            .unwrap();
+    }
 
+    #[test]
+    fn iterative_tarjan_is_output_identical_to_recursive() {
         // The iterative Tarjan is output-identical to the original
         // recursive formulation: same components, same order, same member
         // order — not merely the same partition.
-        #[test]
-        fn iterative_tarjan_is_output_identical_to_recursive(
-            n in 1usize..12,
-            edges in proptest::collection::vec((0usize..12, 0usize..12), 0..60)
-        ) {
-            let mut idx_graph: Vec<Vec<usize>> = vec![vec![]; n];
-            for (a, b) in edges {
-                idx_graph[a % n].push(b % n);
-            }
-            let iterative = match TarjanScc::new(&idx_graph) {
-                Ok(t) => t.run(),
-                Err(e) => {
-                    return Err(TestCaseError::fail(format!("validated targets: {e}")));
-                }
-            };
-            let recursive = RecursiveTarjan::new(&idx_graph).run();
-            prop_assert_eq!(iterative, recursive);
-        }
+        let mut runner = TestRunner::default();
+        runner
+            .run(
+                &(
+                    1usize..12,
+                    proptest::collection::vec((0usize..12, 0usize..12), 0..60),
+                ),
+                |(n, edges)| {
+                    let mut idx_graph: Vec<Vec<usize>> = vec![vec![]; n];
+                    for (a, b) in edges {
+                        idx_graph[a % n].push(b % n);
+                    }
+                    let iterative = match TarjanScc::new(&idx_graph) {
+                        Ok(t) => t.run(),
+                        Err(e) => {
+                            return Err(TestCaseError::fail(format!("validated targets: {e}")));
+                        }
+                    };
+                    let recursive = RecursiveTarjan::new(&idx_graph).run();
+                    prop_assert_eq!(iterative, recursive);
+                    Ok(())
+                },
+            )
+            .unwrap();
+    }
 
+    #[test]
+    fn kahn_output_is_a_stratification() {
         // Kahn's output on a random poisoned DAG is a stratification:
         // every node exactly once; every edge points into the same or a
         // later stratum; every poisoned edge into a strictly later one.
-        #[test]
-        fn kahn_output_is_a_stratification(
-            n in 1usize..12,
-            edges in proptest::collection::vec((0usize..12, 0usize..12, any::<bool>()), 0..60)
-        ) {
-            // Orient every edge low → high so the graph is a DAG.
-            let mut g: StratifiedGraph<usize> = BTreeMap::new();
-            for (a, b, poisoned) in edges {
-                let (a, b) = (a % n, b % n);
-                if a == b {
-                    continue;
-                }
-                let (fr, to) = (a.min(b), a.max(b));
-                let e = g.entry(fr).or_default().entry(to).or_insert(false);
-                *e = *e || poisoned;
-            }
-            let strata = match generalized_kahn(&g, n) {
-                Ok(s) => s,
-                Err(e) => {
-                    return Err(TestCaseError::fail(format!("a DAG stratifies: {e}")));
-                }
-            };
-            let mut stratum_of: BTreeMap<usize, usize> = BTreeMap::new();
-            for (idx, stratum) in strata.iter().enumerate() {
-                for node in stratum {
-                    prop_assert!(
-                        stratum_of.insert(*node, idx).is_none(),
-                        "node emitted twice"
-                    );
-                }
-            }
-            prop_assert_eq!(stratum_of.len(), n, "every node emitted");
-            for (fr, tos) in &g {
-                for (to, poisoned) in tos {
-                    prop_assert!(stratum_of[to] >= stratum_of[fr]);
-                    if *poisoned {
-                        prop_assert!(stratum_of[to] > stratum_of[fr]);
+        let mut runner = TestRunner::default();
+        runner
+            .run(
+                &(
+                    1usize..12,
+                    proptest::collection::vec((0usize..12, 0usize..12, any::<bool>()), 0..60),
+                ),
+                |(n, edges)| {
+                    // Orient every edge low → high so the graph is a DAG.
+                    let mut g: StratifiedGraph<usize> = BTreeMap::new();
+                    for (a, b, poisoned) in edges {
+                        let (a, b) = (a % n, b % n);
+                        if a == b {
+                            continue;
+                        }
+                        let (fr, to) = (a.min(b), a.max(b));
+                        let e = g.entry(fr).or_default().entry(to).or_insert(false);
+                        *e = *e || poisoned;
                     }
-                }
-            }
-        }
+                    let strata = match generalized_kahn(&g, n) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            return Err(TestCaseError::fail(format!("a DAG stratifies: {e}")));
+                        }
+                    };
+                    let mut stratum_of: BTreeMap<usize, usize> = BTreeMap::new();
+                    for (idx, stratum) in strata.iter().enumerate() {
+                        for node in stratum {
+                            prop_assert!(
+                                stratum_of.insert(*node, idx).is_none(),
+                                "node emitted twice"
+                            );
+                        }
+                    }
+                    prop_assert_eq!(stratum_of.len(), n, "every node emitted");
+                    for (fr, tos) in &g {
+                        for (to, poisoned) in tos {
+                            prop_assert!(stratum_of[to] >= stratum_of[fr]);
+                            if *poisoned {
+                                prop_assert!(stratum_of[to] > stratum_of[fr]);
+                            }
+                        }
+                    }
+                    Ok(())
+                },
+            )
+            .unwrap();
     }
 
     #[test]

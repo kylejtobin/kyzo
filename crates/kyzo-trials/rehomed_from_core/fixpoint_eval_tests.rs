@@ -46,6 +46,7 @@ use std::time::Duration;
 use itertools::Itertools;
 use miette::Result;
 use proptest::prelude::*;
+use proptest::test_runner::{Config, TestRunner};
 
 use kyzo::oracle_harness::{
     AtomOccurrence, Budget, BudgetDimension, EpochStore, EvalDefinition, EvalProgram, EvalRuleSet,
@@ -1010,16 +1011,19 @@ fn build_case(case: &GenCase) -> Program {
     }
 }
 
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(64))]
-    /// The moment of truth: randomized stratified programs — plain and
-    /// self-join recursion, meet recursion over five lattices,
-    /// negation, normal aggregation — through the real semi-naive
-    /// evaluator and the sealed oracle, relation by relation.
-    #[test]
-    fn differential_randomized_stratified_programs(case in arb_case()) {
-        assert_matches_oracle(&build_case(&case));
-    }
+/// The moment of truth: randomized stratified programs — plain and
+/// self-join recursion, meet recursion over five lattices,
+/// negation, normal aggregation — through the real semi-naive
+/// evaluator and the sealed oracle, relation by relation.
+#[test]
+fn differential_randomized_stratified_programs() {
+    let mut runner = TestRunner::new(Config::with_cases(64));
+    runner
+        .run(&arb_case(), |case| {
+            assert_matches_oracle(&build_case(&case));
+            Ok(())
+        })
+        .unwrap();
 }
 
 // ── the determinism law ──────────────────────────────────────────────
@@ -2657,22 +2661,25 @@ fn rev_nonsuffix_meet_witness_premises_are_per_group() {
 // ATTACK 1d (randomized): the full randomized stratified differential,
 // but with the meet column at position 0 — the frozen diff's proptest
 // only ever generates suffix layouts.
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(64))]
-    #[test]
-    fn rev_differential_randomized_nonsuffix_meet(case in arb_case()) {
-        let mut model = build_case(&case);
-        // Swap the suffix meet rules for the pos0 form and re-point the
-        // reader at the swapped columns.
-        model.rules.retain(|r| r.head_rel != "m" && r.head_rel != "out");
-        model.rules.extend(meet_reach_rules_pos0(case.aggr_name));
-        model.rules.push(Rule::plain(
-            "out",
-            vec![x(), y()],
-            vec![lit("m", vec![y(), x()], false)],
-        ));
-        assert_matches_oracle(&model);
-    }
+#[test]
+fn rev_differential_randomized_nonsuffix_meet() {
+    let mut runner = TestRunner::new(Config::with_cases(64));
+    runner
+        .run(&arb_case(), |case| {
+            let mut model = build_case(&case);
+            // Swap the suffix meet rules for the pos0 form and re-point the
+            // reader at the swapped columns.
+            model.rules.retain(|r| r.head_rel != "m" && r.head_rel != "out");
+            model.rules.extend(meet_reach_rules_pos0(case.aggr_name));
+            model.rules.push(Rule::plain(
+                "out",
+                vec![x(), y()],
+                vec![lit("m", vec![y(), x()], false)],
+            ));
+            assert_matches_oracle(&model);
+            Ok(())
+        })
+        .unwrap();
 }
 
 #[test]

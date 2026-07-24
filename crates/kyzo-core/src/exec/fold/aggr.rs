@@ -1640,7 +1640,7 @@ mod tests {
     use kyzo_model::program::aggregate::parse_aggr;
     use miette::{Result, miette};
     use proptest::prelude::*;
-    use proptest::test_runner::TestCaseError;
+    use proptest::test_runner::{TestCaseError, TestRunner};
 
     fn lattice_ok(r: Result<()>) -> std::result::Result<(), TestCaseError> {
         r.map_err(|e| TestCaseError::fail(format!("{e}")))
@@ -1775,119 +1775,153 @@ mod tests {
         })
     }
 
-    proptest! {
-        #[test]
-        fn meet_laws_and_or(x in any::<bool>(), y in any::<bool>(), z in any::<bool>()) {
-            let (x, y, z) = (v(DataValue::from(x)), v(DataValue::from(y)), v(DataValue::from(z)));
-            lattice_ok(assert_semilattice_laws(
-                &MeetAggrAnd,
-                [&x, &y, &z],
-                ident,
-                true,
-            ))?;
-            lattice_ok(assert_semilattice_laws(
-                &MeetAggrOr,
-                [&x, &y, &z],
-                ident,
-                true,
-            ))?;
-        }
+    #[test]
+    fn meet_laws_and_or() {
+        TestRunner::default()
+            .run(&(any::<bool>(), any::<bool>(), any::<bool>()), |(x, y, z)| {
+                let (x, y, z) = (
+                    v(DataValue::from(x)),
+                    v(DataValue::from(y)),
+                    v(DataValue::from(z)),
+                );
+                lattice_ok(assert_semilattice_laws(
+                    &MeetAggrAnd,
+                    [&x, &y, &z],
+                    ident,
+                    true,
+                ))?;
+                lattice_ok(assert_semilattice_laws(
+                    &MeetAggrOr,
+                    [&x, &y, &z],
+                    ident,
+                    true,
+                ))?;
+                Ok(())
+            })
+            .unwrap();
+    }
 
-        #[test]
-        fn meet_laws_min_max(x in arb_num(), y in arb_num(), z in arb_num()) {
-            let (x, y, z) = (v(x), v(y), v(z));
-            lattice_ok(assert_semilattice_laws(
-                &MeetAggrMin,
-                [&x, &y, &z],
-                ident,
-                true,
-            ))?;
-            lattice_ok(assert_semilattice_laws(
-                &MeetAggrMax,
-                [&x, &y, &z],
-                ident,
-                true,
-            ))?;
-        }
+    #[test]
+    fn meet_laws_min_max() {
+        TestRunner::default()
+            .run(&(arb_num(), arb_num(), arb_num()), |(x, y, z)| {
+                let (x, y, z) = (v(x), v(y), v(z));
+                lattice_ok(assert_semilattice_laws(
+                    &MeetAggrMin,
+                    [&x, &y, &z],
+                    ident,
+                    true,
+                ))?;
+                lattice_ok(assert_semilattice_laws(
+                    &MeetAggrMax,
+                    [&x, &y, &z],
+                    ident,
+                    true,
+                ))?;
+                Ok(())
+            })
+            .unwrap();
+    }
 
-        #[test]
-        fn meet_laws_choice(x in arb_value(), y in arb_value(), z in arb_value()) {
-            let (x, y, z) = (v(x), v(y), v(z));
-            lattice_ok(assert_semilattice_laws(
-                &MeetAggrChoice,
-                [&x, &y, &z],
-                ident,
-                false,
-            ))?;
-        }
+    #[test]
+    fn meet_laws_choice() {
+        TestRunner::default()
+            .run(&(arb_value(), arb_value(), arb_value()), |(x, y, z)| {
+                let (x, y, z) = (v(x), v(y), v(z));
+                lattice_ok(assert_semilattice_laws(
+                    &MeetAggrChoice,
+                    [&x, &y, &z],
+                    ident,
+                    false,
+                ))?;
+                Ok(())
+            })
+            .unwrap();
+    }
 
-        #[test]
-        fn meet_laws_bit_and_or((x, y, z) in arb_bytes_triple()) {
-            let (x, y, z) = (v(x), v(y), v(z));
-            lattice_ok(assert_semilattice_laws(
-                &MeetAggrBitAnd,
-                [&x, &y, &z],
-                ident,
-                true,
-            ))?;
-            lattice_ok(assert_semilattice_laws(
-                &MeetAggrBitOr,
-                [&x, &y, &z],
-                ident,
-                true,
-            ))?;
-        }
+    #[test]
+    fn meet_laws_bit_and_or() {
+        TestRunner::default()
+            .run(&arb_bytes_triple(), |(x, y, z)| {
+                let (x, y, z) = (v(x), v(y), v(z));
+                lattice_ok(assert_semilattice_laws(
+                    &MeetAggrBitAnd,
+                    [&x, &y, &z],
+                    ident,
+                    true,
+                ))?;
+                lattice_ok(assert_semilattice_laws(
+                    &MeetAggrBitOr,
+                    [&x, &y, &z],
+                    ident,
+                    true,
+                ))?;
+                Ok(())
+            })
+            .unwrap();
+    }
 
-        #[test]
-        fn meet_laws_union_intersection(
-            x in arb_small_list(),
-            y in arb_small_list(),
-            z in arb_small_list()
-        ) {
-            let (x, y, z) = (v(x), v(y), v(z));
-            lattice_ok(assert_semilattice_laws(
-                &MeetAggrUnion,
-                [&x, &y, &z],
-                as_set,
-                true,
-            ))?;
-            lattice_ok(assert_semilattice_laws(
-                &MeetAggrIntersection,
-                [&x, &y, &z],
-                as_set,
-                true,
-            ))?;
-        }
+    #[test]
+    fn meet_laws_union_intersection() {
+        TestRunner::default()
+            .run(
+                &(arb_small_list(), arb_small_list(), arb_small_list()),
+                |(x, y, z)| {
+                    let (x, y, z) = (v(x), v(y), v(z));
+                    lattice_ok(assert_semilattice_laws(
+                        &MeetAggrUnion,
+                        [&x, &y, &z],
+                        as_set,
+                        true,
+                    ))?;
+                    lattice_ok(assert_semilattice_laws(
+                        &MeetAggrIntersection,
+                        [&x, &y, &z],
+                        as_set,
+                        true,
+                    ))?;
+                    Ok(())
+                },
+            )
+            .unwrap();
+    }
 
-        #[test]
-        fn meet_laws_shortest(
-            x in arb_small_list(),
-            y in arb_small_list(),
-            z in arb_small_list()
-        ) {
-            let (x, y, z) = (v(x), v(y), v(z));
-            lattice_ok(assert_semilattice_laws(
-                &MeetAggrShortest,
-                [&x, &y, &z],
-                ident,
-                false,
-            ))?;
-        }
+    #[test]
+    fn meet_laws_shortest() {
+        TestRunner::default()
+            .run(
+                &(arb_small_list(), arb_small_list(), arb_small_list()),
+                |(x, y, z)| {
+                    let (x, y, z) = (v(x), v(y), v(z));
+                    lattice_ok(assert_semilattice_laws(
+                        &MeetAggrShortest,
+                        [&x, &y, &z],
+                        ident,
+                        false,
+                    ))?;
+                    Ok(())
+                },
+            )
+            .unwrap();
+    }
 
-        #[test]
-        fn meet_laws_min_cost(
-            x in arb_costed_pair(),
-            y in arb_costed_pair(),
-            z in arb_costed_pair()
-        ) {
-            let (x, y, z) = (v(x), v(y), v(z));
-            lattice_ok(assert_semilattice_laws(
-                &MeetAggrMinCost,
-                [&x, &y, &z],
-                ident,
-                false,
-            ))?;
-        }
+    #[test]
+    fn meet_laws_min_cost() {
+        TestRunner::default()
+            .run(
+                &(arb_costed_pair(), arb_costed_pair(), arb_costed_pair()),
+                |(x, y, z)| {
+                    let (x, y, z) = (v(x), v(y), v(z));
+                    lattice_ok(assert_semilattice_laws(
+                        &MeetAggrMinCost,
+                        [&x, &y, &z],
+                        ident,
+                        false,
+                    ))?;
+                    Ok(())
+                },
+            )
+            .unwrap();
     }
 
     /// Exact `Num` order: integers beyond 2^53 that collide as `f64` stay
