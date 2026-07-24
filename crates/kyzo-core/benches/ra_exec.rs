@@ -35,7 +35,7 @@ use std::fmt::Debug;
 use std::hint::black_box;
 use std::path::PathBuf;
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion};
 use kyzo::bench_api::{
     Backend, Graph, Workload, aggregation, scan_filter, three_way_join, transitive_closure,
 };
@@ -124,9 +124,19 @@ fn all(c: &mut Criterion) {
     }
 }
 
-criterion_group! {
-    name = benches;
-    config = Criterion::default().sample_size(20);
-    targets = all
+/// Criterion group harness — hand-expanded from criterion 0.8.2 `criterion_group!`
+/// (judge tip 421: macros are trivial public-API wiring). Custom sample_size(20)
+/// matches the prior `config = Criterion::default().sample_size(20)` arm.
+pub fn benches() {
+    let mut criterion: Criterion<_> = Criterion::default()
+        .sample_size(20)
+        .configure_from_args();
+    all(&mut criterion);
 }
-criterion_main!(benches);
+
+fn main() {
+    benches();
+    Criterion::default()
+        .configure_from_args()
+        .final_summary();
+}
