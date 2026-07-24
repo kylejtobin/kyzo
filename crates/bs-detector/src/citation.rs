@@ -24,6 +24,7 @@ use std::path::Path;
 use quote::ToTokens;
 use syn::visit::Visit;
 
+use crate::boundary::Label;
 use crate::engines::Hit;
 use crate::grammar::Laws;
 use crate::identity;
@@ -123,11 +124,11 @@ pub fn resolve_hash(root: &Path, laws: &Laws, citation: &Citation) -> Option<Str
 
 /// Whether a waiver's citation still resolves to the recorded hash.
 pub fn citation_live(root: &Path, laws: &Laws, w: &Waiver) -> bool {
-    let Ok(c) = Citation::parse(&w.citation) else {
+    let Ok(c) = Citation::parse(w.citation()) else {
         return false;
     };
     match resolve_hash(root, laws, &c) {
-        Some(h) => h == w.anchor_hash,
+        Some(h) => h == w.anchor_hash(),
         None => false,
     }
 }
@@ -135,11 +136,11 @@ pub fn citation_live(root: &Path, laws: &Laws, w: &Waiver) -> bool {
 /// Every waiver whose citation is missing or whose anchor hash drifted.
 pub fn dead_citations(root: &Path, laws: &Laws, waivers: &WaiverFile) -> Vec<Hit> {
     let mut hits = vec![];
-    for w in &waivers.waiver {
+    for w in waivers.waivers() {
         if citation_live(root, laws, w) {
             continue;
         }
-        hits.push(Hit::admit(w.file.clone(), w.line, format!("dead_citation:{}", w.citation)));
+        hits.push(Hit::admit(w.file(), w.line(), format!("dead_citation:{}", w.citation())));
     }
     hits
 }
@@ -170,31 +171,31 @@ fn find_fn(ast: &syn::File, name: &str) -> Option<FoundItem> {
 }
 
 fn find_named_item(ast: &syn::File, name: &str) -> Option<FoundItem> {
-    struct V<'a> {
-        name: &'a str,
+    struct V {
+        name: Label,
         found: Option<FoundItem>,
     }
-    impl<'ast> Visit<'ast> for V<'_> {
+    impl<'ast> Visit<'ast> for V {
         fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
-            if self.found.is_none() && node.sig.ident == self.name {
+            if self.found.is_none() && node.sig.ident == self.name.as_str() {
                 self.found = Some(FoundItem(node.to_token_stream()));
             }
             syn::visit::visit_item_fn(self, node);
         }
         fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
-            if self.found.is_none() && node.sig.ident == self.name {
+            if self.found.is_none() && node.sig.ident == self.name.as_str() {
                 self.found = Some(FoundItem(node.to_token_stream()));
             }
             syn::visit::visit_impl_item_fn(self, node);
         }
         fn visit_item_struct(&mut self, node: &'ast syn::ItemStruct) {
-            if self.found.is_none() && node.ident == self.name {
+            if self.found.is_none() && node.ident == self.name.as_str() {
                 self.found = Some(FoundItem(node.to_token_stream()));
             }
             syn::visit::visit_item_struct(self, node);
         }
         fn visit_item_enum(&mut self, node: &'ast syn::ItemEnum) {
-            if self.found.is_none() && node.ident == self.name {
+            if self.found.is_none() && node.ident == self.name.as_str() {
                 self.found = Some(FoundItem(node.to_token_stream()));
             }
             syn::visit::visit_item_enum(self, node);
@@ -202,60 +203,63 @@ fn find_named_item(ast: &syn::File, name: &str) -> Option<FoundItem> {
         // Tip 686: citing const/type/static/trait was blind (resolve None →
         // dead or, worse, a wrong earlier match). Exact name, first hit.
         fn visit_item_const(&mut self, node: &'ast syn::ItemConst) {
-            if self.found.is_none() && node.ident == self.name {
+            if self.found.is_none() && node.ident == self.name.as_str() {
                 self.found = Some(FoundItem(node.to_token_stream()));
             }
             syn::visit::visit_item_const(self, node);
         }
         fn visit_item_static(&mut self, node: &'ast syn::ItemStatic) {
-            if self.found.is_none() && node.ident == self.name {
+            if self.found.is_none() && node.ident == self.name.as_str() {
                 self.found = Some(FoundItem(node.to_token_stream()));
             }
             syn::visit::visit_item_static(self, node);
         }
         fn visit_item_type(&mut self, node: &'ast syn::ItemType) {
-            if self.found.is_none() && node.ident == self.name {
+            if self.found.is_none() && node.ident == self.name.as_str() {
                 self.found = Some(FoundItem(node.to_token_stream()));
             }
             syn::visit::visit_item_type(self, node);
         }
         fn visit_item_trait(&mut self, node: &'ast syn::ItemTrait) {
-            if self.found.is_none() && node.ident == self.name {
+            if self.found.is_none() && node.ident == self.name.as_str() {
                 self.found = Some(FoundItem(node.to_token_stream()));
             }
             syn::visit::visit_item_trait(self, node);
         }
     }
-    let mut v = V { name, found: None };
+    let mut v = V {
+        name: name.into(),
+        found: None,
+    };
     v.visit_file(ast);
     v.found
 }
 
 fn find_impl_method(ast: &syn::File, ty: &str, method: &str) -> Option<FoundItem> {
-    struct V<'a> {
-        ty: &'a str,
-        method: &'a str,
+    struct V {
+        ty: Label,
+        method: Label,
         in_match: bool,
         found: Option<FoundItem>,
     }
-    impl<'ast> Visit<'ast> for V<'_> {
+    impl<'ast> Visit<'ast> for V {
         fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {
             let self_ty = type_path_tail(&node.self_ty);
             let prev = self.in_match;
-            self.in_match = self_ty.as_deref() == Some(self.ty);
+            self.in_match = self_ty.as_deref() == Some(self.ty.as_str());
             syn::visit::visit_item_impl(self, node);
             self.in_match = prev;
         }
         fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
-            if self.in_match && self.found.is_none() && node.sig.ident == self.method {
+            if self.in_match && self.found.is_none() && node.sig.ident == self.method.as_str() {
                 self.found = Some(FoundItem(node.to_token_stream()));
             }
             syn::visit::visit_impl_item_fn(self, node);
         }
     }
     let mut v = V {
-        ty,
-        method,
+        ty: ty.into(),
+        method: method.into(),
         in_match: false,
         found: None,
     };
@@ -325,6 +329,8 @@ enum CitationProofRefuse {
     LiveMustNotBeDead,
     EditMustDead,
     DeadMustStopWaiver,
+    Template,
+    Load,
     CratesParent,
     RepoRoot,
     HashLen,
@@ -416,20 +422,24 @@ caught_by = "fixture"
         let hash =
             resolve_hash(root, &laws, &c).ok_or(CitationProofRefuse::Resolve)?;
 
-        let w = Waiver {
-            check: "expect".into(),
-            file: file.into(),
-            line: 3,
-            construct: "expect".into(),
-            site_hash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
-            citation: format!("{file}::cited"),
-            anchor_hash: hash,
-            why_not_sabotage: "a genuinely long justification for the fixture".into(),
-        };
-        let wf = WaiverFile {
-            waiver: vec![w.clone()],
-            scope_waiver: vec![],
-        };
+        let template = crate::waiver::AttestationTemplate::load_canonical()
+            .map_err(|_| CitationProofRefuse::Template)?;
+        let why = template
+            .fill(&[
+                ("alt_one", "a typed Result refusal at this call site"),
+                ("reason_one", "fixture reason one"),
+                ("alt_two", "returning a sentinel"),
+                ("reason_two", "fixture reason two"),
+            ])
+            .map_err(|_| CitationProofRefuse::Template)?;
+        let waivers_toml = format!(
+            "scope_waiver = []\n\n[[waiver]]\ncheck = \"expect\"\nfile = {file:?}\nline = 3\nconstruct = \"expect\"\nsite_hash = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\ncitation = \"{file}::cited\"\nanchor_hash = \"{hash}\"\nwhy_not_sabotage = {why:?}\n"
+        );
+        let waivers_path = root.join("waivers.toml");
+        std::fs::write(&waivers_path, &waivers_toml).map_err(|_| CitationProofRefuse::Write)?;
+        let wf = WaiverFile::load(&waivers_path).map_err(|_| CitationProofRefuse::Load)?;
+        let w = wf.waivers()[0].clone();
+
         CitationProofRefuse::LiveMustNotBeDead.require(dead_citations(root, &laws, &wf).is_empty())?;
 
         let after = "#[cfg(test)]\nmod tests {\n    fn cited() { let y = 1; y }\n}\n";

@@ -50,7 +50,7 @@ pub fn enclosing_item_site_hash(ast: &syn::File, line: usize) -> Option<String> 
         best: None,
     };
     v.visit_file(ast);
-    v.best.map(|c| c.hash)
+    v.best.map(|c| c.hash.to_string())
 }
 
 /// Look up the content hash for a detector hit via its file + display line.
@@ -62,15 +62,15 @@ pub fn hit_site_hash(files: &[SourceFile], h: &Hit) -> Option<String> {
 /// Content binding for a waiver against a hit. Lines are display-only:
 /// matching is check/file/construct/`site_hash`, never `w.line == h.line()`.
 pub fn waiver_matches_hit(w: &Waiver, h: &Hit, files: &[SourceFile]) -> bool {
-    w.file.as_str() == h.file().as_str()
-        && w.construct == h.construct()
-        && hit_site_hash(files, h).as_deref() == Some(w.site_hash.as_str())
+    w.file() == h.file().as_str()
+        && w.construct() == h.construct()
+        && hit_site_hash(files, h).as_deref() == Some(w.site_hash())
 }
 
 struct Candidate {
     start: usize,
     end: usize,
-    hash: String,
+    hash: crate::boundary::Label,
 }
 
 struct Enclosing {
@@ -93,7 +93,7 @@ impl Enclosing {
             self.best = Some(Candidate {
                 start,
                 end,
-                hash: site_hash(node),
+                hash: crate::boundary::Label::admit(site_hash(node)),
             });
         }
     }
@@ -227,21 +227,28 @@ mod tests {
             src.to_string(),
             ast,
         )];
-        let w = Waiver {
-            check: "expect".to_string(),
-            file: "crates/x/src/a.rs".to_string(),
-            line: 1, // deliberately wrong display line
-            construct: "expect".to_string(),
-            why_not_sabotage: "a genuinely long justification for the fixture".to_string(),
-            site_hash: hash.clone(),
-            citation: "expect".to_string(),
-            anchor_hash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-                .to_string(),
-        };
+        let w = Waiver::admit(
+            "expect",
+            "crates/x/src/a.rs",
+            1, // deliberately wrong display line
+            "expect",
+            hash.clone(),
+            "expect",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "a genuinely long justification for the fixture",
+        );
         let h = Hit::admit("crates/x/src/a.rs".to_string(), item_line, "expect".to_string());
         IdentityProofRefuse::WaiverMissesOnSiteHash.require(waiver_matches_hit(&w, &h, &files))?;
-        let mut drifted = w.clone();
-        drifted.site_hash = "0".repeat(64);
+        let drifted = Waiver::admit(
+            "expect",
+            "crates/x/src/a.rs",
+            1,
+            "expect",
+            "0".repeat(64),
+            "expect",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "a genuinely long justification for the fixture",
+        );
         IdentityProofRefuse::DriftedWaiverStillMatches.require(!waiver_matches_hit(&drifted, &h, &files))
     }
 }

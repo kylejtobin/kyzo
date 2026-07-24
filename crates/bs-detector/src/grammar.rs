@@ -970,10 +970,10 @@ struct LawEntry {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CampaignEntry {
-    name: String,
-    artifact: String,
+    name: Label,
+    artifact: RelPath,
     freshness_bound_secs: u64,
-    sources: Vec<String>,
+    sources: Vec<RelPath>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1012,21 +1012,21 @@ impl Laws {
             if c.sources.is_empty() {
                 bail!("campaign `{}` declares no sources — refuse vacuous seat", c.name);
             }
-            if c.artifact.trim().is_empty() {
+            if c.artifact.as_str().trim().is_empty() {
                 bail!("campaign `{}` declares no artifact path", c.name);
             }
-            if !by_name.keys().any(|k| k.as_str() == c.name) {
+            if !by_name.keys().any(|k| k.as_str() == c.name.as_str()) {
                 bail!(
                     "campaign `{}` has no [[law]] entry — a campaign without a retained law may not seat",
                     c.name
                 );
             }
-            campaigns.push(crate::engines::behavior::campaign::CampaignSeat {
-                name: c.name,
-                artifact: c.artifact,
-                freshness_bound_secs: c.freshness_bound_secs,
-                sources: c.sources,
-            });
+            campaigns.push(crate::engines::behavior::campaign::CampaignSeat::admit(
+                c.name,
+                c.artifact,
+                c.freshness_bound_secs,
+                c.sources,
+            ));
         }
         Ok(Laws { by_name, campaigns })
     }

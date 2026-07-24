@@ -200,7 +200,7 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
         let scope = waivers.scope_for(name);
         let in_scope = |file: &str| -> bool {
             // No scope waiver → whole tree. `is_none_or` avoids `None => true`.
-            scope.is_none_or(|s| s.scope.iter().any(|p| file.starts_with(p.as_str())))
+            scope.is_none_or(|s| s.scope().iter().any(|p| file.starts_with(p.as_str())))
         };
         let scoped: Vec<&SourceFile> =
             b.files().iter().filter(|f| in_scope(f.rel_path())).collect();
@@ -287,7 +287,7 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
                 };
                 let scope = waivers.scope_for(name);
                 let in_scope = |file: &str| -> bool {
-                    scope.is_none_or(|s| s.scope.iter().any(|p| file.starts_with(p.as_str())))
+                    scope.is_none_or(|s| s.scope().iter().any(|p| file.starts_with(p.as_str())))
                 };
                 let mut hits = Vec::new();
                 for f in b.files().iter().filter(|f| in_scope(f.rel_path())) {
@@ -446,10 +446,12 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
             }
         }
     }
-    for s in &waivers.scope_waiver {
+    for s in waivers.scope_waivers() {
         report.push_str(&format!(
             "SCOPE {} limited to {:?} — justification: {}\n",
-            s.check, s.scope, s.why_full_scope_breaks
+            s.check(),
+            s.scope(),
+            s.why_full_scope_breaks()
         ));
     }
 

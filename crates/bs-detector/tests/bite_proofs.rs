@@ -533,22 +533,19 @@ fn bite_campaign_artifact() -> BiteOutcome {
     let art_dir = root.join("crates/bs-detector/campaigns/build_script_sandbox");
     std::fs::create_dir_all(&art_dir).map_err(|_| BiteProofRefuse::Io)?;
     // Proof: specimen ≠ flagged → meta fails regardless of hashes/timestamp.
-    let art = CampaignArtifact {
-        name: "build_script_sandbox".to_string(),
-        timestamp_unix: 1,
-        specimen_verdict: SpecimenVerdict::Clean,
-        sources: vec![ArtifactSource {
-            path: src_rel.to_string(),
-            blake3: digest,
-        }],
-    };
+    let art = CampaignArtifact::admit(
+        "build_script_sandbox",
+        1,
+        SpecimenVerdict::Clean,
+        vec![ArtifactSource::admit(src_rel, digest)],
+    );
     std::fs::write(art_dir.join("artifact.toml"), art.render_toml()).map_err(|_| BiteProofRefuse::Io)?;
-    let seats = vec![CampaignSeat {
-        name: "build_script_sandbox".to_string(),
-        artifact: "campaigns/build_script_sandbox/artifact.toml".to_string(),
-        freshness_bound_secs: 86_400,
-        sources: vec![src_rel.to_string()],
-    }];
+    let seats = vec![CampaignSeat::admit(
+        "build_script_sandbox",
+        "campaigns/build_script_sandbox/artifact.toml",
+        86_400,
+        vec![bs_detector::boundary::RelPath::admit(src_rel)],
+    )];
     let hits = verify_campaigns(root, &seats);
     require(hits.iter()
             .any(|h| h.construct().starts_with("campaign_specimen_unflagged:")), BiteProofRefuse::Behavior)?;
@@ -563,7 +560,7 @@ fn bite_build_script_sandbox() -> BiteOutcome {
             .map_err(|_| BiteProofRefuse::Laws)?
             .campaigns()
             .iter()
-            .any(|c| c.name == "build_script_sandbox"), BiteProofRefuse::BanCount)?;
+            .any(|c| c.name() == "build_script_sandbox"), BiteProofRefuse::BanCount)?;
     Ok(())
 }
 

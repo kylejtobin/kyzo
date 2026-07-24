@@ -35,6 +35,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
+use crate::boundary::{Label, RelPath};
 use crate::citation::Citation;
 
 /// Canonical attestation template embedded from the file beside this schema.
@@ -204,60 +205,152 @@ impl AttestationTemplate {
 }
 
 /// One approved, content-bound waiver entry.
+///
+/// Fields are private (TRUTH item 9). Deserialize is the sole admission
+/// door; callers read through accessors.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Waiver {
     /// The registered check this covers a hit of (must exist in
     /// checks.toml — a waiver naming an unknown check is a load error).
-    pub check: String,
+    check: Label,
     /// Repo-root-relative file of the waived site.
-    pub file: String,
+    file: RelPath,
     /// Display-only 1-indexed line (editor coordinate). Never used to
     /// decide whether the waiver still applies — that is `site_hash`.
-    pub line: usize,
+    line: usize,
     /// The construct at the site, exactly as the check reports it (pattern
     /// name for shape checks, function/member name for graph checks).
-    pub construct: String,
+    construct: Label,
     /// Blake3 hex of the waived item's identity tokens (TRUTH item 6).
     /// Mismatch against the live item = STALE; the waiver stops applying.
-    pub site_hash: String,
+    site_hash: Label,
     /// Checkable anchor (TRUTH item 7): laws.toml law name, file#item-path,
     /// `file.rs::test_fn`, or `decisions.md#N`.
-    pub citation: String,
+    citation: Label,
     /// Blake3 hex of the cited anchor's identity at grant time. Mismatch
     /// or missing target = dead_citation; the waiver stops applying.
-    pub anchor_hash: String,
+    anchor_hash: Label,
     /// The canonical attestation template with filled slots (TRUTH item 8).
     /// Fit of slot prose to the citation is NOT mechanically verified
     /// (laws.toml residual `R-citation-prose`).
-    pub why_not_sabotage: String,
+    why_not_sabotage: Label,
+}
+
+impl Waiver {
+    pub fn check(&self) -> &str {
+        self.check.as_str()
+    }
+
+    pub fn file(&self) -> &str {
+        self.file.as_str()
+    }
+
+    pub fn line(&self) -> usize {
+        self.line
+    }
+
+    pub fn construct(&self) -> &str {
+        self.construct.as_str()
+    }
+
+    pub fn site_hash(&self) -> &str {
+        self.site_hash.as_str()
+    }
+
+    pub fn citation(&self) -> &str {
+        self.citation.as_str()
+    }
+
+    pub fn anchor_hash(&self) -> &str {
+        self.anchor_hash.as_str()
+    }
+
+    pub fn why_not_sabotage(&self) -> &str {
+        self.why_not_sabotage.as_str()
+    }
+
+    /// Test-only in-memory entry, bypassing `WaiverFile::load`'s file/TOML
+    /// door (which is the production admission path and validates the
+    /// attestation form — this constructor does not).
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn admit(
+        check: impl Into<Label>,
+        file: impl Into<RelPath>,
+        line: usize,
+        construct: impl Into<Label>,
+        site_hash: impl Into<Label>,
+        citation: impl Into<Label>,
+        anchor_hash: impl Into<Label>,
+        why_not_sabotage: impl Into<Label>,
+    ) -> Self {
+        Self {
+            check: check.into(),
+            file: file.into(),
+            line,
+            construct: construct.into(),
+            site_hash: site_hash.into(),
+            citation: citation.into(),
+            anchor_hash: anchor_hash.into(),
+            why_not_sabotage: why_not_sabotage.into(),
+        }
+    }
+
 }
 
 /// The single lawful narrow scope: a check whose boundary is less than all
 /// of `crates/` must carry one of these, stating why full scope BREAKS the
 /// check (not why it's inconvenient). The meta engine prints every one on
 /// every run — narrow scope is always visible, never ambient.
+///
+/// Fields are private (TRUTH item 9). Deserialize is the sole admission
+/// door; callers read through accessors.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ScopeWaiver {
-    pub check: String,
+    check: Label,
     /// Path prefixes (repo-root-relative) the check is limited to.
-    pub scope: Vec<String>,
+    scope: Vec<RelPath>,
     /// Why the full boundary would break us — written, audited.
-    pub why_full_scope_breaks: String,
+    why_full_scope_breaks: Label,
 }
 
+impl ScopeWaiver {
+    pub fn check(&self) -> &str {
+        self.check.as_str()
+    }
+
+    pub fn scope(&self) -> &[RelPath] {
+        &self.scope
+    }
+
+    pub fn why_full_scope_breaks(&self) -> &str {
+        self.why_full_scope_breaks.as_str()
+    }
+}
+
+/// Fields are private (TRUTH item 9). Deserialize is the sole admission
+/// door; callers read through accessors.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WaiverFile {
     /// Both ledgers are REQUIRED keys: an empty ledger is written
     /// `waiver = []`, stated on purpose — zero waiver entrys is a claim the
     /// file makes, never a shape it defaults into.
-    pub waiver: Vec<Waiver>,
-    pub scope_waiver: Vec<ScopeWaiver>,
+    waiver: Vec<Waiver>,
+    scope_waiver: Vec<ScopeWaiver>,
 }
 
 impl WaiverFile {
+    pub fn waivers(&self) -> &[Waiver] {
+        &self.waiver
+    }
+
+    pub fn scope_waivers(&self) -> &[ScopeWaiver] {
+        &self.scope_waiver
+    }
+
     /// Load and validate. Refuses: attestation form mismatch (TRUTH item 8),
     /// duplicate content bindings, malformed site_hash/anchor_hash,
     /// unparseable citation grammar, and unknown fields. One bad entry
@@ -271,7 +364,7 @@ impl WaiverFile {
 
         let mut seen: BTreeSet<(String, String, String, String)> = BTreeSet::new();
         for w in &parsed.waiver {
-            if let Err(e) = template.segment(&w.why_not_sabotage) {
+            if let Err(e) = template.segment(w.why_not_sabotage.as_str()) {
                 bail!(
                     "waiver {}:{} ({}) — attestation refused: {e}",
                     w.file,
@@ -279,7 +372,9 @@ impl WaiverFile {
                     w.construct
                 );
             }
-            if w.site_hash.len() != 64 || !w.site_hash.chars().all(|c| c.is_ascii_hexdigit()) {
+            if w.site_hash.as_str().len() != 64
+                || !w.site_hash.as_str().chars().all(|c| c.is_ascii_hexdigit())
+            {
                 bail!(
                     "waiver {}:{} ({}) — site_hash must be 64 hex chars (blake3 of identity_tokens)",
                     w.file,
@@ -287,7 +382,9 @@ impl WaiverFile {
                     w.construct
                 );
             }
-            if w.anchor_hash.len() != 64 || !w.anchor_hash.chars().all(|c| c.is_ascii_hexdigit()) {
+            if w.anchor_hash.as_str().len() != 64
+                || !w.anchor_hash.as_str().chars().all(|c| c.is_ascii_hexdigit())
+            {
                 bail!(
                     "waiver {}:{} ({}) — anchor_hash must be 64 hex chars (blake3 of cited anchor)",
                     w.file,
@@ -295,7 +392,7 @@ impl WaiverFile {
                     w.construct
                 );
             }
-            if let Err(e) = Citation::parse(&w.citation) {
+            if let Err(e) = Citation::parse(w.citation.as_str()) {
                 bail!(
                     "waiver {}:{} ({}) — citation grammar refused: {e}",
                     w.file,
@@ -304,10 +401,10 @@ impl WaiverFile {
                 );
             }
             let key = (
-                w.check.clone(),
-                w.file.clone(),
-                w.construct.clone(),
-                w.site_hash.clone(),
+                w.check.to_string(),
+                w.file.to_string(),
+                w.construct.to_string(),
+                w.site_hash.to_string(),
             );
             if !seen.insert(key) {
                 bail!(
@@ -319,7 +416,7 @@ impl WaiverFile {
             }
         }
         for s in &parsed.scope_waiver {
-            if s.why_full_scope_breaks.trim().len() < 20 {
+            if s.why_full_scope_breaks.as_str().trim().len() < 20 {
                 bail!(
                     "scope_waiver for `{}` — 'why full scope breaks' under 20 chars is not an argument",
                     s.check
@@ -332,13 +429,13 @@ impl WaiverFile {
                 );
             }
             for p in &s.scope {
-                if p.trim().is_empty() {
+                if p.as_str().trim().is_empty() {
                     bail!(
                         "scope_waiver for `{}` has an empty path — that matches nothing",
                         s.check
                     );
                 }
-                if !p.ends_with('/') {
+                if !p.ends_with("/") {
                     bail!(
                         "scope_waiver for `{}` path `{p}` must end in `/` — a prefix without a slash silently overlaps neighbors",
                         s.check
@@ -351,12 +448,12 @@ impl WaiverFile {
 
     /// The waivers approved for one check.
     pub fn for_check<'a>(&'a self, check: &str) -> Vec<&'a Waiver> {
-        self.waiver.iter().filter(|w| w.check == check).collect()
+        self.waiver.iter().filter(|w| w.check.as_str() == check).collect()
     }
 
     /// The scope waiver for one check, if any.
     pub fn scope_for<'a>(&'a self, check: &str) -> Option<&'a ScopeWaiver> {
-        self.scope_waiver.iter().find(|s| s.check == check)
+        self.scope_waiver.iter().find(|s| s.check.as_str() == check)
     }
 }
 

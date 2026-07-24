@@ -16,12 +16,13 @@
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
+use crate::boundary::{Label, RelPath};
 use crate::engines::Hit;
 
 /// Specimen campaign outcome recorded on the artifact.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SpecimenVerdict {
     Flagged,
@@ -40,28 +41,118 @@ impl SpecimenVerdict {
 }
 
 /// One source file binding on a campaign artifact.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+///
+/// Fields are private (TRUTH item 9). Sole admission is
+/// [`ArtifactSource::admit`]; callers read through accessors.
+#[derive(Clone, Debug, Deserialize)]
 pub struct ArtifactSource {
-    pub path: String,
-    pub blake3: String,
+    path: RelPath,
+    blake3: Label,
+}
+
+impl ArtifactSource {
+    pub fn admit(path: impl Into<RelPath>, blake3: impl Into<Label>) -> Self {
+        Self {
+            path: path.into(),
+            blake3: blake3.into(),
+        }
+    }
+
+    pub fn path(&self) -> &str {
+        self.path.as_str()
+    }
+
+    pub fn blake3(&self) -> &str {
+        self.blake3.as_str()
+    }
 }
 
 /// On-disk campaign artifact (committed under campaigns/).
-#[derive(Clone, Debug, Serialize, Deserialize)]
+///
+/// Fields are private (TRUTH item 9). Sole admission is
+/// [`CampaignArtifact::admit`]; callers read through accessors.
+#[derive(Clone, Debug, Deserialize)]
 pub struct CampaignArtifact {
-    pub name: String,
-    pub timestamp_unix: u64,
-    pub specimen_verdict: SpecimenVerdict,
-    pub sources: Vec<ArtifactSource>,
+    name: Label,
+    timestamp_unix: u64,
+    specimen_verdict: SpecimenVerdict,
+    sources: Vec<ArtifactSource>,
+}
+
+impl CampaignArtifact {
+    pub fn admit(
+        name: impl Into<Label>,
+        timestamp_unix: u64,
+        specimen_verdict: SpecimenVerdict,
+        sources: Vec<ArtifactSource>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            timestamp_unix,
+            specimen_verdict,
+            sources,
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        self.name.as_str()
+    }
+
+    pub fn timestamp_unix(&self) -> u64 {
+        self.timestamp_unix
+    }
+
+    pub fn specimen_verdict(&self) -> &SpecimenVerdict {
+        &self.specimen_verdict
+    }
+
+    pub fn sources(&self) -> &[ArtifactSource] {
+        &self.sources
+    }
 }
 
 /// Campaign seat from laws.toml [[campaign]].
+///
+/// Fields are private (TRUTH item 9). Sole admission is
+/// [`CampaignSeat::admit`]; callers read through accessors.
 #[derive(Clone, Debug)]
 pub struct CampaignSeat {
-    pub name: String,
-    pub artifact: String,
-    pub freshness_bound_secs: u64,
-    pub sources: Vec<String>,
+    name: Label,
+    artifact: RelPath,
+    freshness_bound_secs: u64,
+    sources: Vec<RelPath>,
+}
+
+impl CampaignSeat {
+    pub fn admit(
+        name: impl Into<Label>,
+        artifact: impl Into<RelPath>,
+        freshness_bound_secs: u64,
+        sources: Vec<RelPath>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            artifact: artifact.into(),
+            freshness_bound_secs,
+            sources,
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        self.name.as_str()
+    }
+
+    pub fn artifact(&self) -> &str {
+        self.artifact.as_str()
+    }
+
+    pub fn freshness_bound_secs(&self) -> u64 {
+        self.freshness_bound_secs
+    }
+
+    pub fn sources(&self) -> &[RelPath] {
+        &self.sources
+    }
 }
 
 /// Refuse reasons when loading/building an artifact (typed, not String).
@@ -106,35 +197,30 @@ impl CampaignArtifact {
                 ArtifactRefuse::Io(format!("hashing {rel}: {e}"))
             })?;
             let digest = blake3::hash(&bytes);
-            out.push(ArtifactSource {
-                path: rel.clone(),
-                blake3: digest.to_hex().to_string(),
-            });
+            out.push(ArtifactSource::admit(
+                rel.clone(),
+                digest.to_hex().to_string(),
+            ));
         }
         let timestamp_unix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        Ok(Self {
-            name: name.to_string(),
-            timestamp_unix,
-            specimen_verdict,
-            sources: out,
-        })
+        Ok(Self::admit(name, timestamp_unix, specimen_verdict, out))
     }
 
     pub fn render_toml(&self) -> String {
         let mut s = String::new();
-        s.push_str(&format!("name = {:?}\n", self.name));
-        s.push_str(&format!("timestamp_unix = {}\n", self.timestamp_unix));
+        s.push_str(&format!("name = {:?}\n", self.name()));
+        s.push_str(&format!("timestamp_unix = {}\n", self.timestamp_unix()));
         s.push_str(&format!(
             "specimen_verdict = {:?}\n\n",
             self.specimen_verdict.as_str()
         ));
         for src in &self.sources {
             s.push_str("[[sources]]\n");
-            s.push_str(&format!("path = {:?}\n", src.path));
-            s.push_str(&format!("blake3 = {:?}\n\n", src.blake3));
+            s.push_str(&format!("path = {:?}\n", src.path()));
+            s.push_str(&format!("blake3 = {:?}\n\n", src.blake3()));
         }
         s
     }
@@ -160,74 +246,74 @@ pub fn verify_campaigns(repo_root: &Path, seats: &[CampaignSeat]) -> Vec<Hit> {
     for seat in seats {
         let art_path = repo_root
             .join("crates/bs-detector")
-            .join(&seat.artifact);
+            .join(seat.artifact());
         let artifact = match CampaignArtifact::load(&art_path) {
             Ok(a) => a,
             Err(_) => {
                 hits.push(Hit::admit(
-                    seat.artifact.clone(),
+                    seat.artifact(),
                     1,
-                    format!("campaign_missing:{}", seat.name),
+                    format!("campaign_missing:{}", seat.name()),
                 ));
                 continue;
             }
         };
 
         // Specimen first — the proof law: unflagged fails even if hashes ok.
-        if artifact.specimen_verdict != SpecimenVerdict::Flagged {
+        if *artifact.specimen_verdict() != SpecimenVerdict::Flagged {
             hits.push(Hit::admit(
-                seat.artifact.clone(),
+                seat.artifact(),
                 1,
                 format!(
                     "campaign_specimen_unflagged:{}:{}",
-                    seat.name,
-                    artifact.specimen_verdict.as_str()
+                    seat.name(),
+                    artifact.specimen_verdict().as_str()
                 ),
             ));
             // Still report other defects, but specimen alone is enough to red.
         }
 
-        if artifact.name != seat.name {
+        if artifact.name() != seat.name() {
             hits.push(Hit::admit(
-                seat.artifact.clone(),
+                seat.artifact(),
                 1,
-                format!("campaign_missing:{}:name_mismatch", seat.name),
+                format!("campaign_missing:{}:name_mismatch", seat.name()),
             ));
         }
 
         let now = now_unix();
-        if now.saturating_sub(artifact.timestamp_unix) > seat.freshness_bound_secs {
+        if now.saturating_sub(artifact.timestamp_unix()) > seat.freshness_bound_secs() {
             hits.push(Hit::admit(
-                seat.artifact.clone(),
+                seat.artifact(),
                 1,
-                format!("campaign_stale:{}", seat.name),
+                format!("campaign_stale:{}", seat.name()),
             ));
         }
 
         // Declared sources must match seat and hash live bytes.
         let declared: std::collections::BTreeSet<&str> =
-            seat.sources.iter().map(String::as_str).collect();
+            seat.sources().iter().map(RelPath::as_str).collect();
         let recorded: std::collections::BTreeSet<&str> =
-            artifact.sources.iter().map(|s| s.path.as_str()).collect();
+            artifact.sources().iter().map(ArtifactSource::path).collect();
         if declared != recorded {
             hits.push(Hit::admit(
-                seat.artifact.clone(),
+                seat.artifact(),
                 1,
-                format!("campaign_hash_mismatch:{}:source_set", seat.name),
+                format!("campaign_hash_mismatch:{}:source_set", seat.name()),
             ));
         }
-        for src in &artifact.sources {
-            match live_blake3(repo_root, &src.path) {
-                Ok(live) if live == src.blake3 => {}
+        for src in artifact.sources() {
+            match live_blake3(repo_root, src.path()) {
+                Ok(live) if live == src.blake3() => {}
                 Ok(_) => hits.push(Hit::admit(
-                    src.path.clone(),
+                    src.path(),
                     1,
-                    format!("campaign_hash_mismatch:{}", seat.name),
+                    format!("campaign_hash_mismatch:{}", seat.name()),
                 )),
                 Err(_) => hits.push(Hit::admit(
-                    src.path.clone(),
+                    src.path(),
                     1,
-                    format!("campaign_hash_mismatch:{}:unreadable", seat.name),
+                    format!("campaign_hash_mismatch:{}:unreadable", seat.name()),
                 )),
             }
         }
@@ -239,7 +325,7 @@ pub fn verify_campaigns(repo_root: &Path, seats: &[CampaignSeat]) -> Vec<Hit> {
 pub fn artifact_abs(repo_root: &Path, seat: &CampaignSeat) -> PathBuf {
     repo_root
         .join("crates/bs-detector")
-        .join(&seat.artifact)
+        .join(seat.artifact())
 }
 
 #[cfg(test)]
@@ -300,26 +386,23 @@ mod tests {
                 std::fs::create_dir_all(dir).map_err(|_| CampaignProofRefuse::MkdirArt)?;
             }
         }
-        let art = CampaignArtifact {
-            name: "build_script_sandbox".to_string(),
-            timestamp_unix: now_unix(),
-            specimen_verdict: SpecimenVerdict::Unflagged,
-            sources: vec![ArtifactSource {
-                path: src_rel.to_string(),
-                blake3: digest,
-            }],
-        };
+        let art = CampaignArtifact::admit(
+            "build_script_sandbox",
+            now_unix(),
+            SpecimenVerdict::Unflagged,
+            vec![ArtifactSource::admit(src_rel, digest)],
+        );
         match std::fs::write(&art_path, art.render_toml()) {
             Ok(()) => {}
             Err(_) => return Err(CampaignProofRefuse::WriteArtifact),
         }
 
-        let seats = [CampaignSeat {
-            name: "build_script_sandbox".to_string(),
-            artifact: "campaigns/build_script_sandbox/artifact.toml".to_string(),
-            freshness_bound_secs: 86_400,
-            sources: vec![src_rel.to_string()],
-        }];
+        let seats = [CampaignSeat::admit(
+            "build_script_sandbox",
+            "campaigns/build_script_sandbox/artifact.toml",
+            86_400,
+            vec![RelPath::admit(src_rel)],
+        )];
         let hits = verify_campaigns(root, &seats);
         let unflagged = hits
             .iter()

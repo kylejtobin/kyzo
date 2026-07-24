@@ -272,25 +272,26 @@ impl RawEdges {
     fn collect_file(&mut self, file: &SourceFile) -> Result<()> {
         struct V<'a> {
             raw: &'a mut RawEdges,
-            file: &'a str,
+            file: &'a RelPath,
         }
         impl<'ast> Visit<'ast> for V<'_> {
             fn visit_item_type(&mut self, node: &'ast syn::ItemType) {
                 self.raw.insert_edge(
-                    self.file,
+                    self.file.as_str(),
                     node.ident.to_string(),
                     (*node.ty).clone(),
                 );
                 visit::visit_item_type(self, node);
             }
             fn visit_item_use(&mut self, node: &'ast syn::ItemUse) {
-                self.raw.collect_use_renames(&node.tree, &[], self.file);
+                self.raw
+                    .collect_use_renames(&node.tree, &[], self.file.as_str());
                 visit::visit_item_use(self, node);
             }
         }
         let mut v = V {
             raw: self,
-            file: file.rel_path(),
+            file: file.rel_path_ref(),
         };
         v.visit_file(file.ast());
         Ok(())

@@ -44,12 +44,12 @@ pub fn stale_waivers(
     files: &[SourceFile],
 ) -> Vec<Hit> {
     let mut stale = vec![];
-    for w in &waivers.waiver {
+    for w in waivers.waivers() {
         let live = raw_hits.iter().any(|(check, hits)| {
-            *check == w.check && hits.iter().any(|h| identity::waiver_matches_hit(w, h, files))
+            check.as_str() == w.check() && hits.iter().any(|h| identity::waiver_matches_hit(w, h, files))
         });
         if !live {
-            stale.push(Hit::admit(w.file.clone(), w.line, format!("stale_waiver:{}:{}", w.check, w.construct)));
+            stale.push(Hit::admit(w.file(), w.line(), format!("stale_waiver:{}:{}", w.check(), w.construct())));
         }
     }
     stale
@@ -112,6 +112,16 @@ mod tests {
 
     #[test]
     fn stale_waiver_is_reported_when_its_site_dies() {
+        let src = "fn f() { let x = 1; x }";
+        let ast = syn::parse_file(src).expect("parses");
+        let real_hash = identity::site_hash(ast.items.first().expect("item"));
+        let files = vec![SourceFile::admit(
+            "crates/x/src/a.rs".to_string(),
+            src.to_string(),
+            ast,
+        )];
+
+        // Live hit whose enclosing item hash matches the waiver from the start.
         let why = toml_basic_escape(&valid_attestation_why());
         let toml = format!(
             r#"
@@ -122,7 +132,7 @@ check = "expect"
 file = "crates/x/src/a.rs"
 line = 3
 construct = "expect"
-site_hash = "{HASH}"
+site_hash = "{real_hash}"
 citation = "expect"
 anchor_hash = "{HASH}"
 why_not_sabotage = {why}
@@ -130,23 +140,7 @@ why_not_sabotage = {why}
         );
         let mut tf = tempfile::NamedTempFile::new().expect("tempfile");
         std::io::Write::write_all(&mut tf, toml.as_bytes()).expect("write");
-        let wf = WaiverFile::load(tf.path()).expect("loads");
-
-        let src = "fn f() { let x = 1; x }";
-        let ast = syn::parse_file(src).expect("parses");
-        let real_hash = identity::site_hash(ast.items.first().expect("item"));
-        let files = vec![SourceFile::admit(
-            "crates/x/src/a.rs".to_string(),
-            src.to_string(),
-            ast,
-        )];
-        // Live hit whose enclosing item hash matches the waiver.
-        let mut live_w = wf.waiver[0].clone();
-        live_w.site_hash = real_hash.clone();
-        let live_wf = WaiverFile {
-            waiver: vec![live_w],
-            scope_waiver: vec![],
-        };
+        let live_wf = WaiverFile::load(tf.path()).expect("loads");
         let live = vec![(
             "expect".to_string(),
             vec![Hit::admit("crates/x/src/a.rs".to_string(), 1, "expect".to_string())],
@@ -184,20 +178,25 @@ why_not_sabotage = {why}
         let noisy_ast = syn::parse_file(noisy).expect("parses");
         let item_line = noisy_ast.items.first().expect("item").span().start().line;
         let files = vec![SourceFile::admit("crates/x/src/a.rs".to_string(), noisy.to_string(), noisy_ast)];
-        let wf = WaiverFile {
-            waiver: vec![crate::waiver::Waiver {
-                check: "expect".to_string(),
-                file: "crates/x/src/a.rs".to_string(),
-                line: 1, // old display line, pre-insert
-                construct: "expect".to_string(),
-                site_hash: hash,
-                citation: "expect".to_string(),
-                anchor_hash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-                    .to_string(),
-                why_not_sabotage: "a genuinely long justification for the fixture".to_string(),
-            }],
-            scope_waiver: vec![],
-        };
+        let why = toml_basic_escape(&valid_attestation_why());
+        let toml = format!(
+            r#"
+scope_waiver = []
+
+[[waiver]]
+check = "expect"
+file = "crates/x/src/a.rs"
+line = 1
+construct = "expect"
+site_hash = "{hash}"
+citation = "expect"
+anchor_hash = "{HASH}"
+why_not_sabotage = {why}
+"#
+        );
+        let mut tf = tempfile::NamedTempFile::new().expect("tempfile");
+        std::io::Write::write_all(&mut tf, toml.as_bytes()).expect("write");
+        let wf = WaiverFile::load(tf.path()).expect("loads");
         let live = vec![(
             "expect".to_string(),
             vec![Hit::admit("crates/x/src/a.rs".to_string(), item_line, "expect".to_string())],

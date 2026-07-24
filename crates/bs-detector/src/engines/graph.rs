@@ -615,13 +615,13 @@ fn is_env_or_args_path(path: &syn::Path) -> bool {
 struct EnvSite {
     line: usize,
     /// Module path of the enclosing fn, e.g. `host_env::read` or `main`.
-    fn_path: String,
+    fn_path: Label,
 }
 
 fn collect_env_sites(file: &SourceFile) -> Vec<EnvSite> {
     // File-path module prefix: `crates/xtask/src/host_env.rs` → `host_env`,
     // `crates/xtask/src/a/b.rs` → `a::b`, `.../main.rs`/`lib.rs`/`mod.rs` → ∅.
-    let file_mod_prefix: Vec<String> = {
+    let file_mod_prefix: Vec<Label> = {
         let marker = "/src/";
         if let Some(idx) = file.rel_path().find(marker) {
             let rest = &file.rel_path()[idx + marker.len()..];
@@ -631,7 +631,7 @@ fn collect_env_sites(file: &SourceFile) -> Vec<EnvSite> {
                 } else {
                     stem.split('/')
                         .filter(|s| *s != "mod")
-                        .map(|s| s.to_string())
+                        .map(Label::admit)
                         .collect()
                 }
             } else {
@@ -642,32 +642,32 @@ fn collect_env_sites(file: &SourceFile) -> Vec<EnvSite> {
         }
     };
     struct V<'a> {
-        mod_stack: Vec<String>,
-        fn_stack: Vec<String>,
+        mod_stack: Vec<Label>,
+        fn_stack: Vec<Label>,
         sites: &'a mut Vec<EnvSite>,
     }
     impl V<'_> {
-        fn current_fn_path(&self) -> String {
-            let mut parts = self.mod_stack.clone();
+        fn current_fn_path(&self) -> Label {
+            let mut parts: Vec<&str> = self.mod_stack.iter().map(Label::as_str).collect();
             if let Some(f) = self.fn_stack.last() {
-                parts.push(f.clone());
+                parts.push(f.as_str());
             }
-            parts.join("::")
+            Label::admit(parts.join("::"))
         }
     }
     impl<'ast> Visit<'ast> for V<'_> {
         fn visit_item_mod(&mut self, node: &'ast syn::ItemMod) {
-            self.mod_stack.push(node.ident.to_string());
+            self.mod_stack.push(Label::admit(node.ident.to_string()));
             visit::visit_item_mod(self, node);
             self.mod_stack.pop();
         }
         fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
-            self.fn_stack.push(node.sig.ident.to_string());
+            self.fn_stack.push(Label::admit(node.sig.ident.to_string()));
             visit::visit_item_fn(self, node);
             self.fn_stack.pop();
         }
         fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
-            self.fn_stack.push(node.sig.ident.to_string());
+            self.fn_stack.push(Label::admit(node.sig.ident.to_string()));
             visit::visit_impl_item_fn(self, node);
             self.fn_stack.pop();
         }
