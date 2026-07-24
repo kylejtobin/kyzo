@@ -944,64 +944,71 @@ mod tests {
 
     type TestResult = Result<(), BuildScriptSandboxProofRefuse>;
 
-    /// Distinct from pure_rust/citation plant writers — match-shaped so
-    /// copy_detector does not see a second authority (tip 794).
-    fn write_sandbox_plant(root: &StdPath, rel: &str, content: &str) -> TestResult {
-        let fp = root.join(rel);
-        match fp.parent() {
-            None => return Err(BuildScriptSandboxProofRefuse::CreateDir),
-            Some(parent) => match fs::create_dir_all(parent) {
-                Ok(()) => {}
-                Err(_) => return Err(BuildScriptSandboxProofRefuse::CreateDir),
-            },
-        }
-        match fs::write(&fp, content) {
-            Ok(()) => Ok(()),
-            Err(_) => Err(BuildScriptSandboxProofRefuse::WriteFixture),
-        }
-    }
+    /// Receiver for plant helpers — free helpers are unclassified-fn (tip 1071).
+    struct SandboxProofs;
+    const P: SandboxProofs = SandboxProofs;
 
-    /// A single-crate workspace whose `build.rs` is swapped in by the
-    /// caller, mirroring `pure_rust.rs`'s plant-test pattern. Each plant gets
-    /// its own `crate_name`: the two tests below run concurrently under the
-    /// default test harness and share one process-wide `CARGO_TARGET_DIR`
-    /// (this container sets it once, globally), and cargo's top-level
-    /// "uplifted" artifact for a lib target is named after the crate's own
-    /// identifier with no hash suffix — an identically-named plant in each
-    /// test would collide on that one shared path.
-    fn plant_workspace(
-        crate_name: &str,
-        build_rs: &str,
-    ) -> Result<tempfile::TempDir, BuildScriptSandboxProofRefuse> {
-        let tmp = tempfile::Builder::new()
-            .prefix("build-script-sandbox-plant-")
-            .tempdir()
-            .map_err(|_| BuildScriptSandboxProofRefuse::Tempdir)?;
-        let root = tmp.path();
+    impl SandboxProofs {
+        /// Distinct from pure_rust/citation plant writers — match-shaped so
+        /// copy_detector does not see a second authority (tip 794).
+        fn write_sandbox_plant(&self, root: &StdPath, rel: &str, content: &str) -> TestResult {
+            let fp = root.join(rel);
+            match fp.parent() {
+                None => return Err(BuildScriptSandboxProofRefuse::CreateDir),
+                Some(parent) => match fs::create_dir_all(parent) {
+                    Ok(()) => {}
+                    Err(_) => return Err(BuildScriptSandboxProofRefuse::CreateDir),
+                },
+            }
+            match fs::write(&fp, content) {
+                Ok(()) => Ok(()),
+                Err(_) => Err(BuildScriptSandboxProofRefuse::WriteFixture),
+            }
+        }
 
-        write_sandbox_plant(
-            root,
-            "Cargo.toml",
-            &format!(
-                "[workspace]\n\
-                 resolver = \"2\"\n\
-                 members = [{crate_name:?}]\n"
-            ),
-        )?;
-        write_sandbox_plant(
-            root,
-            &format!("{crate_name}/Cargo.toml"),
-            &format!(
-                "[package]\n\
-                 name = {crate_name:?}\n\
-                 version = \"0.0.0\"\n\
-                 edition = \"2021\"\n\
-                 build = \"build.rs\"\n"
-            ),
-        )?;
-        write_sandbox_plant(root, &format!("{crate_name}/src/lib.rs"), "")?;
-        write_sandbox_plant(root, &format!("{crate_name}/build.rs"), build_rs)?;
-        Ok(tmp)
+        /// A single-crate workspace whose `build.rs` is swapped in by the
+        /// caller, mirroring `pure_rust.rs`'s plant-test pattern. Each plant gets
+        /// its own `crate_name`: the two tests below run concurrently under the
+        /// default test harness and share one process-wide `CARGO_TARGET_DIR`
+        /// (this container sets it once, globally), and cargo's top-level
+        /// "uplifted" artifact for a lib target is named after the crate's own
+        /// identifier with no hash suffix — an identically-named plant in each
+        /// test would collide on that one shared path.
+        fn plant_workspace(
+            &self,
+            crate_name: &str,
+            build_rs: &str,
+        ) -> Result<tempfile::TempDir, BuildScriptSandboxProofRefuse> {
+            let tmp = tempfile::Builder::new()
+                .prefix("build-script-sandbox-plant-")
+                .tempdir()
+                .map_err(|_| BuildScriptSandboxProofRefuse::Tempdir)?;
+            let root = tmp.path();
+
+            self.write_sandbox_plant(
+                root,
+                "Cargo.toml",
+                &format!(
+                    "[workspace]\n\
+                     resolver = \"2\"\n\
+                     members = [{crate_name:?}]\n"
+                ),
+            )?;
+            self.write_sandbox_plant(
+                root,
+                &format!("{crate_name}/Cargo.toml"),
+                &format!(
+                    "[package]\n\
+                     name = {crate_name:?}\n\
+                     version = \"0.0.0\"\n\
+                     edition = \"2021\"\n\
+                     build = \"build.rs\"\n"
+                ),
+            )?;
+            self.write_sandbox_plant(root, &format!("{crate_name}/src/lib.rs"), "")?;
+            self.write_sandbox_plant(root, &format!("{crate_name}/build.rs"), build_rs)?;
+            Ok(tmp)
+        }
     }
 
     /// Plant #1 (ruling task 6a): a build script that needs the network. It
@@ -1011,7 +1018,7 @@ mod tests {
     #[test]
     fn plants_network_dependent_build_script_and_trips_network_access_attempted() -> TestResult {
         let crate_name = "xtask-plant-network";
-        let tmp = plant_workspace(
+        let tmp = P.plant_workspace(
             crate_name,
             "fn main() {\n\
              \x20   use std::net::TcpStream;\n\
@@ -1041,7 +1048,7 @@ mod tests {
     #[test]
     fn plants_out_of_bounds_write_and_trips_write_outside_out_dir() -> TestResult {
         let crate_name = "xtask-plant-writeescape";
-        let tmp = plant_workspace(
+        let tmp = P.plant_workspace(
             crate_name,
             "fn main() {\n\
              \x20   // CARGO_MANIFEST_DIR is the crate's own directory, a direct child of\n\
@@ -1089,7 +1096,7 @@ mod tests {
             .map_err(|_| BuildScriptSandboxProofRefuse::Tempdir)?;
         let root = tmp.path();
 
-        write_sandbox_plant(
+        P.write_sandbox_plant(
             root,
             "Cargo.toml",
             &format!(
@@ -1099,7 +1106,7 @@ mod tests {
             ),
         )?;
 
-        write_sandbox_plant(
+        P.write_sandbox_plant(
             root,
             &format!("{clean_name}/Cargo.toml"),
             &format!(
@@ -1110,9 +1117,9 @@ mod tests {
                  build = \"build.rs\"\n"
             ),
         )?;
-        write_sandbox_plant(root, &format!("{clean_name}/src/lib.rs"), "")?;
+        P.write_sandbox_plant(root, &format!("{clean_name}/src/lib.rs"), "")?;
         // A well-behaved build script: writes only inside its own OUT_DIR.
-        write_sandbox_plant(
+        P.write_sandbox_plant(
             root,
             &format!("{clean_name}/build.rs"),
             "fn main() {\n\
@@ -1122,7 +1129,7 @@ mod tests {
              }\n",
         )?;
 
-        write_sandbox_plant(
+        P.write_sandbox_plant(
             root,
             &format!("{violator_name}/Cargo.toml"),
             &format!(
@@ -1133,14 +1140,14 @@ mod tests {
                  build = \"build.rs\"\n"
             ),
         )?;
-        write_sandbox_plant(root, &format!("{violator_name}/src/lib.rs"), "")?;
+        P.write_sandbox_plant(root, &format!("{violator_name}/src/lib.rs"), "")?;
         // Writes into its OWN source directory: still squarely a violation
         // (the source tree must never move at all), and — unlike a
         // workspace-root write, which no path evidence can pin to one of two
         // sibling crates — attributable to the violator alone via the
         // longest-matching manifest-directory prefix (ruling attribution
         // rule b).
-        write_sandbox_plant(
+        P.write_sandbox_plant(
             root,
             &format!("{violator_name}/build.rs"),
             "fn main() {\n\

@@ -729,7 +729,7 @@ impl<'a> Ctx<'a> {
     }
 
     /// Tip 1064: `#[test]` or `#[tokio::test]` on the attribute span.
-    fn has_test_entry_attr(attrs: &[syn::Attribute]) -> bool {
+    fn has_test_entry_attr(&self, attrs: &[syn::Attribute]) -> bool {
         attrs.iter().any(|a| {
             if a.path().is_ident("test") {
                 return true;
@@ -777,7 +777,7 @@ impl<'a> Ctx<'a> {
         attrs: &[syn::Attribute],
     ) -> bool {
         let receiver = SigView(sig).receiver_form();
-        let test_entry = Self::has_test_entry_attr(attrs);
+        let test_entry = self.has_test_entry_attr(attrs);
         match rule {
             StructuralRule::CompositionRootBody => {
                 !test_entry

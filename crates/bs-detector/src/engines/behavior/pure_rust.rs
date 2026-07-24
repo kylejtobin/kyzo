@@ -312,19 +312,23 @@ mod tests {
 
     type TestResult = Result<(), PureRustProofRefuse>;
 
+    /// Receiver for plant helpers — free helpers are unclassified-fn (tip 1071).
+    struct PureRustProofs;
+    const P: PureRustProofs = PureRustProofs;
 
-
-    /// File::create + write_all — deliberately not the sandbox/citation
-    /// mkdir/`fs::write` twin (tip 794 copy_detector).
-    fn plant_source(root: &StdPath, rel: &str, content: &str) -> TestResult {
-        use std::io::Write as _;
-        let path = root.join(rel);
-        let parent = path.parent().ok_or(PureRustProofRefuse::CreateDir)?;
-        fs::create_dir_all(parent).map_err(|_| PureRustProofRefuse::CreateDir)?;
-        let mut file = fs::File::create(&path).map_err(|_| PureRustProofRefuse::WriteFixture)?;
-        file.write_all(content.as_bytes())
-            .map_err(|_| PureRustProofRefuse::WriteFixture)?;
-        Ok(())
+    impl PureRustProofs {
+        /// File::create + write_all — deliberately not the sandbox/citation
+        /// mkdir/`fs::write` twin (tip 794 copy_detector).
+        fn plant_source(&self, root: &StdPath, rel: &str, content: &str) -> TestResult {
+            use std::io::Write as _;
+            let path = root.join(rel);
+            let parent = path.parent().ok_or(PureRustProofRefuse::CreateDir)?;
+            fs::create_dir_all(parent).map_err(|_| PureRustProofRefuse::CreateDir)?;
+            let mut file = fs::File::create(&path).map_err(|_| PureRustProofRefuse::WriteFixture)?;
+            file.write_all(content.as_bytes())
+                .map_err(|_| PureRustProofRefuse::WriteFixture)?;
+            Ok(())
+        }
     }
 
     /// Story #322: crate coverage must come from the real workspace, not a
@@ -367,7 +371,7 @@ mod tests {
             .map_err(|_| PureRustProofRefuse::Tempdir)?;
         let dep_path = |name: &str| deps.path().join(name).display().to_string();
 
-        plant_source(
+        P.plant_source(
             root,
             "Cargo.toml",
             "[workspace]\n\
@@ -375,7 +379,7 @@ mod tests {
              members = [\"kyzo\", \"kyzo-bin\", \"kyzo-newproduct\", \"internal-tool\"]\n",
         )?;
 
-        plant_source(
+        P.plant_source(
             root,
             "kyzo/Cargo.toml",
             &format!(
@@ -393,9 +397,9 @@ mod tests {
                 dep_path("planted-dev-dep"),
             ),
         )?;
-        plant_source(root, "kyzo/src/lib.rs", "")?;
+        P.plant_source(root, "kyzo/src/lib.rs", "")?;
 
-        plant_source(
+        P.plant_source(
             root,
             "kyzo-bin/Cargo.toml",
             "[package]\n\
@@ -403,11 +407,11 @@ mod tests {
              version = \"0.0.0\"\n\
              edition = \"2021\"\n",
         )?;
-        plant_source(root, "kyzo-bin/src/main.rs", "fn main() {}\n")?;
+        P.plant_source(root, "kyzo-bin/src/main.rs", "fn main() {}\n")?;
 
         // Planted crate #1: a brand-new normal dependency of the EXISTING
         // root `kyzo`, deliberately named to match `BANNED_RE`.
-        plant_source(
+        P.plant_source(
             deps.path(),
             "planted-normal-dep/Cargo.toml",
             "[package]\n\
@@ -415,12 +419,12 @@ mod tests {
              version = \"0.0.0\"\n\
              edition = \"2021\"\n",
         )?;
-        plant_source(deps.path(), "planted-normal-dep/src/lib.rs", "")?;
+        P.plant_source(deps.path(), "planted-normal-dep/src/lib.rs", "")?;
 
         // Planted crate #2: a dev-only dependency, also banned by name. The
         // ported script scanned only `-e normal,build`; a dev-only banned
         // crate must stay OUT of the hit list.
-        plant_source(
+        P.plant_source(
             deps.path(),
             "planted-dev-dep/Cargo.toml",
             "[package]\n\
@@ -428,12 +432,12 @@ mod tests {
              version = \"0.0.0\"\n\
              edition = \"2021\"\n",
         )?;
-        plant_source(deps.path(), "planted-dev-dep/src/lib.rs", "")?;
+        P.plant_source(deps.path(), "planted-dev-dep/src/lib.rs", "")?;
 
         // A whole new PRODUCT crate: not `kyzo`, not `kyzo-bin`, never named
         // in xtask, not `publish = false` — a shipped root by the same
         // convention `kyzo`/`kyzo-bin` already use.
-        plant_source(
+        P.plant_source(
             root,
             "kyzo-newproduct/Cargo.toml",
             &format!(
@@ -447,8 +451,8 @@ mod tests {
                 dep_path("planted-product-dep"),
             ),
         )?;
-        plant_source(root, "kyzo-newproduct/src/lib.rs", "")?;
-        plant_source(
+        P.plant_source(root, "kyzo-newproduct/src/lib.rs", "")?;
+        P.plant_source(
             deps.path(),
             "planted-product-dep/Cargo.toml",
             "[package]\n\
@@ -456,12 +460,12 @@ mod tests {
              version = \"0.0.0\"\n\
              edition = \"2021\"\n",
         )?;
-        plant_source(deps.path(), "planted-product-dep/src/lib.rs", "")?;
+        P.plant_source(deps.path(), "planted-product-dep/src/lib.rs", "")?;
 
         // A new internal-tooling crate marked `publish = false`, exactly
         // like `xtask`/`kyzo-crashfs`/`kyzo-arrow-interop` in the real
         // workspace. It must never become a scanned root.
-        plant_source(
+        P.plant_source(
             root,
             "internal-tool/Cargo.toml",
             &format!(
@@ -476,8 +480,8 @@ mod tests {
                 dep_path("planted-tool-dep"),
             ),
         )?;
-        plant_source(root, "internal-tool/src/lib.rs", "")?;
-        plant_source(
+        P.plant_source(root, "internal-tool/src/lib.rs", "")?;
+        P.plant_source(
             deps.path(),
             "planted-tool-dep/Cargo.toml",
             "[package]\n\
@@ -485,7 +489,7 @@ mod tests {
              version = \"0.0.0\"\n\
              edition = \"2021\"\n",
         )?;
-        plant_source(deps.path(), "planted-tool-dep/src/lib.rs", "")?;
+        P.plant_source(deps.path(), "planted-tool-dep/src/lib.rs", "")?;
 
         let outcome = PureRustGate::check_at(root);
         if let Err(PureRustError::BannedCratesFound(hits)) = outcome {

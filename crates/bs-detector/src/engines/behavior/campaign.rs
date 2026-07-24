@@ -385,63 +385,71 @@ mod tests {
         seats: [CampaignSeat; 1],
     }
 
-    /// One shared seed for campaign freshness proofs (tip 1010 — not twin bodies).
-    fn seed_campaign_probe(
-        body: &[u8],
-        artifact_stamp: u64,
-        verdict: SpecimenVerdict,
-    ) -> Result<(tempfile::TempDir, CampaignProbe), CampaignProofRefuse> {
-        let tmp = tempfile::tempdir().map_err(|_| CampaignProofRefuse::Tempdir)?;
-        let root = tmp.path().to_path_buf();
-        let src_rel = "crates/bs-detector/src/engines/behavior/campaign.rs";
-        let src_path = root.join(src_rel);
-        match src_path.parent() {
-            None => return Err(CampaignProofRefuse::Mkdir),
-            Some(dir) => {
-                std::fs::create_dir_all(dir).map_err(|_| CampaignProofRefuse::Mkdir)?;
+    /// Receiver for seed helper — free helpers are unclassified-fn (tip 1071).
+    struct CampaignProofs;
+    const P: CampaignProofs = CampaignProofs;
+
+    impl CampaignProofs {
+        /// One shared seed for campaign freshness proofs (tip 1010 — not twin bodies).
+        fn seed_campaign_probe(
+            &self,
+            body: &[u8],
+            artifact_stamp: u64,
+            verdict: SpecimenVerdict,
+        ) -> Result<(tempfile::TempDir, CampaignProbe), CampaignProofRefuse> {
+            let tmp = tempfile::tempdir().map_err(|_| CampaignProofRefuse::Tempdir)?;
+            let root = tmp.path().to_path_buf();
+            let src_rel = "crates/bs-detector/src/engines/behavior/campaign.rs";
+            let src_path = root.join(src_rel);
+            match src_path.parent() {
+                None => return Err(CampaignProofRefuse::Mkdir),
+                Some(dir) => {
+                    std::fs::create_dir_all(dir).map_err(|_| CampaignProofRefuse::Mkdir)?;
+                }
             }
-        }
-        match std::fs::write(&src_path, body) {
-            Ok(()) => {}
-            Err(_) => return Err(CampaignProofRefuse::WriteSource),
-        }
-        let digest = blake3::hash(body).to_hex().to_string();
-        let art_path = root.join("crates/bs-detector/campaigns/build_script_sandbox/artifact.toml");
-        match art_path.parent() {
-            None => return Err(CampaignProofRefuse::MkdirArt),
-            Some(dir) => {
-                std::fs::create_dir_all(dir).map_err(|_| CampaignProofRefuse::MkdirArt)?;
+            match std::fs::write(&src_path, body) {
+                Ok(()) => {}
+                Err(_) => return Err(CampaignProofRefuse::WriteSource),
             }
+            let digest = blake3::hash(body).to_hex().to_string();
+            let art_path =
+                root.join("crates/bs-detector/campaigns/build_script_sandbox/artifact.toml");
+            match art_path.parent() {
+                None => return Err(CampaignProofRefuse::MkdirArt),
+                Some(dir) => {
+                    std::fs::create_dir_all(dir).map_err(|_| CampaignProofRefuse::MkdirArt)?;
+                }
+            }
+            let art = CampaignArtifact::admit(
+                "build_script_sandbox",
+                artifact_stamp,
+                verdict,
+                vec![ArtifactSource::admit(src_rel, digest)],
+            );
+            match std::fs::write(&art_path, art.render_toml()) {
+                Ok(()) => {}
+                Err(_) => return Err(CampaignProofRefuse::WriteArtifact),
+            }
+            let seats = [CampaignSeat::admit(
+                "build_script_sandbox",
+                "campaigns/build_script_sandbox/artifact.toml",
+                86_400,
+                vec![RelPath::admit(src_rel)],
+            )];
+            Ok((
+                tmp,
+                CampaignProbe {
+                    root,
+                    seats,
+                },
+            ))
         }
-        let art = CampaignArtifact::admit(
-            "build_script_sandbox",
-            artifact_stamp,
-            verdict,
-            vec![ArtifactSource::admit(src_rel, digest)],
-        );
-        match std::fs::write(&art_path, art.render_toml()) {
-            Ok(()) => {}
-            Err(_) => return Err(CampaignProofRefuse::WriteArtifact),
-        }
-        let seats = [CampaignSeat::admit(
-            "build_script_sandbox",
-            "campaigns/build_script_sandbox/artifact.toml",
-            86_400,
-            vec![RelPath::admit(src_rel)],
-        )];
-        Ok((
-            tmp,
-            CampaignProbe {
-                root,
-                seats,
-            },
-        ))
     }
 
     #[test]
     fn specimen_unflagged_reds_even_with_fresh_matching_hashes() -> TestResult {
         let stamp = 1_700_000_000_u64;
-        let (_tmp, probe) = seed_campaign_probe(
+        let (_tmp, probe) = P.seed_campaign_probe(
             b"fn campaign_fixture() {}\n",
             stamp,
             SpecimenVerdict::Unflagged,
@@ -459,7 +467,7 @@ mod tests {
     #[test]
     fn future_dated_artifact_reds_as_campaign_future_stamp() -> TestResult {
         let now = 1_700_000_000_u64;
-        let seeded = seed_campaign_probe(
+        let seeded = P.seed_campaign_probe(
             b"fn campaign_future_fixture() {}\n",
             now + 86_400,
             SpecimenVerdict::Flagged,
