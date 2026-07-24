@@ -6,13 +6,21 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! The four detection surfaces. Exactly four — this mirrors the ontology of
-//! how a claim/reality mismatch becomes visible, not a historical file
-//! count:
-//! - [`shape`]: the lie is a construct at one site in source text.
-//! - [`graph`]: the lie is relational — no single site is wrong.
-//! - [`behavior`]: the lie only exists when executed.
-//! - [`meta`]: the lie is in the detector itself.
+//! Gate engines that live under this module — the tree as it is, not a
+//! planned ontology.
+//!
+//! Crate seats outside this folder (named so the map is complete):
+//! - `grammar` — grammar.toml load / construct seats (unbuilt seats named
+//!   in that file stay unbuilt until declared).
+//! - `classify` — item classifier onto seated constructs or unclassified.
+//!
+//! Engines here:
+//! - [`shape`]: banned-shape predicates (named matchers over one site).
+//! - [`graph`]: relational passes (no single site is the whole lie).
+//! - [`meta`]: meta passes (the detector policing its own run).
+//!
+//! Unbuilt under `engines/`: no `behavior` module (execution-only lies are
+//! not seated here yet).
 
 use crate::boundary::{Label, RelPath};
 
