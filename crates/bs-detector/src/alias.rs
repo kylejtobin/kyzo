@@ -472,18 +472,20 @@ impl AliasProofs {
         Ok(SourceFile::admit("crates/probe/src/lib.rs", src, ast))
     }
 
-    fn item_4_proof_type_alias_to_string_carries(&self) -> Result<(), AliasProofRefuse> {
-        let f = self.file("type Name = String;")?;
+    /// Shared carry proof for item-4 alias edges (tip 1017 copy_detector).
+    fn assert_alias_src_carries(&self, src: &str, ty_name: &str) -> Result<(), AliasProofRefuse> {
+        let f = self.file(src)?;
         let t = AliasTable::build(&[&f]).map_err(|_| AliasProofRefuse::Build)?;
-        let ty: syn::Type = syn::parse_str("Name").map_err(|_| AliasProofRefuse::Type)?;
+        let ty: syn::Type = syn::parse_str(ty_name).map_err(|_| AliasProofRefuse::Type)?;
         AliasProofRefuse::MustCarry.require(t.type_carries_string(f.rel_path(), &ty))
     }
 
+    fn item_4_proof_type_alias_to_string_carries(&self) -> Result<(), AliasProofRefuse> {
+        self.assert_alias_src_carries("type Name = String;", "Name")
+    }
+
     fn item_4_proof_use_as_string_carries(&self) -> Result<(), AliasProofRefuse> {
-        let f = self.file("use std::string::String as Text;")?;
-        let t = AliasTable::build(&[&f]).map_err(|_| AliasProofRefuse::Build)?;
-        let ty: syn::Type = syn::parse_str("Text").map_err(|_| AliasProofRefuse::Type)?;
-        AliasProofRefuse::MustCarry.require(t.type_carries_string(f.rel_path(), &ty))
+        self.assert_alias_src_carries("use std::string::String as Text;", "Text")
     }
 
     fn item_4_proof_restrict_does_not_carry(&self) -> Result<(), AliasProofRefuse> {

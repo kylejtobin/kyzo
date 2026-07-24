@@ -456,6 +456,32 @@ mod tests {
         fn temp_root(&self) -> Result<tempfile::TempDir, CitationProofRefuse> {
             tempfile::tempdir().map_err(|_| CitationProofRefuse::TempDir)
         }
+
+        /// Shared probe seed for tip-686 citation resolves (tip 1017 copy_detector).
+        fn resolve_in_probe(
+            &self,
+            src: &str,
+            citation: &str,
+            resolve_blind: CitationProofRefuse,
+        ) -> Result<(tempfile::TempDir, Laws, String), CitationProofRefuse> {
+            let dir = self.temp_root()?;
+            let root = dir.path();
+            let laws = self.fixture_laws(
+                root,
+                r#"[[law]]
+name = "x"
+law = "x"
+caught_by = "x"
+"#,
+            )?;
+            let file = "crates/x/src/lib.rs";
+            self.write_temp_rs(root, file, src)?;
+            let c = Citation::parse(citation).map_err(|_| CitationProofRefuse::Parse)?;
+            let hash = CITATION
+                .resolve_hash(root, &laws, &c)
+                .ok_or(resolve_blind)?;
+            Ok((dir, laws, hash))
+        }
     }
 
     const C: CitationProofs = CitationProofs;
@@ -572,48 +598,31 @@ caught_by = "x"
     /// Tip 686: const citations were resolve-None blind.
     #[test]
     fn anti_fraud_file_item_const_citation_resolves() -> TestResult {
-        let dir = C.temp_root()?;
-        let root = dir.path();
-        let laws = C.fixture_laws(
-            root,
-            r#"[[law]]
-name = "x"
-law = "x"
-caught_by = "x"
-"#,
-        )?;
         let file = "crates/x/src/lib.rs";
-        C.write_temp_rs(root, file, "const TARGET: u8 = 1;\n")?;
-        let c = Citation::parse(&format!("{file}#TARGET")).map_err(|_| CitationProofRefuse::Parse)?;
-        let h = CITATION.resolve_hash(root, &laws, &c).ok_or(CitationProofRefuse::ConstResolveBlind)?;
+        let (dir, laws, h) = C.resolve_in_probe(
+            "const TARGET: u8 = 1;\n",
+            &format!("{file}#TARGET"),
+            CitationProofRefuse::ConstResolveBlind,
+        )?;
         CitationProofRefuse::HashLen.require(h.len() == 64)?;
-        C.write_temp_rs(root, file, "const TARGET: u8 = 2;\n")?;
-        let h2 = CITATION.resolve_hash(root, &laws, &c).ok_or(CitationProofRefuse::Resolve)?;
+        // Second write proves content-bound identity (not shared with impl-ref proof).
+        C.write_temp_rs(dir.path(), file, "const TARGET: u8 = 2;\n")?;
+        let c = Citation::parse(&format!("{file}#TARGET")).map_err(|_| CitationProofRefuse::Parse)?;
+        let h2 = CITATION
+            .resolve_hash(dir.path(), &laws, &c)
+            .ok_or(CitationProofRefuse::Resolve)?;
         CitationProofRefuse::ConstHashMustChange.require(h != h2)
     }
 
     /// Tip 686: `impl &Type { fn m }` was type_path_tail-blind.
     #[test]
     fn anti_fraud_impl_ref_self_ty_method_citation_resolves() -> TestResult {
-        let dir = C.temp_root()?;
-        let root = dir.path();
-        let laws = C.fixture_laws(
-            root,
-            r#"[[law]]
-name = "x"
-law = "x"
-caught_by = "x"
-"#,
-        )?;
         let file = "crates/x/src/lib.rs";
-        C.write_temp_rs(
-            root,
-            file,
+        let (_dir, _laws, h) = C.resolve_in_probe(
             "struct Foo;\nimpl &Foo { fn method(&self) { let a = 1; let _ = a; } }\n",
+            &format!("{file}#Foo::method"),
+            CitationProofRefuse::ImplRefResolveBlind,
         )?;
-        let c = Citation::parse(&format!("{file}#Foo::method"))
-            .map_err(|_| CitationProofRefuse::Parse)?;
-        let h = CITATION.resolve_hash(root, &laws, &c).ok_or(CitationProofRefuse::ImplRefResolveBlind)?;
         CitationProofRefuse::HashLen.require(h.len() == 64)
     }
 }
