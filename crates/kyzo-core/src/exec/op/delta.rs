@@ -199,101 +199,98 @@ struct TempStorePrefixBatchJoin<'a> {
     capture_right_as_premise: bool,
 }
 
-impl<'a> TempStorePrefixBatchJoin<'a> {
-    fn advance_left_batch(&mut self) -> Result<bool> {
-        crate::exec::op::join::pull_nonempty_left_batch(&mut self.left, &mut self.cur)
-    }
-
-    fn probe(
-        &self,
-        left_row: &[DataValue],
-    ) -> Result<Box<dyn Iterator<Item = TupleInIter<'a>> + 'a>> {
-        Ok(match &self.bounds {
-            Some((l_bound, u_bound)) => {
-                // Range-bounded probes carry residual filter bounds beyond
-                // the prefix: the merged bound tuples must own (the level
-                // merge filters per row against them).
-                let prefix_bounds = || {
-                    self.left_to_prefix_indices
-                        .iter()
-                        .map(|i| ScanBound::Value(left_row[*i].clone()))
-                };
-                let lower: Vec<ScanBound> =
-                    prefix_bounds().chain(l_bound.iter().cloned()).collect();
-                let upper: Vec<ScanBound> =
-                    prefix_bounds().chain(u_bound.iter().cloned()).collect();
-                if self.scan_epoch {
-                    Box::new(self.storage.delta_range_iter(&lower, &upper, true)?)
-                } else {
-                    Box::new(self.storage.range_iter(&lower, &upper, true)?)
-                }
-            }
-            // The plain prefix probe is zero-clone: cursors are built up
-            // front through the projection and nothing is retained.
-            None => Box::new(self.storage.prefix_iter_projected(
-                left_row,
-                &self.left_to_prefix_indices,
-                self.scan_epoch,
-            )?),
-        })
-    }
-}
-
 impl<'a> Iterator for TempStorePrefixBatchJoin<'a> {
     type Item = Result<Batch>;
     fn next(&mut self) -> Option<Self::Item> {
-        crate::batch_prefix_join_next!(
-            self,
-            batch: out,
-            advance_missing: "temp-store join left cursor missing after batch advance",
-            probing_missing: "temp-store join left cursor missing while probing",
-            active_missing: "temp-store join active probe missing after setup",
-            probe: |left_row| self.probe(left_row),
-            on_item: |found, out, left_owned, left_premises| {
+        let TempStorePrefixBatchJoin {
+            left,
+            inner,
+            storage,
+            scan_epoch,
+            left_to_prefix_indices,
+            bounds,
+            eliminate_indices,
+            cur,
+            active,
+            want_premises,
+            capture_right_as_premise,
+        } = self;
+        crate::exec::op::join::drive_batch_prefix_join_next(
+            left,
+            cur,
+            active,
+            *want_premises,
+            "temp-store join left cursor missing after batch advance",
+            "temp-store join left cursor missing while probing",
+            "temp-store join active probe missing after setup",
+            |left_row| {
+                // Inlined [`TempStorePrefixBatchJoin::probe`] so field borrows stay disjoint.
+                Ok(match bounds {
+                    Some((l_bound, u_bound)) => {
+                        let prefix_bounds = || {
+                            left_to_prefix_indices
+                                .iter()
+                                .map(|i| ScanBound::Value(left_row[*i].clone()))
+                        };
+                        let lower: Vec<ScanBound> =
+                            prefix_bounds().chain(l_bound.iter().cloned()).collect();
+                        let upper: Vec<ScanBound> =
+                            prefix_bounds().chain(u_bound.iter().cloned()).collect();
+                        if *scan_epoch {
+                            Box::new(storage.delta_range_iter(&lower, &upper, true)?)
+                        } else {
+                            Box::new(storage.range_iter(&lower, &upper, true)?)
+                        }
+                    }
+                    None => Box::new(storage.prefix_iter_projected(
+                        left_row,
+                        left_to_prefix_indices,
+                        *scan_epoch,
+                    )?),
+                })
+            },
+            |active_it| active_it.next().map(Ok),
+            |found, out, left_owned, left_premises| {
                 let found_tuple = match found.try_into_tuple() {
                     Ok(t) => t,
-                    Err(e) => {
-                        return Some(Err(e.into()));
-                    }
+                    Err(e) => return std::ops::ControlFlow::Break(e.into()),
                 };
                 let mut keep = true;
-                if !self.inner.filters.is_empty() {
-                    for p in self.inner.filters.iter() {
+                if !inner.filters.is_empty() {
+                    for p in inner.filters.iter() {
                         match crate::exec::expr::eval_pred(p, &found_tuple) {
                             Ok(true) => {}
                             Ok(false) => {
                                 keep = false;
                                 break;
                             }
-                            Err(e) => {
-                                return Some(Err(e));
-                            }
+                            Err(e) => return std::ops::ControlFlow::Break(e),
                         }
                     }
                 }
                 if keep {
-                    let right_premise =
-                        if self.want_premises && self.capture_right_as_premise {
-                            Some(found_tuple.clone())
-                        } else {
-                            None
-                        };
+                    let right_premise = if *want_premises && *capture_right_as_premise {
+                        Some(found_tuple.clone())
+                    } else {
+                        None
+                    };
                     if let Err(e) = push_joined_row(
                         out,
-                        &left_owned,
+                        left_owned,
                         found_tuple.into_iter(),
-                        &self.eliminate_indices,
+                        eliminate_indices,
                     ) {
-                        return Some(Err(e));
+                        return std::ops::ControlFlow::Break(e);
                     }
                     push_join_premises(
                         out,
-                        left_premises.clone(),
+                        left_premises.to_vec(),
                         right_premise.as_ref(),
-                        self.want_premises,
+                        *want_premises,
                     );
                 }
-            }
+                std::ops::ControlFlow::Continue(())
+            },
         )
     }
 }
