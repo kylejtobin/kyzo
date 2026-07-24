@@ -854,69 +854,63 @@ impl<S: FjallSeekStep> SkipCursor for FjallSkipCursor<S> {
     }
 }
 
-macro_rules! impl_read_tx {
-    ($ty:ty, $reader:ident, $seek_iter:ty) => {
-        impl ReadTx for $ty {
-            fn get(&self, key: &[u8]) -> Result<Option<Slice>> {
-                read_get(&self.$reader, &self.ks, key)
-            }
+impl ReadTx for FjallReadTx {
+    fn get(&self, key: &[u8]) -> Result<Option<Slice>> {
+        read_get(&self.snap, &self.ks, key)
+    }
 
-            fn exists(&self, key: &[u8]) -> Result<bool> {
-                read_exists(&self.$reader, &self.ks, key)
-            }
+    fn exists(&self, key: &[u8]) -> Result<bool> {
+        read_exists(&self.snap, &self.ks, key)
+    }
 
-            fn range_scan<'a>(
-                &'a self,
-                lower: &[u8],
-                upper: &[u8],
-            ) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
-                Box::new(raw_range(&self.$reader, &self.ks, lower, upper).map(materialize_row))
-            }
+    fn range_scan<'a>(
+        &'a self,
+        lower: &[u8],
+        upper: &[u8],
+    ) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
+        Box::new(raw_range(&self.snap, &self.ks, lower, upper).map(materialize_row))
+    }
 
-            fn range_scan_keys<'a>(
-                &'a self,
-                lower: &[u8],
-                upper: &[u8],
-            ) -> Box<dyn Iterator<Item = Result<Slice>> + 'a> {
-                Box::new(raw_range(&self.$reader, &self.ks, lower, upper).map(materialize_key))
-            }
+    fn range_scan_keys<'a>(
+        &'a self,
+        lower: &[u8],
+        upper: &[u8],
+    ) -> Box<dyn Iterator<Item = Result<Slice>> + 'a> {
+        Box::new(raw_range(&self.snap, &self.ks, lower, upper).map(materialize_key))
+    }
 
-            fn range_skip_scan_tuple<'a>(
-                &'a self,
-                lower: &[u8],
-                upper: &[u8],
-                as_of: AsOf,
-            ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
-                Box::new(SkipWalk::new(
-                    self.open_skip_cursor(lower, upper),
-                    lower,
-                    upper,
-                    as_of,
-                ))
-            }
+    fn range_skip_scan_tuple<'a>(
+        &'a self,
+        lower: &[u8],
+        upper: &[u8],
+        as_of: AsOf,
+    ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
+        Box::new(SkipWalk::new(
+            self.open_skip_cursor(lower, upper),
+            lower,
+            upper,
+            as_of,
+        ))
+    }
 
-            fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
-                read_total_scan(&self.$reader, &self.ks)
-            }
-        }
-
-        impl OpenSkipCursor for $ty {
-            type Cursor<'c> = FjallSkipCursor<$seek_iter>;
-
-            fn open_skip_cursor<'c>(&'c self, lower: &[u8], upper: &[u8]) -> Self::Cursor<'c> {
-                if lower >= upper {
-                    return FjallSkipCursor::Empty;
-                }
-                FjallSkipCursor::Live(self.$reader.seek_range::<&[u8], _>(
-                    &self.ks,
-                    (Bound::Included(lower), Bound::Excluded(upper)),
-                ))
-            }
-        }
-    };
+    fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
+        read_total_scan(&self.snap, &self.ks)
+    }
 }
 
-impl_read_tx!(FjallReadTx, snap, fjall::SeekIter);
+impl OpenSkipCursor for FjallReadTx {
+    type Cursor<'c> = FjallSkipCursor<fjall::SeekIter>;
+
+    fn open_skip_cursor<'c>(&'c self, lower: &[u8], upper: &[u8]) -> Self::Cursor<'c> {
+        if lower >= upper {
+            return FjallSkipCursor::Empty;
+        }
+        FjallSkipCursor::Live(self.snap.seek_range::<&[u8], _>(
+            &self.ks,
+            (Bound::Included(lower), Bound::Excluded(upper)),
+        ))
+    }
+}
 
 impl FjallWriteTx {
     /// The one scan shell both range methods return through: the TxSpent
