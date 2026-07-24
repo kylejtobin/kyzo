@@ -225,7 +225,23 @@ allowed_imports = []
 
 [[seats.hosts]]
 path = "crates/bs-detector/"
-allowed_imports = []
+# Host sealed door: every first-segment use outside {crate,super,self} ∪ this
+# list is import-outside-door:<seg>. Seated from live --only sealed_public_door
+# evidence on crates/bs-detector/ (tip745 / item-9). bs_detector is the package
+# lib name used by main.rs + integration tests (not crate::).
+allowed_imports = [
+  "anyhow",
+  "bs_detector",
+  "clap",
+  "proc_macro2",
+  "quote",
+  "regex",
+  "serde",
+  "serde_json",
+  "std",
+  "syn",
+  "walkdir",
+]
 
 [[seats.hosts]]
 path = "crates/xtask/"
