@@ -770,22 +770,30 @@ mod tests {
     use kyzo_model::program::symbol::Symbol;
     use miette::{IntoDiagnostic, Result, miette};
 
-    macro_rules! fts_rows {
-        ($cancel:expr, $tx:expr, $query:expr, $base:expr, $idx:expr, $params:expr, $filter:expr, $tokenizer:expr, $n_total:expr $(,)?) => {{
-            crate::project::contract::search_rows(Fts::search_index(
-                $tx,
-                FtsSearchRequest {
-                    cancel: $cancel,
-                    query: $query,
-                    base: $base,
-                    idx: $idx,
-                    params: $params,
-                    filter_code: $filter,
-                    tokenizer: $tokenizer,
-                    n_total: $n_total,
-                },
-            )?)?
-        }};
+    fn fts_rows(
+        cancel: &crate::rules::contract::CancelFlag,
+        tx: &impl ReadTx,
+        query: &str,
+        base: &RelationHandle,
+        idx: &RelationHandle,
+        params: &FtsSearchParams,
+        filter: &Option<Expr>,
+        tokenizer: &TextAnalyzer,
+        n_total: usize,
+    ) -> Result<Vec<Tuple>> {
+        crate::project::contract::search_rows(Fts::search_index(
+            tx,
+            FtsSearchRequest {
+                cancel,
+                query,
+                base,
+                idx,
+                params,
+                filter_code: filter,
+                tokenizer,
+                n_total,
+            },
+        )?)
     }
 
     fn col(name: &str, coltype: ColType) -> ColumnDef {
@@ -874,7 +882,7 @@ mod tests {
         } else {
             0
         };
-        let hits = fts_rows!(
+        let hits = fts_rows(
             &CancelFlag::inert(),
             &rtx,
             q,
@@ -884,7 +892,7 @@ mod tests {
             &None,
             &f.analyzer,
             n,
-        );
+        )?;
         let mut out = Vec::with_capacity(hits.len());
         for t in &hits {
             let key = t[0].get_int().ok_or_else(|| miette!("expected int key"))?;
@@ -1183,7 +1191,7 @@ mod tests {
 
         let rtx = db.read_tx()?;
         // "the" and "a" are stopwords: the query tokenizes to nothing.
-        let hits = fts_rows!(
+        let hits = fts_rows(
             &CancelFlag::inert(),
             &rtx,
             "the AND a",
@@ -1193,13 +1201,13 @@ mod tests {
             &None,
             &a,
             0,
-        );
+        )?;
         assert!(
             hits.is_empty(),
             "stopword-only query yields no hits, no error"
         );
         // "cat" survives tokenization and matches.
-        let hits = fts_rows!(
+        let hits = fts_rows(
             &CancelFlag::inert(),
             &rtx,
             "cat",
@@ -1209,7 +1217,7 @@ mod tests {
             &None,
             &a,
             0,
-        );
+        )?;
         assert_eq!(hits.len(), 1);
         Ok(())
     }
@@ -1290,7 +1298,7 @@ mod tests {
             span: SourceSpan::new(0, 0),
         };
         let p = params(0, FtsScoreKind::Tf);
-        let with_filter = fts_rows!(
+        let with_filter = fts_rows(
             &CancelFlag::inert(),
             &rtx,
             "cat",
@@ -1300,13 +1308,13 @@ mod tests {
             &Some(filter),
             &f.analyzer,
             0,
-        );
+        )?;
         assert!(
             with_filter.is_empty(),
             "k=0 + filter must return 0 rows, got {}",
             with_filter.len()
         );
-        let without = fts_rows!(
+        let without = fts_rows(
             &CancelFlag::inert(),
             &rtx,
             "cat",
@@ -1316,7 +1324,7 @@ mod tests {
             &None,
             &f.analyzer,
             0,
-        );
+        )?;
         assert!(without.is_empty(), "k=0 without filter returns 0 rows");
         Ok(())
     }

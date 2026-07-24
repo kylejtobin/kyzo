@@ -974,23 +974,32 @@ mod tests {
     use kyzo_model::program::symbol::Symbol;
     use miette::{IntoDiagnostic, Result, miette};
 
-    macro_rules! lsh_rows {
-        ($cancel:expr, $tx:expr, $q:expr, $manifest:expr, $base:expr, $idx:expr, $params:expr, $filter:expr, $perms:expr, $tokenizer:expr $(,)?) => {{
-            crate::project::contract::search_rows(Lsh::search_index(
-                $tx,
-                LshSearchRequest {
-                    cancel: $cancel,
-                    q: $q,
-                    manifest: $manifest,
-                    base: $base,
-                    idx: $idx,
-                    params: $params,
-                    filter_code: $filter,
-                    perms: $perms,
-                    tokenizer: $tokenizer,
-                },
-            )?)?
-        }};
+    fn lsh_rows(
+        cancel: &crate::rules::contract::CancelFlag,
+        tx: &impl ReadTx,
+        q: &DataValue,
+        manifest: &MinHashLshIndexManifest,
+        base: &RelationHandle,
+        idx: &RelationHandle,
+        params: &LshSearchParams,
+        filter: &Option<Expr>,
+        perms: &HashPermutations,
+        tokenizer: &TextAnalyzer,
+    ) -> Result<Vec<Tuple>> {
+        crate::project::contract::search_rows(Lsh::search_index(
+            tx,
+            LshSearchRequest {
+                cancel,
+                q,
+                manifest,
+                base,
+                idx,
+                params,
+                filter_code: filter,
+                perms,
+                tokenizer,
+            },
+        )?)
     }
 
     /// The ratified LE format, byte for byte: known seeds encode to their
@@ -1568,7 +1577,7 @@ mod tests {
 
         {
             let rtx = db.read_tx()?;
-            let hits = lsh_rows!(
+            let hits = lsh_rows(
                 &CancelFlag::inert(),
                 &rtx,
                 &DataValue::from("the quick brown fox jumps over the lazy dog"),
@@ -1579,7 +1588,7 @@ mod tests {
                 &None,
                 &perms,
                 &f.tokenizer,
-            );
+            )?;
             let mut keys = Vec::new();
             for t in &hits {
                 keys.push(t[0].get_int().ok_or_else(|| miette!("expected int"))?);
@@ -1638,7 +1647,7 @@ mod tests {
 
         {
             let rtx = db.read_tx()?;
-            let hits = lsh_rows!(
+            let hits = lsh_rows(
                 &CancelFlag::inert(),
                 &rtx,
                 &DataValue::from("the quick brown fox jumps over the lazy dog"),
@@ -1649,7 +1658,7 @@ mod tests {
                 &None,
                 &perms,
                 &f.tokenizer,
-            );
+            )?;
             let mut keys = Vec::new();
             for t in &hits {
                 keys.push(t[0].get_int().ok_or_else(|| miette!("expected int"))?);

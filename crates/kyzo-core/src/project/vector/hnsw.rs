@@ -256,7 +256,21 @@ pub(crate) mod probe {
 
     #[cfg(test)]
     pub(crate) fn snapshot() -> Snapshot {
-        let s = state().lock().unwrap_or_else(|p| p.into_inner());
+        // Poisoned mutex: refuse into_inner (poison_continue). Empty probe
+        // snapshot — test instrumentation only, never production truth.
+        let Ok(s) = state().lock() else {
+            return Snapshot {
+                dist_calls: 0,
+                v_dist_calls: 0,
+                k_dist_calls: 0,
+                neighbours_calls: 0,
+                neighbours_rows: 0,
+                neighbours_rows_scanned: 0,
+                neighbours_dur: Duration::ZERO,
+                entry_point_calls: 0,
+                entry_point_dur: Duration::ZERO,
+            };
+        };
         Snapshot {
             dist_calls: s.dist_calls,
             v_dist_calls: s.v_dist_calls,
@@ -1781,12 +1795,11 @@ fn entry_point(
     )
     .next();
     #[cfg(test)]
-    probe::add_entry_point_dur(std::time::Duration::from_nanos(
-        match crate::session::host_clock::mono_nanos().checked_sub(t0) {
-            Some(d) => u64::try_from(d).unwrap_or(u64::MAX),
-            None => 0,
-        },
-    ));
+    if let Some(d) = crate::session::host_clock::mono_nanos().checked_sub(t0)
+        && let Ok(ns) = u64::try_from(d)
+    {
+        probe::add_entry_point_dur(std::time::Duration::from_nanos(ns));
+    }
     match first {
         None => Ok(None),
         Some(row) => {
@@ -1851,14 +1864,14 @@ fn neighbours(
     }
     #[cfg(test)]
     {
-        let n = u64::try_from(ret.len()).unwrap_or(u64::MAX);
-        probe::add_neighbours_rows(n);
-        probe::add_neighbours_dur(std::time::Duration::from_nanos(
-            match crate::session::host_clock::mono_nanos().checked_sub(t0) {
-                Some(d) => u64::try_from(d).unwrap_or(u64::MAX),
-                None => 0,
-            },
-        ));
+        if let Ok(n) = u64::try_from(ret.len()) {
+            probe::add_neighbours_rows(n);
+        }
+        if let Some(d) = crate::session::host_clock::mono_nanos().checked_sub(t0)
+            && let Ok(ns) = u64::try_from(d)
+        {
+            probe::add_neighbours_dur(std::time::Duration::from_nanos(ns));
+        }
     }
     Ok(ret)
 }
@@ -3871,30 +3884,37 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use kyzo_model::program::InputRelationHandle;
-    use kyzo_model::value::{TupleT, encode_key_with_suffix};
-    use miette::{IntoDiagnostic, Result, bail, miette};
-
-    macro_rules! knn_rows {
-        ($tx:expr, $q:expr, $m:expr, $base:expr, $idx:expr, $params:expr, $filter:expr, $cancel:expr $(,)?) => {{
-            crate::project::contract::search_rows(Hnsw::knn(
-                $tx,
-                HnswSearchRequest {
-                    q: $q,
-                    manifest: $m,
-                    base: $base,
-                    idx: $idx,
-                    params: $params,
-                    filter_expr: $filter,
-                    cancel: $cancel,
-                },
-            )?)?
-        }};
-    }
     use crate::rules::contract::CancelFlag;
     use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation};
     use crate::store::Storage;
     use crate::store::fjall::new_fjall_storage;
+    use kyzo_model::program::InputRelationHandle;
+    use kyzo_model::value::{TupleT, encode_key_with_suffix};
+    use miette::{IntoDiagnostic, Result, bail, miette};
+
+    fn knn_rows(
+        tx: &impl ReadTx,
+        q: &Vector,
+        m: &HnswIndexManifest,
+        base: &RelationHandle,
+        idx: &RelationHandle,
+        params: &HnswKnnParams,
+        filter: &Option<Expr>,
+        cancel: &CancelFlag,
+    ) -> Result<Vec<Tuple>> {
+        crate::project::contract::search_rows(Hnsw::knn(
+            tx,
+            HnswSearchRequest {
+                q,
+                manifest: m,
+                base,
+                idx,
+                params,
+                filter_expr: filter,
+                cancel,
+            },
+        )?)
+    }
 
     fn col(name: &str, coltype: ColType) -> ColumnDef {
         ColumnDef {
@@ -4081,8 +4101,13 @@ mod tests {
             assert!(hnsw_put(&mut tx, &m, &base, &idx, None, r.as_slice())?);
         }
         let elapsed = match crate::session::host_clock::mono_nanos().checked_sub(t0) {
-            Some(d) => (d as f64) / 1e9,
-            None => 0.0,
+            Some(d) => match u64::try_from(d) {
+                Ok(ns) => crate::exec::stdlib::convert::u64_to_f64(ns) / 1e9,
+                Err(_past_u64) => {
+                    return Err(miette!("probe elapsed past u64::MAX nanos"));
+                }
+            },
+            None => return Err(miette!("probe mono clock moved backwards")),
         };
         let snap = probe::snapshot();
         tx.commit().map_err(|e| miette!("{e}"))?;
@@ -4334,7 +4359,7 @@ mod tests {
 
         let rtx = db.read_tx()?;
         let q = Vector::try_new(vec![0.9, 0.1]).ok_or_else(|| miette!("vector refused"))?;
-        let hits = knn_rows!(
+        let hits = knn_rows(
             &rtx,
             &q,
             &m,
@@ -4343,7 +4368,7 @@ mod tests {
             &knn_params(2),
             &None,
             &CancelFlag::inert(),
-        );
+        )?;
         // Hand-computed squared distances from (0.9, 0.1):
         //   k=2 (1,0): 0.01 + 0.01 = 0.02   <- nearest
         //   k=1 (0,0): 0.81 + 0.01 = 0.82
@@ -4364,12 +4389,12 @@ mod tests {
         // Radius is in squared units too: 0.5 keeps only (1,0).
         let mut p = knn_params(4);
         p.radius = Some(0.5);
-        let hits = knn_rows!(&rtx, &q, &m, &base, &idx, &p, &None, &CancelFlag::inert());
+        let hits = knn_rows(&rtx, &q, &m, &base, &idx, &p, &None, &CancelFlag::inert())?;
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0][0], DataValue::from(2));
 
         // k larger than the index: everything comes back, still ordered.
-        let hits = knn_rows!(
+        let hits = knn_rows(
             &rtx,
             &q,
             &m,
@@ -4378,7 +4403,7 @@ mod tests {
             &knn_params(10),
             &None,
             &CancelFlag::inert(),
-        );
+        )?;
         assert_eq!(hits.len(), 4);
         assert_eq!(
             hits.iter()
@@ -4404,7 +4429,7 @@ mod tests {
 
         let rtx = db.read_tx()?;
         let q = Vector::try_new(vec![2.0, 0.0]).ok_or_else(|| miette!("vector refused"))?;
-        let hits = knn_rows!(
+        let hits = knn_rows(
             &rtx,
             &q,
             &m,
@@ -4413,7 +4438,7 @@ mod tests {
             &knn_params(3),
             &None,
             &CancelFlag::inert(),
-        );
+        )?;
         assert_eq!(
             hits.iter()
                 .map(|t| t[0].get_int().ok_or_else(|| miette!("expected int")))
@@ -4537,7 +4562,7 @@ mod tests {
 
         let rtx = db.read_tx()?;
         let q = Vector::try_new(vec![1.0, 0.0]).ok_or_else(|| miette!("vector refused"))?;
-        let hits = knn_rows!(
+        let hits = knn_rows(
             &rtx,
             &q,
             &m,
@@ -4546,7 +4571,7 @@ mod tests {
             &knn_params(2),
             &None,
             &CancelFlag::inert(),
-        );
+        )?;
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0][0], DataValue::from(1));
 
@@ -4555,7 +4580,7 @@ mod tests {
         tx.commit().map_err(|e| miette!("{e}"))?;
 
         let rtx = db.read_tx()?;
-        let hits = knn_rows!(
+        let hits = knn_rows(
             &rtx,
             &q,
             &m,
@@ -4564,7 +4589,7 @@ mod tests {
             &knn_params(2),
             &None,
             &CancelFlag::inert(),
-        );
+        )?;
         assert!(hits.is_empty(), "empty index yields empty results");
         assert_eq!(
             idx.scan_all(&rtx).count(),
@@ -4607,7 +4632,7 @@ mod tests {
 
         let rtx = db.read_tx()?;
         let q = Vector::try_new(vec![4.0, 4.0]).ok_or_else(|| miette!("vector refused"))?;
-        let hits = knn_rows!(
+        let hits = knn_rows(
             &rtx,
             &q,
             &m,
@@ -4616,7 +4641,7 @@ mod tests {
             &knn_params(1),
             &None,
             &CancelFlag::inert(),
-        );
+        )?;
         assert_eq!(hits[0][0], DataValue::from(1), "found at its new position");
         Ok(())
     }
@@ -5234,7 +5259,7 @@ mod tests {
             let (base, idx, m) = setup(&db, HnswDistance::L2, &rows)?;
             let rtx = db.read_tx()?;
             let q = Vector::try_new(vec![1.0, 0.0]).ok_or_else(|| miette!("vector refused"))?;
-            let hits = knn_rows!(
+            let hits = knn_rows(
                 &rtx,
                 &q,
                 &m,
@@ -5243,7 +5268,7 @@ mod tests {
                 &knn_params(3),
                 &None,
                 &CancelFlag::inert(),
-            );
+            )?;
             // Every hit is at distance 0 (identical vectors).
             for h in &hits {
                 assert!(

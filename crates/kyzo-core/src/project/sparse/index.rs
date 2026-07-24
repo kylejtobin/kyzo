@@ -686,10 +686,22 @@ mod tests {
     use kyzo_model::program::symbol::Symbol;
     use miette::{IntoDiagnostic, Result, miette};
 
-    macro_rules! sparse_rows {
-        ($($arg:expr),* $(,)?) => {{
-            crate::project::contract::search_rows(Sparse::search_index($($arg),*)?)?
-        }};
+    fn sparse_rows(
+        tx: &impl ReadTx,
+        query: &[(u32, f32)],
+        base: &RelationHandle,
+        idx: &RelationHandle,
+        params: &SparseSearchParams,
+        filter_code: &Option<Expr>,
+    ) -> Result<Vec<Tuple>> {
+        crate::project::contract::search_rows(Sparse::search_index(
+            tx,
+            query,
+            base,
+            idx,
+            params,
+            filter_code,
+        )?)
     }
 
     fn col(name: &str, coltype: ColType) -> ColumnDef {
@@ -741,7 +753,7 @@ mod tests {
         k: usize,
     ) -> Result<Vec<(i64, f32)>> {
         let rtx = db.read_tx()?;
-        let hits = sparse_rows!(&rtx, query, &f.base, &f.idx, &params(k), &None);
+        let hits = sparse_rows(&rtx, query, &f.base, &f.idx, &params(k), &None)?;
         let mut out = Vec::with_capacity(hits.len());
         for t in &hits {
             let key = t[0].get_int().ok_or_else(|| miette!("expected int key"))?;
@@ -895,14 +907,14 @@ mod tests {
             let db = new_fjall_storage(dir.path())?;
             let f = setup(&db, docs)?;
             let rtx = db.read_tx()?;
-            Ok(sparse_rows!(
+            sparse_rows(
                 &rtx,
                 query,
                 &f.base,
                 &f.idx,
                 &params(10),
                 &None
-            ))
+            )
         };
 
         let a = build_and_search()?;
@@ -1137,7 +1149,7 @@ mod tests {
             k: 10,
             bind_score: SparseBindScore::Append,
         };
-        let hits = sparse_rows!(&rtx, &[(0, 1.0)], &f.base, &f.idx, &p, &Some(filter));
+        let hits = sparse_rows(&rtx, &[(0, 1.0)], &f.base, &f.idx, &p, &Some(filter))?;
         let mut keys = Vec::with_capacity(hits.len());
         for t in &hits {
             keys.push(t[0].get_int().ok_or_else(|| miette!("expected int key"))?);
