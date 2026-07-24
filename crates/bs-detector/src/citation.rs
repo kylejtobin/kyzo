@@ -55,7 +55,9 @@ impl Citation {
             return Ok(Citation::DecisionsSeat(n));
         }
         if s.contains('#') {
-            let (file, item) = s.split_once('#').expect("contains #");
+            let Some((file, item)) = s.split_once('#') else {
+                return Err(format!("file#item-path malformed: {s}"));
+            };
             if file.is_empty() || item.is_empty() {
                 return Err(format!("file#item-path malformed: `{s}`"));
             }
