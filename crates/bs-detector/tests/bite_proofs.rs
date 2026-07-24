@@ -445,7 +445,7 @@ fn bite_derive_bypass() -> BiteOutcome {
         "crates/x/src/a.rs",
         "#[derive(Default)] struct Interval(u8);\nimpl Interval { fn new(x: u8) -> Result<Interval, ()> { if x > 0 { Ok(Interval(x)) } else { Err(()) } } }",
     )?;
-    P.require_eq(graph::derive_bypass(&[&f]).len(), 1, BiteProofRefuse::HitCount)?;
+    P.require_eq(graph::GRAPH.derive_bypass(&[&f]).len(), 1, BiteProofRefuse::HitCount)?;
     Ok(())
 }
 
@@ -454,7 +454,7 @@ fn bite_copy_detector() -> BiteOutcome {
     let body = "{ let mut acc = 0; for i in 0..100 { if i % 2 == 0 { acc += i * 3 + 7; } else { acc -= i / 2 + 11; } while acc > 500 { acc /= 2; } match acc { 0 => acc = 1, 1 => acc = 2, other => acc = other - 1, } } acc }";
     let a = P.parsed("crates/x/src/a.rs", &format!("fn alpha() -> i64 {body}"))?;
     let b = P.parsed("crates/y/src/b.rs", &format!("fn beta() -> i64 {body}"))?;
-    P.require_eq(graph::copy_detector(&[&a, &b]).len(), 1, BiteProofRefuse::HitCount)?;
+    P.require_eq(graph::GRAPH.copy_detector(&[&a, &b]).len(), 1, BiteProofRefuse::HitCount)?;
     Ok(())
 }
 
@@ -462,7 +462,7 @@ fn bite_copy_detector() -> BiteOutcome {
 fn bite_agreement_registry() -> BiteOutcome {
     let f = P.parsed("crates/x/src/a.rs", "fn law_alive() {}")?;
     let reg = "[[agreement]]\ntest_fn = \"law_alive\"\n[[agreement]]\ntest_fn = \"law_deleted\"\n";
-    let hits = graph::agreement_registry(&[&f], reg);
+    let hits = graph::GRAPH.agreement_registry(&[&f], reg);
     P.require_eq(hits.len(), 1, BiteProofRefuse::HitCount)?;
     P.require(hits[0].construct().contains("law_deleted"), BiteProofRefuse::Construct)?;
     Ok(())

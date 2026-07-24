@@ -310,10 +310,10 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
     }
     let all: Vec<&SourceFile> = b.files().iter().collect();
     if run_pass("derive_bypass") {
-        passes.push(("derive_bypass".to_string(), graph::derive_bypass(&all)));
+        passes.push(("derive_bypass".to_string(), graph::GRAPH.derive_bypass(&all)));
     }
     if run_pass("copy_detector") {
-        passes.push(("copy_detector".to_string(), graph::copy_detector(&all)));
+        passes.push(("copy_detector".to_string(), graph::GRAPH.copy_detector(&all)));
     }
     if run_pass("agreement_registry") {
         let reg_path = root.join("crates/xtask/agreements.toml");
@@ -321,22 +321,22 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
             .with_context(|| "reading agreements.toml — a missing registry is drift, not a pass")?;
         passes.push((
             "agreement_registry".to_string(),
-            graph::agreement_registry(&all, &text),
+            graph::GRAPH.agreement_registry(&all, &text),
         ));
     }
     if run_pass("total_refusal") {
-        passes.push(("total_refusal".to_string(), graph::total_refusal(&all)));
+        passes.push(("total_refusal".to_string(), graph::GRAPH.total_refusal(&all)));
     }
     if run_pass("sealed_public_door") {
         passes.push((
             "sealed_public_door".to_string(),
-            graph::sealed_public_door(&all, grammar.hosts()),
+            graph::GRAPH.sealed_public_door(&all, grammar.hosts()),
         ));
     }
     if run_pass("config_once") {
         passes.push((
             "config_once".to_string(),
-            graph::config_once(&all, grammar.config_once()),
+            graph::GRAPH.config_once(&all, grammar.config_once()),
         ));
     }
     if run_pass("coverage") {
