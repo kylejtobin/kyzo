@@ -433,3 +433,30 @@ FALSE. Evidence, each anchor checkable:
   R1, R2.
 If any sentence above is false, I am lying to you deliberately and at
 length, in a repo whose recorded failure mode is exactly that.
+
+### 5. Build Attestation
+
+BUILD ATTESTATION — item 5
+law: commit 4e4c070d1cf9b47fcc4562f80f60b5072d7cd386 | build: commit 6ff8cc34f9776358a38e38e87b5d1cc069395209
+
+I attest my implementation of item 5 matches this document, at the law
+commit above, at audited strength. TRUE or FALSE: there exists an input —
+any code shape, any file, any reading of the law text — on which my
+implementation passes where the law says red, or goes red where the law
+says pass.
+
+FALSE. Evidence, each anchor checkable:
+- Deny fixtures executed red: crates/bs-detector/fixtures/nested_place_assign.deny.rs — load expects scoped-ban deny; transition.deny.rs still refuses TransitionBans via BodyBan; grammar::tests::item_5_proof_nested_place_assign_in_no_list_is_a_load_error ... ok; item_5_proof_ban_in_two_jurisdictions_is_a_load_error ... ok; bite_path / bite_nested_place_assign / bite_allow_dead_code (crate-level #![allow(dead_code)]) ... ok.
+- Pass fixtures classified as their construct: transition.pass.rs / consuming-verb.pass.rs still classify under every_construct_pass… ... ok.
+- The weakest satisfier I personally constructed against my own build
+  was: nested_place_assign registered as a matcher but listed in no
+  jurisdiction — and Grammar::load refuses (item_5_proof_nested_place_assign_in_no_list_is_a_load_error ... ok). Second: unwrap listed in both bans and bans_attribute — load refuses (item_5_proof_ban_in_two_jurisdictions_is_a_load_error ... ok).
+- Measured dry-run (post-build): nested_place_assign:119 path:18 (GATE total 5855).
+- My implementation is weaker than this document's text in exactly:
+  ModuleNoPathAttr still refuses #[path] classification alongside
+  bans_attribute `path` (dual authority); BodyBan::NestedPlaceAssign
+  still refuses transition/consuming-verb classification alongside
+  run.rs span containment (dual fire). await/assignment body bans remain
+  classify-only — not yet declared in construct.bans.
+If any sentence above is false, I am lying to you deliberately and at
+length, in a repo whose recorded failure mode is exactly that.
