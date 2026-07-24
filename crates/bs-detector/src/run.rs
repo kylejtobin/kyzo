@@ -514,38 +514,49 @@ mod tests {
 
     type TestResult = Result<(), RunProofRefuse>;
 
-    fn stage_root_with_free_fn(probe_src: &str) -> Result<tempfile::TempDir, RunProofRefuse> {
-        let dir = tempfile::tempdir().map_err(|_| RunProofRefuse::Tempdir)?;
-        let root = dir.path();
-        let src = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let det = root.join("crates/bs-detector");
-        fs::create_dir_all(det.join("tests")).map_err(|_| RunProofRefuse::Mkdir)?;
-        fs::create_dir_all(det.join("fixtures")).map_err(|_| RunProofRefuse::Mkdir)?;
-        fs::create_dir_all(root.join("crates/probe/src")).map_err(|_| RunProofRefuse::Mkdir)?;
-        for name in ["grammar.toml", "laws.toml", "waivers.toml"] {
-            fs::copy(src.join(name), det.join(name)).map_err(|_| RunProofRefuse::Copy)?;
+    /// Receiver for run test helpers (tip 806/896).
+    struct RunProofs;
+
+    impl RunProofs {
+        fn stage_root_with_free_fn(
+            &self,
+            probe_src: &str,
+        ) -> Result<tempfile::TempDir, RunProofRefuse> {
+            let dir = tempfile::tempdir().map_err(|_| RunProofRefuse::Tempdir)?;
+            let root = dir.path();
+            let src = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            let det = root.join("crates/bs-detector");
+            fs::create_dir_all(det.join("tests")).map_err(|_| RunProofRefuse::Mkdir)?;
+            fs::create_dir_all(det.join("fixtures")).map_err(|_| RunProofRefuse::Mkdir)?;
+            fs::create_dir_all(root.join("crates/probe/src")).map_err(|_| RunProofRefuse::Mkdir)?;
+            for name in ["grammar.toml", "laws.toml", "waivers.toml"] {
+                fs::copy(src.join(name), det.join(name)).map_err(|_| RunProofRefuse::Copy)?;
+            }
+            fs::copy(
+                src.join("tests/bite_proofs.rs"),
+                det.join("tests/bite_proofs.rs"),
+            )
+            .map_err(|_| RunProofRefuse::Copy)?;
+            for entry in fs::read_dir(src.join("fixtures")).map_err(|_| RunProofRefuse::FixturesDir)?
+            {
+                let entry = entry.map_err(|_| RunProofRefuse::Entry)?;
+                let name = entry.file_name();
+                let to = det.join("fixtures").join(&name);
+                fs::write(&to, "struct FixtureUnit;\n").map_err(|_| RunProofRefuse::Write)?;
+            }
+            fs::write(root.join("crates/probe/src/lib.rs"), probe_src)
+                .map_err(|_| RunProofRefuse::Write)?;
+            Ok(dir)
         }
-        fs::copy(
-            src.join("tests/bite_proofs.rs"),
-            det.join("tests/bite_proofs.rs"),
-        )
-        .map_err(|_| RunProofRefuse::Copy)?;
-        for entry in fs::read_dir(src.join("fixtures")).map_err(|_| RunProofRefuse::FixturesDir)? {
-            let entry = entry.map_err(|_| RunProofRefuse::Entry)?;
-            let name = entry.file_name();
-            let to = det.join("fixtures").join(&name);
-            fs::write(&to, "struct FixtureUnit;\n").map_err(|_| RunProofRefuse::Write)?;
-        }
-        fs::write(root.join("crates/probe/src/lib.rs"), probe_src)
-            .map_err(|_| RunProofRefuse::Write)?;
-        Ok(dir)
     }
+
+    const R: RunProofs = RunProofs;
 
     /// Tip 650 anti-fraud: free unseated fn meters as hard `unclassified-fn:N`
     /// on the counts banner — exact token equality, not soft contains/any.
     #[test]
     fn anti_fraud_counts_line_meters_unclassified_fn_exactly() -> TestResult {
-        let dir = stage_root_with_free_fn("fn free_unseated() {}\n")?;
+        let dir = R.stage_root_with_free_fn("fn free_unseated() {}\n")?;
         let v = run(dir.path(), Some("unclassified-fn")).map_err(|_| RunProofRefuse::Run)?;
         let n = v
             .report()
