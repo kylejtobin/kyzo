@@ -91,10 +91,10 @@ fn item_kind(item: &syn::Item) -> Option<KindName> {
         syn::Item::Union(_) => Some(KindName::Union),
         syn::Item::Use(_) => Some(KindName::Use),
         syn::Item::Verbatim(_) => Some(KindName::Verbatim),
-        unrecognized_item_variant => {
-            let _ = unrecognized_item_variant;
-            None
-        }
+        // Named (not bare `_`) so a future syn variant is a visible red,
+        // never a silent catch-all. Leading underscore = unused-ok without
+        // a `let _ =` discard.
+        _unrecognized_item_variant => None,
     }
 }
 
@@ -105,10 +105,7 @@ fn impl_item_kind(item: &syn::ImplItem) -> Option<KindName> {
         syn::ImplItem::Type(_) => Some(KindName::ImplType),
         syn::ImplItem::Macro(_) => Some(KindName::ImplMacro),
         syn::ImplItem::Verbatim(_) => Some(KindName::Verbatim),
-        unrecognized_impl_item_variant => {
-            let _ = unrecognized_impl_item_variant;
-            None
-        }
+        _unrecognized_impl_item_variant => None,
     }
 }
 
@@ -119,10 +116,7 @@ fn trait_item_kind(item: &syn::TraitItem) -> Option<KindName> {
         syn::TraitItem::Type(_) => Some(KindName::TraitType),
         syn::TraitItem::Macro(_) => Some(KindName::TraitMacro),
         syn::TraitItem::Verbatim(_) => Some(KindName::Verbatim),
-        unrecognized_trait_item_variant => {
-            let _ = unrecognized_trait_item_variant;
-            None
-        }
+        _unrecognized_trait_item_variant => None,
     }
 }
 
@@ -928,10 +922,7 @@ mod fixture_tests {
                     | Some(syn::ImplItem::Macro(_))
                     | Some(syn::ImplItem::Verbatim(_))
                     | None => false,
-                    unrecognized_impl_item => {
-                        let _ = unrecognized_impl_item;
-                        false
-                    }
+                    _unrecognized_impl_item => false,
                 }
             }
             other => {
@@ -956,10 +947,17 @@ mod fixture_tests {
                 rel_for(&c.name)
             };
             let pass_path = crate_dir().join("fixtures").join(format!("{}.pass.rs", c.name));
-            let pass_src = std::fs::read_to_string(&pass_path)
-                .unwrap_or_else(|e| panic!("{} pass fixture readable: {e}", c.name));
-            let pass_ast = syn::parse_file(&pass_src).unwrap_or_else(|e| panic!("{} pass fixture parses: {e}", c.name));
-            let first = pass_ast.items.first().unwrap_or_else(|| panic!("{} pass fixture has an item", c.name));
+            let pass_src = match std::fs::read_to_string(&pass_path) {
+                Ok(s) => s,
+                Err(e) => panic!("{} pass fixture readable: {e}", c.name),
+            };
+            let pass_ast = match syn::parse_file(&pass_src) {
+                Ok(a) => a,
+                Err(e) => panic!("{} pass fixture parses: {e}", c.name),
+            };
+            let Some(first) = pass_ast.items.first() else {
+                panic!("{} pass fixture has an item", c.name);
+            };
             assert!(
                 probe_matches(&grammar, rel, c.rule, first),
                 "{} pass fixture must classify as its own construct",
@@ -975,10 +973,17 @@ mod fixture_tests {
                 rel_for(&c.name)
             };
             let deny_path = crate_dir().join("fixtures").join(format!("{}.deny.rs", c.name));
-            let deny_src = std::fs::read_to_string(&deny_path)
-                .unwrap_or_else(|e| panic!("{} deny fixture readable: {e}", c.name));
-            let deny_ast = syn::parse_file(&deny_src).unwrap_or_else(|e| panic!("{} deny fixture parses: {e}", c.name));
-            let first = deny_ast.items.first().unwrap_or_else(|| panic!("{} deny fixture has an item", c.name));
+            let deny_src = match std::fs::read_to_string(&deny_path) {
+                Ok(s) => s,
+                Err(e) => panic!("{} deny fixture readable: {e}", c.name),
+            };
+            let deny_ast = match syn::parse_file(&deny_src) {
+                Ok(a) => a,
+                Err(e) => panic!("{} deny fixture parses: {e}", c.name),
+            };
+            let Some(first) = deny_ast.items.first() else {
+                panic!("{} deny fixture has an item", c.name);
+            };
             assert!(
                 !probe_matches(&grammar, deny_rel, c.rule, first),
                 "{} deny fixture must be refused by its OWN rule",
@@ -991,14 +996,16 @@ mod fixture_tests {
     fn every_condemned_kind_deny_fixture_is_red_under_its_own_law() {
         let grammar = real_grammar();
         for kind in &grammar.condemned {
-            let law = kind
-                .condemned_law_name()
-                .unwrap_or_else(|| panic!("{} must have a condemnation law", kind.kebab()));
+            let Some(law) = kind.condemned_law_name() else {
+                panic!("{} must have a condemnation law", kind.kebab());
+            };
             let path = crate_dir()
                 .join("fixtures")
                 .join(format!("{}.deny.rs", kind.kebab()));
-            let src = std::fs::read_to_string(&path)
-                .unwrap_or_else(|e| panic!("{} deny fixture readable: {e}", kind.kebab()));
+            let src = match std::fs::read_to_string(&path) {
+                Ok(s) => s,
+                Err(e) => panic!("{} deny fixture readable: {e}", kind.kebab()),
+            };
             // Verbatim cannot be authored inside a file syn::parse_file accepts —
             // by definition it is what syn could not interpret. Presence is the
             // load law; live-tree Verbatim is the classify path. Skip parse-exec
@@ -1010,8 +1017,10 @@ mod fixture_tests {
                 );
                 continue;
             }
-            let ast = syn::parse_file(&src)
-                .unwrap_or_else(|e| panic!("{} deny fixture parses: {e}", kind.kebab()));
+            let ast = match syn::parse_file(&src) {
+                Ok(a) => a,
+                Err(e) => panic!("{} deny fixture parses: {e}", kind.kebab()),
+            };
             let f = SourceFile {
                 rel_path: format!("crates/bs-detector/fixtures/{}.deny.rs", kind.kebab()),
                 text: src,

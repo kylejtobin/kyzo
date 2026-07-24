@@ -433,20 +433,24 @@ fn result_error_type(ty: &syn::Type) -> Option<&syn::Type> {
     let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
         return None;
     };
-    let mut types = args.args.iter().filter_map(|a| match a {
-        syn::GenericArgument::Type(t) => Some(t),
-        syn::GenericArgument::Lifetime(_)
-        | syn::GenericArgument::AssocType(_)
-        | syn::GenericArgument::AssocConst(_)
-        | syn::GenericArgument::Constraint(_)
-        | syn::GenericArgument::Const(_) => None,
-        unrecognized_generic_arg => {
-            let _ = unrecognized_generic_arg;
-            None
-        }
-    });
-    let _ok = types.next()?;
-    types.next()
+    let types: Vec<&syn::Type> = args
+        .args
+        .iter()
+        .filter_map(|a| match a {
+            syn::GenericArgument::Type(t) => Some(t),
+            syn::GenericArgument::Lifetime(_)
+            | syn::GenericArgument::AssocType(_)
+            | syn::GenericArgument::AssocConst(_)
+            | syn::GenericArgument::Constraint(_)
+            | syn::GenericArgument::Const(_) => None,
+            _unrecognized_generic_arg => None,
+        })
+        .collect();
+    // Result<T, E> — keep E; T is witness-position only.
+    match types.as_slice() {
+        [_, err] => Some(*err),
+        _not_result_arity => None,
+    }
 }
 
 fn error_ty_is_workspace_enum(ty: &syn::Type, enums: &BTreeSet<String>) -> bool {
@@ -454,12 +458,14 @@ fn error_ty_is_workspace_enum(ty: &syn::Type, enums: &BTreeSet<String>) -> bool 
         return false;
     };
     // Box<dyn Error> / aliased wrappers handled by banned check first.
-    if let syn::PathArguments::AngleBracketed(args) = &tp.path.segments.last().unwrap().arguments {
+    let Some(seg) = tp.path.segments.last() else {
+        return false;
+    };
+    if let syn::PathArguments::AngleBracketed(_args) = &seg.arguments {
         // Box<dyn …> — Path with one type arg that is TraitObject.
-        if tp.path.segments.last().is_some_and(|s| s.ident == "Box") {
+        if seg.ident == "Box" {
             return false;
         }
-        let _ = args;
     }
     path_last_ident(&tp.path).is_some_and(|name| enums.contains(&name))
 }

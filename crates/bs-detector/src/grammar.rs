@@ -341,9 +341,9 @@ struct KindsSection {
 #[serde(deny_unknown_fields)]
 struct SeatsSection {
     fns: Vec<FnSeat>,
-    #[serde(default)]
+    // Required keys (no serde default): empty lists refuse at load; silent
+    // missing-section soft-pass is the hole item 2 closed.
     hosts: Vec<HostDoor>,
-    #[serde(default)]
     config_once: Vec<ConfigOnceSeat>,
 }
 
