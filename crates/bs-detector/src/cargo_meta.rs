@@ -15,38 +15,97 @@ use serde::Deserialize;
 use serde::de::Error as _;
 use serde_json::{Map, Value};
 
+use crate::boundary::{Label, RelPath};
+
 /// Shape of `cargo metadata --format-version=1`, trimmed to the fields the
 /// two gates need. `--no-deps` callers simply never see dependency packages;
 /// full-graph callers get them. Extra JSON fields cargo may emit are ignored.
+///
+/// Fields are private (TRUTH item 9). Deserialize is the sole admission
+/// door; callers read through accessors.
 #[derive(Debug)]
 pub struct CargoMetadata {
-    pub packages: Vec<MetaPackage>,
-    pub workspace_members: Vec<String>,
-    pub workspace_root: String,
-    /// Present on a full-graph `cargo metadata` response; empty string when
-    /// a `--no-deps` parse omits the key (explicit absence at this door).
-    pub target_directory: String,
+    packages: Vec<MetaPackage>,
+    workspace_members: Vec<Label>,
+    workspace_root: RelPath,
+    /// Present on a full-graph `cargo metadata` response; empty when a
+    /// `--no-deps` parse omits the key (explicit absence at this door).
+    target_directory: RelPath,
 }
 
+impl CargoMetadata {
+    pub fn packages(&self) -> &[MetaPackage] {
+        &self.packages
+    }
+
+    pub fn workspace_members(&self) -> &[Label] {
+        &self.workspace_members
+    }
+
+    pub fn workspace_root(&self) -> &str {
+        self.workspace_root.as_str()
+    }
+
+    pub fn target_directory(&self) -> &str {
+        self.target_directory.as_str()
+    }
+}
+
+/// Fields are private (TRUTH item 9). Deserialize is the sole admission
+/// door; callers read through accessors.
 #[derive(Debug)]
 pub struct MetaPackage {
-    pub id: String,
-    pub name: String,
-    pub manifest_path: String,
+    id: Label,
+    name: Label,
+    manifest_path: RelPath,
     /// Empty when a `--no-deps` payload omits version; the build-script
     /// sandbox always sees a real version on a full-graph parse.
-    pub version: String,
+    version: Label,
     /// `null` unless the manifest sets `publish`; `Some([])` is exactly
     /// `publish = false`, `Some([..])` is a registry allowlist. Missing key
     /// is `None` — same meaning as cargo omitting the field.
-    pub publish: Option<Vec<String>>,
+    publish: Option<Vec<Label>>,
     /// Empty when the payload omits targets.
-    pub targets: Vec<MetaTarget>,
+    targets: Vec<MetaTarget>,
 }
 
+impl MetaPackage {
+    pub fn id(&self) -> &str {
+        self.id.as_str()
+    }
+
+    pub fn name(&self) -> &str {
+        self.name.as_str()
+    }
+
+    pub fn manifest_path(&self) -> &str {
+        self.manifest_path.as_str()
+    }
+
+    pub fn version(&self) -> &str {
+        self.version.as_str()
+    }
+
+    pub fn publish(&self) -> Option<&[Label]> {
+        self.publish.as_deref()
+    }
+
+    pub fn targets(&self) -> &[MetaTarget] {
+        &self.targets
+    }
+}
+
+/// Fields are private (TRUTH item 9). Deserialize is the sole admission
+/// door; callers read through [`MetaTarget::kind`].
 #[derive(Debug, Deserialize)]
 pub struct MetaTarget {
-    pub kind: Vec<String>,
+    kind: Vec<Label>,
+}
+
+impl MetaTarget {
+    pub fn kind(&self) -> &[Label] {
+        &self.kind
+    }
 }
 
 fn take_string(map: &mut Map<String, Value>, key: &str) -> Result<String, String> {
@@ -73,7 +132,7 @@ impl<'de> Deserialize<'de> for CargoMetadata {
             None => return Err(D::Error::missing_field("packages")),
         };
         let workspace_members = match map.remove("workspace_members") {
-            Some(v) => Vec::<String>::deserialize(v).map_err(D::Error::custom)?,
+            Some(v) => Vec::<Label>::deserialize(v).map_err(D::Error::custom)?,
             None => return Err(D::Error::missing_field("workspace_members")),
         };
         let workspace_root =
@@ -83,8 +142,8 @@ impl<'de> Deserialize<'de> for CargoMetadata {
         Ok(Self {
             packages,
             workspace_members,
-            workspace_root,
-            target_directory,
+            workspace_root: RelPath::admit(workspace_root),
+            target_directory: RelPath::admit(target_directory),
         })
     }
 }
@@ -98,17 +157,17 @@ impl<'de> Deserialize<'de> for MetaPackage {
         let version = take_string_or_empty(&mut map, "version").map_err(D::Error::custom)?;
         let publish = match map.remove("publish") {
             None | Some(Value::Null) => None,
-            Some(v) => Some(Vec::<String>::deserialize(v).map_err(D::Error::custom)?),
+            Some(v) => Some(Vec::<Label>::deserialize(v).map_err(D::Error::custom)?),
         };
         let targets = match map.remove("targets") {
             None | Some(Value::Null) => Vec::new(),
             Some(v) => Vec::<MetaTarget>::deserialize(v).map_err(D::Error::custom)?,
         };
         Ok(Self {
-            id,
-            name,
-            manifest_path,
-            version,
+            id: Label::admit(id),
+            name: Label::admit(name),
+            manifest_path: RelPath::admit(manifest_path),
+            version: Label::admit(version),
             publish,
             targets,
         })

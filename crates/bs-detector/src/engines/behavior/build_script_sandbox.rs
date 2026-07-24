@@ -41,6 +41,7 @@ use std::process::{Command, Output};
 
 use walkdir::WalkDir;
 
+use crate::boundary::Label;
 use crate::cargo_meta::CargoMetadata;
 // Ported from xtask; campaign-seated under laws.toml [[campaign]].
 
@@ -230,9 +231,29 @@ fn run_metadata(repo_root: &Path) -> Result<CargoMetadata, BuildScriptSandboxErr
 /// build/lib directory naming never embeds the version) and its exact
 /// `name@version` spec (kept for display only now that builds run
 /// workspace-wide rather than per-package).
+///
+/// Fields are private (TRUTH item 9). Sole admission is
+/// [`BuildScriptTarget::admit`]; callers read through accessors.
 struct BuildScriptTarget {
-    name: String,
-    spec: String,
+    name: Label,
+    spec: Label,
+}
+
+impl BuildScriptTarget {
+    fn admit(name: impl Into<Label>, spec: impl Into<Label>) -> Self {
+        Self {
+            name: name.into(),
+            spec: spec.into(),
+        }
+    }
+
+    fn name(&self) -> &str {
+        self.name.as_str()
+    }
+
+    fn spec(&self) -> &str {
+        self.spec.as_str()
+    }
 }
 
 /// Every package with at least one `custom-build` (build.rs) target,
@@ -241,20 +262,17 @@ struct BuildScriptTarget {
 /// party or vendored, is covered the moment `cargo metadata` reports it.
 fn discover_build_script_packages(metadata: &CargoMetadata) -> Vec<BuildScriptTarget> {
     let mut targets: Vec<BuildScriptTarget> = metadata
-        .packages
+        .packages()
         .iter()
         .filter(|p| {
-            p.targets
+            p.targets()
                 .iter()
-                .any(|t| t.kind.iter().any(|k| k == "custom-build"))
+                .any(|t| t.kind().iter().any(|k| k == "custom-build"))
         })
-        .map(|p| BuildScriptTarget {
-            name: p.name.clone(),
-            spec: format!("{}@{}", p.name, p.version),
-        })
+        .map(|p| BuildScriptTarget::admit(p.name(), format!("{}@{}", p.name(), p.version())))
         .collect();
-    targets.sort_unstable_by(|a, b| a.spec.cmp(&b.spec));
-    targets.dedup_by(|a, b| a.spec == b.spec);
+    targets.sort_unstable_by(|a, b| a.spec().cmp(b.spec()));
+    targets.dedup_by(|a, b| a.spec() == b.spec());
     targets
 }
 
@@ -263,15 +281,15 @@ fn discover_build_script_packages(metadata: &CargoMetadata) -> Vec<BuildScriptTa
 /// uses to tell a real member from a merely-resolved dependency.
 fn discover_workspace_member_names(metadata: &CargoMetadata) -> Vec<String> {
     let member_ids: std::collections::HashSet<&str> = metadata
-        .workspace_members
+        .workspace_members()
         .iter()
-        .map(String::as_str)
+        .map(Label::as_str)
         .collect();
     metadata
-        .packages
+        .packages()
         .iter()
-        .filter(|p| member_ids.contains(p.id.as_str()))
-        .map(|p| p.name.clone())
+        .filter(|p| member_ids.contains(p.id()))
+        .map(|p| p.name().to_string())
         .collect()
 }
 
@@ -280,14 +298,14 @@ fn discover_workspace_member_names(metadata: &CargoMetadata) -> Vec<String> {
 /// workspace-source-tree path falls under.
 fn package_dirs(metadata: &CargoMetadata) -> Vec<(String, PathBuf)> {
     metadata
-        .packages
+        .packages()
         .iter()
         .map(|p| {
-            let dir = match Path::new(&p.manifest_path).parent() {
+            let dir = match Path::new(p.manifest_path()).parent() {
                 Some(parent) => parent.to_path_buf(),
-                None => PathBuf::from(&p.manifest_path),
+                None => PathBuf::from(p.manifest_path()),
             };
-            (p.name.clone(), dir)
+            (p.name().to_string(), dir)
         })
         .collect()
 }
@@ -778,9 +796,9 @@ impl BuildScriptSandboxGate {
         let metadata = run_metadata(repo_root)?;
         let owned_target = match owned_target_override {
             Some(p) => p.to_path_buf(),
-            None => PathBuf::from(&metadata.target_directory).join("build-script-sandbox"),
+            None => PathBuf::from(metadata.target_directory()).join("build-script-sandbox"),
         };
-        let workspace_root = PathBuf::from(&metadata.workspace_root);
+        let workspace_root = PathBuf::from(metadata.workspace_root());
         let targets = discover_build_script_packages(&metadata);
 
         if targets.is_empty() {
@@ -791,7 +809,7 @@ impl BuildScriptSandboxGate {
         }
 
         let member_names = discover_workspace_member_names(&metadata);
-        let mut known_names: Vec<String> = targets.iter().map(|t| t.name.clone()).collect();
+        let mut known_names: Vec<String> = targets.iter().map(|t| t.name().to_string()).collect();
         known_names.extend(member_names);
         known_names.sort_unstable();
         known_names.dedup();
@@ -811,7 +829,7 @@ impl BuildScriptSandboxGate {
             "build-script sandbox gate: clean (checked, net-isolated, whole-workspace build:{} — wrote only inside their own build/<pkg>-*/out/, touched no network)",
             targets
                 .iter()
-                .map(|t| format!(" {}", t.spec))
+                .map(|t| format!(" {}", t.spec()))
                 .collect::<String>()
         ))
     }

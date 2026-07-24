@@ -23,7 +23,7 @@
 use quote::ToTokens;
 use syn::visit::{self, Visit};
 
-use crate::boundary::{Label, SourceFile, span_line};
+use crate::boundary::{Label, RelPath, SourceFile, span_line};
 use crate::engines::Hit;
 
 /// Matcher family label. Does **not** gate scanning (tip 650/659: no strip).
@@ -104,37 +104,68 @@ pub const MATCHER_LOOKUP: MatcherLookup = MatcherLookup;
 /// a single authority. Wrappers below select a node kind by filling one
 /// list; the others stay empty.
 struct NameSites<'a> {
-    methods: &'a [&'a str],
-    macros: &'a [&'a str],
-    paths: &'a [&'a str],
-    construct: &'a str,
-    rel: &'a str,
+    methods: Vec<Label>,
+    macros: Vec<Label>,
+    paths: Vec<Label>,
+    construct: Label,
+    rel: &'a RelPath,
     hits: Vec<Hit>,
+}
+
+/// Which name-list a site checks — one hit authority (tip 862: the three
+/// Visit arms must not be twin bodies after Label conversion).
+#[derive(Clone, Copy)]
+enum NameListKind {
+    Methods,
+    Macros,
+    Paths,
 }
 
 impl<'ast, 'a> Visit<'ast> for NameSites<'a> {
     fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
-        self.hit_listed(node.method.to_string(), self.methods, &node.method.span());
+        self.hit_listed(
+            NameListKind::Methods,
+            &node.method.to_string(),
+            &node.method.span(),
+        );
         visit::visit_expr_method_call(self, node);
     }
     fn visit_macro(&mut self, node: &'ast syn::Macro) {
         if let Some(seg) = node.path.segments.last() {
-            self.hit_listed(seg.ident.to_string(), self.macros, &seg.ident.span());
+            self.hit_listed(
+                NameListKind::Macros,
+                &seg.ident.to_string(),
+                &seg.ident.span(),
+            );
         }
         visit::visit_macro(self, node);
     }
     fn visit_path(&mut self, node: &'ast syn::Path) {
         for seg in &node.segments {
-            self.hit_listed(seg.ident.to_string(), self.paths, &seg.ident.span());
+            self.hit_listed(
+                NameListKind::Paths,
+                &seg.ident.to_string(),
+                &seg.ident.span(),
+            );
         }
         visit::visit_path(self, node);
     }
 }
 
 impl NameSites<'_> {
-    fn hit_listed(&mut self, name: String, list: &[&str], span: &proc_macro2::Span) {
-        if list.contains(&name.as_str()) {
-            HIT_PUSH.push(&mut self.hits, self.rel, span_line(span), self.construct);
+    fn hit_listed(&mut self, kind: NameListKind, name: &str, span: &proc_macro2::Span) {
+        let list = match kind {
+            NameListKind::Methods => &self.methods,
+            NameListKind::Macros => &self.macros,
+            NameListKind::Paths => &self.paths,
+        };
+        if list.iter().any(|l| l.as_str() == name) {
+            HIT_PUSH.push(
+                &mut self.hits,
+                self.rel,
+                span_line(span),
+                self.construct.as_str(),
+            );
         }
     }
 }
@@ -144,8 +175,8 @@ impl NameSites<'_> {
 struct HitPush;
 
 impl HitPush {
-    fn push(&self, hits: &mut Vec<Hit>, rel: &str, line: usize, construct: &str) {
-        hits.push(Hit::admit(rel.to_string(), line, construct.to_string()));
+    fn push(&self, hits: &mut Vec<Hit>, rel: &RelPath, line: usize, construct: &str) {
+        hits.push(Hit::admit(rel.clone(), line, construct.to_string()));
     }
 }
 
@@ -161,7 +192,7 @@ enum FileHitKind {
 }
 
 struct FileHitVisitor<'a> {
-    rel: &'a str,
+    rel: &'a RelPath,
     kind: FileHitKind,
     hits: Vec<Hit>,
 }
@@ -234,7 +265,7 @@ impl<'ast> Visit<'ast> for FileHitVisitor<'_> {
 impl SourceFile {
     fn file_hits(&self, kind: FileHitKind) -> Vec<Hit> {
         let mut v = FileHitVisitor {
-            rel: self.rel_path(),
+            rel: self.rel_path_ref(),
             kind,
             hits: vec![],
         };
@@ -250,11 +281,11 @@ impl SourceFile {
         construct: &str,
     ) -> Vec<Hit> {
         let mut v = NameSites {
-            methods,
-            macros,
-            paths,
-            construct,
-            rel: self.rel_path(),
+            methods: methods.iter().map(|s| Label::admit(*s)).collect(),
+            macros: macros.iter().map(|s| Label::admit(*s)).collect(),
+            paths: paths.iter().map(|s| Label::admit(*s)).collect(),
+            construct: Label::admit(construct),
+            rel: self.rel_path_ref(),
             hits: vec![],
         };
         v.visit_file(self.ast());
@@ -332,7 +363,7 @@ impl SourceFile {
         );
         // #[cfg(debug_assertions)] is the same law compiled out of release.
         struct V<'a> {
-            rel: &'a str,
+            rel: &'a RelPath,
             hits: Vec<Hit>,
         }
         impl<'ast, 'a> Visit<'ast> for V<'a> {
@@ -346,7 +377,7 @@ impl SourceFile {
             }
         }
         let mut v = V {
-            rel: self.rel_path(),
+            rel: self.rel_path_ref(),
             hits: vec![],
         };
         v.visit_file(self.ast());
@@ -357,7 +388,7 @@ impl SourceFile {
     /// `let _ = fallible(...)` — discarding a value that had something to say.
     fn detect_let_underscore(&self) -> Vec<Hit> {
         struct V<'a> {
-            rel: &'a str,
+            rel: &'a RelPath,
             hits: Vec<Hit>,
         }
         impl<'ast, 'a> Visit<'ast> for V<'a> {
@@ -373,7 +404,7 @@ impl SourceFile {
             }
         }
         let mut v = V {
-            rel: self.rel_path(),
+            rel: self.rel_path_ref(),
             hits: vec![],
         };
         v.visit_file(self.ast());
@@ -385,7 +416,7 @@ impl SourceFile {
     /// `mem::drop(value)` was silent-green when only semicolon stmts were scanned.
     fn detect_ok_drop(&self) -> Vec<Hit> {
         struct V<'a> {
-            rel: &'a str,
+            rel: &'a RelPath,
             hits: Vec<Hit>,
         }
         impl V<'_> {
@@ -423,7 +454,7 @@ impl SourceFile {
             }
         }
         let mut v = V {
-            rel: self.rel_path(),
+            rel: self.rel_path_ref(),
             hits: vec![],
         };
         v.visit_file(self.ast());
@@ -472,7 +503,7 @@ impl SourceFile {
     /// than scope truth on purpose; a false neighbor costs a wrong report.
     fn detect_capacity_min_cap(&self) -> Vec<Hit> {
         struct Clamped {
-            idents: std::collections::BTreeSet<String>,
+            idents: std::collections::BTreeSet<Label>,
         }
         impl<'ast> Visit<'ast> for Clamped {
             fn visit_local(&mut self, node: &'ast syn::Local) {
@@ -480,7 +511,7 @@ impl SourceFile {
                     let toks = init.expr.to_token_stream().to_string();
                     if toks.contains(". min (") || toks.contains(".min(") {
                         if let syn::Pat::Ident(pi) = &node.pat {
-                            self.idents.insert(pi.ident.to_string());
+                            self.idents.insert(Label::admit(pi.ident.to_string()));
                         }
                     }
                 }
@@ -493,8 +524,8 @@ impl SourceFile {
         clamped.visit_file(self.ast());
 
         struct V<'a> {
-            clamped: &'a std::collections::BTreeSet<String>,
-            rel: &'a str,
+            clamped: &'a std::collections::BTreeSet<Label>,
+            rel: &'a RelPath,
             hits: Vec<Hit>,
         }
         impl V<'_> {
@@ -508,7 +539,7 @@ impl SourceFile {
                         return true;
                     }
                     toks.split(|ch: char| !ch.is_alphanumeric() && ch != '_')
-                        .any(|w| self.clamped.contains(w))
+                        .any(|w| self.clamped.contains(&Label::admit(w)))
                 })
             }
         }
@@ -535,7 +566,7 @@ impl SourceFile {
         }
         let mut v = V {
             clamped: &clamped.idents,
-            rel: self.rel_path(),
+            rel: self.rel_path_ref(),
             hits: vec![],
         };
         v.visit_file(self.ast());
@@ -682,7 +713,7 @@ impl SourceFile {
     fn arm_sites(&self, kind: ArmSiteKind) -> Vec<Hit> {
         struct V<'a> {
             kind: ArmSiteKind,
-            rel: &'a str,
+            rel: &'a RelPath,
             hits: Vec<Hit>,
         }
         impl<'ast, 'a> Visit<'ast> for V<'a> {
@@ -695,7 +726,7 @@ impl SourceFile {
         }
         let mut v = V {
             kind,
-            rel: self.rel_path(),
+            rel: self.rel_path_ref(),
             hits: vec![],
         };
         v.visit_file(self.ast());
@@ -707,7 +738,7 @@ impl SourceFile {
         // `#[derive(\n  Default,\n)]` is the same second door; reading only the
         // `#[derive(` line was the tip-686 soft drain.
         struct V<'a> {
-            rel: &'a str,
+            rel: &'a RelPath,
             hits: Vec<Hit>,
         }
         impl<'ast, 'a> Visit<'ast> for V<'a> {
@@ -729,7 +760,7 @@ impl SourceFile {
             }
         }
         let mut v = V {
-            rel: self.rel_path(),
+            rel: self.rel_path_ref(),
             hits: vec![],
         };
         v.visit_file(self.ast());
@@ -756,28 +787,28 @@ impl SourceFile {
     ) -> Vec<Hit> {
         struct V<'a> {
             pick: &'a dyn Fn(&syn::Signature) -> Option<usize>,
-            construct: &'a str,
-            rel: &'a str,
+            construct: Label,
+            rel: &'a RelPath,
             hits: Vec<Hit>,
         }
         impl<'ast, 'a> Visit<'ast> for V<'a> {
             fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
                 if let Some(line) = (self.pick)(&node.sig) {
-                    HIT_PUSH.push(&mut self.hits, self.rel, line, self.construct);
+                    HIT_PUSH.push(&mut self.hits, self.rel, line, self.construct.as_str());
                 }
                 visit::visit_impl_item_fn(self, node);
             }
             fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
                 if let Some(line) = (self.pick)(&node.sig) {
-                    HIT_PUSH.push(&mut self.hits, self.rel, line, self.construct);
+                    HIT_PUSH.push(&mut self.hits, self.rel, line, self.construct.as_str());
                 }
                 visit::visit_item_fn(self, node);
             }
         }
         let mut v = V {
             pick,
-            construct,
-            rel: self.rel_path(),
+            construct: Label::admit(construct),
+            rel: self.rel_path_ref(),
             hits: vec![],
         };
         v.visit_file(self.ast());
@@ -790,7 +821,7 @@ impl SourceFile {
     /// scope, `#[should_panic]`, `#[ignore]`.
     fn detect_test_err_early_return(&self) -> Vec<Hit> {
         struct V<'a> {
-            rel: &'a str,
+            rel: &'a RelPath,
             hits: Vec<Hit>,
         }
         impl V<'_> {
@@ -831,7 +862,7 @@ impl SourceFile {
         }
         let mut hits = self.arm_sites(ArmSiteKind::TestErrEarlyReturn);
         let mut v = V {
-            rel: self.rel_path(),
+            rel: self.rel_path_ref(),
             hits: vec![],
         };
         v.visit_file(self.ast());
@@ -926,7 +957,7 @@ impl SourceFile {
         use syn::spanned::Spanned;
         struct V<'a> {
             kind: AssignSiteKind,
-            rel: &'a str,
+            rel: &'a RelPath,
             hits: Vec<Hit>,
         }
         impl<'ast, 'a> Visit<'ast> for V<'a> {
@@ -955,7 +986,7 @@ impl SourceFile {
         }
         let mut v = V {
             kind,
-            rel: self.rel_path(),
+            rel: self.rel_path_ref(),
             hits: vec![],
         };
         v.visit_file(self.ast());
@@ -976,7 +1007,7 @@ impl SourceFile {
     /// `.await` expression sites (construct-scoped on fn skeletons).
     fn detect_await(&self) -> Vec<Hit> {
         struct V<'a> {
-            rel: &'a str,
+            rel: &'a RelPath,
             hits: Vec<Hit>,
         }
         impl<'ast, 'a> Visit<'ast> for V<'a> {
@@ -991,7 +1022,7 @@ impl SourceFile {
             }
         }
         let mut v = V {
-            rel: self.rel_path(),
+            rel: self.rel_path_ref(),
             hits: vec![],
         };
         v.visit_file(self.ast());
@@ -1003,26 +1034,26 @@ impl SourceFile {
     /// formatting cannot hide an attribute from a parsed walk.
     fn attr_sites(&self, name: &str, construct: &str) -> Vec<Hit> {
         struct V<'a> {
-            name: &'a str,
-            construct: &'a str,
-            rel: &'a str,
+            name: Label,
+            construct: Label,
+            rel: &'a RelPath,
             hits: Vec<Hit>,
         }
         impl<'ast, 'a> Visit<'ast> for V<'a> {
             fn visit_attribute(&mut self, node: &'ast syn::Attribute) {
-                let direct = node.path().is_ident(self.name);
+                let direct = node.path().is_ident(self.name.as_str());
                 let smuggled = node.path().is_ident("cfg_attr")
-                    && node.to_token_stream().to_string().contains(self.name);
+                    && node.to_token_stream().to_string().contains(self.name.as_str());
                 if direct || smuggled {
-                    HIT_PUSH.push(&mut self.hits, self.rel, span_line(&node.pound_token.spans[0]), self.construct);
+                    HIT_PUSH.push(&mut self.hits, self.rel, span_line(&node.pound_token.spans[0]), self.construct.as_str());
                 }
                 visit::visit_attribute(self, node);
             }
         }
         let mut v = V {
-            name,
-            construct,
-            rel: self.rel_path(),
+            name: Label::admit(name),
+            construct: Label::admit(construct),
+            rel: self.rel_path_ref(),
             hits: vec![],
         };
         v.visit_file(self.ast());
@@ -1075,7 +1106,7 @@ impl SourceFile {
     /// field that can silently vanish or self-invent.
     fn detect_serde_default_skip(&self) -> Vec<Hit> {
         struct V<'a> {
-            rel: &'a str,
+            rel: &'a RelPath,
             hits: Vec<Hit>,
         }
         impl<'ast, 'a> Visit<'ast> for V<'a> {
@@ -1096,7 +1127,7 @@ impl SourceFile {
             }
         }
         let mut v = V {
-            rel: self.rel_path(),
+            rel: self.rel_path_ref(),
             hits: vec![],
         };
         v.visit_file(self.ast());
@@ -1127,7 +1158,7 @@ impl SourceFile {
             "nondeterminism",
         );
         struct V<'a> {
-            rel: &'a str,
+            rel: &'a RelPath,
             hits: &'a mut Vec<Hit>,
         }
         impl V<'_> {
@@ -1169,7 +1200,7 @@ impl SourceFile {
             }
         }
         let mut v = V {
-            rel: self.rel_path(),
+            rel: self.rel_path_ref(),
             hits: &mut hits,
         };
         v.visit_file(self.ast());
@@ -1269,7 +1300,7 @@ impl SourceFile {
         const TRIGGER_FIELDS: &[&str] = &["put_triggers", "rm_triggers", "replace_triggers"];
         const EXTRACTOR_NAMES: &[&str] = &["extractor", "extract_filter"];
         struct V<'a> {
-            rel: &'a str,
+            rel: &'a RelPath,
             hits: Vec<Hit>,
         }
         impl<'ast, 'a> Visit<'ast> for V<'a> {
@@ -1322,7 +1353,7 @@ impl SourceFile {
             }
         }
         let mut v = V {
-            rel: self.rel_path(),
+            rel: self.rel_path_ref(),
             hits: vec![],
         };
         v.visit_file(self.ast());
@@ -1338,7 +1369,7 @@ impl SourceFile {
     /// baseline).
     fn detect_hand_layout(&self) -> Vec<Hit> {
         struct V<'a> {
-            rel: &'a str,
+            rel: &'a RelPath,
             hits: Vec<Hit>,
         }
         impl<'ast, 'a> Visit<'ast> for V<'a> {
@@ -1358,7 +1389,7 @@ impl SourceFile {
             }
         }
         let mut v = V {
-            rel: self.rel_path(),
+            rel: self.rel_path_ref(),
             hits: vec![],
         };
         v.visit_file(self.ast());

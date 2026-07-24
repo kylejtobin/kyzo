@@ -240,25 +240,25 @@ fn run_cargo(repo_root: &Path, args: &[&str]) -> std::io::Result<std::process::O
 /// — closing the "a new crate silently escapes" defect (Condemned).
 fn discover_roots(metadata: &CargoMetadata) -> Vec<String> {
     let workspace_members: HashSet<&str> = metadata
-        .workspace_members
+        .workspace_members()
         .iter()
-        .map(String::as_str)
+        .map(crate::boundary::Label::as_str)
         .collect();
-    let workspace_root = Path::new(&metadata.workspace_root);
+    let workspace_root = Path::new(metadata.workspace_root());
 
     let mut roots: Vec<String> = metadata
-        .packages
+        .packages()
         .iter()
-        .filter(|p| workspace_members.contains(p.id.as_str()))
-        .filter(|p| !matches!(&p.publish, Some(registries) if registries.is_empty()))
+        .filter(|p| workspace_members.contains(p.id()))
+        .filter(|p| !matches!(p.publish(), Some(registries) if registries.is_empty()))
         .filter(|p| {
-            match Path::new(&p.manifest_path).strip_prefix(workspace_root) {
+            match Path::new(p.manifest_path()).strip_prefix(workspace_root) {
                 Ok(rel) => !rel.starts_with("vendor"),
                 // Outside workspace root — keep as a root candidate.
                 Err(_outside_workspace) => KEEP_MANIFEST_OUTSIDE_WORKSPACE,
             }
         })
-        .map(|p| p.name.clone())
+        .map(|p| p.name().to_string())
         .collect();
     roots.sort_unstable();
     roots.dedup();

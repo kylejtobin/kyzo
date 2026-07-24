@@ -85,6 +85,12 @@ impl From<String> for RelPath {
     }
 }
 
+impl From<&RelPath> for RelPath {
+    fn from(path: &RelPath) -> Self {
+        path.clone()
+    }
+}
+
 impl<'de> Deserialize<'de> for RelPath {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;
@@ -178,6 +184,12 @@ impl From<String> for Label {
     }
 }
 
+impl From<&Label> for Label {
+    fn from(text: &Label) -> Self {
+        text.clone()
+    }
+}
+
 impl<'de> Deserialize<'de> for Label {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;
@@ -241,6 +253,12 @@ impl SourceFile {
 
     pub fn rel_path(&self) -> &str {
         self.rel_path.as_str()
+    }
+
+    /// The admitted [`RelPath`] itself — for callers that must hold it as a
+    /// non-string-terminal field (TRUTH item 9 sealed-struct law).
+    pub fn rel_path_ref(&self) -> &RelPath {
+        &self.rel_path
     }
 
     /// Source text as UTF-8. Corrupt bytes yield U+FFFD — never expect.

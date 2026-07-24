@@ -28,7 +28,7 @@ use quote::ToTokens;
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 
-use crate::boundary::{SourceFile, span_line};
+use crate::boundary::{Label, RelPath, SourceFile, span_line};
 use crate::engines::Hit;
 use crate::grammar::{ConfigOnceSeat, HostDoor};
 
@@ -38,30 +38,31 @@ use crate::grammar::{ConfigOnceSeat, HostDoor};
 
 pub fn derive_bypass(files: &[&SourceFile]) -> Vec<Hit> {
     struct TypeFacts {
-        file: String,
+        file: RelPath,
         line: usize,
         fallible_ctor: bool,
-        bad_derives: Vec<String>,
+        bad_derives: Vec<Label>,
     }
-    let mut types: BTreeMap<String, TypeFacts> = BTreeMap::new();
+    let mut types: BTreeMap<Label, TypeFacts> = BTreeMap::new();
 
     for f in files {
         struct V<'a> {
-            rel: &'a str,
-            types: &'a mut BTreeMap<String, TypeFacts>,
+            rel: &'a RelPath,
+            types: &'a mut BTreeMap<Label, TypeFacts>,
         }
         fn record_derives(
             v: &mut V<'_>,
             ident: &syn::Ident,
             attrs: &[syn::Attribute],
         ) {
-            let bad: Vec<String> = derive_names(attrs)
+            let bad: Vec<Label> = derive_names(attrs)
                 .into_iter()
                 .filter(|d| d == "Deserialize" || d == "Default" || d == "From")
+                .map(Label::admit)
                 .collect();
-            let rel = v.rel.to_string();
+            let rel = v.rel.clone();
             v.types
-                .entry(ident.to_string())
+                .entry(Label::admit(ident.to_string()))
                 .or_insert(TypeFacts {
                     file: rel,
                     line: span_line(&ident.span()),
@@ -105,9 +106,9 @@ pub fn derive_bypass(files: &[&SourceFile]) -> Vec<Hit> {
                                     && (ret.contains("Result <") || ret.contains("Option <"))
                                 {
                                     self.types
-                                        .entry(ty.clone())
+                                        .entry(Label::admit(ty.clone()))
                                         .or_insert(TypeFacts {
-                                            file: self.rel.to_string(),
+                                            file: self.rel.clone(),
                                             line: span_line(&m.sig.ident.span()),
                                             fallible_ctor: false,
                                             bad_derives: vec![],
@@ -122,7 +123,7 @@ pub fn derive_bypass(files: &[&SourceFile]) -> Vec<Hit> {
             }
         }
         let mut v = V {
-            rel: f.rel_path(),
+            rel: f.rel_path_ref(),
             types: &mut types,
         };
         v.visit_file(f.ast());
@@ -131,7 +132,10 @@ pub fn derive_bypass(files: &[&SourceFile]) -> Vec<Hit> {
     types
         .into_iter()
         .filter(|(_, t)| t.fallible_ctor && !t.bad_derives.is_empty())
-        .map(|(name, t)| Hit::admit(t.file, t.line, format!("{name}+derive({})", t.bad_derives.join("+"))))
+        .map(|(name, t)| {
+            let derives: Vec<&str> = t.bad_derives.iter().map(Label::as_str).collect();
+            Hit::admit(t.file, t.line, format!("{name}+derive({})", derives.join("+")))
+        })
         .collect()
 }
 
@@ -161,8 +165,8 @@ const MIN_TOKENS: usize = 60;
 const SIMILARITY_PERCENT: usize = 60;
 
 struct Unit {
-    label: String,
-    file: String,
+    label: Label,
+    file: RelPath,
     line: usize,
     /// Line of the body's closing brace — used to refuse parent~nested-fn
     /// "pairs": a fn textually contained in another is the same text
@@ -175,10 +179,10 @@ pub fn copy_detector(files: &[&SourceFile]) -> Vec<Hit> {
     let mut units: Vec<Unit> = vec![];
     for f in files {
         struct V<'a> {
-            rel: &'a str,
+            rel: &'a RelPath,
             units: &'a mut Vec<Unit>,
         }
-        fn push_unit(units: &mut Vec<Unit>, rel: &str, name: &str, line: usize, body: &syn::Block) {
+        fn push_unit(units: &mut Vec<Unit>, rel: &RelPath, name: &str, line: usize, body: &syn::Block) {
             let toks = normalize_tokens(body);
             if toks.len() < MIN_TOKENS {
                 return;
@@ -188,8 +192,8 @@ pub fn copy_detector(files: &[&SourceFile]) -> Vec<Hit> {
                 shingles.insert(fnv(w));
             }
             units.push(Unit {
-                label: format!("{rel}::{name}"),
-                file: rel.to_string(),
+                label: Label::admit(format!("{rel}::{name}")),
+                file: rel.clone(),
                 line,
                 line_end: body.brace_token.span.close().end().line,
                 shingles,
@@ -218,7 +222,7 @@ pub fn copy_detector(files: &[&SourceFile]) -> Vec<Hit> {
             }
         }
         let mut v = V {
-            rel: f.rel_path(),
+            rel: f.rel_path_ref(),
             units: &mut units,
         };
         v.visit_file(f.ast());
@@ -351,14 +355,14 @@ pub fn agreement_registry(files: &[&SourceFile], registry_text: &str) -> Vec<Hit
             }
         }
     }
-    let mut defined: BTreeSet<String> = BTreeSet::new();
+    let mut defined: BTreeSet<Label> = BTreeSet::new();
     for f in files {
         struct V<'a> {
-            defined: &'a mut BTreeSet<String>,
+            defined: &'a mut BTreeSet<Label>,
         }
         impl<'ast, 'a> Visit<'ast> for V<'a> {
             fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
-                self.defined.insert(node.sig.ident.to_string());
+                self.defined.insert(Label::admit(node.sig.ident.to_string()));
                 visit::visit_item_fn(self, node);
             }
         }
@@ -369,7 +373,7 @@ pub fn agreement_registry(files: &[&SourceFile], registry_text: &str) -> Vec<Hit
     }
     declared
         .into_iter()
-        .filter(|(name, _)| !defined.contains(name))
+        .filter(|(name, _)| !defined.contains(&Label::admit(name.as_str())))
         .map(|(name, line)| {
             Hit::admit(
                 "crates/xtask/agreements.toml".to_string(),
@@ -444,7 +448,7 @@ fn result_error_type(ty: &syn::Type) -> Option<&syn::Type> {
     }
 }
 
-fn error_ty_is_workspace_enum(ty: &syn::Type, enums: &BTreeSet<String>) -> bool {
+fn error_ty_is_workspace_enum(ty: &syn::Type, enums: &BTreeSet<Label>) -> bool {
     let syn::Type::Path(tp) = ty else {
         return false;
     };
@@ -458,25 +462,25 @@ fn error_ty_is_workspace_enum(ty: &syn::Type, enums: &BTreeSet<String>) -> bool 
             return false;
         }
     }
-    path_last_ident(&tp.path).is_some_and(|name| enums.contains(&name))
+    path_last_ident(&tp.path).is_some_and(|name| enums.contains(&Label::admit(name)))
 }
 
 /// Every `Result<_, E>` in the workspace: E must be a workspace enum.
 /// `String`, `anyhow::*`, and `Box<dyn …>` are red by name.
 pub fn total_refusal(files: &[&SourceFile]) -> Vec<Hit> {
-    let mut enums: BTreeSet<String> = BTreeSet::new();
+    let mut enums: BTreeSet<Label> = BTreeSet::new();
     for f in files {
         for item in &f.ast().items {
             if let syn::Item::Enum(e) = item {
-                enums.insert(e.ident.to_string());
+                enums.insert(Label::admit(e.ident.to_string()));
             }
         }
     }
     let mut hits = vec![];
     for f in files {
         struct V<'a> {
-            rel: &'a str,
-            enums: &'a BTreeSet<String>,
+            rel: &'a RelPath,
+            enums: &'a BTreeSet<Label>,
             hits: &'a mut Vec<Hit>,
         }
         impl<'ast, 'a> Visit<'ast> for V<'a> {
@@ -496,7 +500,7 @@ pub fn total_refusal(files: &[&SourceFile]) -> Vec<Hit> {
                     };
                     if let Some(reason) = reason {
                         self.hits.push(Hit::admit(
-                            self.rel.to_string(),
+                            self.rel.clone(),
                             span_line(&node.span()),
                             format!("result-error:{reason}"),
                         ));
@@ -506,7 +510,7 @@ pub fn total_refusal(files: &[&SourceFile]) -> Vec<Hit> {
             }
         }
         let mut v = V {
-            rel: f.rel_path(),
+            rel: f.rel_path_ref(),
             enums: &enums,
             hits: &mut hits,
         };
