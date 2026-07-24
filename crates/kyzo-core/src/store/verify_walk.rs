@@ -68,6 +68,8 @@ use kyzo_model::value::{
 };
 use miette::{Result, bail};
 use sha2::{Digest, Sha256};
+
+use super::digest_domain::DigestDomain;
 use smartstring::{LazyCompact, SmartString};
 
 /// Domain-separated checksum over (keyspace, block, payload).
@@ -100,7 +102,7 @@ impl KeyspaceScopedChecksum {
     /// Compute a scoped checksum over payload bytes.
     pub fn compute(keyspace: KeyspaceId, block: u64, payload: &[u8]) -> Self {
         let mut h = Sha256::new();
-        h.update(b"kyzo.keyspace_scoped_checksum.v1");
+        DigestDomain::KeyspaceScopedChecksum.absorb(&mut h);
         h.update(u64::to_be_bytes(keyspace.get()));
         h.update(u64::to_be_bytes(block));
         h.update(payload);
@@ -438,7 +440,7 @@ impl DeepVerifyReport {
         // Cardinality prefixes are `u64`; on every supported target `usize`
         // widens into `u64` losslessly (see [`u64_from_usize`]).
         let mut h = Sha256::new();
-        h.update(b"kyzo.deep_verify_report.v1");
+        DigestDomain::DeepVerifyReport.absorb(&mut h);
         h.update(u64::to_be_bytes(self.walk.checked));
         h.update(u64::to_be_bytes(self.walk.ordering_violations));
         h.update([u8::from(self.walk.truncated)]);
@@ -469,7 +471,7 @@ fn u64_from_usize(n: usize) -> u64 {
 
 fn digest_bytes(payload: &[u8]) -> IndexRowDigest {
     let mut h = Sha256::new();
-    h.update(b"kyzo.index_row_digest.v1");
+    DigestDomain::IndexRowDigest.absorb(&mut h);
     h.update(payload);
     IndexRowDigest(h.finalize().into())
 }

@@ -391,8 +391,10 @@ impl AddressFence {
 
 fn fence_key(store_id: StoreId, token_id: &WriteTokenId) -> AddressFenceKey {
     use sha2::{Digest, Sha256};
+
+    use super::digest_domain::DigestDomain;
     let mut h = Sha256::new();
-    h.update(b"kyzo.address_fence.v1");
+    DigestDomain::AddressFence.absorb(&mut h);
     h.update(store_id.as_bytes());
     h.update(token_id.as_bytes());
     AddressFenceKey::from_digest(h.finalize().into())

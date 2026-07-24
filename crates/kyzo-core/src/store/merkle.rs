@@ -79,6 +79,8 @@ use std::num::NonZeroU64;
 use fjall::Slice;
 use miette::{Diagnostic, Result};
 use sha2::{Digest, Sha256};
+
+use super::digest_domain::DigestDomain;
 use thiserror::Error;
 
 use super::ReadTx;
@@ -536,7 +538,7 @@ fn compose_durable_cut(
     commit_ordinal: CommitOrdinal,
 ) -> DurableCutDigest {
     let mut h = Sha256::new();
-    h.update(b"kyzo.durable_commit_cut.v1");
+    DigestDomain::DurableCommitCut.absorb(&mut h);
     h.update(meaning_root.as_bytes());
     h.update(wal_final_hash.as_bytes());
     h.update(u64::to_be_bytes(commit_ordinal.get()));
@@ -2386,7 +2388,7 @@ mod tests {
         let meaning_only = {
             use sha2::{Digest, Sha256};
             let mut h = Sha256::new();
-            h.update(b"kyzo.durable_commit_cut.v1");
+            DigestDomain::DurableCommitCut.absorb(&mut h);
             h.update(honest.meaning_root().as_bytes());
             // deliberately omit wal_final_hash
             h.update(u64::to_be_bytes(ordinal.get()));
@@ -2396,7 +2398,7 @@ mod tests {
         let meaning_only_broken_wal = {
             use sha2::{Digest, Sha256};
             let mut h = Sha256::new();
-            h.update(b"kyzo.durable_commit_cut.v1");
+            DigestDomain::DurableCommitCut.absorb(&mut h);
             h.update(honest.meaning_root().as_bytes());
             h.update(u64::to_be_bytes(ordinal.get()));
             let d: [u8; 32] = h.finalize().into();

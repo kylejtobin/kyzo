@@ -20,6 +20,7 @@
 
 use sha2::{Digest, Sha256};
 
+use crate::store::digest_domain::DigestDomain;
 use crate::store::open::StoreId;
 use crate::store::sweep::CommitOrdinal;
 use crate::store::transcript::Digest32;
@@ -41,7 +42,7 @@ impl CompositionId {
         canonical_composition_digest: Digest32,
     ) -> Self {
         let mut h = Sha256::new();
-        h.update(b"kyzo.composition_id.v1");
+        DigestDomain::CompositionId.absorb(&mut h);
         h.update(principal);
         h.update(client_operation_id);
         h.update(canonical_composition_digest.as_bytes());
@@ -66,14 +67,14 @@ pub fn canonical_composition_digest(
     compensations: &[(StoreId, &[u8])],
 ) -> Digest32 {
     let mut h = Sha256::new();
-    h.update(b"kyzo.composition_digest.v1");
+    DigestDomain::CompositionDigest.absorb(&mut h);
     h.update([shape_tag]);
     for (store, step) in steps {
         h.update(store.as_bytes());
         h.update(step);
     }
     for (store, comp) in compensations {
-        h.update(b"compensation");
+        DigestDomain::CompositionCompensation.absorb(&mut h);
         h.update(store.as_bytes());
         h.update(comp);
     }

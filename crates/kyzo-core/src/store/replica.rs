@@ -45,6 +45,8 @@ use std::fmt;
 use ed25519_dalek::{Signature as Ed25519Signature, Signer, SigningKey, VerifyingKey};
 use sha2::{Digest as ShaDigest, Sha256};
 
+use super::digest_domain::DigestDomain;
+
 use crate::data::digest::{ProvenanceDigest, RecordContentDigest, ValidTimeDigest};
 
 use super::contract::FormatVersion;
@@ -264,7 +266,7 @@ impl AuthorizingKey {
             }
             // Negligible; domain-separate and try again.
             let mut h = Sha256::new();
-            h.update(b"kyzo.authorizing_key.seed_reroll.v1");
+            DigestDomain::AuthorizingKeySeedReroll.absorb(&mut h);
             h.update(seed_bytes);
             seed_bytes = h.finalize().into();
         }
@@ -560,7 +562,7 @@ impl ReplicaKey {
         record_digest: RecordContentDigest,
     ) -> Self {
         let mut h = Sha256::new();
-        h.update(b"kyzo.replica_key.v1");
+        DigestDomain::ReplicaKey.absorb(&mut h);
         h.update(origin_store.as_bytes());
         h.update(u64::to_be_bytes(origin_epoch.get()));
         h.update(u64::to_be_bytes(origin_commit.get()));
@@ -601,9 +603,9 @@ impl AsRef<[u8]> for TenantId {
 }
 
 /// Domain-separated SHA-256 digest over labeled seat bytes (copy_detector).
-fn domain_separated_digest(label: &[u8], seats: &[&[u8; 32]]) -> [u8; 32] {
+fn domain_separated_digest(label: DigestDomain, seats: &[&[u8; 32]]) -> [u8; 32] {
     let mut h = Sha256::new();
-    h.update(label);
+    label.absorb(&mut h);
     for seat in seats {
         h.update(*seat);
     }
@@ -678,7 +680,7 @@ impl NamespacedRecordIdentity {
     /// Federation-stable digest of the four-tuple (not a custody key).
     pub fn digest(&self) -> Digest32 {
         Digest32::admit(domain_separated_digest(
-            b"kyzo.namespaced_record_identity.v1",
+            DigestDomain::NamespacedRecordIdentity,
             &[
                 self.local_id.as_bytes(),
                 self.origin_authority.as_bytes(),
@@ -914,7 +916,7 @@ fn signing_body_digest(body: AdmissionSigningBody<'_>) -> Digest {
         operation_key,
     } = body;
     let mut h = Sha256::new();
-    h.update(b"kyzo.admission_certificate.sign.v1");
+    DigestDomain::AdmissionCertificateSign.absorb(&mut h);
     h.update(protocol_version);
     h.update(origin_store.as_bytes());
     h.update(u64::to_be_bytes(origin_epoch.get()));
@@ -1781,7 +1783,7 @@ impl PromotionMeaning {
     /// Stable digest over all four seats (replay meter).
     pub fn digest(&self) -> Digest32 {
         Digest32::admit(domain_separated_digest(
-            b"kyzo.promotion_meaning.v1",
+            DigestDomain::PromotionMeaning,
             &[
                 self.identity.digest().as_bytes(),
                 self.valid_time.as_bytes(),

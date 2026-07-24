@@ -49,6 +49,8 @@ use std::sync::{Arc, Mutex};
 
 use sha2::{Digest, Sha256};
 
+use super::digest_domain::DigestDomain;
+
 use super::authority::{Entropy, IncarnationId, OpenOrdinal, WriteAuthority, WriteTokenId};
 use super::commit_cap::{SnapshotFork, StableCommitCap};
 use super::epoch::FenceEpoch;
@@ -262,14 +264,14 @@ impl LiveSweepHandle {
         let fence_epoch = FenceEpoch::genesis(store_id);
         let token = {
             let mut h = Sha256::new();
-            h.update(b"kyzo.live_sweep.write_token.v1");
+            DigestDomain::LiveSweepWriteToken.absorb(&mut h);
             h.update(store_id.as_bytes());
             WriteTokenId::from_digest(h.finalize().into())
         };
         let auth = WriteAuthority::mint(store_id, token);
         let entropy: [u8; 32] = {
             let mut h = Sha256::new();
-            h.update(b"kyzo.live_sweep.incarnation_entropy.v1");
+            DigestDomain::LiveSweepIncarnationEntropy.absorb(&mut h);
             h.update(store_id.as_bytes());
             h.finalize().into()
         };
@@ -793,7 +795,7 @@ impl SweepDoor {
 
         let content_root = {
             let mut h = Sha256::new();
-            h.update(b"kyzo.commit_write.content.v1");
+            DigestDomain::CommitWriteContent.absorb(&mut h);
             h.update(key.as_bytes());
             h.update(request_digest.as_bytes());
             StateRoot::from_digest(h.finalize().into())

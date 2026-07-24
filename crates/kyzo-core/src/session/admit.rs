@@ -53,6 +53,7 @@ use crate::session::db::{Engine, RunQuerySeats, SessionTx};
 use crate::session::generation::CatalogGeneration;
 use crate::session::observe::{CallbackCollector, CallbackOp};
 use crate::store::FenceEpoch;
+use crate::store::digest_domain::DigestDomain;
 use crate::store::authority::{Entropy, WriteAuthority, WriteTokenId};
 use crate::store::commit_cap::SnapshotFork;
 use crate::store::crypto::Signature;
@@ -337,7 +338,7 @@ impl LiveAdmissionSeats {
         let mut root_chain = RootChain::empty();
         let genesis_content = {
             let mut h = Sha256::new();
-            h.update(b"kyzo.admission.seats.genesis_root.v1");
+            DigestDomain::AdmissionSeatsGenesisRoot.absorb(&mut h);
             h.update(store_id.as_bytes());
             h.update(authorizing_key_id.as_bytes());
             StateRoot::from_digest(h.finalize().into())
@@ -540,7 +541,7 @@ fn genesis_scope_manifest_digest(
     verifying_key: VerifyingPublicKey,
 ) -> ScopeManifestDigest {
     let mut h = Sha256::new();
-    h.update(b"kyzo.scope.manifest.v1");
+    DigestDomain::ScopeManifest.absorb(&mut h);
     h.update(store_id.as_bytes());
     h.update(key_id.as_bytes());
     h.update(verifying_key.as_bytes());
@@ -621,7 +622,7 @@ fn root_tip_digests(root_chain: &RootChain) -> (Digest32, Digest32) {
 
 fn schema_cut_from_catalog(generation: CatalogGeneration) -> SchemaCutDigest {
     let mut h = Sha256::new();
-    h.update(b"kyzo.catalog.generation.schema_cut.v1");
+    DigestDomain::CatalogGenerationSchemaCut.absorb(&mut h);
     h.update(generation.counter().to_be_bytes());
     SchemaCutDigest::from_digest(h.finalize().into())
 }
@@ -991,13 +992,13 @@ pub(crate) fn admit_record(
 /// Shared sugar-relation row digest scaffold — domain tag and optional prior
 /// [`RecordId`] are the caller's independence seat.
 pub(crate) fn digest_sugar_relation_row(
-    domain: &[u8],
+    domain: DigestDomain,
     prior: Option<&RecordId>,
     relation: &str,
     row: &[DataValue],
 ) -> RecordContentDigest {
     let mut h = Sha256::new();
-    h.update(domain);
+    domain.absorb(&mut h);
     if let Some(prior) = prior {
         h.update(prior.as_bytes());
     }
@@ -1010,7 +1011,7 @@ pub(crate) fn digest_sugar_relation_row(
 
 /// Digest a sugar relation row into a content-addressed record digest.
 fn digest_sugar_row(relation: &str, row: &[DataValue]) -> RecordContentDigest {
-    digest_sugar_relation_row(b"kyzo.sugar.row.v1", None, relation, row)
+    digest_sugar_relation_row(DigestDomain::SugarRow, None, relation, row)
 }
 
 /// One relation-row door into [`admit_record`]: statement construction +

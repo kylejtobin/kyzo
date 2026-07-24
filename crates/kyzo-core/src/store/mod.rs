@@ -27,6 +27,8 @@ pub(crate) mod compact;
 pub(crate) mod contract;
 /// DEK/KEK/ShredSalt/WrappedShredSalt/AuditKey/AEAD pipeline (07 seat).
 pub(crate) mod crypto;
+/// Closed identity-digest / KDF domain tags (one absorb door; not sealed-artifact wire).
+pub(crate) mod digest_domain;
 /// FenceEpoch + CryptoDomain + EpochGrant advance (07 seat).
 pub(crate) mod epoch;
 /// Failure lattice + closed StoreRefuse ledger + debt economy (07 seat).

@@ -20,6 +20,8 @@
 
 use sha2::{Digest, Sha256};
 
+use super::digest_domain::DigestDomain;
+
 use super::failure::StoreRefuse;
 use super::open::StoreId;
 use super::transcript::Digest32;
@@ -41,7 +43,7 @@ impl OperationKey {
         step_id: &[u8],
     ) -> Self {
         let mut h = Sha256::new();
-        h.update(b"kyzo.operation_key.v1");
+        DigestDomain::OperationKey.absorb(&mut h);
         h.update(domain_label);
         h.update(composition_id.as_bytes());
         h.update(store_id.as_bytes());
@@ -57,7 +59,7 @@ impl OperationKey {
         step_id: &[u8],
     ) -> Self {
         let mut h = Sha256::new();
-        h.update(b"kyzo.composition_id.degenerate.v1");
+        DigestDomain::CompositionIdDegenerate.absorb(&mut h);
         h.update(client_operation_id);
         let degenerate = Digest32::admit(h.finalize().into());
         Self::derive(domain_label, degenerate, store_id, step_id)
@@ -150,7 +152,7 @@ impl IdempotencyMemo {
     /// Digest of a request envelope (canonical bytes the caller already sealed).
     pub fn digest_request(envelope: &[u8]) -> RequestDigest {
         let mut h = Sha256::new();
-        h.update(b"kyzo.request_digest.v1");
+        DigestDomain::RequestDigest.absorb(&mut h);
         h.update(envelope);
         RequestDigest::from_digest(h.finalize().into())
     }

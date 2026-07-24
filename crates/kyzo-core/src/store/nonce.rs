@@ -19,6 +19,8 @@
 
 use sha2::{Digest, Sha256};
 
+use super::digest_domain::DigestDomain;
+
 use super::authority::IncarnationId;
 use super::crypto::Nonce;
 use super::epoch::CryptoDomain;
@@ -182,7 +184,7 @@ pub fn nonce(
     incarnation_id: IncarnationId,
 ) -> Nonce {
     let mut h = Sha256::new();
-    h.update(b"kyzo.nonce.v1");
+    DigestDomain::Nonce.absorb(&mut h);
     h.update([domain.tag()]);
     h.update(u64::to_be_bytes(counter.get()));
     h.update(crypto_domain.store_id().as_bytes());

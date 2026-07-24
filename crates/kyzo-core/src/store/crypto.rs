@@ -28,6 +28,8 @@ use std::collections::HashSet;
 
 use sha2::{Digest as ShaDigest, Sha256};
 
+use super::digest_domain::DigestDomain;
+
 use super::epoch::CryptoDomain;
 use super::transcript::{
     CanonicalTranscript, encode_key_commitment, encode_wrapped_shred_salt_aad,
@@ -273,7 +275,7 @@ impl AuditKey {
     /// Leaf MAC over a sealed CanonicalTranscript (cipher-invariant roots).
     pub fn leaf_mac(&self, transcript: &CanonicalTranscript) -> Mac {
         let mut h = Sha256::new();
-        h.update(b"kyzo.audit.leaf.v1");
+        DigestDomain::AuditLeaf.absorb(&mut h);
         h.update(self.0);
         h.update(transcript.as_bytes());
         let dig = h.finalize();
@@ -737,7 +739,7 @@ pub fn derive_dek(
     salt: &ShredSalt,
 ) -> Dek {
     let mut h = Sha256::new();
-    h.update(b"kyzo.dek.derive.v1");
+    DigestDomain::DekDerive.absorb(&mut h);
     h.update(cap.kek().as_bytes());
     h.update(crypto_domain.store_id().as_bytes());
     h.update(u64::to_be_bytes(crypto_domain.fence_epoch().get()));

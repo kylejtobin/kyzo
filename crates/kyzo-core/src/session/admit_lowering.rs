@@ -29,6 +29,7 @@ use crate::store::replica::{
     NamespacedRecordIdentity, PromotionMeaning, ReplicaKey, SchemaCutDigest, TenantId,
     view_under_schema_cut,
 };
+use crate::store::digest_domain::DigestDomain;
 use crate::store::transcript::Digest32;
 use kyzo_model::value::DataValue;
 use kyzo_model::value::canonical::encode_owned;
@@ -255,7 +256,7 @@ impl OriginSealedLowering {
     /// Replay meter: origin cut + kind + custody key + concatenated row bytes.
     pub fn replay_digest(&self) -> Digest32 {
         let mut h = Sha256::new();
-        h.update(b"kyzo.origin_sealed_lowering.v1");
+        DigestDomain::OriginSealedLowering.absorb(&mut h);
         h.update(self.origin_schema_cut.as_bytes());
         h.update([self.kind.as_wire()]);
         h.update(self.custody_key.as_bytes());
@@ -299,7 +300,7 @@ pub(crate) fn lower_after_crossing(
 pub(crate) fn promotion_valid_time_digest(record: &KyzoRecord) -> ValidTimeDigest {
     let encoded = encode_owned(&DataValue::Interval(record.validity_time().as_interval()));
     let mut h = Sha256::new();
-    h.update(b"kyzo.promotion.valid_time.v1");
+    DigestDomain::PromotionValidTime.absorb(&mut h);
     h.update(encoded.as_bytes());
     ValidTimeDigest::from_digest(h.finalize().into())
 }
@@ -307,9 +308,9 @@ pub(crate) fn promotion_valid_time_digest(record: &KyzoRecord) -> ValidTimeDiges
 /// Digest of provenance / source for [`PromotionMeaning`] (#270 T3).
 pub(crate) fn promotion_provenance_digest(record: &KyzoRecord) -> ProvenanceDigest {
     let mut h = Sha256::new();
-    h.update(b"kyzo.promotion.provenance.v1");
+    DigestDomain::PromotionProvenance.absorb(&mut h);
     match record.source() {
-        StatementSource::Unbound => h.update(b"unbound"),
+        StatementSource::Unbound => DigestDomain::ProvenanceUnbound.absorb(&mut h),
         StatementSource::Artifact(id) => h.update(id.as_bytes()),
     }
     ProvenanceDigest::from_digest(h.finalize().into())

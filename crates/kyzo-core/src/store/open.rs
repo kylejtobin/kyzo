@@ -19,6 +19,8 @@
 
 use sha2::{Digest, Sha256};
 
+use super::digest_domain::DigestDomain;
+
 use super::authority::{RecoveryMatrix, WriteAuthority};
 use super::commit_cap::SnapshotFork;
 use super::epoch::{CryptoDomain, FenceEpoch};
@@ -371,20 +373,20 @@ pub fn open_path_only(_path: &std::path::Path) -> Result<StoreId, GenesisRefuse>
 
 fn mint_store_id(params: &GenesisParams) -> StoreId {
     let mut h = Sha256::new();
-    h.update(b"kyzo.store_id.genesis.v1");
+    DigestDomain::StoreIdGenesis.absorb(&mut h);
     h.update(params.identity_seed);
     h.update(u64::to_be_bytes(params.staging_ttl.ordinals()));
     h.update([size_class_tag(params.size_class)]);
     h.update([entropy_arm_tag(params.entropy_arm)]);
     h.update([stable_commit_cap_tag(params.stable_commit_cap)]);
     if let Some(matrix) = &params.recovery_matrix {
-        h.update(b"recovery_matrix");
+        DigestDomain::RecoveryMatrixPresent.absorb(&mut h);
         h.update(u32::to_be_bytes(matrix.threshold()));
         for key in matrix.keys() {
             h.update(key.as_bytes());
         }
     } else {
-        h.update(b"no_recovery_matrix");
+        DigestDomain::RecoveryMatrixAbsent.absorb(&mut h);
     }
     StoreId::from_digest(h.finalize().into())
 }
@@ -394,7 +396,7 @@ fn mint_write_authority_token(
     store_id: StoreId,
 ) -> super::authority::WriteTokenId {
     let mut h = Sha256::new();
-    h.update(b"kyzo.write_authority.genesis.v1");
+    DigestDomain::WriteAuthorityGenesis.absorb(&mut h);
     h.update(store_id.as_bytes());
     h.update(params.identity_seed);
     super::authority::WriteTokenId::from_digest(h.finalize().into())

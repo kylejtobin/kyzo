@@ -27,6 +27,7 @@ use crate::data::statement::{
 };
 use crate::session::catalog::RelationHandle;
 use crate::session::generation::{CatalogGeneration, RelationGeneration};
+use crate::store::digest_domain::DigestDomain;
 use crate::store::replica::{AdmissionCertificate, CrossingStatus};
 use crate::store::sweep::CommitOrdinal;
 use crate::store::time::ClaimPolarity;
@@ -147,7 +148,7 @@ impl Supersession {
 /// Content digest for a correction — binds prior [`RecordId`] so the
 /// successor identity cannot collide with the prior.
 fn digest_correction(prior: RecordId, relation: &str, row: &[DataValue]) -> RecordContentDigest {
-    super::digest_sugar_relation_row(b"kyzo.sugar.correction.v1", Some(&prior), relation, row)
+    super::digest_sugar_relation_row(DigestDomain::SugarCorrection, Some(&prior), relation, row)
 }
 
 /// Content digest for a semantic deletion — binds kind + prior so deletion
@@ -158,7 +159,7 @@ fn digest_semantic_deletion(
     subject: &DataValue,
 ) -> RecordContentDigest {
     let mut h = Sha256::new();
-    h.update(b"kyzo.semantic.deletion.v1");
+    DigestDomain::SemanticDeletion.absorb(&mut h);
     h.update(match kind {
         SemanticDeletionKind::Invalidation => b"invalidation".as_slice(),
         SemanticDeletionKind::Tombstone => b"tombstone".as_slice(),
