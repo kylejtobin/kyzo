@@ -33,18 +33,11 @@ use crate::value::DataValue;
 
 use super::{ExtractSpan, IntoChildren, Pair, Rule, UnexpectedRule};
 
-macro_rules! lazy_pratt_parser {
-    ($init:expr) => {{
-        static PARSER: std::sync::OnceLock<PrattParser<Rule>> = std::sync::OnceLock::new();
-        PARSER.get_or_init(|| $init)
-    }};
-}
-pub(crate) use lazy_pratt_parser;
-
 fn init_pratt_parser(
     build: impl FnOnce(PrattParser<Rule>) -> PrattParser<Rule>,
 ) -> &'static PrattParser<Rule> {
-    lazy_pratt_parser!(build(PrattParser::new()))
+    static PARSER: std::sync::OnceLock<PrattParser<Rule>> = std::sync::OnceLock::new();
+    PARSER.get_or_init(|| build(PrattParser::new()))
 }
 
 /// One Pratt seat: expression arithmetic/logic ladder and FTS boolean ladder

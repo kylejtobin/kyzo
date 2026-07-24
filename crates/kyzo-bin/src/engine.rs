@@ -150,11 +150,11 @@ pub fn open(engine: EngineKind, path: &Path, opts: StorageArgs) -> Result<DbHand
             // Ephemeral path: still admit (empty store is complete) so mem and
             // fjall share one completeness law.
             let storage = new_fjall_storage_with(dir.path(), storage_opts)?;
-            kyzo::admit_complete_store!(storage)?;
+            kyzo::admit_complete_store(&storage)?;
             (storage, Some(dir))
         }
         EngineKind::Fjall => {
-            let storage = kyzo::open_complete_store_with!(path, storage_opts)?;
+            let storage = kyzo::open_complete_store_with(path, storage_opts)?;
             (storage, None)
         }
     };
@@ -241,7 +241,7 @@ mod restore_completeness {
             }
         };
         assert!(
-            kyzo::is_incomplete_restore!(open_err),
+            open_err.downcast_ref::<kyzo::IncompleteRestore>().is_some(),
             "production open must typed-refuse IncompleteRestore, got: {open_err}"
         );
         Ok(())

@@ -267,36 +267,9 @@ pub fn open_complete_store_with(
     Ok(db)
 }
 
-/// Host open sites: expand to the crate-root [`admit_complete_store`] re-export
-/// so production callers outside this `pub(crate)` module share the completeness
-/// gate (seat 26 / #375 T2). Macros must not name `$crate::store::…` — `store`
-/// is `pub(crate)` and is invisible at expansion sites in kyzo-bin.
-///
-/// `$crate` resolves inside kyzo-core, so the gate stays one function — not a
-/// duplicated mark-key check in the binary.
-#[macro_export]
-macro_rules! admit_complete_store {
-    ($storage:expr) => {
-        $crate::admit_complete_store(&$storage)
-    };
-}
-
-/// Host open sites: expand to the crate-root [`open_complete_store_with`] re-export.
-#[macro_export]
-macro_rules! open_complete_store_with {
-    ($path:expr, $opts:expr) => {
-        $crate::open_complete_store_with($path, $opts)
-    };
-}
-
-/// Typed IncompleteRestore probe for host nasty tests (crate-root path law).
-#[macro_export]
-macro_rules! is_incomplete_restore {
-    ($err:expr) => {
-        ($err).downcast_ref::<$crate::IncompleteRestore>().is_some()
-    };
-}
-
+/// Host open sites call crate-root [`admit_complete_store`] /
+/// [`open_complete_store_with`] directly (no Item::Macro). `store` is
+/// `pub(crate)` so the re-exports on the crate root are the door.
 fn mark_restore_in_progress<S: Storage>(db: &S) -> Result<()> {
     let mut tx = db.write_tx()?;
     tx.put(RESTORE_IN_PROGRESS_KEY, RESTORE_IN_PROGRESS_VAL)?;
