@@ -9,7 +9,7 @@
 //! An approved waiver: the ONLY way a detector hit survives without a fix.
 //!
 //! A waiver binds to content (TRUTH item 6): check, file, construct, and
-//! `site_hash` (blake3 of the item's [`crate::identity::identity_tokens`]).
+//! `site_hash` (blake3 of the item's [`crate::identity::Identity::tokens`]).
 //! The `line` field is display-only — a `//` inserted above the item shifts
 //! the editor line but does not stale the ruling. A content edit that
 //! changes the site hash makes the waiver STALE: it stops applying and is

@@ -384,7 +384,7 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
                 .filter(|h| {
                     let found = entries.iter().enumerate().find(|(i, w)| {
                         !consumed[*i]
-                            && identity::waiver_matches_hit(w, h, b.files())
+                            && identity::IDENTITY.waiver_matches_hit(w, h, b.files())
                             // TRUTH item 7: a dead citation stops the waiver
                             // from applying (in addition to reporting it).
                             && citation::citation_live(root, &laws, w)

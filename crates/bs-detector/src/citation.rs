@@ -107,12 +107,12 @@ pub fn resolve_hash(root: &Path, laws: &Laws, citation: &Citation) -> Option<Str
         Citation::FileItem { file, item_path } => {
             let ast = parse_rs(root, file)?;
             let item = find_item(&ast, item_path)?;
-            Some(identity::site_hash(&item))
+            Some(identity::IDENTITY.site_hash(&item))
         }
         Citation::TestFn { file, fn_name } => {
             let ast = parse_rs(root, file)?;
             let item = find_fn(&ast, fn_name)?;
-            Some(identity::site_hash(&item))
+            Some(identity::IDENTITY.site_hash(&item))
         }
         Citation::DecisionsSeat(n) => {
             let text = std::fs::read_to_string(root.join("docs/decisions.md")).ok()?;

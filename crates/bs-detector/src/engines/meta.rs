@@ -46,7 +46,7 @@ pub fn stale_waivers(
     let mut stale = vec![];
     for w in waivers.waivers() {
         let live = raw_hits.iter().any(|(check, hits)| {
-            check.as_str() == w.check() && hits.iter().any(|h| identity::waiver_matches_hit(w, h, files))
+            check.as_str() == w.check() && hits.iter().any(|h| identity::IDENTITY.waiver_matches_hit(w, h, files))
         });
         if !live {
             stale.push(Hit::admit(w.file(), w.line(), format!("stale_waiver:{}:{}", w.check(), w.construct())));
@@ -153,7 +153,7 @@ mod tests {
     fn stale_waiver_is_reported_when_its_site_dies() -> TestResult {
         let src = "fn f() { let x = 1; x }";
         let ast = syn::parse_file(src).map_err(|_| MetaProofRefuse::Parse)?;
-        let real_hash = identity::site_hash(
+        let real_hash = identity::IDENTITY.site_hash(
             ast.items.first().ok_or(MetaProofRefuse::MissingItem)?,
         );
         let files = vec![SourceFile::admit(
@@ -207,7 +207,7 @@ why_not_sabotage = {why}
     fn item_6_proof_line_comment_above_does_not_stale_waiver() -> TestResult {
         let bare = "fn f() { let x = 1; x }";
         let bare_ast = syn::parse_file(bare).map_err(|_| MetaProofRefuse::Parse)?;
-        let hash = identity::site_hash(
+        let hash = identity::IDENTITY.site_hash(
             bare_ast.items.first().ok_or(MetaProofRefuse::MissingItem)?,
         );
         let noisy = "// inserted comment\nfn f() { let x = 1; x }";

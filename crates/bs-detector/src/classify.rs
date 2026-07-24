@@ -728,7 +728,7 @@ impl<'a> Ctx<'a> {
         let Some(seat) = self.grammar.fn_seat(self.rel.as_str(), &sig.ident.to_string()) else {
             return false;
         };
-        if crate::identity::site_hash(whole) != seat.site_hash() {
+        if crate::identity::IDENTITY.site_hash(whole) != seat.site_hash() {
             return false;
         }
         if !seat.io() {
