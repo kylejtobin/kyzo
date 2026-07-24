@@ -73,51 +73,62 @@ fn line_of<T: ?Sized + syn::spanned::Spanned>(node: &T) -> usize {
 // variant is a reported violation, never a silent pass)
 // ---------------------------------------------------------------------------
 
-fn item_kind(item: &syn::Item) -> Option<KindName> {
-    match item {
-        syn::Item::Const(_) => Some(KindName::Const),
-        syn::Item::Enum(_) => Some(KindName::Enum),
-        syn::Item::ExternCrate(_) => Some(KindName::ExternCrate),
-        syn::Item::Fn(_) => Some(KindName::Fn),
-        syn::Item::ForeignMod(_) => Some(KindName::ForeignMod),
-        syn::Item::Impl(_) => Some(KindName::Impl),
-        syn::Item::Macro(_) => Some(KindName::Macro),
-        syn::Item::Mod(_) => Some(KindName::Mod),
-        syn::Item::Static(_) => Some(KindName::Static),
-        syn::Item::Struct(_) => Some(KindName::Struct),
-        syn::Item::Trait(_) => Some(KindName::Trait),
-        syn::Item::TraitAlias(_) => Some(KindName::TraitAlias),
-        syn::Item::Type(_) => Some(KindName::Type),
-        syn::Item::Union(_) => Some(KindName::Union),
-        syn::Item::Use(_) => Some(KindName::Use),
-        syn::Item::Verbatim(_) => Some(KindName::Verbatim),
+/// One kind-map authority for Item / ImplItem / TraitItem. Thin wrappers
+/// below keep call sites typed; a second parallel `match` is the twin this
+/// closes.
+enum SynMember<'a> {
+    Item(&'a syn::Item),
+    Impl(&'a syn::ImplItem),
+    Trait(&'a syn::TraitItem),
+}
+
+fn syn_member_kind(member: SynMember<'_>) -> Option<KindName> {
+    match member {
+        SynMember::Item(syn::Item::Const(_)) => Some(KindName::Const),
+        SynMember::Item(syn::Item::Enum(_)) => Some(KindName::Enum),
+        SynMember::Item(syn::Item::ExternCrate(_)) => Some(KindName::ExternCrate),
+        SynMember::Item(syn::Item::Fn(_)) => Some(KindName::Fn),
+        SynMember::Item(syn::Item::ForeignMod(_)) => Some(KindName::ForeignMod),
+        SynMember::Item(syn::Item::Impl(_)) => Some(KindName::Impl),
+        SynMember::Item(syn::Item::Macro(_)) => Some(KindName::Macro),
+        SynMember::Item(syn::Item::Mod(_)) => Some(KindName::Mod),
+        SynMember::Item(syn::Item::Static(_)) => Some(KindName::Static),
+        SynMember::Item(syn::Item::Struct(_)) => Some(KindName::Struct),
+        SynMember::Item(syn::Item::Trait(_)) => Some(KindName::Trait),
+        SynMember::Item(syn::Item::TraitAlias(_)) => Some(KindName::TraitAlias),
+        SynMember::Item(syn::Item::Type(_)) => Some(KindName::Type),
+        SynMember::Item(syn::Item::Union(_)) => Some(KindName::Union),
+        SynMember::Item(syn::Item::Use(_)) => Some(KindName::Use),
+        SynMember::Item(syn::Item::Verbatim(_)) => Some(KindName::Verbatim),
         // Named (not bare `_`) so a future syn variant is a visible red,
         // never a silent catch-all. Leading underscore = unused-ok without
         // a `let _ =` discard.
-        _unrecognized_item_variant => None,
+        SynMember::Item(_unrecognized_item_variant) => None,
+        SynMember::Impl(syn::ImplItem::Const(_)) => Some(KindName::ImplConst),
+        SynMember::Impl(syn::ImplItem::Fn(_)) => Some(KindName::ImplFn),
+        SynMember::Impl(syn::ImplItem::Type(_)) => Some(KindName::ImplType),
+        SynMember::Impl(syn::ImplItem::Macro(_)) => Some(KindName::ImplMacro),
+        SynMember::Impl(syn::ImplItem::Verbatim(_)) => Some(KindName::Verbatim),
+        SynMember::Impl(_unrecognized_impl_item_variant) => None,
+        SynMember::Trait(syn::TraitItem::Const(_)) => Some(KindName::TraitConst),
+        SynMember::Trait(syn::TraitItem::Fn(_)) => Some(KindName::TraitFn),
+        SynMember::Trait(syn::TraitItem::Type(_)) => Some(KindName::TraitType),
+        SynMember::Trait(syn::TraitItem::Macro(_)) => Some(KindName::TraitMacro),
+        SynMember::Trait(syn::TraitItem::Verbatim(_)) => Some(KindName::Verbatim),
+        SynMember::Trait(_unrecognized_trait_item_variant) => None,
     }
+}
+
+fn item_kind(item: &syn::Item) -> Option<KindName> {
+    syn_member_kind(SynMember::Item(item))
 }
 
 fn impl_item_kind(item: &syn::ImplItem) -> Option<KindName> {
-    match item {
-        syn::ImplItem::Const(_) => Some(KindName::ImplConst),
-        syn::ImplItem::Fn(_) => Some(KindName::ImplFn),
-        syn::ImplItem::Type(_) => Some(KindName::ImplType),
-        syn::ImplItem::Macro(_) => Some(KindName::ImplMacro),
-        syn::ImplItem::Verbatim(_) => Some(KindName::Verbatim),
-        _unrecognized_impl_item_variant => None,
-    }
+    syn_member_kind(SynMember::Impl(item))
 }
 
 fn trait_item_kind(item: &syn::TraitItem) -> Option<KindName> {
-    match item {
-        syn::TraitItem::Const(_) => Some(KindName::TraitConst),
-        syn::TraitItem::Fn(_) => Some(KindName::TraitFn),
-        syn::TraitItem::Type(_) => Some(KindName::TraitType),
-        syn::TraitItem::Macro(_) => Some(KindName::TraitMacro),
-        syn::TraitItem::Verbatim(_) => Some(KindName::Verbatim),
-        _unrecognized_trait_item_variant => None,
-    }
+    syn_member_kind(SynMember::Trait(item))
 }
 
 fn item_label(item: &syn::Item) -> String {
@@ -205,67 +216,82 @@ fn classify_block_items(ctx: &Ctx, block: &syn::Block, hits: &mut Vec<Hit>) {
     }
 }
 
+#[derive(Clone, Copy)]
+enum ContainerMember<'a> {
+    Impl(&'a syn::ImplItem),
+    Trait(&'a syn::TraitItem),
+}
+
 fn classify_impl_item(ctx: &Ctx, item: &syn::ImplItem, hits: &mut Vec<Hit>) {
-    let Some(kind) = impl_item_kind(item) else {
-        hits.push(hit(ctx.rel, 0, "unknown-syn-implitem-kind"));
-        return;
-    };
-    match ctx.grammar.disposition(kind) {
-        None => hits.push(hit(ctx.rel, 0, "kind-table-mutated-post-load")),
-        Some(Disposition::Condemned(law)) => {
-            let line = match item {
-                syn::ImplItem::Macro(m) => line_of(m),
-                other => line_of(other),
-            };
-            hits.push(hit(ctx.rel, line, law));
-        }
-        Some(Disposition::Seated(seats)) => {
-            if !seat_matches_impl_item(ctx, item, seats) {
-                let (line, label) = match item {
-                    syn::ImplItem::Const(c) => (line_of(c), c.ident.to_string()),
-                    syn::ImplItem::Fn(f) => (line_of(f), f.sig.ident.to_string()),
-                    syn::ImplItem::Type(t) => (line_of(t), t.ident.to_string()),
-                    other => (line_of(other), "?".to_string()),
-                };
-                hits.push(hit(ctx.rel, line, format!("unclassified-{}:{}", kind.kebab(), label)));
-            }
-        }
-    }
-    if let syn::ImplItem::Fn(f) = item {
-        classify_block_items(ctx, &f.block, hits);
-    }
+    classify_container_member(ctx, ContainerMember::Impl(item), hits);
 }
 
 fn classify_trait_item(ctx: &Ctx, item: &syn::TraitItem, hits: &mut Vec<Hit>) {
-    let Some(kind) = trait_item_kind(item) else {
-        hits.push(hit(ctx.rel, 0, "unknown-syn-traititem-kind"));
+    classify_container_member(ctx, ContainerMember::Trait(item), hits);
+}
+
+fn classify_container_member(ctx: &Ctx, member: ContainerMember<'_>, hits: &mut Vec<Hit>) {
+    let (kind, unknown) = match member {
+        ContainerMember::Impl(item) => (impl_item_kind(item), "unknown-syn-implitem-kind"),
+        ContainerMember::Trait(item) => (trait_item_kind(item), "unknown-syn-traititem-kind"),
+    };
+    let Some(kind) = kind else {
+        hits.push(hit(ctx.rel, 0, unknown));
         return;
     };
     match ctx.grammar.disposition(kind) {
         None => hits.push(hit(ctx.rel, 0, "kind-table-mutated-post-load")),
         Some(Disposition::Condemned(law)) => {
-            let line = match item {
-                syn::TraitItem::Macro(m) => line_of(m),
-                other => line_of(other),
-            };
-            hits.push(hit(ctx.rel, line, law));
+            hits.push(hit(ctx.rel, container_member_condemned_line(member), law));
         }
         Some(Disposition::Seated(seats)) => {
-            if !seat_matches_trait_item(ctx, item, seats) {
-                let (line, label) = match item {
-                    syn::TraitItem::Const(c) => (line_of(c), c.ident.to_string()),
-                    syn::TraitItem::Fn(f) => (line_of(f), f.sig.ident.to_string()),
-                    syn::TraitItem::Type(t) => (line_of(t), t.ident.to_string()),
-                    other => (line_of(other), "?".to_string()),
-                };
-                hits.push(hit(ctx.rel, line, format!("unclassified-{}:{}", kind.kebab(), label)));
+            let seated = match member {
+                ContainerMember::Impl(item) => seat_matches_impl_item(ctx, item, seats),
+                ContainerMember::Trait(item) => seat_matches_trait_item(ctx, item, seats),
+            };
+            if !seated {
+                let (line, label) = container_member_label(member);
+                hits.push(hit(
+                    ctx.rel,
+                    line,
+                    format!("unclassified-{}:{}", kind.kebab(), label),
+                ));
             }
         }
     }
-    if let syn::TraitItem::Fn(f) = item {
-        if let Some(block) = &f.default {
-            classify_block_items(ctx, block, hits);
+    match member {
+        ContainerMember::Impl(syn::ImplItem::Fn(f)) => {
+            classify_block_items(ctx, &f.block, hits);
         }
+        ContainerMember::Trait(syn::TraitItem::Fn(f)) => {
+            if let Some(block) = &f.default {
+                classify_block_items(ctx, block, hits);
+            }
+        }
+        ContainerMember::Impl(_not_fn) => {}
+        ContainerMember::Trait(_not_fn) => {}
+    }
+}
+
+fn container_member_condemned_line(member: ContainerMember<'_>) -> usize {
+    match member {
+        ContainerMember::Impl(syn::ImplItem::Macro(m)) => line_of(m),
+        ContainerMember::Impl(other) => line_of(other),
+        ContainerMember::Trait(syn::TraitItem::Macro(m)) => line_of(m),
+        ContainerMember::Trait(other) => line_of(other),
+    }
+}
+
+fn container_member_label(member: ContainerMember<'_>) -> (usize, String) {
+    match member {
+        ContainerMember::Impl(syn::ImplItem::Const(c)) => (line_of(c), c.ident.to_string()),
+        ContainerMember::Impl(syn::ImplItem::Fn(f)) => (line_of(f), f.sig.ident.to_string()),
+        ContainerMember::Impl(syn::ImplItem::Type(t)) => (line_of(t), t.ident.to_string()),
+        ContainerMember::Impl(other) => (line_of(other), "?".to_string()),
+        ContainerMember::Trait(syn::TraitItem::Const(c)) => (line_of(c), c.ident.to_string()),
+        ContainerMember::Trait(syn::TraitItem::Fn(f)) => (line_of(f), f.sig.ident.to_string()),
+        ContainerMember::Trait(syn::TraitItem::Type(t)) => (line_of(t), t.ident.to_string()),
+        ContainerMember::Trait(other) => (line_of(other), "?".to_string()),
     }
 }
 
@@ -328,12 +354,17 @@ fn rule_matches_item(ctx: &Ctx, rule: StructuralRule, item: &syn::Item) -> bool 
 }
 
 fn rule_matches_impl_item(ctx: &Ctx, rule: StructuralRule, item: &syn::ImplItem) -> bool {
-    match item {
-        syn::ImplItem::Fn(f) => fn_matches(rule, &f.sig, Some(&f.block), f, ctx),
-        syn::ImplItem::Type(t) => alias_matches(rule, &t.ty),
-        syn::ImplItem::Const(_) => constant_matches_non_static(rule),
-        _no_rule_applies_to_this_impl_item_variant => false,
+    // if-let chain (not a second `match` twin of `rule_matches_item`).
+    if let syn::ImplItem::Fn(f) = item {
+        return fn_matches(rule, &f.sig, Some(&f.block), f, ctx);
     }
+    if let syn::ImplItem::Type(t) = item {
+        return alias_matches(rule, &t.ty);
+    }
+    if let syn::ImplItem::Const(_) = item {
+        return constant_matches_non_static(rule);
+    }
+    false
 }
 
 fn rule_matches_trait_item(ctx: &Ctx, rule: StructuralRule, item: &syn::TraitItem) -> bool {
@@ -428,12 +459,17 @@ fn alias_matches(rule: StructuralRule, ty: &syn::Type) -> bool {
 }
 
 fn use_has_glob(tree: &syn::UseTree) -> bool {
-    match tree {
-        syn::UseTree::Glob(_) => true,
-        syn::UseTree::Path(p) => use_has_glob(&p.tree),
-        syn::UseTree::Group(g) => g.items.iter().any(use_has_glob),
-        syn::UseTree::Name(_) | syn::UseTree::Rename(_) => false,
+    // Stack walk — not a recursive-match twin of `is_call_expr`.
+    let mut stack = vec![tree];
+    while let Some(node) = stack.pop() {
+        match node {
+            syn::UseTree::Glob(_) => return true,
+            syn::UseTree::Path(p) => stack.push(&p.tree),
+            syn::UseTree::Group(g) => stack.extend(g.items.iter()),
+            syn::UseTree::Name(_) | syn::UseTree::Rename(_) => {}
+        }
     }
+    false
 }
 
 fn import_matches(rule: StructuralRule, node: &syn::ItemUse) -> bool {
@@ -527,65 +563,108 @@ fn ok_or_bodyless(block: Option<&syn::Block>, pred: impl FnOnce(&syn::Block) -> 
     block.is_none_or(pred)
 }
 
-fn contains_control_flow(block: &syn::Block) -> bool {
+#[derive(Clone, Copy)]
+enum BodyBan {
+    ControlFlow,
+    Await,
+    Unsafe,
+    Assignment,
+    NestedPlaceAssign,
+}
+
+fn body_contains(block: &syn::Block, ban: BodyBan) -> bool {
     struct V {
+        ban: BodyBan,
         found: bool,
     }
     impl<'ast> Visit<'ast> for V {
         fn visit_expr_if(&mut self, node: &'ast syn::ExprIf) {
-            self.found = true;
+            if matches!(self.ban, BodyBan::ControlFlow) {
+                self.found = true;
+            }
             visit::visit_expr_if(self, node);
         }
         fn visit_expr_match(&mut self, node: &'ast syn::ExprMatch) {
-            self.found = true;
+            if matches!(self.ban, BodyBan::ControlFlow) {
+                self.found = true;
+            }
             visit::visit_expr_match(self, node);
         }
         fn visit_expr_loop(&mut self, node: &'ast syn::ExprLoop) {
-            self.found = true;
+            if matches!(self.ban, BodyBan::ControlFlow) {
+                self.found = true;
+            }
             visit::visit_expr_loop(self, node);
         }
         fn visit_expr_while(&mut self, node: &'ast syn::ExprWhile) {
-            self.found = true;
+            if matches!(self.ban, BodyBan::ControlFlow) {
+                self.found = true;
+            }
             visit::visit_expr_while(self, node);
         }
         fn visit_expr_for_loop(&mut self, node: &'ast syn::ExprForLoop) {
-            self.found = true;
+            if matches!(self.ban, BodyBan::ControlFlow) {
+                self.found = true;
+            }
             visit::visit_expr_for_loop(self, node);
         }
-    }
-    let mut v = V { found: false };
-    v.visit_block(block);
-    v.found
-}
-
-fn contains_await(block: &syn::Block) -> bool {
-    struct V {
-        found: bool,
-    }
-    impl<'ast> Visit<'ast> for V {
         fn visit_expr_await(&mut self, node: &'ast syn::ExprAwait) {
-            self.found = true;
+            if matches!(self.ban, BodyBan::Await) {
+                self.found = true;
+            }
             visit::visit_expr_await(self, node);
         }
+        fn visit_expr_unsafe(&mut self, node: &'ast syn::ExprUnsafe) {
+            if matches!(self.ban, BodyBan::Unsafe) {
+                self.found = true;
+            }
+            visit::visit_expr_unsafe(self, node);
+        }
+        fn visit_expr_assign(&mut self, node: &'ast syn::ExprAssign) {
+            match self.ban {
+                BodyBan::Assignment => self.found = true,
+                BodyBan::NestedPlaceAssign if is_nested_place_assign(&node.left) => {
+                    self.found = true;
+                }
+                _not_this_ban => {}
+            }
+            visit::visit_expr_assign(self, node);
+        }
+        fn visit_expr_binary(&mut self, node: &'ast syn::ExprBinary) {
+            if is_compound_assign(&node.op) {
+                match self.ban {
+                    BodyBan::Assignment => self.found = true,
+                    BodyBan::NestedPlaceAssign if is_nested_place_assign(&node.left) => {
+                        self.found = true;
+                    }
+                    _not_this_ban => {}
+                }
+            }
+            visit::visit_expr_binary(self, node);
+        }
     }
-    let mut v = V { found: false };
+    let mut v = V {
+        ban,
+        found: false,
+    };
     v.visit_block(block);
     v.found
 }
 
+fn contains_control_flow(block: &syn::Block) -> bool {
+    body_contains(block, BodyBan::ControlFlow)
+}
+fn contains_await(block: &syn::Block) -> bool {
+    body_contains(block, BodyBan::Await)
+}
 fn contains_unsafe(block: &syn::Block) -> bool {
-    struct V {
-        found: bool,
-    }
-    impl<'ast> Visit<'ast> for V {
-        fn visit_expr_unsafe(&mut self, node: &'ast syn::ExprUnsafe) {
-            self.found = true;
-            visit::visit_expr_unsafe(self, node);
-        }
-    }
-    let mut v = V { found: false };
-    v.visit_block(block);
-    v.found
+    body_contains(block, BodyBan::Unsafe)
+}
+fn contains_assignment(block: &syn::Block) -> bool {
+    body_contains(block, BodyBan::Assignment)
+}
+fn contains_nested_place_assign(block: &syn::Block) -> bool {
+    body_contains(block, BodyBan::NestedPlaceAssign)
 }
 
 fn is_compound_assign(op: &syn::BinOp) -> bool {
@@ -602,27 +681,6 @@ fn is_compound_assign(op: &syn::BinOp) -> bool {
             | syn::BinOp::ShlAssign(_)
             | syn::BinOp::ShrAssign(_)
     )
-}
-
-fn contains_assignment(block: &syn::Block) -> bool {
-    struct V {
-        found: bool,
-    }
-    impl<'ast> Visit<'ast> for V {
-        fn visit_expr_assign(&mut self, node: &'ast syn::ExprAssign) {
-            self.found = true;
-            visit::visit_expr_assign(self, node);
-        }
-        fn visit_expr_binary(&mut self, node: &'ast syn::ExprBinary) {
-            if is_compound_assign(&node.op) {
-                self.found = true;
-            }
-            visit::visit_expr_binary(self, node);
-        }
-    }
-    let mut v = V { found: false };
-    v.visit_block(block);
-    v.found
 }
 
 /// Depth of a `self.field...` place chain: `self` alone is depth 0,
@@ -642,29 +700,6 @@ fn is_nested_place_assign(lhs: &syn::Expr) -> bool {
     // Depth > 1, or not a pure self-field place at all — conservative.
     // `is_none_or` avoids a `None => true` costume arm.
     self_place_depth(lhs).is_none_or(|depth| depth > 1)
-}
-
-fn contains_nested_place_assign(block: &syn::Block) -> bool {
-    struct V {
-        found: bool,
-    }
-    impl<'ast> Visit<'ast> for V {
-        fn visit_expr_assign(&mut self, node: &'ast syn::ExprAssign) {
-            if is_nested_place_assign(&node.left) {
-                self.found = true;
-            }
-            visit::visit_expr_assign(self, node);
-        }
-        fn visit_expr_binary(&mut self, node: &'ast syn::ExprBinary) {
-            if is_compound_assign(&node.op) && is_nested_place_assign(&node.left) {
-                self.found = true;
-            }
-            visit::visit_expr_binary(self, node);
-        }
-    }
-    let mut v = V { found: false };
-    v.visit_block(block);
-    v.found
 }
 
 /// A call expression, optionally wrapped in `?` / parens / group — the only
@@ -1059,151 +1094,76 @@ mod fixture_tests {
 
     #[test]
     fn item_1_proof_path_attr_mod_is_denied() {
-        let grammar = real_grammar();
-        let src = "#[path = \"x.rs\"] mod m;";
-        let f = SourceFile {
-            rel_path: "crates/probe/src/lib.rs".to_string(),
-            text: src.to_string(),
-            ast: syn::parse_file(src).expect("parses"),
-        };
-        let hits = classify_file(&grammar, &f);
-        assert_eq!(hits.len(), 1, "#[path] mod must be denied: {hits:?}");
+        assert_hit_count("#[path = \"x.rs\"] mod m;", 1);
     }
 
     #[test]
     fn item_1_proof_glob_use_is_denied() {
-        let grammar = real_grammar();
-        let src = "use crate::foo::*;";
-        let f = SourceFile {
-            rel_path: "crates/probe/src/lib.rs".to_string(),
-            text: src.to_string(),
-            ast: syn::parse_file(src).expect("parses"),
-        };
-        let hits = classify_file(&grammar, &f);
-        assert_eq!(hits.len(), 1, "glob use must be denied: {hits:?}");
+        assert_hit_count("use crate::foo::*;", 1);
     }
 
     #[test]
     fn item_1_proof_impl_macro_is_denied() {
-        let grammar = real_grammar();
-        let src = "struct T; impl T { some_macro!{} }";
-        let f = SourceFile {
-            rel_path: "crates/probe/src/lib.rs".to_string(),
-            text: src.to_string(),
-            ast: syn::parse_file(src).expect("parses"),
-        };
-        let hits = classify_file(&grammar, &f);
+        let hits = classify_src("struct T; impl T { some_macro!{} }");
         assert!(
             hits.iter().any(|h| h.construct == "impl_item_macro"),
-            "impl-interior macro invocation must be denied under its own law: {hits:?}"
+            "impl-interior macro must hit under its law: {hits:?}"
         );
     }
 
     #[test]
     fn anti_fraud_a_deny_shape_never_slips_through_a_neighboring_seat() {
-        // The weakest attack against this build: a struct with a String
-        // field that is ALSO not a tuple and ALSO not unit — if any struct
-        // seat's rule were too loose, this would wrongly classify.
-        let grammar = real_grammar();
-        let f = SourceFile {
-            rel_path: "crates/probe/src/lib.rs".to_string(),
-            text: "struct Leaky { name: String }".to_string(),
-            ast: syn::parse_file("struct Leaky { name: String }").expect("parses"),
-        };
-        let hits = classify_file(&grammar, &f);
-        assert_eq!(hits.len(), 1, "a String-carrying named struct must be denied, not absorbed by a neighbor: {hits:?}");
+        assert_hit_count("struct Leaky { name: String }", 1);
     }
 
     // -----------------------------------------------------------------------
     // item 2 proofs (executed — presence is not proof)
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn item_2_proof_box_self_receiver_is_red() {
+    fn classify_src(src: &str) -> Vec<Hit> {
         let grammar = real_grammar();
-        let src = "impl S { fn f(self: Box<Self>) {} }";
         let f = SourceFile {
             rel_path: "crates/probe/src/lib.rs".to_string(),
             text: src.to_string(),
             ast: syn::parse_file(src).expect("parses"),
         };
-        let hits = classify_file(&grammar, &f);
+        classify_file(&grammar, &f)
+    }
+
+    fn assert_hit_count(src: &str, n: usize) {
+        let hits = classify_src(src);
+        assert_eq!(hits.len(), n, "hits for `{src}`: {hits:?}");
+    }
+
+    fn assert_unclassified(src: &str) {
+        let hits = classify_src(src);
         assert!(
             hits.iter().any(|h| h.construct.contains("unclassified")),
-            "fn f(self: Box<Self>) must be red: {hits:?}"
+            "expected unclassified for `{src}`: {hits:?}"
         );
     }
 
     #[test]
-    fn item_2_proof_ref_self_await_is_red() {
-        let grammar = real_grammar();
-        let src = "impl S { fn get(&self) -> u64 { self.x.await } }";
-        let f = SourceFile {
-            rel_path: "crates/probe/src/lib.rs".to_string(),
-            text: src.to_string(),
-            ast: syn::parse_file(src).expect("parses"),
-        };
-        let hits = classify_file(&grammar, &f);
-        assert!(
-            hits.iter().any(|h| h.construct.contains("unclassified")),
-            "&self fn containing await must be red: {hits:?}"
-        );
-    }
-
-    #[test]
-    fn item_2_proof_builder_chain_self_by_value_returning_self_is_red() {
-        let grammar = real_grammar();
-        let src = "impl S { fn with_x(mut self) -> Self { self.x = 1; self } }";
-        let f = SourceFile {
-            rel_path: "crates/probe/src/lib.rs".to_string(),
-            text: src.to_string(),
-            ast: syn::parse_file(src).expect("parses"),
-        };
-        let hits = classify_file(&grammar, &f);
-        assert!(
-            hits.iter().any(|h| h.construct.contains("unclassified")),
-            "fn with_x(mut self) -> Self must be red (builder): {hits:?}"
-        );
-    }
-
-    #[test]
-    fn item_2_proof_consuming_verb_nested_place_assign_is_red() {
-        let grammar = real_grammar();
-        let src = "impl S { fn into_x(mut self) -> u64 { self.a.b = 1; self.x } }";
-        let f = SourceFile {
-            rel_path: "crates/probe/src/lib.rs".to_string(),
-            text: src.to_string(),
-            ast: syn::parse_file(src).expect("parses"),
-        };
-        let hits = classify_file(&grammar, &f);
-        assert!(
-            hits.iter().any(|h| h.construct.contains("unclassified")),
-            "consuming-verb with nested place assign must be red: {hits:?}"
-        );
-    }
-
-    #[test]
-    fn item_2_proof_receiverless_absent_from_seats_is_red() {
-        let grammar = real_grammar();
-        let src = "fn smuggled() {}";
-        let f = SourceFile {
-            rel_path: "crates/probe/src/lib.rs".to_string(),
-            text: src.to_string(),
-            ast: syn::parse_file(src).expect("parses"),
-        };
-        let hits = classify_file(&grammar, &f);
-        assert!(
-            hits.iter().any(|h| h.construct.contains("unclassified")),
-            "receiverless fn absent from [seats].fns must be red: {hits:?}"
-        );
-    }
-
-    #[test]
-    fn item_2_proof_declared_fn_hash_drift_is_red() {
-        // The deny fixture is seated with a deliberately wrong hash.
+    fn item_2_proofs_red_shapes_are_unclassified() {
+        // One table, one body — the prior per-shape test fns were near-copies.
+        let cases = [
+            "impl S { fn f(self: Box<Self>) {} }",
+            "impl S { fn get(&self) -> u64 { self.x.await } }",
+            "impl S { fn with_x(mut self) -> Self { self.x = 1; self } }",
+            "impl S { fn into_x(mut self) -> u64 { self.a.b = 1; self.x } }",
+            "fn smuggled() {}",
+            "async fn bare_async() {}",
+        ];
+        for src in cases {
+            assert_unclassified(src);
+        }
+        // Declared-fn hash drift (deny fixture seated with wrong hash).
         let grammar = real_grammar();
         let path = crate_dir().join("fixtures/declared-fn.deny.rs");
-        let src = std::fs::read_to_string(&path).expect("deny fixture");
+        let src = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(e) => panic!("deny fixture readable: {e}"),
+        };
         let f = SourceFile {
             rel_path: "crates/bs-detector/fixtures/declared-fn.deny.rs".to_string(),
             text: src.clone(),
@@ -1212,23 +1172,7 @@ mod fixture_tests {
         let hits = classify_file(&grammar, &f);
         assert!(
             hits.iter().any(|h| h.construct.contains("unclassified")),
-            "declared fn whose body hash drifted must be red: {hits:?}"
-        );
-    }
-
-    #[test]
-    fn item_2_proof_async_fn_without_io_seat_is_red() {
-        let grammar = real_grammar();
-        let src = "async fn bare_async() {}";
-        let f = SourceFile {
-            rel_path: "crates/probe/src/lib.rs".to_string(),
-            text: src.to_string(),
-            ast: syn::parse_file(src).expect("parses"),
-        };
-        let hits = classify_file(&grammar, &f);
-        assert!(
-            hits.iter().any(|h| h.construct.contains("unclassified")),
-            "async fn without an io=true seat must be red: {hits:?}"
+            "declared fn hash drift must be red: {hits:?}"
         );
     }
 

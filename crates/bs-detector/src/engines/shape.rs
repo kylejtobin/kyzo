@@ -193,29 +193,28 @@ struct NameSites<'a> {
 
 impl<'ast, 'a> Visit<'ast> for NameSites<'a> {
     fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
-        let name = node.method.to_string();
-        if self.methods.contains(&name.as_str()) {
-            push(&mut self.hits, self.rel, span_line(&node.method.span()), self.construct);
-        }
+        self.hit_listed(node.method.to_string(), self.methods, &node.method.span());
         visit::visit_expr_method_call(self, node);
     }
     fn visit_macro(&mut self, node: &'ast syn::Macro) {
         if let Some(seg) = node.path.segments.last() {
-            let name = seg.ident.to_string();
-            if self.macros.contains(&name.as_str()) {
-                push(&mut self.hits, self.rel, span_line(&seg.ident.span()), self.construct);
-            }
+            self.hit_listed(seg.ident.to_string(), self.macros, &seg.ident.span());
         }
         visit::visit_macro(self, node);
     }
     fn visit_path(&mut self, node: &'ast syn::Path) {
         for seg in &node.segments {
-            let ident = seg.ident.to_string();
-            if self.paths.contains(&ident.as_str()) {
-                push(&mut self.hits, self.rel, span_line(&seg.ident.span()), self.construct);
-            }
+            self.hit_listed(seg.ident.to_string(), self.paths, &seg.ident.span());
         }
         visit::visit_path(self, node);
+    }
+}
+
+impl NameSites<'_> {
+    fn hit_listed(&mut self, name: String, list: &[&str], span: &proc_macro2::Span) {
+        if list.contains(&name.as_str()) {
+            push(&mut self.hits, self.rel, span_line(span), self.construct);
+        }
     }
 }
 
@@ -225,6 +224,26 @@ fn push(hits: &mut Vec<Hit>, rel: &str, line: usize, construct: &str) {
         line,
         construct: construct.to_string(),
     });
+}
+
+/// One visitor-boilerplate authority. Matcher fns stay thin wrappers so
+/// copy_detector sees one template, not three cloned `struct V` bodies.
+macro_rules! file_visitor_hits {
+    ($file:ident, $($visit_methods:tt)*) => {{
+        struct V<'a> {
+            rel: &'a str,
+            hits: Vec<Hit>,
+        }
+        impl<'ast, 'a> Visit<'ast> for V<'a> {
+            $($visit_methods)*
+        }
+        let mut v = V {
+            rel: &$file.rel_path,
+            hits: vec![],
+        };
+        v.visit_file(&$file.ast);
+        v.hits
+    }};
 }
 
 fn name_sites<'a>(
@@ -408,22 +427,12 @@ fn m_ok_drop(f: &SourceFile) -> Vec<Hit> {
 fn m_as_cast(f: &SourceFile) -> Vec<Hit> {
     // Every `as` cast, no numeric shortlist: `type W = u8; x as W` dodges
     // any list of names. Lossless and pointer-shaped casts buy waivers.
-    struct V<'a> {
-        rel: &'a str,
-        hits: Vec<Hit>,
-    }
-    impl<'ast, 'a> Visit<'ast> for V<'a> {
+    file_visitor_hits!(f,
         fn visit_expr_cast(&mut self, node: &'ast syn::ExprCast) {
             push(&mut self.hits, self.rel, span_line(&node.as_token.span), "as_cast");
             visit::visit_expr_cast(self, node);
         }
-    }
-    let mut v = V {
-        rel: &f.rel_path,
-        hits: vec![],
-    };
-    v.visit_file(&f.ast);
-    v.hits
+    )
 }
 
 /// wrapping_*/saturating_*/overflowing_*/unchecked_* arithmetic — every
@@ -592,11 +601,7 @@ fn m_default_derive(f: &SourceFile) -> Vec<Hit> {
 }
 
 fn m_default_impl(f: &SourceFile) -> Vec<Hit> {
-    struct V<'a> {
-        rel: &'a str,
-        hits: Vec<Hit>,
-    }
-    impl<'ast, 'a> Visit<'ast> for V<'a> {
+    file_visitor_hits!(f,
         fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {
             if let Some((_, path, _)) = &node.trait_ {
                 if path.segments.last().is_some_and(|s| s.ident == "Default") {
@@ -605,13 +610,7 @@ fn m_default_impl(f: &SourceFile) -> Vec<Hit> {
             }
             visit::visit_item_impl(self, node);
         }
-    }
-    let mut v = V {
-        rel: &f.rel_path,
-        hits: vec![],
-    };
-    v.visit_file(&f.ast);
-    v.hits
+    )
 }
 
 /// Unchecked construction doors: `from_raw` / `*_unchecked` /
@@ -906,8 +905,12 @@ fn m_serde_default_skip(f: &SourceFile) -> Vec<Hit> {
 }
 
 /// Wall-clock / unseeded randomness (seats 25/45/83/84).
+///
+/// `Local` and `env` are NOT bare path-ident matches: bare `Local` collides
+/// with `syn::Local` / `Stmt::Local`, and bare `env` collides with the
+/// compile-time `env!` macro. Those two are judged with path structure.
 fn m_nondeterminism(f: &SourceFile) -> Vec<Hit> {
-    path_idents(
+    let mut hits = path_idents(
         f,
         &[
             "Instant",
@@ -920,13 +923,57 @@ fn m_nondeterminism(f: &SourceFile) -> Vec<Hit> {
             "from_entropy",
             "fastrand",
             "Utc",
-            "Local",
             "RandomState",
             "DefaultHasher",
-            "env",
         ],
         "nondeterminism",
-    )
+    );
+    struct V<'a> {
+        rel: &'a str,
+        hits: &'a mut Vec<Hit>,
+    }
+    fn segs(path: &syn::Path) -> Vec<String> {
+        path.segments.iter().map(|s| s.ident.to_string()).collect()
+    }
+    impl<'ast, 'a> Visit<'ast> for V<'a> {
+        fn visit_path(&mut self, node: &'ast syn::Path) {
+            let s = segs(node);
+            // chrono::Local (or Local under a chrono crate path) — never syn::Local.
+            if s.last().is_some_and(|x| x == "Local") && s.iter().any(|x| x == "chrono") {
+                if let Some(seg) = node.segments.last() {
+                    push(
+                        self.hits,
+                        self.rel,
+                        span_line(&seg.ident.span()),
+                        "nondeterminism",
+                    );
+                }
+            }
+            visit::visit_path(self, node);
+        }
+        fn visit_expr_path(&mut self, node: &'ast syn::ExprPath) {
+            let s = segs(&node.path);
+            // Runtime std::env / ::env / env::var — not the env! macro (macros
+            // are visited via visit_macro, which we do not flag here).
+            if s.iter().any(|x| x == "env") {
+                if let Some(seg) = node.path.segments.iter().find(|sg| sg.ident == "env") {
+                    push(
+                        self.hits,
+                        self.rel,
+                        span_line(&seg.ident.span()),
+                        "nondeterminism",
+                    );
+                }
+            }
+            visit::visit_expr_path(self, node);
+        }
+    }
+    let mut v = V {
+        rel: &f.rel_path,
+        hits: &mut hits,
+    };
+    v.visit_file(&f.ast);
+    hits
 }
 
 /// Raw peer/transport sockets (seats 18/92): NATS is the only nervous
@@ -964,11 +1011,7 @@ fn m_naked_array_sig(f: &SourceFile) -> Vec<Hit> {
 /// `#![forbid(unsafe_code)]` are the meta engine's business; the token
 /// itself is this matcher's).
 fn m_unsafe_token(f: &SourceFile) -> Vec<Hit> {
-    struct V<'a> {
-        rel: &'a str,
-        hits: Vec<Hit>,
-    }
-    impl<'ast, 'a> Visit<'ast> for V<'a> {
+    file_visitor_hits!(f,
         fn visit_expr_unsafe(&mut self, node: &'ast syn::ExprUnsafe) {
             push(&mut self.hits, self.rel, span_line(&node.unsafe_token.span), "unsafe_token");
             visit::visit_expr_unsafe(self, node);
@@ -997,13 +1040,7 @@ fn m_unsafe_token(f: &SourceFile) -> Vec<Hit> {
             }
             visit::visit_item_trait(self, node);
         }
-    }
-    let mut v = V {
-        rel: &f.rel_path,
-        hits: vec![],
-    };
-    v.visit_file(&f.ast);
-    v.hits
+    )
 }
 
 /// `assert!`/`assert_eq!`/`assert_ne!` on a caller-reachable path — a

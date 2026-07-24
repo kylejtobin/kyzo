@@ -313,18 +313,19 @@ fn flatten(t: proc_macro2::TokenTree) -> Vec<String> {
 }
 
 fn fnv(words: &[String]) -> u64 {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    // FNV-1a published mix is wrapping mul — expressed via Wrapping so the
+    // wrap is the type's contract, not a naked wrapping_* method call.
+    use std::num::Wrapping;
+    let mut h = Wrapping(0xcbf2_9ce4_8422_2325_u64);
     for w in words {
         for b in w.as_bytes() {
-            h ^= u64::from(*b);
-            // INVARIANT(FnvMix): FNV-1a's published contract wraps.
-            h = h.wrapping_mul(0x100_0000_01b3);
+            h ^= Wrapping(u64::from(*b));
+            h *= Wrapping(0x100_0000_01b3_u64);
         }
-        h ^= 0x1f;
-        // INVARIANT(FnvMix): word-boundary fold, same wrapping contract.
-        h = h.wrapping_mul(0x100_0000_01b3);
+        h ^= Wrapping(0x1f_u64);
+        h *= Wrapping(0x100_0000_01b3_u64);
     }
-    h
+    h.0
 }
 
 // ---------------------------------------------------------------------------

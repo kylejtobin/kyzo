@@ -698,6 +698,19 @@ mod tests {
         Grammar::load(f.path(), &real_bite_src(), &crate_dir().join("fixtures"))
     }
 
+    /// Clone the live fixture dir, apply one mutation, load against it.
+    fn load_with_mutated_fixtures(mutate: impl FnOnce(&std::path::Path)) -> Result<Grammar> {
+        let dir = tempfile::tempdir().expect("tempdir");
+        for entry in std::fs::read_dir(crate_dir().join("fixtures")).expect("fixtures dir") {
+            let entry = entry.expect("entry");
+            std::fs::copy(entry.path(), dir.path().join(entry.file_name())).expect("copy");
+        }
+        mutate(dir.path());
+        let mut f = tempfile::NamedTempFile::new().expect("tempfile");
+        f.write_all(real_grammar_text().as_bytes()).expect("write");
+        Grammar::load(f.path(), &real_bite_src(), dir.path())
+    }
+
     #[test]
     fn the_real_grammar_loads() {
         let g = load_text(&real_grammar_text()).expect("the checked-in grammar must load");
@@ -734,29 +747,17 @@ mod tests {
     #[test]
     fn a_missing_fixture_is_a_load_error() {
         // Copy the real fixtures, delete one deny, expect refusal.
-        let dir = tempfile::tempdir().expect("tempdir");
-        for entry in std::fs::read_dir(crate_dir().join("fixtures")).expect("fixtures dir") {
-            let entry = entry.expect("entry");
-            std::fs::copy(entry.path(), dir.path().join(entry.file_name())).expect("copy");
-        }
-        std::fs::remove_file(dir.path().join("sealed-struct.deny.rs")).expect("remove");
-        let mut f = tempfile::NamedTempFile::new().expect("tempfile");
-        f.write_all(real_grammar_text().as_bytes()).expect("write");
-        let e = Grammar::load(f.path(), &real_bite_src(), dir.path());
+        let e = load_with_mutated_fixtures(|dir| {
+            std::fs::remove_file(dir.join("sealed-struct.deny.rs")).expect("remove");
+        });
         assert!(e.is_err(), "missing fixture must refuse to load");
     }
 
     #[test]
     fn an_unrecognized_fixture_file_is_a_load_error() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        for entry in std::fs::read_dir(crate_dir().join("fixtures")).expect("fixtures dir") {
-            let entry = entry.expect("entry");
-            std::fs::copy(entry.path(), dir.path().join(entry.file_name())).expect("copy");
-        }
-        std::fs::write(dir.path().join("rogue.rs"), "fn smuggled() {}\n").expect("write rogue");
-        let mut f = tempfile::NamedTempFile::new().expect("tempfile");
-        f.write_all(real_grammar_text().as_bytes()).expect("write");
-        let e = Grammar::load(f.path(), &real_bite_src(), dir.path());
+        let e = load_with_mutated_fixtures(|dir| {
+            std::fs::write(dir.join("rogue.rs"), "fn smuggled() {}\n").expect("write rogue");
+        });
         assert!(e.is_err(), "a file the fixture law does not expect must refuse");
     }
 
