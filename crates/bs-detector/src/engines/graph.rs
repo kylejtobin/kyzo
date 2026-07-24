@@ -774,24 +774,27 @@ enum GraphProofRefuse {
     ConfigOnceDeclaredPass,
     ConfigOnceTwoSitesRed,
 }
+#[cfg(test)]
+impl GraphProofRefuse {
+    fn require(self, cond: bool) -> Result<(), Self> {
+        if cond {
+            Ok(())
+        } else {
+            Err(self)
+        }
+    }
+
+    fn require_eq<T: PartialEq>(self, got: T, want: T) -> Result<(), Self> {
+        self.require(got == want)
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     type TestResult = Result<(), GraphProofRefuse>;
-
-    fn require(cond: bool, refuse: GraphProofRefuse) -> TestResult {
-        if cond {
-            Ok(())
-        } else {
-            Err(refuse)
-        }
-    }
-
-    fn require_eq<T: PartialEq>(got: T, want: T, refuse: GraphProofRefuse) -> TestResult {
-        require(got == want, refuse)
-    }
 
     fn parse(rel: &str, src: &str) -> Result<SourceFile, GraphProofRefuse> {
         let ast = syn::parse_file(src).map_err(|_| GraphProofRefuse::Parse)?;
@@ -805,7 +808,7 @@ mod tests {
             "#[derive(Default)] struct Interval(u8);\n impl Interval { fn new(x: u8) -> Result<Interval, ()> { if x > 0 { Ok(Interval(x)) } else { Err(()) } } }",
         )?;
         let hits = derive_bypass(&[&f]);
-        require_eq(hits.len(), 1, GraphProofRefuse::DeriveBypassHitCount)
+        GraphProofRefuse::DeriveBypassHitCount.require_eq(hits.len(), 1)
     }
 
     #[test]
@@ -814,12 +817,8 @@ mod tests {
         let a = parse("crates/x/src/a.rs", &format!("fn alpha() -> i64 {body}"))?;
         let b = parse("crates/y/src/b.rs", &format!("fn beta() -> i64 {body}"))?;
         let hits = copy_detector(&[&a, &b]);
-        require_eq(hits.len(), 1, GraphProofRefuse::CopyDetectorHitCount)?;
-        require_eq(
-            hits[0].construct(),
-            "crates/x/src/a.rs::alpha ~ crates/y/src/b.rs::beta",
-            GraphProofRefuse::CopyDetectorConstruct,
-        )
+        GraphProofRefuse::CopyDetectorHitCount.require_eq(hits.len(), 1)?;
+        GraphProofRefuse::CopyDetectorConstruct.require_eq(hits[0].construct(), "crates/x/src/a.rs::alpha ~ crates/y/src/b.rs::beta")
     }
 
     #[test]
@@ -827,11 +826,8 @@ mod tests {
         let f = parse("crates/x/src/a.rs", "fn law_alive() {}")?;
         let reg = "[[agreement]]\ntest_fn = \"law_alive\"\n[[agreement]]\ntest_fn = \"law_deleted\"\n";
         let hits = agreement_registry(&[&f], reg);
-        require_eq(hits.len(), 1, GraphProofRefuse::AgreementHitCount)?;
-        require(
-            hits[0].construct().contains("law_deleted"),
-            GraphProofRefuse::AgreementConstruct,
-        )
+        GraphProofRefuse::AgreementHitCount.require_eq(hits.len(), 1)?;
+        GraphProofRefuse::AgreementConstruct.require(hits[0].construct().contains("law_deleted"))
     }
 
     #[test]
@@ -846,23 +842,11 @@ mod tests {
              fn e() -> Result<(), E> { Ok(()) }",
         )?;
         let hits = total_refusal(&[&enums, &bad]);
-        require(
-            hits.iter().any(|h| h.construct().contains("String")),
-            GraphProofRefuse::TotalRefusalString,
-        )?;
-        require(
-            hits.iter().any(|h| h.construct().contains("anyhow")),
-            GraphProofRefuse::TotalRefusalAnyhow,
-        )?;
-        require(
-            hits.iter().any(|h| h.construct().contains("Box")),
-            GraphProofRefuse::TotalRefusalBox,
-        )?;
-        require(
-            hits.iter().any(|h| h.construct().contains("not-workspace-enum")),
-            GraphProofRefuse::TotalRefusalNotWorkspaceEnum,
-        )?;
-        require_eq(hits.len(), 4, GraphProofRefuse::TotalRefusalExactCount)
+        GraphProofRefuse::TotalRefusalString.require(hits.iter().any(|h| h.construct().contains("String")))?;
+        GraphProofRefuse::TotalRefusalAnyhow.require(hits.iter().any(|h| h.construct().contains("anyhow")))?;
+        GraphProofRefuse::TotalRefusalBox.require(hits.iter().any(|h| h.construct().contains("Box")))?;
+        GraphProofRefuse::TotalRefusalNotWorkspaceEnum.require(hits.iter().any(|h| h.construct().contains("not-workspace-enum")))?;
+        GraphProofRefuse::TotalRefusalExactCount.require_eq(hits.len(), 4)
     }
 
     #[test]
@@ -876,18 +860,9 @@ mod tests {
             vec![crate::boundary::Label::admit("kyzo_core")],
         )];
         let hits = sealed_public_door(&[&f], &hosts);
-        require(
-            hits.iter().any(|h| h.construct().contains("import-outside-door:std")),
-            GraphProofRefuse::SealedDoorStdOutside,
-        )?;
-        require(
-            !hits.iter().any(|h| h.construct().contains("kyzo_core")),
-            GraphProofRefuse::SealedDoorAllowedPass,
-        )?;
-        require(
-            !hits.iter().any(|h| h.construct().contains("crate")),
-            GraphProofRefuse::SealedDoorCrateInternal,
-        )
+        GraphProofRefuse::SealedDoorStdOutside.require(hits.iter().any(|h| h.construct().contains("import-outside-door:std")))?;
+        GraphProofRefuse::SealedDoorAllowedPass.require(!hits.iter().any(|h| h.construct().contains("kyzo_core")))?;
+        GraphProofRefuse::SealedDoorCrateInternal.require(!hits.iter().any(|h| h.construct().contains("crate")))
     }
 
     #[test]
@@ -898,7 +873,7 @@ mod tests {
         )?;
         let seats = vec![ConfigOnceSeat::admit("crates/xtask/", "host_env::read")];
         let hits = config_once(&[&good], &seats);
-        require(hits.is_empty(), GraphProofRefuse::ConfigOnceDeclaredPass)?;
+        GraphProofRefuse::ConfigOnceDeclaredPass.require(hits.is_empty())?;
 
         let two = parse(
             "crates/xtask/src/host_env.rs",
@@ -906,9 +881,6 @@ mod tests {
              fn other() { let _ = std::env::var(\"X\"); }",
         )?;
         let hits = config_once(&[&two], &seats);
-        require(
-            hits.iter().any(|h| h.construct().contains("config-once-count:2")),
-            GraphProofRefuse::ConfigOnceTwoSitesRed,
-        )
+        GraphProofRefuse::ConfigOnceTwoSitesRed.require(hits.iter().any(|h| h.construct().contains("config-once-count:2")))
     }
 }

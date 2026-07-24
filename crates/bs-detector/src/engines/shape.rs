@@ -1386,24 +1386,27 @@ enum ShapeProofRefuse {
     MultilineDefaultDerive,
     CfgAttrDefaultDerive,
 }
+#[cfg(test)]
+impl ShapeProofRefuse {
+    fn require(self, cond: bool) -> Result<(), Self> {
+        if cond {
+            Ok(())
+        } else {
+            Err(self)
+        }
+    }
+
+    fn require_eq<T: PartialEq>(self, got: T, want: T) -> Result<(), Self> {
+        self.require(got == want)
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     type TestResult = Result<(), ShapeProofRefuse>;
-
-    fn require(cond: bool, refuse: ShapeProofRefuse) -> TestResult {
-        if cond {
-            Ok(())
-        } else {
-            Err(refuse)
-        }
-    }
-
-    fn require_eq<T: PartialEq>(got: T, want: T, refuse: ShapeProofRefuse) -> TestResult {
-        require(got == want, refuse)
-    }
 
     fn parse(rel: &str, src: &str) -> Result<SourceFile, ShapeProofRefuse> {
         let ast = syn::parse_file(src).map_err(|_| ShapeProofRefuse::Parse)?;
@@ -1416,7 +1419,7 @@ mod tests {
     }
 
     fn must_hit(name: &str, src: &str, want: usize, refuse: ShapeProofRefuse) -> TestResult {
-        require_eq(run(name, src)?.len(), want, refuse)
+        refuse.require_eq(run(name, src)?.len(), want)
     }
 
     #[test]
@@ -1425,7 +1428,7 @@ mod tests {
         let before = names.len();
         names.sort_unstable();
         names.dedup();
-        require_eq(before, names.len(), ShapeProofRefuse::DuplicateName)
+        ShapeProofRefuse::DuplicateName.require_eq(before, names.len())
     }
 
     #[test]
@@ -1538,14 +1541,10 @@ mod tests {
             "nondeterminism",
             "#[cfg(test)] mod tests { fn f() { let _t = std::time::Instant::now(); } }",
         )?;
-        require_eq(
-            hits
+        ShapeProofRefuse::NondeterminismCfgModStrip.require_eq(hits
                 .iter()
                 .filter(|h| h.construct() == "nondeterminism")
-                .count(),
-            1,
-            ShapeProofRefuse::NondeterminismCfgModStrip,
-        )?;
+                .count(), 1)?;
         must_hit(
             "nondeterminism",
             "fn live() { #[cfg(test)] let _t0 = std::time::Instant::now(); }",
@@ -1615,21 +1614,13 @@ mod tests {
             "default_derive",
             "#[derive(\n    Debug,\n    Default,\n)]\nstruct S;",
         )?;
-        require_eq(hits.len(), 1, ShapeProofRefuse::MultilineDefaultDerive)?;
-        require_eq(
-            hits[0].construct(),
-            "default_derive",
-            ShapeProofRefuse::Construct,
-        )?;
+        ShapeProofRefuse::MultilineDefaultDerive.require_eq(hits.len(), 1)?;
+        ShapeProofRefuse::Construct.require_eq(hits[0].construct(), "default_derive")?;
         let smuggled = run(
             "default_derive",
             "#[cfg_attr(feature = \"x\", derive(Default))]\nstruct T;",
         )?;
-        require_eq(smuggled.len(), 1, ShapeProofRefuse::CfgAttrDefaultDerive)?;
-        require_eq(
-            smuggled[0].construct(),
-            "default_derive",
-            ShapeProofRefuse::Construct,
-        )
+        ShapeProofRefuse::CfgAttrDefaultDerive.require_eq(smuggled.len(), 1)?;
+        ShapeProofRefuse::Construct.require_eq(smuggled[0].construct(), "default_derive")
     }
 }

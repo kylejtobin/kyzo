@@ -394,6 +394,17 @@ enum WaiverProofRefuse {
     EmptyScopeNotEmpty,
     FreeformSilent,
 }
+#[cfg(test)]
+impl WaiverProofRefuse {
+    fn require(self, cond: bool) -> Result<(), Self> {
+        if cond {
+            Ok(())
+        } else {
+            Err(self)
+        }
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -402,13 +413,7 @@ mod tests {
 
     type TestResult = Result<(), WaiverProofRefuse>;
 
-    fn require(cond: bool, refuse: WaiverProofRefuse) -> TestResult {
-        if cond {
-            Ok(())
-        } else {
-            Err(refuse)
-        }
-    }
+
 
     fn load_str(s: &str) -> Result<WaiverFile, WaiverProofRefuse> {
         let mut f = tempfile::NamedTempFile::new().map_err(|_| WaiverProofRefuse::Tempfile)?;
@@ -487,26 +492,11 @@ why_not_sabotage = {why}
     #[test]
     fn a_real_waiver_loads_and_binds_to_its_check() -> TestResult {
         let wf = load_str(&waiver_toml(&valid_why()?, ""))?;
-        require(
-            wf.for_check("expect").len() == 1,
-            WaiverProofRefuse::ExpectCheckBind,
-        )?;
-        require(
-            wf.for_check("unwrap").is_empty(),
-            WaiverProofRefuse::UnwrapCheckLeak,
-        )?;
-        require(
-            wf.waiver[0].site_hash == HASH,
-            WaiverProofRefuse::SiteHashMismatch,
-        )?;
-        require(
-            wf.waiver[0].citation == "expect",
-            WaiverProofRefuse::CitationMismatch,
-        )?;
-        require(
-            wf.waiver[0].anchor_hash == ANCHOR,
-            WaiverProofRefuse::AnchorMismatch,
-        )
+        WaiverProofRefuse::ExpectCheckBind.require(wf.for_check("expect").len() == 1)?;
+        WaiverProofRefuse::UnwrapCheckLeak.require(wf.for_check("unwrap").is_empty())?;
+        WaiverProofRefuse::SiteHashMismatch.require(wf.waiver[0].site_hash == HASH)?;
+        WaiverProofRefuse::CitationMismatch.require(wf.waiver[0].citation == "expect")?;
+        WaiverProofRefuse::AnchorMismatch.require(wf.waiver[0].anchor_hash == ANCHOR)
     }
 
     #[test]
@@ -519,19 +509,16 @@ why_not_sabotage = {why}
         f.write_all(waiver_toml(&hedged, "").as_bytes())
             .map_err(|_| WaiverProofRefuse::WriteFixture)?;
         let e = WaiverFile::load(f.path());
-        require(e.is_err(), WaiverProofRefuse::HedgeSilent)?;
+        WaiverProofRefuse::HedgeSilent.require(e.is_err())?;
         let msg = format!("{}", e.err().ok_or(WaiverProofRefuse::HedgeSilent)?);
-        require(
-            msg.contains("outside every slot") || msg.contains("attestation refused"),
-            WaiverProofRefuse::HedgeUnnamed,
-        )
+        WaiverProofRefuse::HedgeUnnamed.require(msg.contains("outside every slot") || msg.contains("attestation refused"))
     }
 
     #[test]
     fn item_8_proof_missing_false_answer_refuses() -> TestResult {
         // TRUTH item 8 Proof: missing FALSE answer → refuse.
         let why = valid_why()?.replacen("\n\nFALSE.", "\n\nTRUE.", 1);
-        require(why.contains("\n\nTRUE."), WaiverProofRefuse::FixtureReplace)?;
+        WaiverProofRefuse::FixtureReplace.require(why.contains("\n\nTRUE."))?;
         must_refuse(&waiver_toml(&why, ""), WaiverProofRefuse::TrueSilent)
     }
 
@@ -680,12 +667,9 @@ why_not_sabotage = {why}
         )
         .map_err(|_| WaiverProofRefuse::WriteFixture)?;
         let e = WaiverFile::load(f.path());
-        require(e.is_err(), WaiverProofRefuse::ScopeSlashSilent)?;
+        WaiverProofRefuse::ScopeSlashSilent.require(e.is_err())?;
         let msg = format!("{}", e.err().ok_or(WaiverProofRefuse::ScopeSlashSilent)?);
-        require(
-            msg == "scope_waiver for `expect` path `crates/bs-detector` must end in `/` — a prefix without a slash silently overlaps neighbors",
-            WaiverProofRefuse::ScopeSlashMsg,
-        )
+        WaiverProofRefuse::ScopeSlashMsg.require(msg == "scope_waiver for `expect` path `crates/bs-detector` must end in `/` — a prefix without a slash silently overlaps neighbors")
     }
 
     #[test]
@@ -695,11 +679,8 @@ why_not_sabotage = {why}
             Err(WaiverProofRefuse::Load) => return Err(WaiverProofRefuse::EmptyLedgerLoad),
             Err(e) => return Err(e),
         };
-        require(wf.waiver.is_empty(), WaiverProofRefuse::EmptyWaiverNotEmpty)?;
-        require(
-            wf.scope_waiver.is_empty(),
-            WaiverProofRefuse::EmptyScopeNotEmpty,
-        )
+        WaiverProofRefuse::EmptyWaiverNotEmpty.require(wf.waiver.is_empty())?;
+        WaiverProofRefuse::EmptyScopeNotEmpty.require(wf.scope_waiver.is_empty())
     }
 
     #[test]

@@ -252,6 +252,17 @@ enum CampaignProofRefuse {
     WriteArtifact,
     SpecimenUnflaggedMustRed,
 }
+#[cfg(test)]
+impl CampaignProofRefuse {
+    fn require(self, cond: bool) -> Result<(), Self> {
+        if cond {
+            Ok(())
+        } else {
+            Err(self)
+        }
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -259,13 +270,7 @@ mod tests {
 
     type TestResult = Result<(), CampaignProofRefuse>;
 
-    fn require(cond: bool, refuse: CampaignProofRefuse) -> TestResult {
-        if cond {
-            Ok(())
-        } else {
-            Err(refuse)
-        }
-    }
+
 
     #[test]
     fn specimen_unflagged_reds_even_with_fresh_matching_hashes() -> TestResult {
@@ -319,6 +324,6 @@ mod tests {
         let unflagged = hits
             .iter()
             .any(|h| h.construct().starts_with("campaign_specimen_unflagged:"));
-        require(unflagged, CampaignProofRefuse::SpecimenUnflaggedMustRed)
+        CampaignProofRefuse::SpecimenUnflaggedMustRed.require(unflagged)
     }
 }

@@ -1107,6 +1107,17 @@ enum GrammarProofRefuse {
     LawsRequireOk,
     LawlessSilent,
 }
+#[cfg(test)]
+impl GrammarProofRefuse {
+    fn require(self, cond: bool) -> Result<(), Self> {
+        if cond {
+            Ok(())
+        } else {
+            Err(self)
+        }
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -1116,13 +1127,7 @@ mod tests {
 
     type TestResult = std::result::Result<(), GrammarProofRefuse>;
 
-    fn require(cond: bool, refuse: GrammarProofRefuse) -> TestResult {
-        if cond {
-            Ok(())
-        } else {
-            Err(refuse)
-        }
-    }
+
 
     fn crate_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1186,7 +1191,7 @@ mod tests {
     #[test]
     fn the_real_grammar_loads() -> TestResult {
         let g = load_text(&real_grammar_text()?)?;
-        require(g.condemned().len() == 8, GrammarProofRefuse::CondemnedCount)
+        GrammarProofRefuse::CondemnedCount.require(g.condemned().len() == 8)
     }
 
     #[test]
@@ -1196,12 +1201,9 @@ mod tests {
         // are not mangled by a substring replace.
         let text = real_grammar_text()?.replace("\nconst = [\"constant\"]\n", "\n");
         let e = probe_text(&text)?;
-        require(e.is_err(), GrammarProofRefuse::LoadSilent)?;
+        GrammarProofRefuse::LoadSilent.require(e.is_err())?;
         let msg = format!("{:?}", e.err());
-        require(
-            msg.contains("neither seated nor condemned"),
-            GrammarProofRefuse::NeitherSeatedUnnamed,
-        )
+        GrammarProofRefuse::NeitherSeatedUnnamed.require(msg.contains("neither seated nor condemned"))
     }
 
     #[test]
@@ -1214,12 +1216,9 @@ mod tests {
             "[kinds.seated]\nunion = [\"sum-type\"]\n",
         );
         let e = probe_text(&text)?;
-        require(e.is_err(), GrammarProofRefuse::LoadSilent)?;
+        GrammarProofRefuse::LoadSilent.require(e.is_err())?;
         let msg = format!("{:?}", e.err());
-        require(
-            msg.contains("both seated and condemned"),
-            GrammarProofRefuse::BothSeatedUnnamed,
-        )
+        GrammarProofRefuse::BothSeatedUnnamed.require(msg.contains("both seated and condemned"))
     }
 
     #[test]
@@ -1257,12 +1256,9 @@ mod tests {
         f.write_all(text.as_bytes())
             .map_err(|_| GrammarProofRefuse::WriteFixture)?;
         let err = Grammar::load(f.path(), &real_bite_src()?, dir.path());
-        require(err.is_err(), GrammarProofRefuse::LoadSilent)?;
+        GrammarProofRefuse::LoadSilent.require(err.is_err())?;
         let msg = format!("{:?}", err.err());
-        require(
-            msg.contains("not proven disjoint") || msg.contains("identical rules"),
-            GrammarProofRefuse::DisjointUnnamed,
-        )
+        GrammarProofRefuse::DisjointUnnamed.require(msg.contains("not proven disjoint") || msg.contains("identical rules"))
     }
 
     #[test]
@@ -1273,7 +1269,7 @@ mod tests {
                 .map_err(|_| GrammarProofRefuse::RemoveFixture)?;
             Ok(())
         })?;
-        require(e.is_err(), GrammarProofRefuse::LoadSilent)
+        GrammarProofRefuse::LoadSilent.require(e.is_err())
     }
 
     #[test]
@@ -1283,7 +1279,7 @@ mod tests {
                 .map_err(|_| GrammarProofRefuse::WriteRogue)?;
             Ok(())
         })?;
-        require(e.is_err(), GrammarProofRefuse::LoadSilent)
+        GrammarProofRefuse::LoadSilent.require(e.is_err())
     }
 
     #[test]
@@ -1294,12 +1290,9 @@ mod tests {
             "bans = [\"await\"]\n",
         );
         let e = probe_text(&text)?;
-        require(e.is_err(), GrammarProofRefuse::LoadSilent)?;
+        GrammarProofRefuse::LoadSilent.require(e.is_err())?;
         let msg = format!("{:?}", e.err());
-        require(
-            msg.contains("nested_place_assign") && msg.contains("no list"),
-            GrammarProofRefuse::NestedPlaceUnnamed,
-        )
+        GrammarProofRefuse::NestedPlaceUnnamed.require(msg.contains("nested_place_assign") && msg.contains("no list"))
     }
 
     #[test]
@@ -1309,12 +1302,9 @@ mod tests {
             "bans_attribute = [\n  \"unwrap\",\n  \"allow_dead_code\",",
         );
         let e = probe_text(&text)?;
-        require(e.is_err(), GrammarProofRefuse::LoadSilent)?;
+        GrammarProofRefuse::LoadSilent.require(e.is_err())?;
         let msg = format!("{:?}", e.err());
-        require(
-            msg.contains("both") || msg.contains("unwrap"),
-            GrammarProofRefuse::DualSeatUnnamed,
-        )
+        GrammarProofRefuse::DualSeatUnnamed.require(msg.contains("both") || msg.contains("unwrap"))
     }
 
     #[test]
@@ -1323,50 +1313,28 @@ mod tests {
         // Live Transition/ConsumingVerb/Admission enforce nothing in classify
         // for await/nested_place (empty). Derivation still enforces `unsafe`
         // in classify — listing it on construct.bans is the dual specimen.
-        require(
+        GrammarProofRefuse::TransitionBodyBans.require(
             StructuralRule::TransitionBans
                 .body_bans_enforced_in_classify()
                 .is_empty(),
-            GrammarProofRefuse::TransitionBodyBans,
         )?;
-        require(
-            StructuralRule::ConsumingVerbBans
+        GrammarProofRefuse::ConsumingVerbBodyBans.require(StructuralRule::ConsumingVerbBans
                 .body_bans_enforced_in_classify()
-                .is_empty(),
-            GrammarProofRefuse::ConsumingVerbBodyBans,
-        )?;
-        require(
-            StructuralRule::AdmissionDoorBans
+                .is_empty())?;
+        GrammarProofRefuse::AdmissionDoorBodyBans.require(StructuralRule::AdmissionDoorBans
                 .body_bans_enforced_in_classify()
-                .is_empty(),
-            GrammarProofRefuse::AdmissionDoorBodyBans,
-        )?;
-        require(
-            StructuralRule::DerivationBans.body_bans_enforced_in_classify() == ["unsafe"],
-            GrammarProofRefuse::DerivationUnsafeSeat,
-        )?;
+                .is_empty())?;
+        GrammarProofRefuse::DerivationUnsafeSeat.require(StructuralRule::DerivationBans.body_bans_enforced_in_classify() == ["unsafe"])?;
         // Direct refuse path used by Grammar::load:
         let refuse = |rule: StructuralRule, ban: &str| {
             rule.body_bans_enforced_in_classify()
                 .iter()
                 .any(|b| *b == ban)
         };
-        require(
-            refuse(StructuralRule::DerivationBans, "unsafe"),
-            GrammarProofRefuse::UnsafeDualDetectable,
-        )?;
-        require(
-            !refuse(StructuralRule::TransitionBans, "nested_place_assign"),
-            GrammarProofRefuse::NestedPlaceStillBodyBan,
-        )?;
-        require(
-            !refuse(StructuralRule::DerivationBans, "assignment"),
-            GrammarProofRefuse::DerivationAssignmentBodyBan,
-        )?;
-        require(
-            !refuse(StructuralRule::DerivationBans, "await"),
-            GrammarProofRefuse::DerivationAwaitBodyBan,
-        )
+        GrammarProofRefuse::UnsafeDualDetectable.require(refuse(StructuralRule::DerivationBans, "unsafe"))?;
+        GrammarProofRefuse::NestedPlaceStillBodyBan.require(!refuse(StructuralRule::TransitionBans, "nested_place_assign"))?;
+        GrammarProofRefuse::DerivationAssignmentBodyBan.require(!refuse(StructuralRule::DerivationBans, "assignment"))?;
+        GrammarProofRefuse::DerivationAwaitBodyBan.require(!refuse(StructuralRule::DerivationBans, "await"))
     }
 
     #[test]
@@ -1378,7 +1346,7 @@ mod tests {
         f.write_all(real_grammar_text()?.as_bytes())
             .map_err(|_| GrammarProofRefuse::WriteFixture)?;
         let e = Grammar::load(f.path(), "fn bite_nothing() {}", &crate_dir().join("fixtures"));
-        require(e.is_err(), GrammarProofRefuse::MissingBiteSilent)
+        GrammarProofRefuse::MissingBiteSilent.require(e.is_err())
     }
 
     /// Soft `contains("fn bite_unwrap")` matched `fn bite_unwrap_or`. Exact
@@ -1394,16 +1362,14 @@ mod tests {
             .find("\nfn bite_")
             .ok_or(GrammarProofRefuse::BiteUnwrapSuccessor)?;
         bite.replace_range(start..start + 1 + rel_end, "");
-        require(
+        GrammarProofRefuse::SoftContainsStillPass.require(
             bite.lines()
                 .any(|l| l.trim_start().starts_with("fn bite_unwrap_or(")),
-            GrammarProofRefuse::SoftContainsStillPass,
         )?;
-        require(
+        GrammarProofRefuse::ExactUnwrapStillPresent.require(
             !bite
                 .lines()
                 .any(|l| l.trim_start().starts_with("fn bite_unwrap(")),
-            GrammarProofRefuse::ExactUnwrapStillPresent,
         )?;
         let mut f = tempfile::NamedTempFile::new().map_err(|_| GrammarProofRefuse::Tempfile)?;
         f.write_all(real_grammar_text()?.as_bytes())
@@ -1411,10 +1377,7 @@ mod tests {
         let Err(err) = Grammar::load(f.path(), &bite, &crate_dir().join("fixtures")) else {
             return Err(GrammarProofRefuse::PrefixBiteSilent);
         };
-        require(
-            format!("{err}") == "ban `unwrap` has no bite proof — an unproven law may not run",
-            GrammarProofRefuse::BiteMsgMismatch,
-        )
+        GrammarProofRefuse::BiteMsgMismatch.require(format!("{err}") == "ban `unwrap` has no bite proof — an unproven law may not run")
     }
 
     /// A directory named like an expected fixture must not count as present.
@@ -1430,11 +1393,8 @@ mod tests {
         let Err(err) = e else {
             return Err(GrammarProofRefuse::DirMasqueradeSilent);
         };
-        require(
-            format!("{err}")
-                == "fixtures/ entry `sealed-struct.deny.rs` is not a regular file — a directory or symlink cannot prove a rule",
-            GrammarProofRefuse::DirMasqueradeMsg,
-        )
+        GrammarProofRefuse::DirMasqueradeMsg.require(format!("{err}")
+                == "fixtures/ entry `sealed-struct.deny.rs` is not a regular file — a directory or symlink cannot prove a rule")
     }
 
     #[test]
@@ -1445,13 +1405,7 @@ mod tests {
         )
         .map_err(|_| GrammarProofRefuse::WriteFixture)?;
         let laws = Laws::load(f.path()).map_err(|_| GrammarProofRefuse::LawsLoad)?;
-        require(
-            laws.require("unwrap").is_ok(),
-            GrammarProofRefuse::LawsRequireOk,
-        )?;
-        require(
-            laws.require("ghost_check").is_err(),
-            GrammarProofRefuse::LawlessSilent,
-        )
+        GrammarProofRefuse::LawsRequireOk.require(laws.require("unwrap").is_ok())?;
+        GrammarProofRefuse::LawlessSilent.require(laws.require("ghost_check").is_err())
     }
 }

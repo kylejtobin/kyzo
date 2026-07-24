@@ -334,6 +334,17 @@ enum CitationProofRefuse {
     ConstHashMustChange,
     ImplRefResolveBlind,
 }
+#[cfg(test)]
+impl CitationProofRefuse {
+    fn require(self, cond: bool) -> Result<(), Self> {
+        if cond {
+            Ok(())
+        } else {
+            Err(self)
+        }
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -342,13 +353,7 @@ mod tests {
 
     type TestResult = Result<(), CitationProofRefuse>;
 
-    fn require(cond: bool, refuse: CitationProofRefuse) -> TestResult {
-        if cond {
-            Ok(())
-        } else {
-            Err(refuse)
-        }
-    }
+
 
     fn write_temp_rs(dir: &Path, rel: &str, src: &str) -> TestResult {
         let path = dir.join(rel);
@@ -371,44 +376,23 @@ mod tests {
 
     #[test]
     fn citation_grammar_parses_four_forms() -> TestResult {
-        require(
-            Citation::parse("unwrap") == Ok(Citation::LawName("unwrap".into())),
-            CitationProofRefuse::LawNameForm,
-        )?;
-        require(
-            Citation::parse("crates/x/src/a.rs#foo")
+        CitationProofRefuse::LawNameForm.require(Citation::parse("unwrap") == Ok(Citation::LawName("unwrap".into())))?;
+        CitationProofRefuse::FileItemForm.require(Citation::parse("crates/x/src/a.rs#foo")
                 == Ok(Citation::FileItem {
                     file: "crates/x/src/a.rs".into(),
                     item_path: "foo".into(),
-                }),
-            CitationProofRefuse::FileItemForm,
-        )?;
-        require(
-            Citation::parse("crates/x/src/a.rs::bite_foo")
+                }))?;
+        CitationProofRefuse::TestFnForm.require(Citation::parse("crates/x/src/a.rs::bite_foo")
                 == Ok(Citation::TestFn {
                     file: "crates/x/src/a.rs".into(),
                     fn_name: "bite_foo".into(),
-                }),
-            CitationProofRefuse::TestFnForm,
-        )?;
-        require(
-            Citation::parse("decisions.md#2") == Ok(Citation::DecisionsSeat(2)),
-            CitationProofRefuse::DecisionsSeatForm,
-        )?;
-        require(
-            Citation::parse("R-citation-prose")
-                == Ok(Citation::LawName("R-citation-prose".into())),
-            CitationProofRefuse::RLawNameForm,
-        )?;
-        require(
-            Citation::parse("crates/x/src/a.rs#").is_err(),
-            CitationProofRefuse::MalformedMustErr,
-        )?;
-        require(
-            Citation::parse("not a form !!!").is_err(),
-            CitationProofRefuse::GarbageMustErr,
-        )?;
-        require(Citation::parse("").is_err(), CitationProofRefuse::EmptyMustErr)
+                }))?;
+        CitationProofRefuse::DecisionsSeatForm.require(Citation::parse("decisions.md#2") == Ok(Citation::DecisionsSeat(2)))?;
+        CitationProofRefuse::RLawNameForm.require(Citation::parse("R-citation-prose")
+                == Ok(Citation::LawName("R-citation-prose".into())))?;
+        CitationProofRefuse::MalformedMustErr.require(Citation::parse("crates/x/src/a.rs#").is_err())?;
+        CitationProofRefuse::GarbageMustErr.require(Citation::parse("not a form !!!").is_err())?;
+        CitationProofRefuse::EmptyMustErr.require(Citation::parse("").is_err())
     }
 
     #[test]
@@ -446,19 +430,13 @@ caught_by = "fixture"
             waiver: vec![w.clone()],
             scope_waiver: vec![],
         };
-        require(
-            dead_citations(root, &laws, &wf).is_empty(),
-            CitationProofRefuse::LiveMustNotBeDead,
-        )?;
+        CitationProofRefuse::LiveMustNotBeDead.require(dead_citations(root, &laws, &wf).is_empty())?;
 
         let after = "#[cfg(test)]\nmod tests {\n    fn cited() { let y = 1; y }\n}\n";
         write_temp_rs(root, file, after)?;
         let dead = dead_citations(root, &laws, &wf);
-        require(dead.len() == 1, CitationProofRefuse::EditMustDead)?;
-        require(
-            !citation_live(root, &laws, &w),
-            CitationProofRefuse::DeadMustStopWaiver,
-        )
+        CitationProofRefuse::EditMustDead.require(dead.len() == 1)?;
+        CitationProofRefuse::DeadMustStopWaiver.require(!citation_live(root, &laws, &w))
     }
 
     #[test]
@@ -473,14 +451,11 @@ caught_by = "fixture"
             .map_err(|_| CitationProofRefuse::LawsLoad)?;
         let c = Citation::parse("stale_waivers").map_err(|_| CitationProofRefuse::Parse)?;
         let h = resolve_hash(&root, &laws, &c).ok_or(CitationProofRefuse::Resolve)?;
-        require(h.len() == 64, CitationProofRefuse::HashLen)?;
+        CitationProofRefuse::HashLen.require(h.len() == 64)?;
         let seat = Citation::parse("decisions.md#1").map_err(|_| CitationProofRefuse::Parse)?;
         let sh = resolve_hash(&root, &laws, &seat).ok_or(CitationProofRefuse::Resolve)?;
-        require(sh.len() == 64, CitationProofRefuse::HashLen)?;
-        require(
-            resolve_hash(&root, &laws, &Citation::DecisionsSeat(99999)).is_none(),
-            CitationProofRefuse::MissingSeatMustNone,
-        )
+        CitationProofRefuse::HashLen.require(sh.len() == 64)?;
+        CitationProofRefuse::MissingSeatMustNone.require(resolve_hash(&root, &laws, &Citation::DecisionsSeat(99999)).is_none())
     }
 
     #[test]
@@ -501,7 +476,7 @@ caught_by = "x"
         let h1 = resolve_hash(root, &laws, &c).ok_or(CitationProofRefuse::Resolve)?;
         write_temp_rs(root, file, "fn target() { let b = 1; b }\n")?;
         let h2 = resolve_hash(root, &laws, &c).ok_or(CitationProofRefuse::Resolve)?;
-        require(h1 != h2, CitationProofRefuse::HashMustChange)
+        CitationProofRefuse::HashMustChange.require(h1 != h2)
     }
 
     /// Tip 686: const citations were resolve-None blind.
@@ -521,10 +496,10 @@ caught_by = "x"
         write_temp_rs(root, file, "const TARGET: u8 = 1;\n")?;
         let c = Citation::parse(&format!("{file}#TARGET")).map_err(|_| CitationProofRefuse::Parse)?;
         let h = resolve_hash(root, &laws, &c).ok_or(CitationProofRefuse::ConstResolveBlind)?;
-        require(h.len() == 64, CitationProofRefuse::HashLen)?;
+        CitationProofRefuse::HashLen.require(h.len() == 64)?;
         write_temp_rs(root, file, "const TARGET: u8 = 2;\n")?;
         let h2 = resolve_hash(root, &laws, &c).ok_or(CitationProofRefuse::Resolve)?;
-        require(h != h2, CitationProofRefuse::ConstHashMustChange)
+        CitationProofRefuse::ConstHashMustChange.require(h != h2)
     }
 
     /// Tip 686: `impl &Type { fn m }` was type_path_tail-blind.
@@ -549,6 +524,6 @@ caught_by = "x"
         let c = Citation::parse(&format!("{file}#Foo::method"))
             .map_err(|_| CitationProofRefuse::Parse)?;
         let h = resolve_hash(root, &laws, &c).ok_or(CitationProofRefuse::ImplRefResolveBlind)?;
-        require(h.len() == 64, CitationProofRefuse::HashLen)
+        CitationProofRefuse::HashLen.require(h.len() == 64)
     }
 }

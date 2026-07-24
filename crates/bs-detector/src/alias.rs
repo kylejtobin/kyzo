@@ -447,6 +447,17 @@ enum AliasProofRefuse {
     CycleSilent,
     CycleUnnamed,
 }
+#[cfg(test)]
+impl AliasProofRefuse {
+    fn require(self, cond: bool) -> Result<(), Self> {
+        if cond {
+            Ok(())
+        } else {
+            Err(self)
+        }
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -454,13 +465,7 @@ mod tests {
 
     type TestResult = Result<(), AliasProofRefuse>;
 
-    fn require(cond: bool, refuse: AliasProofRefuse) -> TestResult {
-        if cond {
-            Ok(())
-        } else {
-            Err(refuse)
-        }
-    }
+
 
     fn file(src: &str) -> Result<SourceFile, AliasProofRefuse> {
         let ast = syn::parse_file(src).map_err(|_| AliasProofRefuse::Parse)?;
@@ -472,10 +477,7 @@ mod tests {
         let f = file("type Name = String;")?;
         let t = AliasTable::build(&[&f]).map_err(|_| AliasProofRefuse::Build)?;
         let ty: syn::Type = syn::parse_str("Name").map_err(|_| AliasProofRefuse::Type)?;
-        require(
-            t.type_carries_string(f.rel_path(), &ty),
-            AliasProofRefuse::MustCarry,
-        )
+        AliasProofRefuse::MustCarry.require(t.type_carries_string(f.rel_path(), &ty))
     }
 
     #[test]
@@ -483,29 +485,23 @@ mod tests {
         let f = file("use std::string::String as Text;")?;
         let t = AliasTable::build(&[&f]).map_err(|_| AliasProofRefuse::Build)?;
         let ty: syn::Type = syn::parse_str("Text").map_err(|_| AliasProofRefuse::Type)?;
-        require(
-            t.type_carries_string(f.rel_path(), &ty),
-            AliasProofRefuse::MustCarry,
-        )
+        AliasProofRefuse::MustCarry.require(t.type_carries_string(f.rel_path(), &ty))
     }
 
     #[test]
     fn item_4_proof_restrict_does_not_carry() -> TestResult {
         let t = AliasTable::empty();
         let ty: syn::Type = syn::parse_str("Restrict").map_err(|_| AliasProofRefuse::Type)?;
-        require(
-            !t.type_carries_string("crates/probe/src/lib.rs", &ty),
-            AliasProofRefuse::MustNotCarry,
-        )
+        AliasProofRefuse::MustNotCarry.require(!t.type_carries_string("crates/probe/src/lib.rs", &ty))
     }
 
     #[test]
     fn item_4_proof_alias_cycle_is_a_load_error() -> TestResult {
         let f = file("type A = B; type B = A;")?;
         let e = AliasTable::build(&[&f]);
-        require(e.is_err(), AliasProofRefuse::CycleSilent)?;
+        AliasProofRefuse::CycleSilent.require(e.is_err())?;
         let msg = format!("{:?}", e.err());
-        require(msg.contains("cycle"), AliasProofRefuse::CycleUnnamed)
+        AliasProofRefuse::CycleUnnamed.require(msg.contains("cycle"))
     }
 
     /// Soft drain: Ptr/`fn`/dyn/impl wrappers around String were `_ => false`
@@ -515,10 +511,7 @@ mod tests {
         let t = AliasTable::empty();
         let ty: syn::Type =
             syn::parse_str("*const String").map_err(|_| AliasProofRefuse::Type)?;
-        require(
-            t.type_carries_string("crates/probe/src/lib.rs", &ty),
-            AliasProofRefuse::MustCarry,
-        )
+        AliasProofRefuse::MustCarry.require(t.type_carries_string("crates/probe/src/lib.rs", &ty))
     }
 
     #[test]
@@ -526,10 +519,7 @@ mod tests {
         let t = AliasTable::empty();
         let ty: syn::Type =
             syn::parse_str("fn() -> String").map_err(|_| AliasProofRefuse::Type)?;
-        require(
-            t.type_carries_string("crates/probe/src/lib.rs", &ty),
-            AliasProofRefuse::MustCarry,
-        )
+        AliasProofRefuse::MustCarry.require(t.type_carries_string("crates/probe/src/lib.rs", &ty))
     }
 
     #[test]
@@ -537,10 +527,7 @@ mod tests {
         let t = AliasTable::empty();
         let ty: syn::Type =
             syn::parse_str("dyn AsRef<str>").map_err(|_| AliasProofRefuse::Type)?;
-        require(
-            t.type_carries_string("crates/probe/src/lib.rs", &ty),
-            AliasProofRefuse::MustCarry,
-        )
+        AliasProofRefuse::MustCarry.require(t.type_carries_string("crates/probe/src/lib.rs", &ty))
     }
 
     #[test]
@@ -548,10 +535,7 @@ mod tests {
         let t = AliasTable::empty();
         let ty: syn::Type =
             syn::parse_str("impl AsRef<str>").map_err(|_| AliasProofRefuse::Type)?;
-        require(
-            t.type_carries_string("crates/probe/src/lib.rs", &ty),
-            AliasProofRefuse::MustCarry,
-        )
+        AliasProofRefuse::MustCarry.require(t.type_carries_string("crates/probe/src/lib.rs", &ty))
     }
 
     /// Tip 686: Parenthesized `Fn() -> String` was AngleBracketed-only blind.
@@ -560,10 +544,7 @@ mod tests {
         let t = AliasTable::empty();
         let ty: syn::Type =
             syn::parse_str("dyn Fn() -> String").map_err(|_| AliasProofRefuse::Type)?;
-        require(
-            t.type_carries_string("crates/probe/src/lib.rs", &ty),
-            AliasProofRefuse::MustCarry,
-        )
+        AliasProofRefuse::MustCarry.require(t.type_carries_string("crates/probe/src/lib.rs", &ty))
     }
 
     /// Tip 686: AssocType generic arg `Item = String` was Type-only blind.
@@ -572,10 +553,7 @@ mod tests {
         let t = AliasTable::empty();
         let ty: syn::Type = syn::parse_str("dyn IntoIterator<Item = String>")
             .map_err(|_| AliasProofRefuse::Type)?;
-        require(
-            t.type_carries_string("crates/probe/src/lib.rs", &ty),
-            AliasProofRefuse::MustCarry,
-        )
+        AliasProofRefuse::MustCarry.require(t.type_carries_string("crates/probe/src/lib.rs", &ty))
     }
 
     #[test]
@@ -583,9 +561,6 @@ mod tests {
         let t = AliasTable::empty();
         let ty: syn::Type =
             syn::parse_str("dyn Fn() -> u8").map_err(|_| AliasProofRefuse::Type)?;
-        require(
-            !t.type_carries_string("crates/probe/src/lib.rs", &ty),
-            AliasProofRefuse::MustNotCarry,
-        )
+        AliasProofRefuse::MustNotCarry.require(!t.type_carries_string("crates/probe/src/lib.rs", &ty))
     }
 }

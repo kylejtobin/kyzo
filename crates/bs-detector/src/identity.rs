@@ -133,6 +133,17 @@ enum IdentityProofRefuse {
     WaiverMissesOnSiteHash,
     DriftedWaiverStillMatches,
 }
+#[cfg(test)]
+impl IdentityProofRefuse {
+    fn require(self, cond: bool) -> Result<(), Self> {
+        if cond {
+            Ok(())
+        } else {
+            Err(self)
+        }
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -140,13 +151,7 @@ mod tests {
 
     type TestResult = Result<(), IdentityProofRefuse>;
 
-    fn require(cond: bool, refuse: IdentityProofRefuse) -> TestResult {
-        if cond {
-            Ok(())
-        } else {
-            Err(refuse)
-        }
-    }
+
 
     fn item(src: &str) -> Result<syn::Item, IdentityProofRefuse> {
         syn::parse_str(src).map_err(|_| IdentityProofRefuse::Parse)
@@ -160,20 +165,20 @@ mod tests {
     fn layout_change_keeps_identity_and_content_change_breaks_it() -> TestResult {
         let a = site_hash(&item("fn f(x: u64) -> u64 { x }")?);
         let b = site_hash(&item("fn f(x: u64)  ->\n    u64 { x }")?);
-        require(a == b, IdentityProofRefuse::LayoutBreaksIdentity)?;
+        IdentityProofRefuse::LayoutBreaksIdentity.require(a == b)?;
 
         let c = site_hash(&item("fn f(y: u64) -> u64 { y }")?);
-        require(a != c, IdentityProofRefuse::RenameKeepsIdentity)?;
+        IdentityProofRefuse::RenameKeepsIdentity.require(a != c)?;
 
         let d = site_hash(&item("/// documented\nfn f(x: u64) -> u64 { x }")?);
-        require(a != d, IdentityProofRefuse::DocKeepsIdentity)
+        IdentityProofRefuse::DocKeepsIdentity.require(a != d)
     }
 
     #[test]
     fn item_6_proof_rename_local_changes_site_hash() -> TestResult {
         let before = site_hash(&item("fn f() { let x = 1; x }")?);
         let after = site_hash(&item("fn f() { let y = 1; y }")?);
-        require(before != after, IdentityProofRefuse::LocalRenameKeepsIdentity)
+        IdentityProofRefuse::LocalRenameKeepsIdentity.require(before != after)
     }
 
     #[test]
@@ -187,16 +192,10 @@ mod tests {
             .ok_or(IdentityProofRefuse::MissingItem)?;
         let h_bare = site_hash(bare_item);
         let h_noise = site_hash(noise_item);
-        require(
-            h_bare == h_noise,
-            IdentityProofRefuse::LineCommentBreaksIdentity,
-        )?;
+        IdentityProofRefuse::LineCommentBreaksIdentity.require(h_bare == h_noise)?;
         // Enclosing lookup at the shifted line still yields the same hash.
         let line = noise_item.span().start().line;
-        require(
-            enclosing_item_site_hash(&with_noise, line).as_deref() == Some(h_bare.as_str()),
-            IdentityProofRefuse::EnclosingHashMismatch,
-        )
+        IdentityProofRefuse::EnclosingHashMismatch.require(enclosing_item_site_hash(&with_noise, line).as_deref() == Some(h_bare.as_str()))
     }
 
     #[test]
@@ -205,11 +204,8 @@ mod tests {
         // Identity must NOT: two rename-apart bodies must differ here.
         let a = identity_tokens(&item("fn f() { let alpha = 1; alpha }")?);
         let b = identity_tokens(&item("fn f() { let beta = 1; beta }")?);
-        require(a != b, IdentityProofRefuse::IdentityNormalizesIdents)?;
-        require(
-            a.contains("alpha") && b.contains("beta"),
-            IdentityProofRefuse::IdentsNotVerbatim,
-        )
+        IdentityProofRefuse::IdentityNormalizesIdents.require(a != b)?;
+        IdentityProofRefuse::IdentsNotVerbatim.require(a.contains("alpha") && b.contains("beta"))
     }
 
     #[test]
@@ -237,15 +233,9 @@ mod tests {
                 .to_string(),
         };
         let h = Hit::admit("crates/x/src/a.rs".to_string(), item_line, "expect".to_string());
-        require(
-            waiver_matches_hit(&w, &h, &files),
-            IdentityProofRefuse::WaiverMissesOnSiteHash,
-        )?;
+        IdentityProofRefuse::WaiverMissesOnSiteHash.require(waiver_matches_hit(&w, &h, &files))?;
         let mut drifted = w.clone();
         drifted.site_hash = "0".repeat(64);
-        require(
-            !waiver_matches_hit(&drifted, &h, &files),
-            IdentityProofRefuse::DriftedWaiverStillMatches,
-        )
+        IdentityProofRefuse::DriftedWaiverStillMatches.require(!waiver_matches_hit(&drifted, &h, &files))
     }
 }

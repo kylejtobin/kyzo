@@ -261,6 +261,17 @@ enum PureRustProofRefuse {
     BindgenMustStayOut,
     AwsLcSysMustStayOut,
 }
+#[cfg(test)]
+impl PureRustProofRefuse {
+    fn require(self, cond: bool) -> Result<(), Self> {
+        if cond {
+            Ok(())
+        } else {
+            Err(self)
+        }
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -270,13 +281,7 @@ mod tests {
 
     type TestResult = Result<(), PureRustProofRefuse>;
 
-    fn require(cond: bool, refuse: PureRustProofRefuse) -> TestResult {
-        if cond {
-            Ok(())
-        } else {
-            Err(refuse)
-        }
-    }
+
 
     /// File::create + write_all — deliberately not the sandbox/citation
     /// mkdir/`fs::write` twin (tip 794 copy_detector).
@@ -453,22 +458,10 @@ mod tests {
 
         let outcome = check_at(root);
         if let Err(PureRustError::BannedCratesFound(hits)) = outcome {
-            require(
-                hits.iter().any(|h| h.starts_with("cc v")),
-                PureRustProofRefuse::PlantedCcMustHit,
-            )?;
-            require(
-                hits.iter().any(|h| h.starts_with("openssl v")),
-                PureRustProofRefuse::PlantedOpensslMustHit,
-            )?;
-            require(
-                !hits.iter().any(|h| h.starts_with("bindgen v")),
-                PureRustProofRefuse::BindgenMustStayOut,
-            )?;
-            require(
-                !hits.iter().any(|h| h.starts_with("aws-lc-sys v")),
-                PureRustProofRefuse::AwsLcSysMustStayOut,
-            )
+            PureRustProofRefuse::PlantedCcMustHit.require(hits.iter().any(|h| h.starts_with("cc v")))?;
+            PureRustProofRefuse::PlantedOpensslMustHit.require(hits.iter().any(|h| h.starts_with("openssl v")))?;
+            PureRustProofRefuse::BindgenMustStayOut.require(!hits.iter().any(|h| h.starts_with("bindgen v")))?;
+            PureRustProofRefuse::AwsLcSysMustStayOut.require(!hits.iter().any(|h| h.starts_with("aws-lc-sys v")))
         } else {
             Err(PureRustProofRefuse::ExpectedBannedCratesFound)
         }

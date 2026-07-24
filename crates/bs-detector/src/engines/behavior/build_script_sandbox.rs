@@ -823,6 +823,21 @@ enum BuildScriptSandboxProofRefuse {
     EscapedPathMissing,
     CleanSiblingLeak,
 }
+#[cfg(test)]
+impl BuildScriptSandboxProofRefuse {
+    fn require(self, cond: bool) -> Result<(), Self> {
+        if cond {
+            Ok(())
+        } else {
+            Err(self)
+        }
+    }
+
+    fn require_eq<T: PartialEq>(self, got: T, want: T) -> Result<(), Self> {
+        self.require(got == want)
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -831,22 +846,6 @@ mod tests {
     use std::path::Path as StdPath;
 
     type TestResult = Result<(), BuildScriptSandboxProofRefuse>;
-
-    fn require(cond: bool, refuse: BuildScriptSandboxProofRefuse) -> TestResult {
-        if cond {
-            Ok(())
-        } else {
-            Err(refuse)
-        }
-    }
-
-    fn require_eq<T: PartialEq>(
-        got: T,
-        want: T,
-        refuse: BuildScriptSandboxProofRefuse,
-    ) -> TestResult {
-        require(got == want, refuse)
-    }
 
     /// Distinct from pure_rust/citation plant writers — match-shaped so
     /// copy_detector does not see a second authority (tip 794).
@@ -930,10 +929,7 @@ mod tests {
         let outcome = check_at_scoped(tmp.path(), Some(&tmp.path().join("target")));
         if let Err(BuildScriptSandboxError::NetworkAccessAttempted { sandboxed_output }) = outcome
         {
-            require(
-                !sandboxed_output.is_empty(),
-                BuildScriptSandboxProofRefuse::SandboxedOutputEmpty,
-            )
+            BuildScriptSandboxProofRefuse::SandboxedOutputEmpty.require(!sandboxed_output.is_empty())
         } else {
             Err(BuildScriptSandboxProofRefuse::ExpectedNetworkAccessAttempted)
         }
@@ -960,15 +956,8 @@ mod tests {
 
         let outcome = check_at_scoped(tmp.path(), Some(&tmp.path().join("target")));
         if let Err(BuildScriptSandboxError::WriteOutsideOutDir { package, paths }) = outcome {
-            require_eq(
-                package,
-                Attribution::Attributed(crate_name.to_string()),
-                BuildScriptSandboxProofRefuse::AttributionMismatch,
-            )?;
-            require(
-                paths.iter().any(|p| p.contains("ESCAPED.txt")),
-                BuildScriptSandboxProofRefuse::EscapedPathMissing,
-            )
+            BuildScriptSandboxProofRefuse::AttributionMismatch.require_eq(package, Attribution::Attributed(crate_name.to_string()))?;
+            BuildScriptSandboxProofRefuse::EscapedPathMissing.require(paths.iter().any(|p| p.contains("ESCAPED.txt")))
         } else {
             Err(BuildScriptSandboxProofRefuse::ExpectedWriteOutsideOutDir)
         }
@@ -1057,19 +1046,9 @@ mod tests {
 
         let outcome = check_at_scoped(root, Some(&root.join("target")));
         if let Err(BuildScriptSandboxError::WriteOutsideOutDir { package, paths }) = outcome {
-            require_eq(
-                package,
-                Attribution::Attributed(violator_name.to_string()),
-                BuildScriptSandboxProofRefuse::AttributionMismatch,
-            )?;
-            require(
-                paths.iter().any(|p| p.contains("VIOLATOR_ESCAPED.txt")),
-                BuildScriptSandboxProofRefuse::EscapedPathMissing,
-            )?;
-            require(
-                !paths.iter().any(|p| p.contains(clean_name)),
-                BuildScriptSandboxProofRefuse::CleanSiblingLeak,
-            )
+            BuildScriptSandboxProofRefuse::AttributionMismatch.require_eq(package, Attribution::Attributed(violator_name.to_string()))?;
+            BuildScriptSandboxProofRefuse::EscapedPathMissing.require(paths.iter().any(|p| p.contains("VIOLATOR_ESCAPED.txt")))?;
+            BuildScriptSandboxProofRefuse::CleanSiblingLeak.require(!paths.iter().any(|p| p.contains(clean_name)))
         } else {
             Err(BuildScriptSandboxProofRefuse::ExpectedWriteOutsideOutDir)
         }
