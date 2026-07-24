@@ -293,7 +293,7 @@ impl PureRustProofRefuse {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{PureRustError, PureRustGate, PureRustProofRefuse};
     use std::fs;
     use std::path::Path as StdPath;
 

@@ -327,7 +327,11 @@ impl StructuralRule {
     /// two constructs that can both match one item is the soft drain.
     /// Identical rules are never disjoint.
     pub fn disjoint_with(self, other: Self) -> Result<(), &'static str> {
-        use StructuralRule::*;
+        use StructuralRule::{
+            AdmissionDoorBans, CompositionRootBody, ConsumingVerbBans, DeclaredFnSeat,
+            DerivationBans, NamedAllPrivateNoStringTerminal, TransitionBans,
+            TupleSinglePrivateField, UnitStruct,
+        };
         if self == other {
             return Err("identical rules share every parse fact — not disjoint");
         }
@@ -1121,7 +1125,7 @@ impl GrammarProofRefuse {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{Grammar, GrammarProofRefuse, Laws, Result, StructuralRule};
     use std::io::Write;
     use std::path::{Path, PathBuf};
 

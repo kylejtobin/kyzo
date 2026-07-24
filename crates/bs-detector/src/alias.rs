@@ -566,7 +566,7 @@ impl AliasProofs {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{AliasProofRefuse, AliasProofs};
 
     type TestResult = Result<(), AliasProofRefuse>;
 

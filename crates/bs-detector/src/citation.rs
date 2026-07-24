@@ -354,7 +354,10 @@ impl CitationProofRefuse {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        citation_live, dead_citations, resolve_hash, Citation, CitationProofRefuse, Laws, Path,
+        WaiverFile,
+    };
     use std::path::PathBuf;
 
     type TestResult = Result<(), CitationProofRefuse>;

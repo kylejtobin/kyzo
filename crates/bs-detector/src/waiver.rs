@@ -488,7 +488,9 @@ impl WaiverProofRefuse {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        AttestationTemplate, TemplateSegment, WaiverFile, WaiverProofRefuse,
+    };
     use std::io::Write;
 
     type TestResult = Result<(), WaiverProofRefuse>;

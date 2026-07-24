@@ -103,8 +103,8 @@ impl MetaProofRefuse {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::boundary::SourceFile;
+    use super::{forbid_roots, stale_waivers, Hit, MetaProofRefuse, WaiverFile};
+    use crate::boundary::{Boundary, SourceFile};
     use crate::identity;
     use syn::spanned::Spanned;
 

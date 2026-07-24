@@ -1216,7 +1216,10 @@ impl ClassifyProofRefuse {
 
 #[cfg(test)]
 mod fixture_tests {
-    use super::*;
+    use super::{
+        classify_file, ClassifyProofRefuse, Ctx, Hit, KindName, RelPath, SourceFile,
+        StructuralRule,
+    };
     use crate::boundary::Label;
     use crate::grammar::Grammar;
     use std::path::PathBuf;

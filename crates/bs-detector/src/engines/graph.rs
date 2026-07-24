@@ -807,7 +807,10 @@ impl GraphProofs {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        agreement_registry, config_once, copy_detector, derive_bypass, sealed_public_door,
+        total_refusal, ConfigOnceSeat, GraphProofRefuse, GraphProofs, HostDoor,
+    };
 
     type TestResult = Result<(), GraphProofRefuse>;
 

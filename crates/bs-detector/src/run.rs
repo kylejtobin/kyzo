@@ -508,7 +508,8 @@ impl RunProofRefuse {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{hard_unclassified_check, record_check_count, run, RunProofRefuse};
+    use std::collections::BTreeMap;
     use std::fs;
     use std::path::PathBuf;
 

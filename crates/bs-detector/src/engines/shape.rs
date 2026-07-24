@@ -1525,7 +1525,7 @@ const SHAPE_PROOFS: ShapeProofs = ShapeProofs;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{MATCHERS, SHAPE_PROOFS, ShapeProofRefuse};
 
     type TestResult = Result<(), ShapeProofRefuse>;
 

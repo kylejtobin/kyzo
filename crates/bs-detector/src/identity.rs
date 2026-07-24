@@ -162,7 +162,11 @@ impl IdentityProofs {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        enclosing_item_site_hash, identity_tokens, site_hash, waiver_matches_hit, Hit,
+        IdentityProofRefuse, IdentityProofs, SourceFile, Waiver,
+    };
+    use syn::spanned::Spanned;
 
     type TestResult = Result<(), IdentityProofRefuse>;
 

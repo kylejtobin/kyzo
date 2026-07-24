@@ -584,7 +584,7 @@ impl BoundaryProofRefuse {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{Boundary, BoundaryProofRefuse, RelPath};
 
     type TestResult = Result<(), BoundaryProofRefuse>;
 

@@ -867,7 +867,10 @@ impl BuildScriptSandboxProofRefuse {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        Attribution, BuildScriptSandboxError, BuildScriptSandboxGate,
+        BuildScriptSandboxProofRefuse,
+    };
     use std::fs;
     use std::path::Path as StdPath;
 

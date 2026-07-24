@@ -352,7 +352,10 @@ impl CampaignProofRefuse {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        now_unix, verify_campaigns, ArtifactSource, CampaignArtifact, CampaignProofRefuse,
+        CampaignSeat, RelPath, SpecimenVerdict,
+    };
 
     type TestResult = Result<(), CampaignProofRefuse>;
 
