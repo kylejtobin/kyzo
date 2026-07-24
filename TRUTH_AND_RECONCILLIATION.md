@@ -544,3 +544,43 @@ FALSE. Evidence, each anchor checkable:
   R-citation-prose.
 If any sentence above is false, I am lying to you deliberately and at
 length, in a repo whose recorded failure mode is exactly that.
+
+### 8. Build Attestation
+
+BUILD ATTESTATION — item 8
+law: commit 4e4c070d1cf9b47fcc4562f80f60b5072d7cd386 | build: commit 23651f88ae7bd3a6020a26aba4b025e1e7fe73a4
+
+I attest my implementation of item 8 matches this document, at the law
+commit above, at audited strength. TRUE or FALSE: there exists an input —
+any code shape, any file, any reading of the law text — on which my
+implementation passes where the law says red, or goes red where the law
+says pass.
+
+FALSE. Evidence, each anchor checkable:
+- Deny proofs executed red: required sentences plus one hedging sentence
+  → WaiverFile::load refuses —
+  waiver::tests::item_8_proof_required_sentences_plus_hedge_refuses ... ok;
+  missing FALSE (TRUE substituted) → refuse —
+  waiver::tests::item_8_proof_missing_false_answer_refuses ... ok;
+  empty slot → refuse —
+  waiver::tests::item_8_empty_slot_refuses ... ok;
+  freeform pre-attestation justification → refuse (no grandfathering) —
+  waiver::tests::freeform_pre_attestation_justification_refuses ... ok.
+- Pass / load: empty ledger with both keys stated loads —
+  waiver::tests::empty_waiver_ledger_loads_when_both_keys_stated ... ok;
+  filled canonical template loads and binds —
+  waiver::tests::a_real_waiver_loads_and_binds_to_its_check ... ok;
+  cargo test -p bs-detector → 69 lib + 56 bite_proofs ... ok;
+  production loader (pre-cfg(test)) has zero expect/unwrap/panic!.
+- The weakest satisfier I personally constructed against my own build
+  was: append " I believe this is mostly fine." after a fully valid
+  filled template — and it goes red because AttestationTemplate::segment
+  requires pos == why.len() after the final fixed segment, so leftover
+  bytes are outside every slot (item_8_proof_required_sentences_plus_hedge_refuses
+  ... ok).
+- Measured dry-run (post-build 23651f88): GATE total 5758; empty waiver
+  ledger; attestation_form seated in laws.toml.
+- My implementation is weaker than this document's text in exactly:
+  NONE.
+If any sentence above is false, I am lying to you deliberately and at
+length, in a repo whose recorded failure mode is exactly that.
