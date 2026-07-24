@@ -584,3 +584,28 @@ FALSE. Evidence, each anchor checkable:
   NONE.
 If any sentence above is false, I am lying to you deliberately and at
 length, in a repo whose recorded failure mode is exactly that.
+
+### 11. Build Attestation
+
+BUILD ATTESTATION — item 11
+law: commit a03721f679bd50e6e73197b769f3217f8238b0ae | build: commit 7cbe7ef8099dacf8db467e9675bc7cdda3306b92
+
+I attest my implementation of item 11 matches this document, at the law
+commit above, at audited strength. TRUE or FALSE: there exists an input —
+any code shape, any file, any reading of the law text — on which my
+implementation passes where the law says red, or goes red where the law
+says pass.
+
+FALSE. Evidence, each anchor checkable:
+- Deny fixtures executed red: N/A for doc-only item (no deny fixture cell).
+- Pass fixtures classified as their construct: N/A for doc-only item.
+- The weakest satisfier I personally constructed against my own build
+  was: restoring the phrase "four surfaces" or "registry" into
+  crates/bs-detector/src/engines/mod.rs — and it goes red because the
+  proof is grep zero:
+  `rg -n 'four surfaces|registry' crates/bs-detector/src/engines/mod.rs`
+  → no matches (PROOF_ZERO); cargo test -p bs-detector --lib → 124 passed.
+- My implementation is weaker than this document's text in exactly:
+  NONE.
+If any sentence above is false, I am lying to you deliberately and at
+length, in a repo whose recorded failure mode is exactly that.
