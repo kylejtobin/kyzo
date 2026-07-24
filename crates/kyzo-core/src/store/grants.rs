@@ -1887,29 +1887,44 @@ mod tests {
         Ok(())
     }
 
-    /// Weak-key forged FORK CONSENT must refuse (verify_strict).
+    /// Weak-key forged FORK CONSENT and ANCESTOR ENTITLEMENT must refuse
+    /// (verify_strict) — one test seat, two door assertions (floor 230).
     #[test]
-    fn verify_strict_refuses_weak_key_forged_fork_consent() -> Result<()> {
-        let store = StoreId::from_digest([0x72; 32]);
-        let (table, forged) = weak_key_sealed_table_and_forged_signature(
-            store,
+    fn verify_strict_refuses_weak_key_forged_consent_and_entitlement() -> Result<()> {
+        let store_c = StoreId::from_digest([0x72; 32]);
+        let (table_c, forged_c) = weak_key_sealed_table_and_forged_signature(
+            store_c,
             PredecessorConsentTable::new,
             |table, store_id, key| table.insert(store_id, key),
         )?;
-        assert_weak_key_forged_fork_consent_verify_refuses(&table, store, &forged);
-        Ok(())
-    }
-
-    /// Weak-key forged ANCESTOR ENTITLEMENT must refuse (verify_strict).
-    #[test]
-    fn verify_strict_refuses_weak_key_forged_ancestor_entitlement() -> Result<()> {
-        let store = StoreId::from_digest([0x73; 32]);
-        let (table, forged) = weak_key_sealed_table_and_forged_signature(
-            store,
+        assert!(
+            PredecessorConsentProof::verify(
+                &table_c,
+                store_c,
+                &Digest::admit([0x33; 32]),
+                &forged_c,
+            )
+            .is_err(),
+            "FORGED CONSENT: small-order consent key + weak-key forgery must refuse \
+             at PredecessorConsentProof::verify (verify_strict)"
+        );
+        let store_e = StoreId::from_digest([0x73; 32]);
+        let (table_e, forged_e) = weak_key_sealed_table_and_forged_signature(
+            store_e,
             AncestorEntitlementTable::new,
             |table, store_id, key| table.insert(store_id, key),
         )?;
-        assert_weak_key_forged_ancestor_entitlement_verify_refuses(&table, store, &forged);
+        assert!(
+            AncestorEntitlementProof::verify(
+                &table_e,
+                store_e,
+                &Digest::admit([0x33; 32]),
+                &forged_e,
+            )
+            .is_err(),
+            "FORGED ENTITLEMENT: small-order entitlement key + weak-key forgery must refuse \
+             at AncestorEntitlementProof::verify (verify_strict)"
+        );
         Ok(())
     }
     // -----------------------------------------------------------------------
@@ -2465,76 +2480,6 @@ mod tests {
         (weak, forged)
     }
 
-    fn assert_weak_key_forged_fork_consent_verify_refuses(
-        table: &PredecessorConsentTable,
-        store: StoreId,
-        forged: &Signature,
-    ) {
-        assert!(
-            PredecessorConsentProof::verify(
-                table,
-                store,
-                &Digest::admit([0x33; 32]),
-                forged,
-            )
-            .is_err(),
-            "FORGED CONSENT: small-order consent key + weak-key forgery must refuse \
-             at PredecessorConsentProof::verify (verify_strict)"
-        );
-    }
-
-    fn assert_weak_key_forged_ancestor_entitlement_verify_refuses(
-        table: &AncestorEntitlementTable,
-        store: StoreId,
-        forged: &Signature,
-    ) {
-        assert!(
-            AncestorEntitlementProof::verify(
-                table,
-                store,
-                &Digest::admit([0x33; 32]),
-                forged,
-            )
-            .is_err(),
-            "FORGED ENTITLEMENT: small-order entitlement key + weak-key forgery must refuse \
-             at AncestorEntitlementProof::verify (verify_strict)"
-        );
-    }
-
-    fn assert_predecessor_consent_registration_attacker_overwrite_refuses(
-        victim: StoreId,
-        key_a: &ConsentSigningKey,
-        key_b: &ConsentSigningKey,
-        table: &mut PredecessorConsentTable,
-    ) -> Result<(), MaterializeRefuse> {
-        seal_once_registration_attacker_overwrite_refuses(
-            victim,
-            *key_a.verifying_key(),
-            *key_b.verifying_key(),
-            table,
-            |table, store_id, key| table.insert(store_id, key),
-            |table, store_id| table.get(store_id),
-            MaterializeRefuse::TrustRootAlreadySealed { store_id: victim },
-        )
-    }
-
-    fn assert_ancestor_entitlement_registration_attacker_overwrite_refuses(
-        victim: StoreId,
-        key_a: &EntitlementSigningKey,
-        key_b: &EntitlementSigningKey,
-        table: &mut AncestorEntitlementTable,
-    ) -> Result<(), AncestorReadRefuse> {
-        seal_once_registration_attacker_overwrite_refuses(
-            victim,
-            *key_a.verifying_key(),
-            *key_b.verifying_key(),
-            table,
-            |table, store_id, key| table.insert(store_id, key),
-            |table, store_id| table.get(store_id),
-            AncestorReadRefuse::TrustRootAlreadySealed { store_id: victim },
-        )
-    }
-
     /// Shared #375 T3 seal-once registration scaffold: seal key A, idempotent
     /// re-register, attacker key B refused, sealed key A survives.
     fn seal_once_registration_attacker_overwrite_refuses<T, E: PartialEq + std::fmt::Debug>(
@@ -2673,36 +2618,39 @@ mod tests {
 
     // ---- #375 T3 — seal-once registration doors (operator/genesis) ----------
 
-    /// NASTY (#375 T3): register key A for victim StoreId, then attacker key
-    /// B(!=A) for the same StoreId on the production
-    /// [`PredecessorConsentTable::insert`] door → typed refuse (never silent
-    /// overwrite of the sealed consent trust root).
+    /// NASTY (#375 T3): seal-once registration refuses attacker overwrite on
+    /// both consent and entitlement tables — one test seat, two door assertions.
     #[test]
-    fn predecessor_consent_registration_attacker_key_refuses_overwrite() -> Result<()> {
-        let victim = StoreId::from_digest([0x91; 32]);
-        let key_a = ConsentSigningKey::from_seed([0xA1; 32]);
-        let key_b = ConsentSigningKey::from_seed([0xB2; 32]);
-        let mut table = PredecessorConsentTable::new();
-        assert_predecessor_consent_registration_attacker_overwrite_refuses(
-            victim,
-            &key_a,
-            &key_b,
-            &mut table,
+    fn seal_once_registration_attacker_key_refuses_overwrite_on_both_tables() -> Result<()> {
+        let victim_c = StoreId::from_digest([0x91; 32]);
+        let key_ca = ConsentSigningKey::from_seed([0xA1; 32]);
+        let key_cb = ConsentSigningKey::from_seed([0xB2; 32]);
+        let mut table_c = PredecessorConsentTable::new();
+        seal_once_registration_attacker_overwrite_refuses(
+            victim_c,
+            *key_ca.verifying_key(),
+            *key_cb.verifying_key(),
+            &mut table_c,
+            |table, store_id, key| table.insert(store_id, key),
+            |table, store_id| table.get(store_id),
+            MaterializeRefuse::TrustRootAlreadySealed {
+                store_id: victim_c,
+            },
         )?;
-        Ok(())
-    }
-
-    #[test]
-    fn ancestor_entitlement_registration_attacker_key_refuses_overwrite() -> Result<()> {
-        let victim = StoreId::from_digest([0x92; 32]);
-        let key_a = EntitlementSigningKey::from_seed([0xC1; 32]);
-        let key_b = EntitlementSigningKey::from_seed([0xD2; 32]);
-        let mut table = AncestorEntitlementTable::new();
-        assert_ancestor_entitlement_registration_attacker_overwrite_refuses(
-            victim,
-            &key_a,
-            &key_b,
-            &mut table,
+        let victim_e = StoreId::from_digest([0x92; 32]);
+        let key_ea = EntitlementSigningKey::from_seed([0xC1; 32]);
+        let key_eb = EntitlementSigningKey::from_seed([0xD2; 32]);
+        let mut table_e = AncestorEntitlementTable::new();
+        seal_once_registration_attacker_overwrite_refuses(
+            victim_e,
+            *key_ea.verifying_key(),
+            *key_eb.verifying_key(),
+            &mut table_e,
+            |table, store_id, key| table.insert(store_id, key),
+            |table, store_id| table.get(store_id),
+            AncestorReadRefuse::TrustRootAlreadySealed {
+                store_id: victim_e,
+            },
         )?;
         Ok(())
     }

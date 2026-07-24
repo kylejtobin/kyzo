@@ -142,11 +142,11 @@ pub fn encode(d: Datum<'_>) -> CanonicalBytes {
     CanonicalBytes(out)
 }
 
-/// Encode an owned logical value: the production second arm of the one
-/// codec authority (same grammar, same mints). Deliberately does NOT
-/// trust `DataValue`'s `Ord` for set ordering — sets are sorted by their
-/// ENCODED bytes here, so the codec stays the independent authority the
-/// `Ord` mirror is law-locked against (no circularity).
+/// Encode an owned logical value through the one codec authority
+/// ([`encode_into`] for Datum-nameable kinds; owned recursion for List/Set).
+/// Deliberately does NOT trust `DataValue`'s `Ord` for set ordering — sets
+/// are sorted by their ENCODED bytes here, so the codec stays the independent
+/// authority the `Ord` mirror is law-locked against (no circularity).
 pub fn encode_owned(v: &DataValue) -> CanonicalBytes {
     let mut out = Vec::new();
     encode_owned_into(&mut out, v);
@@ -322,47 +322,11 @@ pub fn append_canonical(out: &mut Vec<u8>, v: &DataValue) {
 }
 
 fn encode_owned_into(out: &mut Vec<u8>, v: &DataValue) {
+    // ONE codec authority: scalars/composites that Datum can name go through
+    // `encode_into`. List/Set stay owned-recursive because a borrowed Datum
+    // tree would allocate a parallel arena — the recursion IS the owned arm,
+    // not a second grammar.
     match v {
-        DataValue::Null => out.push(Tag::Null.byte()),
-        DataValue::Bool(b) => {
-            out.push(Tag::Bool.byte());
-            out.push(u8::from(*b));
-        }
-        DataValue::Num(n) => {
-            out.push(Tag::Num.byte());
-            n.encode_key(out);
-        }
-        DataValue::Str(s) => {
-            out.push(Tag::Str.byte());
-            encode_terminated(out, s.as_bytes());
-        }
-        DataValue::Bytes(b) => {
-            out.push(Tag::Bytes.byte());
-            encode_terminated(out, b);
-        }
-        DataValue::Uuid(u) => {
-            out.push(Tag::Uuid.byte());
-            out.extend_from_slice(u.as_uuid().as_bytes());
-        }
-        DataValue::Regex(r) => {
-            out.push(Tag::Regex.byte());
-            out.push(r.flags().bits());
-            encode_terminated(out, r.pattern().as_bytes());
-        }
-        DataValue::Json(j) => {
-            out.push(Tag::Json.byte());
-            let start = out.len();
-            encode_json(out, j);
-            let h = fnv1a64(&out[start..]);
-            out.extend_from_slice(&h.to_be_bytes());
-        }
-        DataValue::Vector(vec) => {
-            out.push(Tag::Vector.byte());
-            out.extend_from_slice(&vec.dimension().get().to_be_bytes());
-            for c in vec.components() {
-                Num::float(c.get()).encode_key(out);
-            }
-        }
         DataValue::List(items) => {
             out.push(Tag::List.byte());
             for item in items {
@@ -387,20 +351,27 @@ fn encode_owned_into(out: &mut Vec<u8>, v: &DataValue) {
             }
             out.push(STRUCT_SEQ_END);
         }
-        DataValue::Validity(v) => {
-            out.push(Tag::Validity.byte());
-            out.extend_from_slice(&desc_ts_key(v.ts_micros()));
-            out.push(if v.is_assert() { 0x00 } else { 0x01 });
-        }
-        DataValue::Interval(iv) => {
-            out.push(Tag::Interval.byte());
-            encode_interval_body(out, iv);
-        }
-        DataValue::Geometry(g) => {
-            out.push(Tag::Geometry.byte());
-            out.extend_from_slice(&g.curve_key_bytes());
-        }
+        DataValue::Null => encode_into(out, Datum::Null),
+        DataValue::Bool(b) => encode_into(out, Datum::Bool(*b)),
+        DataValue::Num(n) => encode_into(out, Datum::Num(*n)),
+        DataValue::Str(s) => encode_into(out, Datum::Str(s)),
+        DataValue::Bytes(b) => encode_into(out, Datum::Bytes(b)),
+        DataValue::Uuid(u) => encode_into(out, Datum::Uuid(*u.as_uuid().as_bytes())),
+        DataValue::Regex(r) => encode_into(out, Datum::Regex(r)),
+        DataValue::Json(j) => encode_into(out, Datum::Json(j)),
+        DataValue::Vector(vec) => encode_into(out, Datum::Vector(vec)),
+        // Value and Seek slots share one validity byte grammar.
+        DataValue::Validity(v) => encode_validity_payload(out, v.ts_micros(), v.is_assert()),
+        DataValue::Interval(iv) => encode_into(out, Datum::Interval(*iv)),
+        DataValue::Geometry(g) => encode_into(out, Datum::Geometry(*g)),
     }
+}
+
+/// One validity payload grammar — shared by Datum::Validity and owned slots.
+fn encode_validity_payload(out: &mut Vec<u8>, ts_micros: i64, is_assert: bool) {
+    out.push(Tag::Validity.byte());
+    out.extend_from_slice(&desc_ts_key(ts_micros));
+    out.push(if is_assert { 0x00 } else { 0x01 });
 }
 
 /// The interval body grammar, shared by both encoder arms.
@@ -493,11 +464,7 @@ fn encode_into(out: &mut Vec<u8>, d: Datum<'_>) {
                 Num::float(c.get()).encode_key(out);
             }
         }
-        Datum::Validity(v) => {
-            out.push(Tag::Validity.byte());
-            out.extend_from_slice(&desc_ts_key(v.ts_micros()));
-            out.push(if v.is_assert() { 0x00 } else { 0x01 });
-        }
+        Datum::Validity(v) => encode_validity_payload(out, v.ts_micros(), v.is_assert()),
         Datum::Interval(iv) => {
             out.push(Tag::Interval.byte());
             encode_interval_body(out, &iv);

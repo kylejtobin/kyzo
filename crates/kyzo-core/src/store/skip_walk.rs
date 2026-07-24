@@ -515,60 +515,9 @@ mod tests {
         SkipWalk::new(cursor, &lo, &hi, as_of).take(1000).collect()
     }
 
-    /// The independent reference model: for each fact, walk its stored
-    /// instants newest-to-oldest (`<= valid_at`), and within the first
-    /// instant that has ANY version at `<= sys_at`, take that instant's
-    /// NEWEST such version's polarity as the verdict (Assert = present,
-    /// Retract = absent-settled, Erase/none = fall through older). Written
-    /// completely independently of `SkipWalk`/`check_key_for_bitemporal` —
-    /// it never seeks, splices, or byte-compares a key; it re-derives the
-    /// bitemporal resolution rule from the (fact, valid, sys, polarity)
-    /// tuples directly, the same brute-force discipline
-    /// `data/bitemporal.rs::oracle` and `query/laws.rs` both use for the
-    /// same reason: an oracle that shares the kernel's algorithm proves
-    /// nothing about the kernel.
-    fn oracle(rows: &[(i64, i64, i64, ClaimPolarity)], sys_at: i64, valid_at: i64) -> Vec<i64> {
-        let mut facts: Vec<i64> = rows.iter().map(|r| r.0).collect();
-        facts.sort_unstable();
-        facts.dedup();
-        let mut out = vec![];
-        for f in facts {
-            let mut instants: Vec<i64> = rows
-                .iter()
-                .filter(|r| r.0 == f && r.1 <= valid_at)
-                .map(|r| r.1)
-                .collect();
-            instants.sort_unstable();
-            instants.dedup();
-            let mut verdict = None;
-            for instant in instants.into_iter().rev() {
-                let governing = rows
-                    .iter()
-                    .filter(|r| r.0 == f && r.1 == instant && r.2 <= sys_at)
-                    .max_by_key(|r| r.2)
-                    .map(|r| r.3);
-                match governing {
-                    Some(ClaimPolarity::Assert) => {
-                        verdict = Some(true);
-                        break;
-                    }
-                    Some(ClaimPolarity::Retract) => {
-                        verdict = Some(false);
-                        break;
-                    }
-                    Some(ClaimPolarity::Erase) | None => {}
-                }
-            }
-            if verdict == Some(true) {
-                out.push(f);
-            }
-        }
-        out
-    }
-
     /// The proof, standalone: 2000 seeded histories, driven through the
     /// PRODUCTION `SkipWalk` over the test-only `MapSeek` backend, judged
-    /// against the from-scratch `oracle` above — both axes, negative
+    /// against `time::bitemporal_presence_oracle` — both axes, negative
     /// coordinates, assert/retract/erase, mirroring
     /// `bitemporal_skip_scan_matches_oracle`'s discipline (issue #78's
     /// dictation: this driver IS #79's first theorem, so the property is
@@ -618,7 +567,7 @@ mod tests {
             for sys_at in [-40i64, -25, -5, 0, 5, 15, 25, 40] {
                 for valid_at in [-40i64, -30, -10, -3, 0, 10, 20, 30, 40] {
                     let got = facts_of(&walk(&store, sys_at, valid_at)?)?;
-                    let want = oracle(&rows, sys_at, valid_at);
+                    let want = crate::store::time::bitemporal_presence_oracle(&rows, sys_at, valid_at);
                     assert_eq!(
                         got, want,
                         "divergence at sys_at={sys_at} valid_at={valid_at} rows={rows:?}"

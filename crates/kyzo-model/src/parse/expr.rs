@@ -47,40 +47,48 @@ fn init_pratt_parser(
     lazy_pratt_parser!(build(PrattParser::new()))
 }
 
-fn build_expr_pratt(p: PrattParser<Rule>) -> PrattParser<Rule> {
-    p.op(Op::infix(Rule::op_or, Assoc::Left))
-        .op(Op::infix(Rule::op_and, Assoc::Left))
-        .op(Op::infix(Rule::op_gt, Assoc::Left)
-            | Op::infix(Rule::op_lt, Assoc::Left)
-            | Op::infix(Rule::op_ge, Assoc::Left)
-            | Op::infix(Rule::op_le, Assoc::Left))
-        .op(Op::infix(Rule::op_eq, Assoc::Left) | Op::infix(Rule::op_ne, Assoc::Left))
-        .op(Op::infix(Rule::op_mod, Assoc::Left))
-        .op(Op::infix(Rule::op_add, Assoc::Left)
-            | Op::infix(Rule::op_sub, Assoc::Left)
-            | Op::infix(Rule::op_concat, Assoc::Left))
-        .op(Op::infix(Rule::op_mul, Assoc::Left) | Op::infix(Rule::op_div, Assoc::Left))
-        .op(Op::infix(Rule::op_pow, Assoc::Right))
-        .op(Op::infix(Rule::op_coalesce, Assoc::Left))
-        .op(Op::prefix(Rule::minus))
-        .op(Op::prefix(Rule::negate))
-        .op(Op::infix(Rule::op_field_access, Assoc::Left))
+/// One Pratt seat: expression arithmetic/logic ladder and FTS boolean ladder
+/// are arms of the same builder — not two copy-pasted authorities.
+fn build_pratt(which: PrattKind, p: PrattParser<Rule>) -> PrattParser<Rule> {
+    match which {
+        PrattKind::Expr => p
+            .op(Op::infix(Rule::op_or, Assoc::Left))
+            .op(Op::infix(Rule::op_and, Assoc::Left))
+            .op(Op::infix(Rule::op_gt, Assoc::Left)
+                | Op::infix(Rule::op_lt, Assoc::Left)
+                | Op::infix(Rule::op_ge, Assoc::Left)
+                | Op::infix(Rule::op_le, Assoc::Left))
+            .op(Op::infix(Rule::op_eq, Assoc::Left) | Op::infix(Rule::op_ne, Assoc::Left))
+            .op(Op::infix(Rule::op_mod, Assoc::Left))
+            .op(Op::infix(Rule::op_add, Assoc::Left)
+                | Op::infix(Rule::op_sub, Assoc::Left)
+                | Op::infix(Rule::op_concat, Assoc::Left))
+            .op(Op::infix(Rule::op_mul, Assoc::Left) | Op::infix(Rule::op_div, Assoc::Left))
+            .op(Op::infix(Rule::op_pow, Assoc::Right))
+            .op(Op::infix(Rule::op_coalesce, Assoc::Left))
+            .op(Op::prefix(Rule::minus))
+            .op(Op::prefix(Rule::negate))
+            .op(Op::infix(Rule::op_field_access, Assoc::Left)),
+        PrattKind::Fts => p
+            .op(Op::infix(Rule::fts_not, Assoc::Left))
+            .op(Op::infix(Rule::fts_and, Assoc::Left))
+            .op(Op::infix(Rule::fts_or, Assoc::Left)),
+    }
 }
 
-fn build_fts_pratt(p: PrattParser<Rule>) -> PrattParser<Rule> {
-    p.op(Op::infix(Rule::fts_not, Assoc::Left))
-        .op(Op::infix(Rule::fts_and, Assoc::Left))
-        .op(Op::infix(Rule::fts_or, Assoc::Left))
+enum PrattKind {
+    Expr,
+    Fts,
 }
 
 fn pratt_parser() -> &'static PrattParser<Rule> {
-    init_pratt_parser(build_expr_pratt)
+    init_pratt_parser(|p| build_pratt(PrattKind::Expr, p))
 }
 
 /// FTS boolean precedence: `NOT` tightest, then `AND`, then `OR` — shared
 /// OnceLock shell lives here; the search seat calls this door.
 pub(crate) fn fts_pratt_parser() -> &'static PrattParser<Rule> {
-    init_pratt_parser(build_fts_pratt)
+    init_pratt_parser(|p| build_pratt(PrattKind::Fts, p))
 }
 
 #[derive(Debug, Error, Diagnostic)]

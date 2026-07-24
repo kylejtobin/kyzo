@@ -201,6 +201,53 @@ impl ClaimPolarity {
     }
 }
 
+/// Independent bitemporal presence oracle over `(fact, valid, sys, polarity)`
+/// rows — one seat for every skip-scan / time-walk proof that must not share
+/// the kernel's seek algorithm. `#[cfg(test)]` so production never links it.
+#[cfg(test)]
+pub(crate) fn bitemporal_presence_oracle(
+    rows: &[(i64, i64, i64, ClaimPolarity)],
+    sys_at: i64,
+    valid_at: i64,
+) -> Vec<i64> {
+    let mut facts: Vec<i64> = rows.iter().map(|r| r.0).collect();
+    facts.sort_unstable();
+    facts.dedup();
+    let mut out = vec![];
+    for f in facts {
+        let mut instants: Vec<i64> = rows
+            .iter()
+            .filter(|r| r.0 == f && r.1 <= valid_at)
+            .map(|r| r.1)
+            .collect();
+        instants.sort_unstable();
+        instants.dedup();
+        let mut verdict = None;
+        for instant in instants.into_iter().rev() {
+            let governing = rows
+                .iter()
+                .filter(|r| r.0 == f && r.1 == instant && r.2 <= sys_at)
+                .max_by_key(|r| r.2)
+                .map(|r| r.3);
+            match governing {
+                Some(ClaimPolarity::Assert) => {
+                    verdict = Some(true);
+                    break;
+                }
+                Some(ClaimPolarity::Retract) => {
+                    verdict = Some(false);
+                    break;
+                }
+                Some(ClaimPolarity::Erase) | None => {}
+            }
+        }
+        if verdict == Some(true) {
+            out.push(f);
+        }
+    }
+    out
+}
+
 pub fn claim_polarity_of_value(val: &[u8]) -> Result<ClaimPolarity> {
     let Some(&byte) = val.get(VALUE_HEADER_LEN) else {
         bail!(BitemporalDecodeError::ValueTruncated);
@@ -428,49 +475,6 @@ mod tests {
         Ok(out)
     }
 
-    fn oracle(rows: &[(i64, i64, i64, ClaimPolarity)], sys_at: i64, valid_at: i64) -> Vec<i64> {
-        let mut facts: Vec<i64> = rows.iter().map(|r| r.0).collect();
-        facts.sort_unstable();
-        facts.dedup();
-        let mut out = vec![];
-        for f in facts {
-            let mut instants: Vec<i64> = rows
-                .iter()
-                .filter(|r| r.0 == f && r.1 <= valid_at)
-                .map(|r| r.1)
-                .collect();
-            instants.sort_unstable();
-            instants.dedup();
-            let mut verdict = None;
-            for instant in instants.into_iter().rev() {
-                // The instant's governing version: newest system ts at or
-                // before sys_at, across ALL of the instant's versions.
-                let governing = rows
-                    .iter()
-                    .filter(|r| r.0 == f && r.1 == instant && r.2 <= sys_at)
-                    .max_by_key(|r| r.2)
-                    .map(|r| r.3);
-                match governing {
-                    Some(ClaimPolarity::Assert) => {
-                        verdict = Some(true);
-                        break;
-                    }
-                    Some(ClaimPolarity::Retract) => {
-                        verdict = Some(false);
-                        break;
-                    }
-                    // Erased or later-recorded: fall to the next older
-                    // instant.
-                    Some(ClaimPolarity::Erase) | None => {}
-                }
-            }
-            if verdict == Some(true) {
-                out.push(f);
-            }
-        }
-        out
-    }
-
     fn facts_of(tuples: &[Tuple]) -> Result<Vec<i64>> {
         tuples
             .iter()
@@ -563,7 +567,7 @@ mod tests {
             for sys_at in [-1i64, 0, 5, 10, 15, 25, 40] {
                 for valid_at in [-1i64, 0, 10, 20, 30, 40] {
                     let got = facts_of(&skip_walk(&store, sys_at, valid_at)?)?;
-                    let want = oracle(&rows, sys_at, valid_at);
+                    let want = super::bitemporal_presence_oracle(&rows, sys_at, valid_at);
                     assert_eq!(
                         got, want,
                         "divergence at sys_at={sys_at} valid_at={valid_at} rows={rows:?}"
