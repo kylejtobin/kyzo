@@ -226,106 +226,114 @@ impl CampaignArtifact {
     }
 }
 
-fn now_unix() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
+/// Campaign-meta authority — tip 806/914: no free helpers.
+pub struct CampaignLaw;
 
-fn live_blake3(repo_root: &Path, rel: &str) -> Result<String, ArtifactRefuse> {
-    let bytes = std::fs::read(repo_root.join(rel))
-        .map_err(|e| ArtifactRefuse::Io(format!("reading {rel}: {e}")))?;
-    Ok(blake3::hash(&bytes).to_hex().to_string())
-}
+/// The one production door for campaign artifact meta.
+pub const CAMPAIGN: CampaignLaw = CampaignLaw;
 
-/// Meta pass over every seated campaign. Proof law: specimen ≠ flagged →
-/// red regardless of hashes and timestamp.
-pub fn verify_campaigns(repo_root: &Path, seats: &[CampaignSeat]) -> Vec<Hit> {
-    let mut hits = Vec::new();
-    for seat in seats {
-        let art_path = repo_root
-            .join("crates/bs-detector")
-            .join(seat.artifact());
-        let artifact = match CampaignArtifact::load(&art_path) {
-            Ok(a) => a,
-            Err(_) => {
+impl CampaignLaw {
+    fn now_unix(&self) -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    }
+
+    fn live_blake3(&self, repo_root: &Path, rel: &str) -> Result<String, ArtifactRefuse> {
+        let bytes = std::fs::read(repo_root.join(rel))
+            .map_err(|e| ArtifactRefuse::Io(format!("reading {rel}: {e}")))?;
+        Ok(blake3::hash(&bytes).to_hex().to_string())
+    }
+
+    /// Meta pass over every seated campaign. Proof law: specimen ≠ flagged →
+    /// red regardless of hashes and timestamp.
+    pub fn verify_campaigns(&self, repo_root: &Path, seats: &[CampaignSeat]) -> Vec<Hit> {
+        let mut hits = Vec::new();
+        for seat in seats {
+            let art_path = repo_root
+                .join("crates/bs-detector")
+                .join(seat.artifact());
+            let artifact = match CampaignArtifact::load(&art_path) {
+                Ok(a) => a,
+                Err(_) => {
+                    hits.push(Hit::admit(
+                        seat.artifact(),
+                        1,
+                        format!("campaign_missing:{}", seat.name()),
+                    ));
+                    continue;
+                }
+            };
+
+            // Specimen first — the proof law: unflagged fails even if hashes ok.
+            if *artifact.specimen_verdict() != SpecimenVerdict::Flagged {
                 hits.push(Hit::admit(
                     seat.artifact(),
                     1,
-                    format!("campaign_missing:{}", seat.name()),
+                    format!(
+                        "campaign_specimen_unflagged:{}:{}",
+                        seat.name(),
+                        artifact.specimen_verdict().as_str()
+                    ),
                 ));
-                continue;
+                // Still report other defects, but specimen alone is enough to red.
             }
-        };
 
-        // Specimen first — the proof law: unflagged fails even if hashes ok.
-        if *artifact.specimen_verdict() != SpecimenVerdict::Flagged {
-            hits.push(Hit::admit(
-                seat.artifact(),
-                1,
-                format!(
-                    "campaign_specimen_unflagged:{}:{}",
-                    seat.name(),
-                    artifact.specimen_verdict().as_str()
-                ),
-            ));
-            // Still report other defects, but specimen alone is enough to red.
-        }
-
-        if artifact.name() != seat.name() {
-            hits.push(Hit::admit(
-                seat.artifact(),
-                1,
-                format!("campaign_missing:{}:name_mismatch", seat.name()),
-            ));
-        }
-
-        let now = now_unix();
-        if now.saturating_sub(artifact.timestamp_unix()) > seat.freshness_bound_secs() {
-            hits.push(Hit::admit(
-                seat.artifact(),
-                1,
-                format!("campaign_stale:{}", seat.name()),
-            ));
-        }
-
-        // Declared sources must match seat and hash live bytes.
-        let declared: std::collections::BTreeSet<&str> =
-            seat.sources().iter().map(RelPath::as_str).collect();
-        let recorded: std::collections::BTreeSet<&str> =
-            artifact.sources().iter().map(ArtifactSource::path).collect();
-        if declared != recorded {
-            hits.push(Hit::admit(
-                seat.artifact(),
-                1,
-                format!("campaign_hash_mismatch:{}:source_set", seat.name()),
-            ));
-        }
-        for src in artifact.sources() {
-            match live_blake3(repo_root, src.path()) {
-                Ok(live) if live == src.blake3() => {}
-                Ok(_) => hits.push(Hit::admit(
-                    src.path(),
+            if artifact.name() != seat.name() {
+                hits.push(Hit::admit(
+                    seat.artifact(),
                     1,
-                    format!("campaign_hash_mismatch:{}", seat.name()),
-                )),
-                Err(_) => hits.push(Hit::admit(
-                    src.path(),
+                    format!("campaign_missing:{}:name_mismatch", seat.name()),
+                ));
+            }
+
+            let now = self.now_unix();
+            if now.saturating_sub(artifact.timestamp_unix()) > seat.freshness_bound_secs() {
+                hits.push(Hit::admit(
+                    seat.artifact(),
                     1,
-                    format!("campaign_hash_mismatch:{}:unreadable", seat.name()),
-                )),
+                    format!("campaign_stale:{}", seat.name()),
+                ));
+            }
+
+            // Declared sources must match seat and hash live bytes.
+            let declared: std::collections::BTreeSet<&str> =
+                seat.sources().iter().map(RelPath::as_str).collect();
+            let recorded: std::collections::BTreeSet<&str> =
+                artifact.sources().iter().map(ArtifactSource::path).collect();
+            if declared != recorded {
+                hits.push(Hit::admit(
+                    seat.artifact(),
+                    1,
+                    format!("campaign_hash_mismatch:{}:source_set", seat.name()),
+                ));
+            }
+            for src in artifact.sources() {
+                match self.live_blake3(repo_root, src.path()) {
+                    Ok(live) if live == src.blake3() => {}
+                    Ok(_) => hits.push(Hit::admit(
+                        src.path(),
+                        1,
+                        format!("campaign_hash_mismatch:{}", seat.name()),
+                    )),
+                    Err(_) => hits.push(Hit::admit(
+                        src.path(),
+                        1,
+                        format!("campaign_hash_mismatch:{}:unreadable", seat.name()),
+                    )),
+                }
             }
         }
+        hits
     }
-    hits
-}
 
-/// Resolve artifact path under the detector crate.
-pub fn artifact_abs(repo_root: &Path, seat: &CampaignSeat) -> PathBuf {
-    repo_root
-        .join("crates/bs-detector")
-        .join(seat.artifact())
+    /// Resolve artifact path under the detector crate.
+    pub fn artifact_abs(&self, repo_root: &Path, seat: &CampaignSeat) -> PathBuf {
+        repo_root
+            .join("crates/bs-detector")
+            .join(seat.artifact())
+    }
 }
 
 #[cfg(test)]
@@ -353,8 +361,8 @@ impl CampaignProofRefuse {
 #[cfg(test)]
 mod tests {
     use super::{
-        now_unix, verify_campaigns, ArtifactSource, CampaignArtifact, CampaignProofRefuse,
-        CampaignSeat, RelPath, SpecimenVerdict,
+        ArtifactSource, CampaignArtifact, CampaignProofRefuse, CampaignSeat, RelPath,
+        SpecimenVerdict, CAMPAIGN,
     };
 
     type TestResult = Result<(), CampaignProofRefuse>;
@@ -391,7 +399,7 @@ mod tests {
         }
         let art = CampaignArtifact::admit(
             "build_script_sandbox",
-            now_unix(),
+            CAMPAIGN.now_unix(),
             SpecimenVerdict::Unflagged,
             vec![ArtifactSource::admit(src_rel, digest)],
         );
@@ -406,7 +414,7 @@ mod tests {
             86_400,
             vec![RelPath::admit(src_rel)],
         )];
-        let hits = verify_campaigns(root, &seats);
+        let hits = CAMPAIGN.verify_campaigns(root, &seats);
         let unflagged = hits
             .iter()
             .any(|h| h.construct().starts_with("campaign_specimen_unflagged:"));

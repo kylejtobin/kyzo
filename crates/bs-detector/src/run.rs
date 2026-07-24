@@ -373,7 +373,7 @@ impl RunLaw {
         if run_pass("campaign_artifact") {
             passes.push((
                 "campaign_artifact".to_string(),
-                behavior::campaign::verify_campaigns(root, laws.campaigns()),
+                behavior::campaign::CAMPAIGN.verify_campaigns(root, laws.campaigns()),
             ));
         }
 
