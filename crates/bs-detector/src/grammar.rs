@@ -612,10 +612,9 @@ impl Grammar {
 
     /// Whether `construct` is a lawful seat for `kind`.
     pub fn seat_allows(&self, kind: KindName, construct: &str) -> bool {
-        match self.seated.get(&kind) {
-            Some(seats) => seats.iter().any(|s| s == construct),
-            None => false,
-        }
+        self.seated
+            .get(&kind)
+            .is_some_and(|seats| seats.iter().any(|s| s == construct))
     }
 
     /// The declared seat for a receiverless fn, if any.

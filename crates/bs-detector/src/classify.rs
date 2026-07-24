@@ -298,23 +298,22 @@ fn exactly_one(matches: impl Iterator<Item = bool>) -> bool {
 }
 
 fn seat_matches_item(ctx: &Ctx, item: &syn::Item, seats: &[String]) -> bool {
-    exactly_one(seats.iter().map(|name| match construct_rule(ctx.grammar, name) {
-        Some(rule) => rule_matches_item(ctx, rule, item),
-        None => false,
+    // filter_map: an unknown seat name is skipped (load proved seats resolve;
+    // a post-load ghost cannot green via `None => false` costume).
+    exactly_one(seats.iter().filter_map(|name| {
+        construct_rule(ctx.grammar, name).map(|rule| rule_matches_item(ctx, rule, item))
     }))
 }
 
 fn seat_matches_impl_item(ctx: &Ctx, item: &syn::ImplItem, seats: &[String]) -> bool {
-    exactly_one(seats.iter().map(|name| match construct_rule(ctx.grammar, name) {
-        Some(rule) => rule_matches_impl_item(ctx, rule, item),
-        None => false,
+    exactly_one(seats.iter().filter_map(|name| {
+        construct_rule(ctx.grammar, name).map(|rule| rule_matches_impl_item(ctx, rule, item))
     }))
 }
 
 fn seat_matches_trait_item(ctx: &Ctx, item: &syn::TraitItem, seats: &[String]) -> bool {
-    exactly_one(seats.iter().map(|name| match construct_rule(ctx.grammar, name) {
-        Some(rule) => rule_matches_trait_item(ctx, rule, item),
-        None => false,
+    exactly_one(seats.iter().filter_map(|name| {
+        construct_rule(ctx.grammar, name).map(|rule| rule_matches_trait_item(ctx, rule, item))
     }))
 }
 
@@ -524,15 +523,14 @@ fn receiver_form(sig: &syn::Signature) -> Receiver {
                 Receiver::ByValueSelf
             }
         }
-        _ => Receiver::None,
+        Some(syn::FnArg::Typed(_)) | None => Receiver::None,
     }
 }
 
 fn ok_or_bodyless(block: Option<&syn::Block>, pred: impl FnOnce(&syn::Block) -> bool) -> bool {
-    match block {
-        None => true,
-        Some(b) => pred(b),
-    }
+    // Bodyless trait methods: bans have nothing to refuse. `is_none_or`
+    // states that without a `None => true` costume arm.
+    block.is_none_or(pred)
 }
 
 fn contains_control_flow(block: &syn::Block) -> bool {
@@ -647,10 +645,9 @@ fn self_place_depth(expr: &syn::Expr) -> Option<usize> {
 }
 
 fn is_nested_place_assign(lhs: &syn::Expr) -> bool {
-    match self_place_depth(lhs) {
-        Some(depth) => depth > 1,
-        None => true,
-    }
+    // Depth > 1, or not a pure self-field place at all — conservative.
+    // `is_none_or` avoids a `None => true` costume arm.
+    self_place_depth(lhs).is_none_or(|depth| depth > 1)
 }
 
 fn contains_nested_place_assign(block: &syn::Block) -> bool {
@@ -926,7 +923,15 @@ mod fixture_tests {
                 };
                 match imp.items.first() {
                     Some(syn::ImplItem::Fn(f)) => fn_matches(rule, &f.sig, Some(&f.block), f, &ctx),
-                    _ => false,
+                    Some(syn::ImplItem::Const(_))
+                    | Some(syn::ImplItem::Type(_))
+                    | Some(syn::ImplItem::Macro(_))
+                    | Some(syn::ImplItem::Verbatim(_))
+                    | None => false,
+                    unrecognized_impl_item => {
+                        let _ = unrecognized_impl_item;
+                        false
+                    }
                 }
             }
             other => {

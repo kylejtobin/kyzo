@@ -94,10 +94,8 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
         };
         let scope = waivers.scope_for(name);
         let in_scope = |file: &str| -> bool {
-            match scope {
-                None => true,
-                Some(s) => s.scope.iter().any(|p| file.starts_with(p.as_str())),
-            }
+            // No scope waiver → whole tree. `is_none_or` avoids `None => true`.
+            scope.is_none_or(|s| s.scope.iter().any(|p| file.starts_with(p.as_str())))
         };
         let scoped: Vec<&SourceFile> =
             b.files.iter().filter(|f| in_scope(&f.rel_path)).collect();
@@ -136,7 +134,12 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
         }
         for name in &condemned_names {
             if run_pass(name) {
-                passes.push((name, condemned_hits.remove(name).unwrap_or_default()));
+                let hits = condemned_hits.remove(name).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "condemned hit bucket for `{name}` vanished post-partition — refuse"
+                    )
+                })?;
+                passes.push((name, hits));
             }
         }
     }
@@ -197,12 +200,11 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
                             && w.line == h.line
                             && w.construct == h.construct
                     });
-                    match found {
-                        Some((i, _)) => {
-                            consumed[i] = true;
-                            false
-                        }
-                        None => true,
+                    if let Some((i, _)) = found {
+                        consumed[i] = true;
+                        false
+                    } else {
+                        true
                     }
                 })
                 .collect()

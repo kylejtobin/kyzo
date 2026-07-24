@@ -351,10 +351,12 @@ pub fn agreement_registry(files: &[&SourceFile], registry_text: &str) -> Vec<Hit
                 // Line 0 is the explicit "declared but not textually
                 // locatable" convention (same as meta's file-level hits) —
                 // a name split across lines still counts, never invents a
-                // position.
-                let line = match registry_text.lines().position(|l| l.contains(name)) {
-                    Some(idx) => idx + 1,
-                    None => 0,
+                // position. if-let avoids a `None => 0` costume arm.
+                let line = if let Some(idx) = registry_text.lines().position(|l| l.contains(name))
+                {
+                    idx + 1
+                } else {
+                    0
                 };
                 declared.push((name.to_string(), line));
             }
@@ -433,7 +435,15 @@ fn result_error_type(ty: &syn::Type) -> Option<&syn::Type> {
     };
     let mut types = args.args.iter().filter_map(|a| match a {
         syn::GenericArgument::Type(t) => Some(t),
-        _ => None,
+        syn::GenericArgument::Lifetime(_)
+        | syn::GenericArgument::AssocType(_)
+        | syn::GenericArgument::AssocConst(_)
+        | syn::GenericArgument::Constraint(_)
+        | syn::GenericArgument::Const(_) => None,
+        unrecognized_generic_arg => {
+            let _ = unrecognized_generic_arg;
+            None
+        }
     });
     let _ok = types.next()?;
     types.next()

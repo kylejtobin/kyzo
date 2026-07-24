@@ -128,13 +128,10 @@ fn attrs_are_cfg_test(attrs: &[syn::Attribute]) -> bool {
         if !a.path().is_ident("cfg") {
             return false;
         }
-        match a.parse_args::<syn::Meta>() {
-            // A cfg whose arguments don't parse as Meta cannot be
-            // `#[cfg(test)]`; unparseable stays PRODUCTION scope — the
-            // exemption must be proven, never defaulted into.
-            Err(_) => false,
-            Ok(m) => meta_implies_test(&m),
-        }
+        // Unparseable cfg stays PRODUCTION — exemption must be proven.
+        a.parse_args::<syn::Meta>()
+            .ok()
+            .is_some_and(|m| meta_implies_test(&m))
     })
 }
 
@@ -622,6 +619,11 @@ fn m_default_impl(f: &SourceFile) -> Vec<Hit> {
 fn m_construction_door(f: &SourceFile) -> Vec<Hit> {
     fn door_site(sig: &syn::Signature) -> Option<usize> {
         let name = sig.ident.to_string();
+        // Bite harnesses are named `bite_<ban>`; the ban spelling may itself
+        // end in `_unchecked`. They prove the matcher, they are not doors.
+        if name.starts_with("bite_") {
+            return None;
+        }
         // Every raw-door name, unconditionally — a Result-returning
         // from_bytes that never actually refuses would dodge any
         // "fallible = validated" carve; a genuinely validating door swears
@@ -792,10 +794,7 @@ fn line_starts_scan(
     let mut hits = vec![];
     for (idx, raw) in f.text.lines().enumerate() {
         let t = raw.trim_start();
-        let extra = match needle {
-            None => true,
-            Some(n) => t.contains(n),
-        };
+        let extra = needle.is_none_or(|n| t.contains(n));
         if t.starts_with(prefix) && extra {
             push(&mut hits, &f.rel_path, idx + 1, construct);
         }
