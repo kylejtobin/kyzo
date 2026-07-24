@@ -310,3 +310,56 @@ kyzo-core/src/session/capacity.rs to cursor as a bus contract: file, line,
 replacement text, held open until acked.
 
 **Proof.** The bus message id and cursor's ack.
+
+
+## Build Attestation
+
+For each of the above upon completion create an H3 sub-section with a build
+attestation.
+
+### 0. Build Attestation Template
+
+BUILD ATTESTATION — item {N}
+law: commit {law hash} | build: commit {build hash}
+
+I attest my implementation of item {N} matches this document, at the law
+commit above, at audited strength. TRUE or FALSE: there exists an input —
+any code shape, any file, any reading of the law text — on which my
+implementation passes where the law says red, or goes red where the law
+says pass.
+
+FALSE. Evidence, each anchor checkable:
+- Deny fixtures executed red: {fixture paths + test run output line}
+- Pass fixtures classified as their construct: {fixture paths}
+- The weakest satisfier I personally constructed against my own build
+  was: {the attack} — and it goes red because {mechanism}.
+- My implementation is weaker than this document's text in exactly:
+  {NONE | laws.toml residual entry name}.
+If any sentence above is false, I am lying to you deliberately and at
+length, in a repo whose recorded failure mode is exactly that.
+
+### 1. Build Attestation
+
+BUILD ATTESTATION — item 1
+law: commit 4e4c070d1cf9b47fcc4562f80f60b5072d7cd386 | build: commit 6401f2625ff6cd52cafa8568d284fa4be22d2728
+
+I attest my implementation of item 1 matches this document, at the law
+commit above, at audited strength. TRUE or FALSE: there exists an input —
+any code shape, any file, any reading of the law text — on which my
+implementation passes where the law says red, or goes red where the law
+says pass.
+
+FALSE. Evidence, each anchor checkable:
+- Deny fixtures executed red: crates/bs-detector/fixtures/{newtype-scalar,sealed-struct,sum-type,alias,import,constant,module,impl-container,trait-container,composition-root,derivation,transition,consuming-verb,admission-door,declared-fn}.deny.rs plus condemned crates/bs-detector/fixtures/{extern-crate,foreign-mod,union,trait-alias,macro,impl-macro,trait-macro}.deny.rs — test classify::fixture_tests::every_construct_pass_classifies_and_deny_is_refused_by_its_own_rule ... ok; classify::fixture_tests::every_condemned_kind_deny_fixture_is_red_under_its_own_law ... ok; item_1_proof_{static_mut,path_attr_mod,glob_use,impl_macro}_is_denied ... ok (verbatim.deny.rs is presence-only: a true Item::Verbatim cannot be authored in a file syn::parse_file accepts; named in the test).
+- Pass fixtures classified as their construct: crates/bs-detector/fixtures/{newtype-scalar,sealed-struct,unit-marker,sum-type,alias,import,constant,module,impl-container,trait-container,composition-root,derivation,transition,consuming-verb,admission-door,declared-fn}.pass.rs — same every_construct_pass… test ... ok.
+- The weakest satisfier I personally constructed against my own build
+  was: `struct Leaky { name: String }` (named fields, private, but string-terminal — if any struct seat were too loose it would classify) — and it goes red because sealed-struct's NamedAllPrivateNoStringTerminal refuses string terminals, and neither newtype-scalar nor unit-marker matches named multi-field shape (anti_fraud_a_deny_shape_never_slips_through_a_neighboring_seat ... ok).
+- My implementation is weaker than this document's text in exactly:
+  pending operator approval of working-tree grammar.toml and laws.toml
+  (headers say agents propose, never edit; exact diffs in
+  .kyzo/item1-grammar-laws-proposal.md; bus 217/228 — edit ≠ approval);
+  string-carrying judgment uses direct terminal names only (item 4's
+  alias-fixpoint walk is unbuilt); verbatim condemned deny fixture is
+  presence-only as stated above.
+If any sentence above is false, I am lying to you deliberately and at
+length, in a repo whose recorded failure mode is exactly that.
