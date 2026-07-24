@@ -10,21 +10,11 @@
 //!
 //! Every matcher is a named entry in [`MATCHERS`]; checks.toml references
 //! them by name and the registry refuses a name this table doesn't export.
-//! Matchers come in two scan classes:
-//! - `ScanClass::Everything` — swallowing shapes (silenced errors, fake
-//!   fallbacks, silenced lints, error costumes…) are banned in test code
-//!   too: a test that swallows is worse than a production lie because it
-//!   certifies one.
-//! - `ScanClass::ProductionOnly` — laws whose own boundary is shipping
-//!   code. Two families: production-surface laws (wall-clock, sockets,
-//!   naked crypto arrays — compiled-out code cannot violate a runtime
-//!   law), and the loud-detonator panics (`unwrap`/`expect`/`panic!`/
-//!   `unreachable!`) — zone law bans them "on any path reachable from a
-//!   caller", and `#[cfg(test)]`/`#[test]` scaffolding has no callers; a
-//!   panicking test is a loud failure, the opposite of a swallow. The
-//!   exemption applies at any syntactic level (`#[cfg(test)]` mods, items,
-//!   statements, `#[test]` fns) and NEVER to a module merely named
-//!   `tests`.
+//! Matchers are registered with a [`ScanClass`] label (historical family:
+//! swallow-shapes vs surface/panic-shapes). Tip 650/659: there is **no
+//! blanket `cfg(test)` strip**. Test code is code — every matcher scans
+//! it. Test-legitimate shapes are admitted only by **named** laws in
+//! `laws.toml` (exact shape + why lawful), never by a silent line filter.
 //!
 //! This file applies its own law to itself: no `unwrap`/`expect`, no `as`
 //! casts, and no `_ =>` arms — foreign non-exhaustive enums are handled
@@ -36,7 +26,7 @@ use syn::visit::{self, Visit};
 use crate::boundary::{SourceFile, span_line};
 use crate::engines::Hit;
 
-/// Whether a matcher sees unit-test scaffolding or skips it.
+/// Matcher family label. Does **not** gate scanning (tip 650/659: no strip).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ScanClass {
     Everything,
@@ -54,124 +44,11 @@ pub fn matcher_by_name(name: &str) -> Option<&'static Matcher> {
     MATCHERS.iter().find(|m| m.name == name)
 }
 
-/// Run one matcher over one file, honoring its scan class.
+/// Run one matcher over one file. Tip 650/659: no scan-class strip — test
+/// code is scanned the same as production code.
 pub fn run_matcher(m: &Matcher, file: &SourceFile) -> Vec<Hit> {
-    let mut hits = (m.run)(file);
-    if m.class == ScanClass::ProductionOnly {
-        let test_lines = test_scope_lines(file);
-        hits.retain(|h| !test_lines.contains(&h.line()));
-    }
-    hits
-}
-
-// ---------------------------------------------------------------------------
-// test-scope accounting (for ProductionOnly matchers)
-// ---------------------------------------------------------------------------
-
-/// Every line that lives inside test scaffolding: `#[cfg(test)]`/`mod
-/// tests` modules, `#[cfg(test)]` items, `#[cfg(test)]` statements, and
-/// `#[test]` functions.
-fn test_scope_lines(file: &SourceFile) -> std::collections::BTreeSet<usize> {
-    struct V {
-        lines: std::collections::BTreeSet<usize>,
-    }
-    fn span_range(tokens: impl ToTokens) -> Option<(usize, usize)> {
-        let ts = tokens.to_token_stream();
-        let mut iter = ts.into_iter();
-        let first = iter.next()?;
-        let start = first.span().start().line;
-        let mut end = first.span().end().line;
-        for t in iter {
-            end = end.max(t.span().end().line);
-        }
-        Some((start, end))
-    }
-    fn mark(v: &mut V, tokens: impl ToTokens) {
-        if let Some((a, b)) = span_range(tokens) {
-            v.lines.extend(a..=b);
-        }
-    }
-    impl<'ast> Visit<'ast> for V {
-        fn visit_item_mod(&mut self, node: &'ast syn::ItemMod) {
-            // Only the cfg attr exempts — a module merely NAMED `tests`
-            // without `#[cfg(test)]` ships, and shipped code is scanned.
-            if attrs_are_cfg_test(&node.attrs) {
-                mark(self, node);
-                return;
-            }
-            visit::visit_item_mod(self, node);
-        }
-        fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
-            if attrs_are_cfg_test(&node.attrs) || is_test_fn(&node.attrs) {
-                mark(self, node);
-                return;
-            }
-            visit::visit_item_fn(self, node);
-        }
-        fn visit_local(&mut self, node: &'ast syn::Local) {
-            if attrs_are_cfg_test(&node.attrs) {
-                mark(self, node);
-                return;
-            }
-            visit::visit_local(self, node);
-        }
-    }
-    let mut v = V {
-        lines: std::collections::BTreeSet::new(),
-    };
-    v.visit_file(file.ast());
-    v.lines
-}
-
-fn attrs_are_cfg_test(attrs: &[syn::Attribute]) -> bool {
-    attrs.iter().any(|a| {
-        if !a.path().is_ident("cfg") {
-            return false;
-        }
-        // Unparseable cfg stays PRODUCTION — exemption must be proven.
-        a.parse_args::<syn::Meta>()
-            .ok()
-            .is_some_and(|m| meta_implies_test(&m))
-    })
-}
-
-/// True only when the cfg predicate IMPLIES test — it cannot evaluate true
-/// outside a test build. A substring or contains() reading is a hole:
-/// `cfg(not(test))` ships ONLY in production, `cfg(feature = "attestation")`
-/// merely contains the letters, `cfg(any(test, feature = "x"))` ships too.
-/// - bare `test` — implies test.
-/// - `all(...)` — implies test if ANY conjunct does (all must hold).
-/// - `any(...)` — implies test only if EVERY disjunct does.
-/// - `not(...)`, name-values, anything else — never exempt.
-fn meta_implies_test(m: &syn::Meta) -> bool {
-    match m {
-        syn::Meta::Path(p) => p.is_ident("test"),
-        syn::Meta::List(l) => {
-            let Ok(nested) = l.parse_args_with(
-                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
-            ) else {
-                return false;
-            };
-            if l.path.is_ident("all") {
-                nested.iter().any(meta_implies_test)
-            } else if l.path.is_ident("any") {
-                !nested.is_empty() && nested.iter().all(meta_implies_test)
-            } else {
-                false
-            }
-        }
-        syn::Meta::NameValue(_) => false,
-    }
-}
-
-fn is_test_fn(attrs: &[syn::Attribute]) -> bool {
-    attrs.iter().any(|a| {
-        a.path().is_ident("test")
-            || a.path()
-                .segments
-                .last()
-                .is_some_and(|s| s.ident == "test")
-    })
+    let _ = m.class;
+    (m.run)(file)
 }
 
 // ---------------------------------------------------------------------------
@@ -1490,65 +1367,67 @@ mod tests {
         );
     }
 
+    /// Tip 650/659: blanket cfg(test) strip is BLINDED — removed. Every
+    /// site below must detonate; a silent empty is the soft drain returning.
     #[test]
-    fn cfg_exemption_requires_implication_not_substring() {
-        // not(test) ships ONLY in production — the exact opposite of
-        // scaffolding; a substring reading exempted it.
+    fn anti_fraud_cfg_test_unwrap_must_be_counted() {
         assert_eq!(
             run("unwrap", "#[cfg(not(test))]\nfn f(x: Option<u8>) -> u8 { x.unwrap() }").len(),
-            1
+            1,
+            "not(test) production path must still fire",
         );
-        // "attestation" contains the letters t-e-s-t; it is not test scope.
         assert_eq!(
-            run("unwrap", "#[cfg(feature = \"attestation\")]\nfn f(x: Option<u8>) -> u8 { x.unwrap() }").len(),
-            1
+            run("unwrap", "#[cfg(all(test, unix))]\nfn f(x: Option<u8>) -> u8 { x.unwrap() }").len(),
+            1,
+            "cfg(test) must NOT strip unwrap",
         );
-        // any(test, feature) compiles outside test builds too.
         assert_eq!(
-            run("unwrap", "#[cfg(any(test, feature = \"x\"))]\nfn f(x: Option<u8>) -> u8 { x.unwrap() }").len(),
-            1
+            run(
+                "unwrap",
+                "#[cfg(test)] mod tests { fn f(x: Option<u8>) -> u8 { x.unwrap() } }",
+            )
+            .len(),
+            1,
+            "cfg(test) mod must NOT strip unwrap",
         );
-        // all(test, unix) cannot be true outside a test build — exempt.
-        assert!(run("unwrap", "#[cfg(all(test, unix))]\nfn f(x: Option<u8>) -> u8 { x.unwrap() }").is_empty());
-    }
-
-    #[test]
-    fn a_module_merely_named_tests_without_cfg_is_production_and_scanned() {
-        // The name is not the exemption — the cfg attr is. A shipped
-        // `mod tests` would otherwise be a free hiding place for every
-        // ProductionOnly law.
         assert_eq!(
             run("unwrap", "mod tests { pub fn f(x: Option<u8>) -> u8 { x.unwrap() } }").len(),
-            1
-        );
-        assert!(
-            run("unwrap", "#[cfg(test)] mod tests { fn f(x: Option<u8>) -> u8 { x.unwrap() } }").is_empty()
+            1,
+            "mod named tests without cfg still scanned",
         );
     }
 
     #[test]
-    fn production_only_matchers_exempt_test_scaffolding_at_every_level() {
-        // mod-level
-        assert!(run(
-            "nondeterminism",
-            "#[cfg(test)] mod tests { fn f() { let _t = std::time::Instant::now(); } }"
-        )
-        .iter()
-        .all(|h| h.construct() != "nondeterminism"));
-        // statement-level (the hnsw probe shape)
-        assert!(run(
-            "nondeterminism",
-            "fn live() { #[cfg(test)] let _t0 = std::time::Instant::now(); }"
-        )
-        .is_empty());
-        // and the production twin still detonates
+    fn anti_fraud_cfg_test_nondeterminism_must_be_counted() {
         assert_eq!(
-            run("nondeterminism", "fn live() { let t = std::time::Instant::now(); let _x = t; }").len(),
-            1
+            run(
+                "nondeterminism",
+                "#[cfg(test)] mod tests { fn f() { let _t = std::time::Instant::now(); } }",
+            )
+            .iter()
+            .filter(|h| h.construct() == "nondeterminism")
+            .count(),
+            1,
+            "cfg(test) mod must NOT strip nondeterminism",
         );
         assert_eq!(
-            run("peer_dial", "fn f() { let _c = std::net::TcpStream::connect(\"127.0.0.1:1\"); }").len(),
-            1
+            run(
+                "nondeterminism",
+                "fn live() { #[cfg(test)] let _t0 = std::time::Instant::now(); }",
+            )
+            .len(),
+            1,
+            "cfg(test) statement must NOT strip nondeterminism",
+        );
+        assert_eq!(
+            run("nondeterminism", "fn live() { let t = std::time::Instant::now(); let _x = t; }")
+                .len(),
+            1,
+        );
+        assert_eq!(
+            run("peer_dial", "fn f() { let _c = std::net::TcpStream::connect(\"127.0.0.1:1\"); }")
+                .len(),
+            1,
         );
     }
 
