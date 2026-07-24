@@ -84,62 +84,6 @@ pub(crate) trait MeetAggrObj: Send + Sync + seal::Sealed {
     fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool>;
 }
 
-macro_rules! dispatch_normal_aggr {
-    ($self:expr, $m:ident $(, $arg:expr)*) => {
-        match $self {
-            NormalAggr::And(a) => a.$m($($arg),*),
-            NormalAggr::Or(a) => a.$m($($arg),*),
-            NormalAggr::Unique(a) => a.$m($($arg),*),
-            NormalAggr::GroupCount(a) => a.$m($($arg),*),
-            NormalAggr::CountUnique(a) => a.$m($($arg),*),
-            NormalAggr::Union(a) => a.$m($($arg),*),
-            NormalAggr::Intersection(a) => a.$m($($arg),*),
-            NormalAggr::Collect(a) => a.$m($($arg),*),
-            NormalAggr::Count(a) => a.$m($($arg),*),
-            NormalAggr::Variance(a) => a.$m($($arg),*),
-            NormalAggr::StdDev(a) => a.$m($($arg),*),
-            NormalAggr::Mean(a) => a.$m($($arg),*),
-            NormalAggr::Sum(a) => a.$m($($arg),*),
-            NormalAggr::Product(a) => a.$m($($arg),*),
-            NormalAggr::Min(a) => a.$m($($arg),*),
-            NormalAggr::Max(a) => a.$m($($arg),*),
-            NormalAggr::LatestBy(a) => a.$m($($arg),*),
-            NormalAggr::SmallestBy(a) => a.$m($($arg),*),
-            NormalAggr::MinCost(a) => a.$m($($arg),*),
-            NormalAggr::Shortest(a) => a.$m($($arg),*),
-            NormalAggr::Choice(a) => a.$m($($arg),*),
-            NormalAggr::BitAnd(a) => a.$m($($arg),*),
-            NormalAggr::BitOr(a) => a.$m($($arg),*),
-            NormalAggr::BitXor(a) => a.$m($($arg),*),
-            NormalAggr::Hll(a) => a.$m($($arg),*),
-            NormalAggr::HllSketch(a) => a.$m($($arg),*),
-            NormalAggr::HllUnion(a) => a.$m($($arg),*),
-            NormalAggr::CountMin(a) => a.$m($($arg),*),
-            NormalAggr::TDigest(a) => a.$m($($arg),*),
-            NormalAggr::Quantile(a) => a.$m($($arg),*),
-        }
-    };
-}
-
-macro_rules! dispatch_meet_aggr {
-    ($self:expr, $m:ident $(, $arg:expr)*) => {
-        match $self {
-            MeetAggr::And(a) => a.$m($($arg),*),
-            MeetAggr::Or(a) => a.$m($($arg),*),
-            MeetAggr::Union(a) => a.$m($($arg),*),
-            MeetAggr::Intersection(a) => a.$m($($arg),*),
-            MeetAggr::Min(a) => a.$m($($arg),*),
-            MeetAggr::Max(a) => a.$m($($arg),*),
-            MeetAggr::MinCost(a) => a.$m($($arg),*),
-            MeetAggr::Shortest(a) => a.$m($($arg),*),
-            MeetAggr::Choice(a) => a.$m($($arg),*),
-            MeetAggr::BitAnd(a) => a.$m($($arg),*),
-            MeetAggr::BitOr(a) => a.$m($($arg),*),
-            MeetAggr::HllUnion(a) => a.$m($($arg),*),
-        }
-    };
-}
-
 /// Sealed exhaustively-matched normal aggregation: the dispatch surface.
 pub(crate) enum NormalAggr {
     And(AggrAnd),
@@ -176,11 +120,73 @@ pub(crate) enum NormalAggr {
 
 impl NormalAggr {
     pub(crate) fn set(&mut self, value: &DataValue) -> Result<()> {
-        dispatch_normal_aggr!(self, set, value)
+        match self {
+            NormalAggr::And(a) => a.set(value),
+            NormalAggr::Or(a) => a.set(value),
+            NormalAggr::Unique(a) => a.set(value),
+            NormalAggr::GroupCount(a) => a.set(value),
+            NormalAggr::CountUnique(a) => a.set(value),
+            NormalAggr::Union(a) => a.set(value),
+            NormalAggr::Intersection(a) => a.set(value),
+            NormalAggr::Collect(a) => a.set(value),
+            NormalAggr::Count(a) => a.set(value),
+            NormalAggr::Variance(a) => a.set(value),
+            NormalAggr::StdDev(a) => a.set(value),
+            NormalAggr::Mean(a) => a.set(value),
+            NormalAggr::Sum(a) => a.set(value),
+            NormalAggr::Product(a) => a.set(value),
+            NormalAggr::Min(a) => a.set(value),
+            NormalAggr::Max(a) => a.set(value),
+            NormalAggr::LatestBy(a) => a.set(value),
+            NormalAggr::SmallestBy(a) => a.set(value),
+            NormalAggr::MinCost(a) => a.set(value),
+            NormalAggr::Shortest(a) => a.set(value),
+            NormalAggr::Choice(a) => a.set(value),
+            NormalAggr::BitAnd(a) => a.set(value),
+            NormalAggr::BitOr(a) => a.set(value),
+            NormalAggr::BitXor(a) => a.set(value),
+            NormalAggr::Hll(a) => a.set(value),
+            NormalAggr::HllSketch(a) => a.set(value),
+            NormalAggr::HllUnion(a) => a.set(value),
+            NormalAggr::CountMin(a) => a.set(value),
+            NormalAggr::TDigest(a) => a.set(value),
+            NormalAggr::Quantile(a) => a.set(value),
+        }
     }
 
     pub(crate) fn get(&self) -> Result<DataValue> {
-        dispatch_normal_aggr!(self, get)
+        match self {
+            NormalAggr::And(a) => a.get(),
+            NormalAggr::Or(a) => a.get(),
+            NormalAggr::Unique(a) => a.get(),
+            NormalAggr::GroupCount(a) => a.get(),
+            NormalAggr::CountUnique(a) => a.get(),
+            NormalAggr::Union(a) => a.get(),
+            NormalAggr::Intersection(a) => a.get(),
+            NormalAggr::Collect(a) => a.get(),
+            NormalAggr::Count(a) => a.get(),
+            NormalAggr::Variance(a) => a.get(),
+            NormalAggr::StdDev(a) => a.get(),
+            NormalAggr::Mean(a) => a.get(),
+            NormalAggr::Sum(a) => a.get(),
+            NormalAggr::Product(a) => a.get(),
+            NormalAggr::Min(a) => a.get(),
+            NormalAggr::Max(a) => a.get(),
+            NormalAggr::LatestBy(a) => a.get(),
+            NormalAggr::SmallestBy(a) => a.get(),
+            NormalAggr::MinCost(a) => a.get(),
+            NormalAggr::Shortest(a) => a.get(),
+            NormalAggr::Choice(a) => a.get(),
+            NormalAggr::BitAnd(a) => a.get(),
+            NormalAggr::BitOr(a) => a.get(),
+            NormalAggr::BitXor(a) => a.get(),
+            NormalAggr::Hll(a) => a.get(),
+            NormalAggr::HllSketch(a) => a.get(),
+            NormalAggr::HllUnion(a) => a.get(),
+            NormalAggr::CountMin(a) => a.get(),
+            NormalAggr::TDigest(a) => a.get(),
+            NormalAggr::Quantile(a) => a.get(),
+        }
     }
 }
 
@@ -202,11 +208,37 @@ pub(crate) enum MeetAggr {
 
 impl MeetAggr {
     pub(crate) fn init_val(&self) -> MeetAccum {
-        dispatch_meet_aggr!(self, init_val)
+        match self {
+            MeetAggr::And(a) => a.init_val(),
+            MeetAggr::Or(a) => a.init_val(),
+            MeetAggr::Union(a) => a.init_val(),
+            MeetAggr::Intersection(a) => a.init_val(),
+            MeetAggr::Min(a) => a.init_val(),
+            MeetAggr::Max(a) => a.init_val(),
+            MeetAggr::MinCost(a) => a.init_val(),
+            MeetAggr::Shortest(a) => a.init_val(),
+            MeetAggr::Choice(a) => a.init_val(),
+            MeetAggr::BitAnd(a) => a.init_val(),
+            MeetAggr::BitOr(a) => a.init_val(),
+            MeetAggr::HllUnion(a) => a.init_val(),
+        }
     }
 
     pub(crate) fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
-        dispatch_meet_aggr!(self, update, left, right)
+        match self {
+            MeetAggr::And(a) => a.update(left, right),
+            MeetAggr::Or(a) => a.update(left, right),
+            MeetAggr::Union(a) => a.update(left, right),
+            MeetAggr::Intersection(a) => a.update(left, right),
+            MeetAggr::Min(a) => a.update(left, right),
+            MeetAggr::Max(a) => a.update(left, right),
+            MeetAggr::MinCost(a) => a.update(left, right),
+            MeetAggr::Shortest(a) => a.update(left, right),
+            MeetAggr::Choice(a) => a.update(left, right),
+            MeetAggr::BitAnd(a) => a.update(left, right),
+            MeetAggr::BitOr(a) => a.update(left, right),
+            MeetAggr::HllUnion(a) => a.update(left, right),
+        }
     }
 }
 
