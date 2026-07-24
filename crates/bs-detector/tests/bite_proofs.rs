@@ -116,6 +116,24 @@ impl BiteProofs {
             .filter(|c| c.starts_with(&prefix))
             .collect()
     }
+
+    /// Shared meta-engine "exactly one hit" assertion (tip 1022 copy_detector).
+    fn require_one_meta_hit(&self, hits: &[Hit]) -> BiteOutcome {
+        self.require_eq(hits.len(), 1, BiteProofRefuse::HitCount)
+    }
+
+    /// Pass-fixture must stay quiet for an unclassified kind (tip 1022).
+    fn require_unclassified_pass_quiet(&self, fixture: &str, kind: &str) -> BiteOutcome {
+        let pass = self.fixture_src(fixture).map_err(|_| BiteProofRefuse::Fixture)?;
+        let pass_hits = self
+            .classify_fixture("crates/probe/src/lib.rs", &pass)
+            .map_err(|_| BiteProofRefuse::Classify)?;
+        self.require_eq(
+            self.unclassified_prefix_hits(&pass_hits, kind),
+            Vec::<&str>::new(),
+            BiteProofRefuse::Construct,
+        )
+    }
 }
 
 const P: BiteProofs = BiteProofs;
@@ -470,9 +488,9 @@ fn bite_agreement_registry() -> BiteOutcome {
 
 #[test]
 fn bite_coverage() -> BiteOutcome {
+    // Adversary: existing path with zero visited files → coverage hole.
     let b = Boundary::admit(vec![], vec![], vec![RelPath::admit("crates/x/src/lib.rs")]);
-    P.require_eq(meta::META.coverage(&b).len(), 1, BiteProofRefuse::HitCount)?;
-    Ok(())
+    P.require_one_meta_hit(&meta::META.coverage(&b))
 }
 
 #[test]
@@ -482,16 +500,15 @@ fn bite_unparsed() -> BiteOutcome {
         vec![UnparsedFile::admit("crates/x/src/broken.rs", "expected `{`")],
         vec![RelPath::admit("crates/x/src/broken.rs")],
     );
-    P.require_eq(meta::META.unparsed(&b).len(), 1, BiteProofRefuse::HitCount)?;
-    Ok(())
+    P.require_one_meta_hit(&meta::META.unparsed(&b))
 }
 
 #[test]
 fn bite_forbid_roots() -> BiteOutcome {
+    // Adversary: parsed crate root without #![forbid(unsafe_code)].
     let f = P.parsed("crates/x/src/lib.rs", "pub fn f() {}")?;
     let b = Boundary::admit(vec![f], vec![], vec![RelPath::admit("crates/x/src/lib.rs")]);
-    P.require_eq(meta::META.forbid_roots(&b).len(), 1, BiteProofRefuse::HitCount)?;
-    Ok(())
+    P.require_one_meta_hit(&meta::META.forbid_roots(&b))
 }
 
 // --- TRUTH item 10: execution checks + campaign artifact -------------------
@@ -812,36 +829,20 @@ fn bite_unclassified_trait_fn() -> BiteOutcome {
     Ok(())
 }
 
+/// Pass-only kinds (no honest DENY detonation). One table-driven bite keeps
+/// every distinct fixture/kind case; the four near-identical twins are gone
+/// (tip 1022 — vacuous structure collapsed, adversary rows kept).
 #[test]
-fn bite_unclassified_mod_pass_only_vacuous() -> BiteOutcome {
-    // ModuleNoPathAttr seats every mod — DENY cannot honestly detonate.
-    let pass = P.fixture_src("module.pass.rs").map_err(|_| BiteProofRefuse::Fixture)?;
-    let pass_hits = P.classify_fixture("crates/probe/src/lib.rs", &pass).map_err(|_| BiteProofRefuse::Classify)?;
-    P.require_eq(P.unclassified_prefix_hits(&pass_hits, "mod"), Vec::<&str>::new(), BiteProofRefuse::Construct)?;
-    Ok(())
-}
-
-#[test]
-fn bite_unclassified_const_pass_only_vacuous() -> BiteOutcome {
-    let pass = P.fixture_src("unclassified-const.pass.rs").map_err(|_| BiteProofRefuse::Fixture)?;
-    let pass_hits = P.classify_fixture("crates/probe/src/lib.rs", &pass).map_err(|_| BiteProofRefuse::Classify)?;
-    P.require_eq(P.unclassified_prefix_hits(&pass_hits, "const"), Vec::<&str>::new(), BiteProofRefuse::Construct)?;
-    Ok(())
-}
-
-#[test]
-fn bite_unclassified_impl_const_pass_only_vacuous() -> BiteOutcome {
-    let pass = P.fixture_src("unclassified-impl-const.pass.rs").map_err(|_| BiteProofRefuse::Fixture)?;
-    let pass_hits = P.classify_fixture("crates/probe/src/lib.rs", &pass).map_err(|_| BiteProofRefuse::Classify)?;
-    P.require_eq(P.unclassified_prefix_hits(&pass_hits, "impl-const"), Vec::<&str>::new(), BiteProofRefuse::Construct)?;
-    Ok(())
-}
-
-#[test]
-fn bite_unclassified_trait_const_pass_only_vacuous() -> BiteOutcome {
-    let pass = P.fixture_src("unclassified-trait-const.pass.rs").map_err(|_| BiteProofRefuse::Fixture)?;
-    let pass_hits = P.classify_fixture("crates/probe/src/lib.rs", &pass).map_err(|_| BiteProofRefuse::Classify)?;
-    P.require_eq(P.unclassified_prefix_hits(&pass_hits, "trait-const"), Vec::<&str>::new(), BiteProofRefuse::Construct)?;
+fn bite_unclassified_pass_only_kinds_stay_quiet() -> BiteOutcome {
+    for (fixture, kind) in [
+        // ModuleNoPathAttr seats every mod — DENY cannot honestly detonate.
+        ("module.pass.rs", "mod"),
+        ("unclassified-const.pass.rs", "const"),
+        ("unclassified-impl-const.pass.rs", "impl-const"),
+        ("unclassified-trait-const.pass.rs", "trait-const"),
+    ] {
+        P.require_unclassified_pass_quiet(fixture, kind)?;
+    }
     Ok(())
 }
 
