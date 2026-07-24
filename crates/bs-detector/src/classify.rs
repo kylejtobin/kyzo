@@ -26,12 +26,21 @@
 //! hides an unseated item inside an expression or type body.
 
 use quote::ToTokens;
+use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 
 use crate::alias::AliasTable;
 use crate::boundary::SourceFile;
 use crate::engines::Hit;
 use crate::grammar::{Disposition, Grammar, KindName, StructuralRule};
+
+struct Ctx<'a> {
+    rel: &'a str,
+    grammar: &'a Grammar,
+    aliases: &'a AliasTable,
+    self_ty: Option<&'a syn::Type>,
+    in_container: bool,
+}
 
 /// Classify every item in `file` under the workspace alias table (item 4).
 pub fn classify_file(grammar: &Grammar, file: &SourceFile, aliases: &AliasTable) -> Vec<Hit> {
@@ -44,7 +53,7 @@ pub fn classify_file(grammar: &Grammar, file: &SourceFile, aliases: &AliasTable)
         in_container: false,
     };
     for item in &file.ast().items {
-        classify_item(&ctx, item, &mut hits);
+        ctx.classify_item(item, &mut hits);
     }
     hits
 }
@@ -101,128 +110,8 @@ pub fn scoped_construct_spans(
         self_ty: None,
         in_container: false,
     };
-    collect_scoped_spans_items(&ctx, &file.ast().items, &mut out);
+    ctx.collect_scoped_spans_items(&file.ast().items, &mut out);
     out
-}
-
-fn collect_scoped_spans_items(ctx: &Ctx, items: &[syn::Item], out: &mut Vec<ScopedConstructSpan>) {
-    for item in items {
-        match item {
-            syn::Item::Fn(f) => {
-                push_scoped_fn_span(ctx, &f.sig, f, out);
-                collect_scoped_spans_block(ctx, &f.block, out);
-            }
-            syn::Item::Impl(im) => {
-                let inner = Ctx {
-                    rel: ctx.rel,
-                    grammar: ctx.grammar,
-                    aliases: ctx.aliases,
-                    self_ty: Some(&im.self_ty),
-                    in_container: true,
-                };
-                for it in &im.items {
-                    if let syn::ImplItem::Fn(f) = it {
-                        push_scoped_fn_span(&inner, &f.sig, f, out);
-                        collect_scoped_spans_block(&inner, &f.block, out);
-                    }
-                }
-            }
-            syn::Item::Trait(t) => {
-                let inner = Ctx {
-                    rel: ctx.rel,
-                    grammar: ctx.grammar,
-                    aliases: ctx.aliases,
-                    self_ty: None,
-                    in_container: true,
-                };
-                for it in &t.items {
-                    if let syn::TraitItem::Fn(f) = it {
-                        push_scoped_fn_span(&inner, &f.sig, f, out);
-                        if let Some(block) = &f.default {
-                            collect_scoped_spans_block(&inner, block, out);
-                        }
-                    }
-                }
-            }
-            syn::Item::Mod(m) => {
-                if let Some((_, items)) = &m.content {
-                    collect_scoped_spans_items(ctx, items, out);
-                }
-            }
-            _other => {}
-        }
-    }
-}
-
-fn collect_scoped_spans_block(ctx: &Ctx, block: &syn::Block, out: &mut Vec<ScopedConstructSpan>) {
-    for stmt in &block.stmts {
-        if let syn::Stmt::Item(it) = stmt {
-            collect_scoped_spans_items(ctx, std::slice::from_ref(it), out);
-        }
-    }
-}
-
-fn push_scoped_fn_span<T: syn::spanned::Spanned>(
-    ctx: &Ctx,
-    sig: &syn::Signature,
-    whole: &T,
-    out: &mut Vec<ScopedConstructSpan>,
-) {
-    for c in ctx.grammar.constructs() {
-        if c.bans().is_empty() {
-            continue;
-        }
-        if !shape_only_fn_matches(c.rule(), sig, ctx) {
-            continue;
-        }
-        let span = whole.span();
-        out.push(ScopedConstructSpan::admit(
-            crate::boundary::span_line(&span),
-            span.end().line,
-            c.bans().to_vec(),
-        ));
-    }
-}
-
-/// Receiver/async/return shape of a construct rule, ignoring body bans that
-/// live in `construct.bans` (those fire via run.rs span containment).
-fn shape_only_fn_matches(rule: StructuralRule, sig: &syn::Signature, ctx: &Ctx) -> bool {
-    let receiver = receiver_form(sig);
-    match rule {
-        StructuralRule::TransitionBans => {
-            receiver == Receiver::RefMutSelf && sig.asyncness.is_none()
-        }
-        StructuralRule::ConsumingVerbBans => {
-            receiver == Receiver::ByValueSelf
-                && sig.asyncness.is_none()
-                && !return_resolves_to_self(&sig.output, ctx.self_ty, false)
-        }
-        StructuralRule::DerivationBans => {
-            receiver == Receiver::RefSelf && sig.asyncness.is_none()
-        }
-        StructuralRule::AdmissionDoorBans => {
-            is_admission_door_shape(sig, ctx) && sig.asyncness.is_none()
-        }
-        StructuralRule::CompositionRootBody => is_composition_root_shape(sig, ctx) && sig.asyncness.is_none(),
-        StructuralRule::DeclaredFnSeat => receiver == Receiver::None,
-        _rule_not_fn_scoped => false,
-    }
-}
-
-struct Ctx<'a> {
-    rel: &'a str,
-    grammar: &'a Grammar,
-    aliases: &'a AliasTable,
-    self_ty: Option<&'a syn::Type>,
-    in_container: bool,
-}
-
-fn hit(rel: &str, line: usize, construct: impl AsRef<str>) -> Hit {
-    Hit::admit(rel, line, construct.as_ref())
-}
-
-fn line_of<T: ?Sized + syn::spanned::Spanned>(node: &T) -> usize {
-    crate::boundary::span_line(&node.span())
 }
 
 // ---------------------------------------------------------------------------
@@ -260,9 +149,6 @@ impl SynMember<'_> {
             SynMember::Item(syn::Item::Union(_)) => Some(KindName::Union),
             SynMember::Item(syn::Item::Use(_)) => Some(KindName::Use),
             SynMember::Item(syn::Item::Verbatim(_)) => Some(KindName::Verbatim),
-            // Named (not bare `_`) so a future syn variant is a visible red,
-            // never a silent catch-all. Leading underscore = unused-ok without
-            // a `let _ =` discard.
             SynMember::Item(_unrecognized_item_variant) => None,
             SynMember::Impl(syn::ImplItem::Const(_)) => Some(KindName::ImplConst),
             SynMember::Impl(syn::ImplItem::Fn(_)) => Some(KindName::ImplFn),
@@ -278,167 +164,619 @@ impl SynMember<'_> {
             SynMember::Trait(_unrecognized_trait_item_variant) => None,
         }
     }
-}
 
-fn item_label(item: &syn::Item) -> String {
-    match item {
-        syn::Item::Const(i) => i.ident.to_string(),
-        syn::Item::Enum(i) => i.ident.to_string(),
-        syn::Item::Fn(i) => i.sig.ident.to_string(),
-        syn::Item::Mod(i) => i.ident.to_string(),
-        syn::Item::Static(i) => i.ident.to_string(),
-        syn::Item::Struct(i) => i.ident.to_string(),
-        syn::Item::Trait(i) => i.ident.to_string(),
-        syn::Item::Type(i) => i.ident.to_string(),
-        syn::Item::Use(_) => "use".to_string(),
-        syn::Item::Impl(i) => i.self_ty.to_token_stream().to_string(),
-        unlabeled_item_variant => unlabeled_item_variant.to_token_stream().to_string(),
+    fn item_label(&self) -> String {
+        let SynMember::Item(item) = self else {
+            return "?".to_string();
+        };
+        match item {
+            syn::Item::Const(i) => i.ident.to_string(),
+            syn::Item::Enum(i) => i.ident.to_string(),
+            syn::Item::Fn(i) => i.sig.ident.to_string(),
+            syn::Item::Mod(i) => i.ident.to_string(),
+            syn::Item::Static(i) => i.ident.to_string(),
+            syn::Item::Struct(i) => i.ident.to_string(),
+            syn::Item::Trait(i) => i.ident.to_string(),
+            syn::Item::Type(i) => i.ident.to_string(),
+            syn::Item::Use(_) => "use".to_string(),
+            syn::Item::Impl(i) => i.self_ty.to_token_stream().to_string(),
+            unlabeled_item_variant => unlabeled_item_variant.to_token_stream().to_string(),
+        }
     }
 }
 
-// ---------------------------------------------------------------------------
-// walk: items, container interiors, and one level of fn-body-local items
-// ---------------------------------------------------------------------------
+impl<'a> Ctx<'a> {
+    fn hit(&self, line: usize, construct: impl AsRef<str>) -> Hit {
+        Hit::admit(self.rel, line, construct.as_ref())
+    }
 
-fn classify_item(ctx: &Ctx, item: &syn::Item, hits: &mut Vec<Hit>) {
-    let Some(kind) = SynMember::Item(item).kind() else {
-        hits.push(hit(ctx.rel, line_of(item), "unknown-syn-item-kind"));
-        return;
-    };
-    match ctx.grammar.disposition(kind) {
-        None => hits.push(hit(ctx.rel, line_of(item), "kind-table-mutated-post-load")),
-        Some(Disposition::Condemned { law }) => {
-            hits.push(hit(ctx.rel, line_of(item), law.as_str()))
+    fn line_of<T: ?Sized + syn::spanned::Spanned>(&self, node: &T) -> usize {
+        crate::boundary::span_line(&node.span())
+    }
+
+    fn nested(&self) -> Ctx<'a> {
+        Ctx {
+            rel: self.rel,
+            grammar: self.grammar,
+            aliases: self.aliases,
+            self_ty: None,
+            in_container: false,
         }
-        Some(Disposition::Seated(seats)) => {
-            // Item 3: classification emits the unique construct name, or red.
-            // `.any()` soft-drain deleted — zero or two matches are both red.
-            if seat_matches_item(ctx, item, seats).is_none() {
-                hits.push(hit(
-                    ctx.rel,
-                    line_of(item),
-                    format!("unclassified-{}:{}", kind.kebab(), item_label(item)),
-                ));
+    }
+
+    fn in_container(&self, self_ty: Option<&'a syn::Type>) -> Ctx<'a> {
+        Ctx {
+            rel: self.rel,
+            grammar: self.grammar,
+            aliases: self.aliases,
+            self_ty,
+            in_container: true,
+        }
+    }
+
+    fn construct_rule(&self, name: &str) -> Option<StructuralRule> {
+        self.grammar
+            .constructs()
+            .iter()
+            .find(|c| c.name() == name)
+            .map(|c| c.rule())
+    }
+
+    fn exactly_one_seat_name<'b>(&self, matches: impl Iterator<Item = &'b str>) -> Option<&'b str> {
+        let mut found: Option<&'b str> = None;
+        for name in matches {
+            if found.is_some() {
+                return None;
+            }
+            found = Some(name);
+        }
+        found
+    }
+
+    fn collect_scoped_spans_items(&self, items: &[syn::Item], out: &mut Vec<ScopedConstructSpan>) {
+        for item in items {
+            match item {
+                syn::Item::Fn(f) => {
+                    self.push_scoped_fn_span(&f.sig, f, out);
+                    self.collect_scoped_spans_block(&f.block, out);
+                }
+                syn::Item::Impl(im) => {
+                    let inner = self.in_container(Some(&im.self_ty));
+                    for it in &im.items {
+                        if let syn::ImplItem::Fn(f) = it {
+                            inner.push_scoped_fn_span(&f.sig, f, out);
+                            inner.collect_scoped_spans_block(&f.block, out);
+                        }
+                    }
+                }
+                syn::Item::Trait(t) => {
+                    let inner = self.in_container(None);
+                    for it in &t.items {
+                        if let syn::TraitItem::Fn(f) = it {
+                            inner.push_scoped_fn_span(&f.sig, f, out);
+                            if let Some(block) = &f.default {
+                                inner.collect_scoped_spans_block(block, out);
+                            }
+                        }
+                    }
+                }
+                syn::Item::Mod(m) => {
+                    if let Some((_, items)) = &m.content {
+                        self.collect_scoped_spans_items(items, out);
+                    }
+                }
+                _other => {}
             }
         }
     }
-    recurse_into_item(ctx, item, hits);
-}
 
-fn recurse_into_item(ctx: &Ctx, item: &syn::Item, hits: &mut Vec<Hit>) {
-    match item {
-        syn::Item::Mod(m) => {
-            if let Some((_, items)) = &m.content {
-                for it in items {
-                    classify_item(ctx, it, hits);
-                }
+    fn collect_scoped_spans_block(&self, block: &syn::Block, out: &mut Vec<ScopedConstructSpan>) {
+        for stmt in &block.stmts {
+            if let syn::Stmt::Item(it) = stmt {
+                self.collect_scoped_spans_items(std::slice::from_ref(it), out);
             }
         }
-        syn::Item::Fn(f) => {
-            // Tip 686: signature type-position const exprs (arg/return/generics)
-            // are nests; block walk alone silent-greened them.
-            classify_signature_items(ctx, &f.sig, hits);
-            classify_block_items(ctx, &f.block, hits);
-        }
-        // Tip 650: const/static RHS blocks are legal item nests in Rust.
-        // Treating them as non-containers silent-greened nested unseated items.
-        // Tip 686: the type annotation is a separate nest surface.
-        syn::Item::Const(c) => {
-            classify_type_items(ctx, &c.ty, hits);
-            classify_expr_items(ctx, &c.expr, hits);
-        }
-        syn::Item::Static(s) => {
-            classify_type_items(ctx, &s.ty, hits);
-            classify_expr_items(ctx, &s.expr, hits);
-        }
-        // Tip 686: enum discriminant exprs + variant field types hold nests.
-        syn::Item::Enum(e) => {
-            classify_generics_items(ctx, &e.generics, hits);
-            for v in &e.variants {
-                for f in &v.fields {
-                    classify_type_items(ctx, &f.ty, hits);
-                }
-                if let Some((_, expr)) = &v.discriminant {
-                    classify_expr_items(ctx, expr, hits);
-                }
-            }
-        }
-        syn::Item::Struct(s) => {
-            classify_generics_items(ctx, &s.generics, hits);
-            for f in &s.fields {
-                classify_type_items(ctx, &f.ty, hits);
-            }
-        }
-        syn::Item::Union(u) => {
-            classify_generics_items(ctx, &u.generics, hits);
-            for f in &u.fields.named {
-                classify_type_items(ctx, &f.ty, hits);
-            }
-        }
-        syn::Item::Type(t) => {
-            classify_generics_items(ctx, &t.generics, hits);
-            classify_type_items(ctx, &t.ty, hits);
-        }
-        syn::Item::Impl(i) => {
-            classify_generics_items(ctx, &i.generics, hits);
-            if let Some((_, trait_path, _)) = &i.trait_ {
-                classify_path_items(ctx, trait_path, hits);
-            }
-            classify_type_items(ctx, &i.self_ty, hits);
-            let inner = Ctx {
-                rel: ctx.rel,
-                grammar: ctx.grammar,
-                aliases: ctx.aliases,
-                self_ty: Some(&i.self_ty),
-                in_container: true,
-            };
-            for it in &i.items {
-                classify_impl_item(&inner, it, hits);
-            }
-        }
-        syn::Item::Trait(t) => {
-            classify_generics_items(ctx, &t.generics, hits);
-            // Tip 686: supertrait bounds are a separate nest surface from
-            // generics/where — skipping them silent-greened bound nests.
-            classify_bounds_items(ctx, &t.supertraits, hits);
-            let inner = Ctx {
-                rel: ctx.rel,
-                grammar: ctx.grammar,
-                aliases: ctx.aliases,
-                self_ty: None,
-                in_container: true,
-            };
-            for it in &t.items {
-                classify_trait_item(&inner, it, hits);
-            }
-        }
-        // Tip 686: trait-alias bounds hold type-position nests.
-        syn::Item::TraitAlias(t) => {
-            classify_generics_items(ctx, &t.generics, hits);
-            classify_bounds_items(ctx, &t.bounds, hits);
-        }
-        // Tip 686: foreign interiors — the extern block is condemned as a
-        // unit, but type-position nests inside foreign sigs/statics were a
-        // silent-green drain.
-        syn::Item::ForeignMod(m) => {
-            for it in &m.items {
-                classify_foreign_item(ctx, it, hits);
-            }
-        }
-        _not_a_container => {}
     }
-}
 
-/// Nested items are NOT impl/trait members — `in_container` must not
-/// bleed from the enclosing method or a nested `fn` false-greens as
-/// admission-door (tip 650 hard-count: no soft drain).
-fn nested_item_ctx<'a>(ctx: &Ctx<'a>) -> Ctx<'a> {
-    Ctx {
-        rel: ctx.rel,
-        grammar: ctx.grammar,
-        aliases: ctx.aliases,
-        self_ty: None,
-        in_container: false,
+    fn push_scoped_fn_span<T: syn::spanned::Spanned>(
+        &self,
+        sig: &syn::Signature,
+        whole: &T,
+        out: &mut Vec<ScopedConstructSpan>,
+    ) {
+        for c in self.grammar.constructs() {
+            if c.bans().is_empty() {
+                continue;
+            }
+            if !self.shape_only_fn_matches(c.rule(), sig) {
+                continue;
+            }
+            let span = whole.span();
+            out.push(ScopedConstructSpan::admit(
+                crate::boundary::span_line(&span),
+                span.end().line,
+                c.bans().to_vec(),
+            ));
+        }
+    }
+
+    fn shape_only_fn_matches(&self, rule: StructuralRule, sig: &syn::Signature) -> bool {
+        let receiver = SigView(sig).receiver_form();
+        match rule {
+            StructuralRule::TransitionBans => {
+                receiver == Receiver::RefMutSelf && sig.asyncness.is_none()
+            }
+            StructuralRule::ConsumingVerbBans => {
+                receiver == Receiver::ByValueSelf
+                    && sig.asyncness.is_none()
+                    && !self.return_resolves_to_self(&sig.output, false)
+            }
+            StructuralRule::DerivationBans => {
+                receiver == Receiver::RefSelf && sig.asyncness.is_none()
+            }
+            StructuralRule::AdmissionDoorBans => {
+                self.is_admission_door_shape(sig) && sig.asyncness.is_none()
+            }
+            StructuralRule::CompositionRootBody => {
+                self.is_composition_root_shape(sig) && sig.asyncness.is_none()
+            }
+            StructuralRule::DeclaredFnSeat => receiver == Receiver::None,
+            _rule_not_fn_scoped => false,
+        }
+    }
+
+    fn classify_item(&self, item: &syn::Item, hits: &mut Vec<Hit>) {
+        let Some(kind) = SynMember::Item(item).kind() else {
+            hits.push(self.hit(self.line_of(item), "unknown-syn-item-kind"));
+            return;
+        };
+        match self.grammar.disposition(kind) {
+            None => hits.push(self.hit(self.line_of(item), "kind-table-mutated-post-load")),
+            Some(Disposition::Condemned { law }) => {
+                hits.push(self.hit(self.line_of(item), law.as_str()))
+            }
+            Some(Disposition::Seated(seats)) => {
+                if self.seat_matches_item(item, seats).is_none() {
+                    hits.push(self.hit(
+                        self.line_of(item),
+                        format!(
+                            "unclassified-{}:{}",
+                            kind.kebab(),
+                            SynMember::Item(item).item_label()
+                        ),
+                    ));
+                }
+            }
+        }
+        self.recurse_into_item(item, hits);
+    }
+
+    fn recurse_into_item(&self, item: &syn::Item, hits: &mut Vec<Hit>) {
+        match item {
+            syn::Item::Mod(m) => {
+                if let Some((_, items)) = &m.content {
+                    for it in items {
+                        self.classify_item(it, hits);
+                    }
+                }
+            }
+            syn::Item::Fn(f) => {
+                self.classify_signature_items(&f.sig, hits);
+                self.classify_block_items(&f.block, hits);
+            }
+            syn::Item::Const(c) => {
+                self.classify_type_items(&c.ty, hits);
+                self.classify_expr_items(&c.expr, hits);
+            }
+            syn::Item::Static(s) => {
+                self.classify_type_items(&s.ty, hits);
+                self.classify_expr_items(&s.expr, hits);
+            }
+            syn::Item::Enum(e) => {
+                self.classify_generics_items(&e.generics, hits);
+                for v in &e.variants {
+                    for f in &v.fields {
+                        self.classify_type_items(&f.ty, hits);
+                    }
+                    if let Some((_, expr)) = &v.discriminant {
+                        self.classify_expr_items(expr, hits);
+                    }
+                }
+            }
+            syn::Item::Struct(s) => {
+                self.classify_generics_items(&s.generics, hits);
+                for f in &s.fields {
+                    self.classify_type_items(&f.ty, hits);
+                }
+            }
+            syn::Item::Union(u) => {
+                self.classify_generics_items(&u.generics, hits);
+                for f in &u.fields.named {
+                    self.classify_type_items(&f.ty, hits);
+                }
+            }
+            syn::Item::Type(t) => {
+                self.classify_generics_items(&t.generics, hits);
+                self.classify_type_items(&t.ty, hits);
+            }
+            syn::Item::Impl(i) => {
+                self.classify_generics_items(&i.generics, hits);
+                if let Some((_, trait_path, _)) = &i.trait_ {
+                    self.classify_path_items(trait_path, hits);
+                }
+                self.classify_type_items(&i.self_ty, hits);
+                let inner = self.in_container(Some(&i.self_ty));
+                for it in &i.items {
+                    inner.classify_impl_item(it, hits);
+                }
+            }
+            syn::Item::Trait(t) => {
+                self.classify_generics_items(&t.generics, hits);
+                self.classify_bounds_items(&t.supertraits, hits);
+                let inner = self.in_container(None);
+                for it in &t.items {
+                    inner.classify_trait_item(it, hits);
+                }
+            }
+            syn::Item::TraitAlias(t) => {
+                self.classify_generics_items(&t.generics, hits);
+                self.classify_bounds_items(&t.bounds, hits);
+            }
+            syn::Item::ForeignMod(m) => {
+                for it in &m.items {
+                    self.classify_foreign_item(it, hits);
+                }
+            }
+            _not_a_container => {}
+        }
+    }
+
+    fn classify_block_items(&self, block: &syn::Block, hits: &mut Vec<Hit>) {
+        let nested_ctx = self.nested();
+        let mut v = NestedItemVisit {
+            ctx: &nested_ctx,
+            hits,
+        };
+        for stmt in &block.stmts {
+            v.visit_stmt(stmt);
+        }
+    }
+
+    fn classify_expr_items(&self, expr: &syn::Expr, hits: &mut Vec<Hit>) {
+        let nested_ctx = self.nested();
+        let mut v = NestedItemVisit {
+            ctx: &nested_ctx,
+            hits,
+        };
+        v.visit_expr(expr);
+    }
+
+    fn classify_type_items(&self, ty: &syn::Type, hits: &mut Vec<Hit>) {
+        let nested_ctx = self.nested();
+        let mut v = NestedItemVisit {
+            ctx: &nested_ctx,
+            hits,
+        };
+        v.visit_type(ty);
+    }
+
+    fn classify_path_items(&self, path: &syn::Path, hits: &mut Vec<Hit>) {
+        let nested_ctx = self.nested();
+        let mut v = NestedItemVisit {
+            ctx: &nested_ctx,
+            hits,
+        };
+        v.visit_path(path);
+    }
+
+    fn classify_generics_items(&self, generics: &syn::Generics, hits: &mut Vec<Hit>) {
+        let nested_ctx = self.nested();
+        let mut v = NestedItemVisit {
+            ctx: &nested_ctx,
+            hits,
+        };
+        v.visit_generics(generics);
+    }
+
+    fn classify_signature_items(&self, sig: &syn::Signature, hits: &mut Vec<Hit>) {
+        let nested_ctx = self.nested();
+        let mut v = NestedItemVisit {
+            ctx: &nested_ctx,
+            hits,
+        };
+        v.visit_signature(sig);
+    }
+
+    fn classify_bounds_items(
+        &self,
+        bounds: &syn::punctuated::Punctuated<syn::TypeParamBound, syn::token::Plus>,
+        hits: &mut Vec<Hit>,
+    ) {
+        let nested_ctx = self.nested();
+        let mut v = NestedItemVisit {
+            ctx: &nested_ctx,
+            hits,
+        };
+        for bound in bounds {
+            v.visit_type_param_bound(bound);
+        }
+    }
+
+    fn classify_foreign_item(&self, item: &syn::ForeignItem, hits: &mut Vec<Hit>) {
+        match item {
+            syn::ForeignItem::Fn(f) => self.classify_signature_items(&f.sig, hits),
+            syn::ForeignItem::Static(s) => self.classify_type_items(&s.ty, hits),
+            syn::ForeignItem::Type(t) => self.classify_generics_items(&t.generics, hits),
+            syn::ForeignItem::Macro(_) => {}
+            _unrecognized_foreign_item => {}
+        }
+    }
+
+    fn classify_impl_item(&self, item: &syn::ImplItem, hits: &mut Vec<Hit>) {
+        self.classify_container_member(ContainerMember::Impl(item), hits);
+    }
+
+    fn classify_trait_item(&self, item: &syn::TraitItem, hits: &mut Vec<Hit>) {
+        self.classify_container_member(ContainerMember::Trait(item), hits);
+    }
+
+    fn classify_container_member(&self, member: ContainerMember<'_>, hits: &mut Vec<Hit>) {
+        let (kind, unknown) = match member {
+            ContainerMember::Impl(item) => (SynMember::Impl(item).kind(), "unknown-syn-implitem-kind"),
+            ContainerMember::Trait(item) => (SynMember::Trait(item).kind(), "unknown-syn-traititem-kind"),
+        };
+        let Some(kind) = kind else {
+            hits.push(self.hit(0, unknown));
+            return;
+        };
+        match self.grammar.disposition(kind) {
+            None => hits.push(self.hit(0, "kind-table-mutated-post-load")),
+            Some(Disposition::Condemned { law }) => {
+                hits.push(self.hit(member.condemned_line(), law.as_str()));
+            }
+            Some(Disposition::Seated(seats)) => {
+                let seated = match member {
+                    ContainerMember::Impl(item) => self.seat_matches_impl_item(item, seats),
+                    ContainerMember::Trait(item) => self.seat_matches_trait_item(item, seats),
+                };
+                if seated.is_none() {
+                    let (line, label) = member.label();
+                    hits.push(self.hit(
+                        line,
+                        format!("unclassified-{}:{}", kind.kebab(), label),
+                    ));
+                }
+            }
+        }
+        match member {
+            ContainerMember::Impl(syn::ImplItem::Fn(f)) => {
+                self.classify_signature_items(&f.sig, hits);
+                self.classify_block_items(&f.block, hits);
+            }
+            ContainerMember::Trait(syn::TraitItem::Fn(f)) => {
+                self.classify_signature_items(&f.sig, hits);
+                if let Some(block) = &f.default {
+                    self.classify_block_items(block, hits);
+                }
+            }
+            ContainerMember::Impl(syn::ImplItem::Const(c)) => {
+                self.classify_type_items(&c.ty, hits);
+                self.classify_expr_items(&c.expr, hits);
+            }
+            ContainerMember::Trait(syn::TraitItem::Const(c)) => {
+                self.classify_type_items(&c.ty, hits);
+                if let Some((_, expr)) = &c.default {
+                    self.classify_expr_items(expr, hits);
+                }
+            }
+            ContainerMember::Impl(syn::ImplItem::Type(t)) => {
+                self.classify_generics_items(&t.generics, hits);
+                self.classify_type_items(&t.ty, hits);
+            }
+            ContainerMember::Trait(syn::TraitItem::Type(t)) => {
+                self.classify_generics_items(&t.generics, hits);
+                self.classify_bounds_items(&t.bounds, hits);
+                if let Some((_, ty)) = &t.default {
+                    self.classify_type_items(ty, hits);
+                }
+            }
+            ContainerMember::Impl(_not_fn_const_or_type) => {}
+            ContainerMember::Trait(_not_fn_const_or_type) => {}
+        }
+    }
+
+    fn seat_matches_item<'b>(
+        &self,
+        item: &syn::Item,
+        seats: &'b [crate::boundary::Label],
+    ) -> Option<&'b str> {
+        self.exactly_one_seat_name(seats.iter().filter_map(|name| {
+            self.construct_rule(name.as_str())
+                .filter(|rule| self.rule_matches_item(*rule, item))
+                .map(|_| name.as_str())
+        }))
+    }
+
+    fn seat_matches_impl_item<'b>(
+        &self,
+        item: &syn::ImplItem,
+        seats: &'b [crate::boundary::Label],
+    ) -> Option<&'b str> {
+        self.exactly_one_seat_name(seats.iter().filter_map(|name| {
+            self.construct_rule(name.as_str())
+                .filter(|rule| self.rule_matches_impl_item(*rule, item))
+                .map(|_| name.as_str())
+        }))
+    }
+
+    fn seat_matches_trait_item<'b>(
+        &self,
+        item: &syn::TraitItem,
+        seats: &'b [crate::boundary::Label],
+    ) -> Option<&'b str> {
+        self.exactly_one_seat_name(seats.iter().filter_map(|name| {
+            self.construct_rule(name.as_str())
+                .filter(|rule| self.rule_matches_trait_item(*rule, item))
+                .map(|_| name.as_str())
+        }))
+    }
+
+    fn rule_matches_item(&self, rule: StructuralRule, item: &syn::Item) -> bool {
+        match item {
+            syn::Item::Struct(s) => self.struct_matches(rule, s),
+            syn::Item::Enum(e) => self.enum_matches(rule, e),
+            syn::Item::Fn(f) => self.fn_matches(rule, &f.sig, Some(&f.block), f),
+            syn::Item::Type(t) => self.alias_matches(rule, &t.ty),
+            syn::Item::Use(u) => rule.matches_import(u),
+            syn::Item::Const(_) => rule.matches_non_static_const(),
+            syn::Item::Static(s) => rule.matches_static(s),
+            syn::Item::Mod(m) => rule.matches_module(m),
+            syn::Item::Impl(i) => rule.matches_container(self.grammar, |it| SynMember::Impl(it).kind(), &i.items),
+            syn::Item::Trait(t) => rule.matches_container(self.grammar, |it| SynMember::Trait(it).kind(), &t.items),
+            _no_rule_applies_to_this_item_variant => false,
+        }
+    }
+
+    fn rule_matches_impl_item(&self, rule: StructuralRule, item: &syn::ImplItem) -> bool {
+        if let syn::ImplItem::Fn(f) = item {
+            return self.fn_matches(rule, &f.sig, Some(&f.block), f);
+        }
+        if let syn::ImplItem::Type(t) = item {
+            return self.alias_matches(rule, &t.ty);
+        }
+        if let syn::ImplItem::Const(_) = item {
+            return rule.matches_non_static_const();
+        }
+        false
+    }
+
+    fn rule_matches_trait_item(&self, rule: StructuralRule, item: &syn::TraitItem) -> bool {
+        match item {
+            syn::TraitItem::Fn(f) => self.fn_matches(rule, &f.sig, f.default.as_ref(), f),
+            syn::TraitItem::Type(t) => match &t.default {
+                Some((_, ty)) => self.alias_matches(rule, ty),
+                None => matches!(rule, StructuralRule::AliasNoBannedTerminal),
+            },
+            syn::TraitItem::Const(_) => rule.matches_non_static_const(),
+            _no_rule_applies_to_this_trait_item_variant => false,
+        }
+    }
+
+    fn type_is_string_terminal(&self, ty: &syn::Type) -> bool {
+        self.aliases.type_carries_string(self.rel, ty)
+    }
+
+    fn struct_matches(&self, rule: StructuralRule, node: &syn::ItemStruct) -> bool {
+        match rule {
+            StructuralRule::TupleSinglePrivateField => {
+                matches!(&node.fields, syn::Fields::Unnamed(u) if u.unnamed.len() == 1)
+                    && FieldsView(&node.fields).all_private()
+            }
+            StructuralRule::NamedAllPrivateNoStringTerminal => {
+                matches!(&node.fields, syn::Fields::Named(_))
+                    && FieldsView(&node.fields).all_private()
+                    && node.fields.iter().all(|f| !self.type_is_string_terminal(&f.ty))
+            }
+            StructuralRule::UnitStruct => matches!(&node.fields, syn::Fields::Unit),
+            _rule_not_for_struct => false,
+        }
+    }
+
+    fn enum_matches(&self, rule: StructuralRule, node: &syn::ItemEnum) -> bool {
+        match rule {
+            StructuralRule::NoStringVariantFields => node
+                .variants
+                .iter()
+                .all(|v| v.fields.iter().all(|f| !self.type_is_string_terminal(&f.ty))),
+            _rule_not_for_enum => false,
+        }
+    }
+
+    fn alias_matches(&self, rule: StructuralRule, ty: &syn::Type) -> bool {
+        match rule {
+            StructuralRule::AliasNoBannedTerminal => !self.type_is_string_terminal(ty),
+            _rule_not_for_alias => false,
+        }
+    }
+
+    fn return_resolves_to_self(&self, output: &syn::ReturnType, allow_result_option: bool) -> bool {
+        ReturnTypeView(output).resolves_to_self(self.self_ty, allow_result_option)
+    }
+
+    fn is_composition_root_shape(&self, sig: &syn::Signature) -> bool {
+        SigView(sig).receiver_form() == Receiver::None
+            && !self.in_container
+            && sig.ident == "main"
+            && (self.rel.ends_with("/src/main.rs") || self.rel.contains("/src/bin/"))
+    }
+
+    fn is_admission_door_shape(&self, sig: &syn::Signature) -> bool {
+        SigView(sig).receiver_form() == Receiver::None
+            && self.in_container
+            && self.return_resolves_to_self(&sig.output, true)
+    }
+
+    fn declared_fn_matches(
+        &self,
+        sig: &syn::Signature,
+        block: Option<&syn::Block>,
+        whole: &dyn ToTokens,
+    ) -> bool {
+        if self.is_composition_root_shape(sig) || self.is_admission_door_shape(sig) {
+            return false;
+        }
+        let Some(seat) = self.grammar.fn_seat(self.rel, &sig.ident.to_string()) else {
+            return false;
+        };
+        if crate::identity::site_hash(whole) != seat.site_hash() {
+            return false;
+        }
+        if !seat.io() {
+            if sig.asyncness.is_some() {
+                return false;
+            }
+            if !Bodyless(block).ok_or(|b| !BlockBody(b).contains(BodyBan::Await)) {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn fn_matches(
+        &self,
+        rule: StructuralRule,
+        sig: &syn::Signature,
+        block: Option<&syn::Block>,
+        whole: &dyn ToTokens,
+    ) -> bool {
+        let receiver = SigView(sig).receiver_form();
+        match rule {
+            StructuralRule::CompositionRootBody => {
+                self.is_composition_root_shape(sig)
+                    && sig.asyncness.is_none()
+                    && block.is_some_and(|b| BlockBody(b).composition_root_ok())
+            }
+            StructuralRule::DerivationBans => {
+                receiver == Receiver::RefSelf
+                    && sig.asyncness.is_none()
+                    && Bodyless(block).ok_or(|b| !BlockBody(b).contains(BodyBan::Unsafe))
+            }
+            StructuralRule::TransitionBans => {
+                receiver == Receiver::RefMutSelf && sig.asyncness.is_none()
+            }
+            StructuralRule::ConsumingVerbBans => {
+                receiver == Receiver::ByValueSelf
+                    && sig.asyncness.is_none()
+                    && !self.return_resolves_to_self(&sig.output, false)
+            }
+            StructuralRule::AdmissionDoorBans => {
+                self.is_admission_door_shape(sig) && sig.asyncness.is_none()
+            }
+            StructuralRule::DeclaredFnSeat => {
+                receiver == Receiver::None && self.declared_fn_matches(sig, block, whole)
+            }
+            _rule_not_for_fn => false,
+        }
     }
 }
 
@@ -449,100 +787,15 @@ struct NestedItemVisit<'a, 'c> {
 
 impl<'ast> Visit<'ast> for NestedItemVisit<'_, '_> {
     fn visit_item(&mut self, node: &'ast syn::Item) {
-        classify_item(self.ctx, node, self.hits);
-        // classify_item already recurses containers; do not
-        // visit_item default-recurse or items double-fire.
+        self.ctx.classify_item(node, self.hits);
     }
     fn visit_stmt(&mut self, node: &'ast syn::Stmt) {
         match node {
             syn::Stmt::Item(it) => {
-                classify_item(self.ctx, it, self.hits);
+                self.ctx.classify_item(it, self.hits);
             }
             other => visit::visit_stmt(self, other),
         }
-    }
-}
-
-fn classify_block_items(ctx: &Ctx, block: &syn::Block, hits: &mut Vec<Hit>) {
-    let nested_ctx = nested_item_ctx(ctx);
-    let mut v = NestedItemVisit {
-        ctx: &nested_ctx,
-        hits,
-    };
-    for stmt in &block.stmts {
-        v.visit_stmt(stmt);
-    }
-}
-
-fn classify_expr_items(ctx: &Ctx, expr: &syn::Expr, hits: &mut Vec<Hit>) {
-    let nested_ctx = nested_item_ctx(ctx);
-    let mut v = NestedItemVisit {
-        ctx: &nested_ctx,
-        hits,
-    };
-    v.visit_expr(expr);
-}
-
-/// Tip 686: type-position const exprs (array lens, const generics) nest items.
-fn classify_type_items(ctx: &Ctx, ty: &syn::Type, hits: &mut Vec<Hit>) {
-    let nested_ctx = nested_item_ctx(ctx);
-    let mut v = NestedItemVisit {
-        ctx: &nested_ctx,
-        hits,
-    };
-    v.visit_type(ty);
-}
-
-fn classify_path_items(ctx: &Ctx, path: &syn::Path, hits: &mut Vec<Hit>) {
-    let nested_ctx = nested_item_ctx(ctx);
-    let mut v = NestedItemVisit {
-        ctx: &nested_ctx,
-        hits,
-    };
-    v.visit_path(path);
-}
-
-fn classify_generics_items(ctx: &Ctx, generics: &syn::Generics, hits: &mut Vec<Hit>) {
-    let nested_ctx = nested_item_ctx(ctx);
-    let mut v = NestedItemVisit {
-        ctx: &nested_ctx,
-        hits,
-    };
-    v.visit_generics(generics);
-}
-
-fn classify_signature_items(ctx: &Ctx, sig: &syn::Signature, hits: &mut Vec<Hit>) {
-    let nested_ctx = nested_item_ctx(ctx);
-    let mut v = NestedItemVisit {
-        ctx: &nested_ctx,
-        hits,
-    };
-    v.visit_signature(sig);
-}
-
-fn classify_bounds_items(
-    ctx: &Ctx,
-    bounds: &syn::punctuated::Punctuated<syn::TypeParamBound, syn::token::Plus>,
-    hits: &mut Vec<Hit>,
-) {
-    let nested_ctx = nested_item_ctx(ctx);
-    let mut v = NestedItemVisit {
-        ctx: &nested_ctx,
-        hits,
-    };
-    for bound in bounds {
-        v.visit_type_param_bound(bound);
-    }
-}
-
-fn classify_foreign_item(ctx: &Ctx, item: &syn::ForeignItem, hits: &mut Vec<Hit>) {
-    match item {
-        syn::ForeignItem::Fn(f) => classify_signature_items(ctx, &f.sig, hits),
-        syn::ForeignItem::Static(s) => classify_type_items(ctx, &s.ty, hits),
-        syn::ForeignItem::Type(t) => classify_generics_items(ctx, &t.generics, hits),
-        syn::ForeignItem::Macro(_) => {}
-        // Named (not bare `_`) — future ForeignItem variants are visible.
-        _unrecognized_foreign_item => {}
     }
 }
 
@@ -552,340 +805,82 @@ enum ContainerMember<'a> {
     Trait(&'a syn::TraitItem),
 }
 
-fn classify_impl_item(ctx: &Ctx, item: &syn::ImplItem, hits: &mut Vec<Hit>) {
-    classify_container_member(ctx, ContainerMember::Impl(item), hits);
-}
-
-fn classify_trait_item(ctx: &Ctx, item: &syn::TraitItem, hits: &mut Vec<Hit>) {
-    classify_container_member(ctx, ContainerMember::Trait(item), hits);
-}
-
-fn classify_container_member(ctx: &Ctx, member: ContainerMember<'_>, hits: &mut Vec<Hit>) {
-    let (kind, unknown) = match member {
-        ContainerMember::Impl(item) => (SynMember::Impl(item).kind(), "unknown-syn-implitem-kind"),
-        ContainerMember::Trait(item) => (SynMember::Trait(item).kind(), "unknown-syn-traititem-kind"),
-    };
-    let Some(kind) = kind else {
-        hits.push(hit(ctx.rel, 0, unknown));
-        return;
-    };
-    match ctx.grammar.disposition(kind) {
-        None => hits.push(hit(ctx.rel, 0, "kind-table-mutated-post-load")),
-        Some(Disposition::Condemned { law }) => {
-            hits.push(hit(ctx.rel, container_member_condemned_line(member), law.as_str()));
+impl ContainerMember<'_> {
+    fn condemned_line(self) -> usize {
+        match self {
+            ContainerMember::Impl(syn::ImplItem::Macro(m)) => crate::boundary::span_line(&m.span()),
+            ContainerMember::Impl(item) => crate::boundary::span_line(&item.span()),
+            ContainerMember::Trait(syn::TraitItem::Macro(m)) => crate::boundary::span_line(&m.span()),
+            ContainerMember::Trait(item) => crate::boundary::span_line(&item.span()),
         }
-        Some(Disposition::Seated(seats)) => {
-            let seated = match member {
-                ContainerMember::Impl(item) => seat_matches_impl_item(ctx, item, seats),
-                ContainerMember::Trait(item) => seat_matches_trait_item(ctx, item, seats),
-            };
-            if seated.is_none() {
-                let (line, label) = container_member_label(member);
-                hits.push(hit(
-                    ctx.rel,
-                    line,
-                    format!("unclassified-{}:{}", kind.kebab(), label),
-                ));
+    }
+
+    fn label(self) -> (usize, String) {
+        match self {
+            ContainerMember::Impl(syn::ImplItem::Const(c)) => {
+                (crate::boundary::span_line(&c.span()), c.ident.to_string())
             }
-        }
-    }
-    match member {
-        ContainerMember::Impl(syn::ImplItem::Fn(f)) => {
-            classify_signature_items(ctx, &f.sig, hits);
-            classify_block_items(ctx, &f.block, hits);
-        }
-        ContainerMember::Trait(syn::TraitItem::Fn(f)) => {
-            classify_signature_items(ctx, &f.sig, hits);
-            if let Some(block) = &f.default {
-                classify_block_items(ctx, block, hits);
+            ContainerMember::Impl(syn::ImplItem::Fn(f)) => {
+                (crate::boundary::span_line(&f.span()), f.sig.ident.to_string())
             }
-        }
-        // Tip 650: associated-const RHS nests — same soft drain as Item::Const
-        // when only Fn bodies were walked.
-        ContainerMember::Impl(syn::ImplItem::Const(c)) => {
-            classify_type_items(ctx, &c.ty, hits);
-            classify_expr_items(ctx, &c.expr, hits);
-        }
-        ContainerMember::Trait(syn::TraitItem::Const(c)) => {
-            classify_type_items(ctx, &c.ty, hits);
-            if let Some((_, expr)) = &c.default {
-                classify_expr_items(ctx, expr, hits);
+            ContainerMember::Impl(syn::ImplItem::Type(t)) => {
+                (crate::boundary::span_line(&t.span()), t.ident.to_string())
             }
-        }
-        // Tip 686: associated-type RHS is a type-position nest surface.
-        ContainerMember::Impl(syn::ImplItem::Type(t)) => {
-            classify_generics_items(ctx, &t.generics, hits);
-            classify_type_items(ctx, &t.ty, hits);
-        }
-        ContainerMember::Trait(syn::TraitItem::Type(t)) => {
-            classify_generics_items(ctx, &t.generics, hits);
-            // Tip 686: `type T: Bound<...>` — bounds were a silent-green drain
-            // when only the optional default RHS was walked.
-            classify_bounds_items(ctx, &t.bounds, hits);
-            if let Some((_, ty)) = &t.default {
-                classify_type_items(ctx, ty, hits);
+            ContainerMember::Impl(item) => (crate::boundary::span_line(&item.span()), "?".to_string()),
+            ContainerMember::Trait(syn::TraitItem::Const(c)) => {
+                (crate::boundary::span_line(&c.span()), c.ident.to_string())
             }
-        }
-        ContainerMember::Impl(_not_fn_const_or_type) => {}
-        ContainerMember::Trait(_not_fn_const_or_type) => {}
-    }
-}
-
-fn container_member_condemned_line(member: ContainerMember<'_>) -> usize {
-    match member {
-        ContainerMember::Impl(syn::ImplItem::Macro(m)) => line_of(m),
-        ContainerMember::Impl(other) => line_of(other),
-        ContainerMember::Trait(syn::TraitItem::Macro(m)) => line_of(m),
-        ContainerMember::Trait(other) => line_of(other),
-    }
-}
-
-fn container_member_label(member: ContainerMember<'_>) -> (usize, String) {
-    match member {
-        ContainerMember::Impl(syn::ImplItem::Const(c)) => (line_of(c), c.ident.to_string()),
-        ContainerMember::Impl(syn::ImplItem::Fn(f)) => (line_of(f), f.sig.ident.to_string()),
-        ContainerMember::Impl(syn::ImplItem::Type(t)) => (line_of(t), t.ident.to_string()),
-        ContainerMember::Impl(other) => (line_of(other), "?".to_string()),
-        ContainerMember::Trait(syn::TraitItem::Const(c)) => (line_of(c), c.ident.to_string()),
-        ContainerMember::Trait(syn::TraitItem::Fn(f)) => (line_of(f), f.sig.ident.to_string()),
-        ContainerMember::Trait(syn::TraitItem::Type(t)) => (line_of(t), t.ident.to_string()),
-        ContainerMember::Trait(other) => (line_of(other), "?".to_string()),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// seat matching: EXACTLY ONE named construct's rule matches (item 2: every
-// fn classifies as exactly one skeleton; a second match is a soft drain).
-// ---------------------------------------------------------------------------
-
-fn construct_rule<'a>(grammar: &'a Grammar, name: &str) -> Option<StructuralRule> {
-    grammar
-        .constructs()
-        .iter()
-        .find(|c| c.name() == name)
-        .map(|c| c.rule())
-}
-
-fn exactly_one_name<'a>(matches: impl Iterator<Item = &'a str>) -> Option<&'a str> {
-    let mut found: Option<&'a str> = None;
-    for name in matches {
-        if found.is_some() {
-            return None;
-        }
-        found = Some(name);
-    }
-    found
-}
-
-fn seat_matches_item<'a>(
-    ctx: &Ctx<'a>,
-    item: &syn::Item,
-    seats: &'a [crate::boundary::Label],
-) -> Option<&'a str> {
-    // filter_map: an unknown seat name is skipped (load proved seats resolve;
-    // a post-load ghost cannot green via `None => false` costume).
-    exactly_one_name(seats.iter().filter_map(|name| {
-        construct_rule(ctx.grammar, name.as_str())
-            .filter(|rule| rule_matches_item(ctx, *rule, item))
-            .map(|_| name.as_str())
-    }))
-}
-
-fn seat_matches_impl_item<'a>(
-    ctx: &Ctx<'a>,
-    item: &syn::ImplItem,
-    seats: &'a [crate::boundary::Label],
-) -> Option<&'a str> {
-    exactly_one_name(seats.iter().filter_map(|name| {
-        construct_rule(ctx.grammar, name.as_str())
-            .filter(|rule| rule_matches_impl_item(ctx, *rule, item))
-            .map(|_| name.as_str())
-    }))
-}
-
-fn seat_matches_trait_item<'a>(
-    ctx: &Ctx<'a>,
-    item: &syn::TraitItem,
-    seats: &'a [crate::boundary::Label],
-) -> Option<&'a str> {
-    exactly_one_name(seats.iter().filter_map(|name| {
-        construct_rule(ctx.grammar, name.as_str())
-            .filter(|rule| rule_matches_trait_item(ctx, *rule, item))
-            .map(|_| name.as_str())
-    }))
-}
-
-fn rule_matches_item(ctx: &Ctx, rule: StructuralRule, item: &syn::Item) -> bool {
-    match item {
-        syn::Item::Struct(s) => struct_matches(ctx, rule, s),
-        syn::Item::Enum(e) => enum_matches(ctx, rule, e),
-        syn::Item::Fn(f) => fn_matches(rule, &f.sig, Some(&f.block), f, ctx),
-        syn::Item::Type(t) => alias_matches(ctx, rule, &t.ty),
-        syn::Item::Use(u) => import_matches(rule, u),
-        syn::Item::Const(_) => constant_matches_non_static(rule),
-        syn::Item::Static(s) => constant_matches_static(rule, s),
-        syn::Item::Mod(m) => module_matches(rule, m),
-        syn::Item::Impl(i) => {
-            container_matches(rule, ctx.grammar, |it| SynMember::Impl(it).kind(), &i.items)
-        }
-        syn::Item::Trait(t) => {
-            container_matches(rule, ctx.grammar, |it| SynMember::Trait(it).kind(), &t.items)
-        }
-        _no_rule_applies_to_this_item_variant => false,
-    }
-}
-
-fn rule_matches_impl_item(ctx: &Ctx, rule: StructuralRule, item: &syn::ImplItem) -> bool {
-    // if-let chain (not a second `match` twin of `rule_matches_item`).
-    if let syn::ImplItem::Fn(f) = item {
-        return fn_matches(rule, &f.sig, Some(&f.block), f, ctx);
-    }
-    if let syn::ImplItem::Type(t) = item {
-        return alias_matches(ctx, rule, &t.ty);
-    }
-    if let syn::ImplItem::Const(_) = item {
-        return constant_matches_non_static(rule);
-    }
-    false
-}
-
-fn rule_matches_trait_item(ctx: &Ctx, rule: StructuralRule, item: &syn::TraitItem) -> bool {
-    match item {
-        syn::TraitItem::Fn(f) => fn_matches(rule, &f.sig, f.default.as_ref(), f, ctx),
-        syn::TraitItem::Type(t) => match &t.default {
-            Some((_, ty)) => alias_matches(ctx, rule, ty),
-            None => matches!(rule, StructuralRule::AliasNoBannedTerminal),
-        },
-        syn::TraitItem::Const(_) => constant_matches_non_static(rule),
-        _no_rule_applies_to_this_trait_item_variant => false,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// item 4: string-carrying decided by type structure + alias fixpoint.
-// ---------------------------------------------------------------------------
-
-fn type_is_string_terminal(ctx: &Ctx<'_>, ty: &syn::Type) -> bool {
-    // AliasTable is acyclic by construction (build refused cycles);
-    // type_carries_string returns bool — no Result at the classify door.
-    ctx.aliases.type_carries_string(ctx.rel, ty)
-}
-
-// ---------------------------------------------------------------------------
-// struct / enum (item 3's partition)
-// ---------------------------------------------------------------------------
-
-fn fields_all_private(fields: &syn::Fields) -> bool {
-    fields.iter().all(|f| matches!(f.vis, syn::Visibility::Inherited))
-}
-
-fn struct_matches(ctx: &Ctx<'_>, rule: StructuralRule, node: &syn::ItemStruct) -> bool {
-    match rule {
-        StructuralRule::TupleSinglePrivateField => {
-            matches!(&node.fields, syn::Fields::Unnamed(u) if u.unnamed.len() == 1)
-                && fields_all_private(&node.fields)
-        }
-        StructuralRule::NamedAllPrivateNoStringTerminal => {
-            matches!(&node.fields, syn::Fields::Named(_))
-                && fields_all_private(&node.fields)
-                && node.fields.iter().all(|f| !type_is_string_terminal(ctx, &f.ty))
-        }
-        StructuralRule::UnitStruct => matches!(&node.fields, syn::Fields::Unit),
-        _rule_not_for_struct => false,
-    }
-}
-
-fn enum_matches(ctx: &Ctx<'_>, rule: StructuralRule, node: &syn::ItemEnum) -> bool {
-    match rule {
-        StructuralRule::NoStringVariantFields => node
-            .variants
-            .iter()
-            .all(|v| v.fields.iter().all(|f| !type_is_string_terminal(ctx, &f.ty))),
-        _rule_not_for_enum => false,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// alias / import / constant / module (item 1's remaining named seats)
-// ---------------------------------------------------------------------------
-
-fn alias_matches(ctx: &Ctx<'_>, rule: StructuralRule, ty: &syn::Type) -> bool {
-    match rule {
-        StructuralRule::AliasNoBannedTerminal => !type_is_string_terminal(ctx, ty),
-        _rule_not_for_alias => false,
-    }
-}
-
-fn use_has_glob(tree: &syn::UseTree) -> bool {
-    // Stack walk — not a recursive-match twin of `is_call_expr`.
-    let mut stack = vec![tree];
-    while let Some(node) = stack.pop() {
-        match node {
-            syn::UseTree::Glob(_) => return true,
-            syn::UseTree::Path(p) => stack.push(&p.tree),
-            syn::UseTree::Group(g) => stack.extend(g.items.iter()),
-            syn::UseTree::Name(_) | syn::UseTree::Rename(_) => {}
+            ContainerMember::Trait(syn::TraitItem::Fn(f)) => {
+                (crate::boundary::span_line(&f.span()), f.sig.ident.to_string())
+            }
+            ContainerMember::Trait(syn::TraitItem::Type(t)) => {
+                (crate::boundary::span_line(&t.span()), t.ident.to_string())
+            }
+            ContainerMember::Trait(item) => (crate::boundary::span_line(&item.span()), "?".to_string()),
         }
     }
-    false
 }
 
-fn import_matches(rule: StructuralRule, node: &syn::ItemUse) -> bool {
-    match rule {
-        StructuralRule::ImportNoGlob => !use_has_glob(&node.tree),
-        _rule_not_for_import => false,
-    }
-}
-
-/// `Const`/`ImplConst`/`TraitConst` can never be `static mut` — the
-/// construct's refusal capability for THIS rule lives entirely on the
-/// `Static` kind (below); these kinds vacuously satisfy it.
-fn constant_matches_non_static(rule: StructuralRule) -> bool {
-    matches!(rule, StructuralRule::ConstantNoStaticMut)
-}
-
-fn constant_matches_static(rule: StructuralRule, node: &syn::ItemStatic) -> bool {
-    match rule {
-        StructuralRule::ConstantNoStaticMut => {
-            !matches!(node.mutability, syn::StaticMutability::Mut(_))
+impl StructuralRule {
+    fn matches_import(self, node: &syn::ItemUse) -> bool {
+        match self {
+            StructuralRule::ImportNoGlob => !UseTreeView(&node.tree).has_glob(),
+            _rule_not_for_import => false,
         }
-        _rule_not_for_constant => false,
+    }
+
+    fn matches_non_static_const(self) -> bool {
+        matches!(self, StructuralRule::ConstantNoStaticMut)
+    }
+
+    fn matches_static(self, node: &syn::ItemStatic) -> bool {
+        match self {
+            StructuralRule::ConstantNoStaticMut => {
+                !matches!(node.mutability, syn::StaticMutability::Mut(_))
+            }
+            _rule_not_for_constant => false,
+        }
+    }
+
+    fn matches_module(self, _node: &syn::ItemMod) -> bool {
+        match self {
+            StructuralRule::ModuleNoPathAttr => true,
+            _rule_not_for_module => false,
+        }
+    }
+
+    fn matches_container<I, F>(self, grammar: &Grammar, kind_of: F, items: &[I]) -> bool
+    where
+        F: Fn(&I) -> Option<KindName>,
+    {
+        match self {
+            StructuralRule::InteriorsClassify => items
+                .iter()
+                .all(|it| !kind_of(it).is_some_and(|k| grammar.condemned().contains(&k))),
+            _rule_not_for_container => false,
+        }
     }
 }
-
-fn module_matches(rule: StructuralRule, _node: &syn::ItemMod) -> bool {
-    match rule {
-        // Item 5: path attribute is bans_attribute only; every mod seats.
-        StructuralRule::ModuleNoPathAttr => true,
-        _rule_not_for_module => false,
-    }
-}
-
-/// impl/trait containers: the construct refuses the container as a whole
-/// when ANY direct interior item is of a condemned kind — interior items
-/// are additionally, individually reported at their own condemned law name
-/// by the caller; this is the container's OWN in-cell refusal, required by
-/// the preamble law since containers are not zero-freedom cells.
-fn container_matches<I, F>(
-    rule: StructuralRule,
-    grammar: &Grammar,
-    kind_of: F,
-    items: &[I],
-) -> bool
-where
-    F: Fn(&I) -> Option<KindName>,
-{
-    match rule {
-        StructuralRule::InteriorsClassify => items
-            .iter()
-            .all(|it| !kind_of(it).is_some_and(|k| grammar.condemned().contains(&k))),
-        _rule_not_for_container => false,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// fn skeletons (item 2, minimum bar for item 1's totality claim)
-// ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Receiver {
@@ -896,29 +891,35 @@ enum Receiver {
     Other,
 }
 
-fn receiver_form(sig: &syn::Signature) -> Receiver {
-    match sig.inputs.first() {
-        Some(syn::FnArg::Receiver(r)) => {
-            if r.colon_token.is_some() {
-                Receiver::Other
-            } else if r.reference.is_some() {
-                if r.mutability.is_some() {
-                    Receiver::RefMutSelf
+struct SigView<'a>(&'a syn::Signature);
+
+impl SigView<'_> {
+    fn receiver_form(self) -> Receiver {
+        match self.0.inputs.first() {
+            Some(syn::FnArg::Receiver(r)) => {
+                if r.colon_token.is_some() {
+                    Receiver::Other
+                } else if r.reference.is_some() {
+                    if r.mutability.is_some() {
+                        Receiver::RefMutSelf
+                    } else {
+                        Receiver::RefSelf
+                    }
                 } else {
-                    Receiver::RefSelf
+                    Receiver::ByValueSelf
                 }
-            } else {
-                Receiver::ByValueSelf
             }
+            Some(syn::FnArg::Typed(_)) | None => Receiver::None,
         }
-        Some(syn::FnArg::Typed(_)) | None => Receiver::None,
     }
 }
 
-fn ok_or_bodyless(block: Option<&syn::Block>, pred: impl FnOnce(&syn::Block) -> bool) -> bool {
-    // Bodyless trait methods: bans have nothing to refuse. `is_none_or`
-    // states that without a `None => true` costume arm.
-    block.is_none_or(pred)
+struct Bodyless<'a>(Option<&'a syn::Block>);
+
+impl Bodyless<'_> {
+    fn ok_or(self, pred: impl FnOnce(&syn::Block) -> bool) -> bool {
+        self.0.is_none_or(pred)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -928,263 +929,186 @@ enum BodyBan {
     Unsafe,
 }
 
-fn body_contains(block: &syn::Block, ban: BodyBan) -> bool {
-    struct V {
-        ban: BodyBan,
-        found: bool,
-    }
-    impl<'ast> Visit<'ast> for V {
-        fn visit_expr_if(&mut self, node: &'ast syn::ExprIf) {
-            if matches!(self.ban, BodyBan::ControlFlow) {
-                self.found = true;
-            }
-            visit::visit_expr_if(self, node);
-        }
-        fn visit_expr_match(&mut self, node: &'ast syn::ExprMatch) {
-            if matches!(self.ban, BodyBan::ControlFlow) {
-                self.found = true;
-            }
-            visit::visit_expr_match(self, node);
-        }
-        fn visit_expr_loop(&mut self, node: &'ast syn::ExprLoop) {
-            if matches!(self.ban, BodyBan::ControlFlow) {
-                self.found = true;
-            }
-            visit::visit_expr_loop(self, node);
-        }
-        fn visit_expr_while(&mut self, node: &'ast syn::ExprWhile) {
-            if matches!(self.ban, BodyBan::ControlFlow) {
-                self.found = true;
-            }
-            visit::visit_expr_while(self, node);
-        }
-        fn visit_expr_for_loop(&mut self, node: &'ast syn::ExprForLoop) {
-            if matches!(self.ban, BodyBan::ControlFlow) {
-                self.found = true;
-            }
-            visit::visit_expr_for_loop(self, node);
-        }
-        fn visit_expr_await(&mut self, node: &'ast syn::ExprAwait) {
-            if matches!(self.ban, BodyBan::Await) {
-                self.found = true;
-            }
-            visit::visit_expr_await(self, node);
-        }
-        fn visit_expr_unsafe(&mut self, node: &'ast syn::ExprUnsafe) {
-            if matches!(self.ban, BodyBan::Unsafe) {
-                self.found = true;
-            }
-            visit::visit_expr_unsafe(self, node);
-        }
-    }
-    let mut v = V {
-        ban,
-        found: false,
-    };
-    v.visit_block(block);
-    v.found
-}
+#[derive(Copy, Clone)]
+struct BlockBody<'a>(&'a syn::Block);
 
-fn contains_control_flow(block: &syn::Block) -> bool {
-    body_contains(block, BodyBan::ControlFlow)
-}
-fn contains_await(block: &syn::Block) -> bool {
-    body_contains(block, BodyBan::Await)
-}
-fn contains_unsafe(block: &syn::Block) -> bool {
-    body_contains(block, BodyBan::Unsafe)
-}
-
-/// A call expression, optionally wrapped in `?` / parens / group — the only
-/// RHS / tail shape composition-root's POSITIVE body law admits.
-fn is_call_expr(expr: &syn::Expr) -> bool {
-    match expr {
-        syn::Expr::Call(_) | syn::Expr::MethodCall(_) => true,
-        syn::Expr::Try(t) => is_call_expr(&t.expr),
-        syn::Expr::Paren(p) => is_call_expr(&p.expr),
-        syn::Expr::Group(g) => is_call_expr(&g.expr),
-        _not_a_call => false,
+impl BlockBody<'_> {
+    fn contains(self, ban: BodyBan) -> bool {
+        struct V {
+            ban: BodyBan,
+            found: bool,
+        }
+        impl<'ast> Visit<'ast> for V {
+            fn visit_expr_if(&mut self, node: &'ast syn::ExprIf) {
+                if matches!(self.ban, BodyBan::ControlFlow) {
+                    self.found = true;
+                }
+                visit::visit_expr_if(self, node);
+            }
+            fn visit_expr_match(&mut self, node: &'ast syn::ExprMatch) {
+                if matches!(self.ban, BodyBan::ControlFlow) {
+                    self.found = true;
+                }
+                visit::visit_expr_match(self, node);
+            }
+            fn visit_expr_loop(&mut self, node: &'ast syn::ExprLoop) {
+                if matches!(self.ban, BodyBan::ControlFlow) {
+                    self.found = true;
+                }
+                visit::visit_expr_loop(self, node);
+            }
+            fn visit_expr_while(&mut self, node: &'ast syn::ExprWhile) {
+                if matches!(self.ban, BodyBan::ControlFlow) {
+                    self.found = true;
+                }
+                visit::visit_expr_while(self, node);
+            }
+            fn visit_expr_for_loop(&mut self, node: &'ast syn::ExprForLoop) {
+                if matches!(self.ban, BodyBan::ControlFlow) {
+                    self.found = true;
+                }
+                visit::visit_expr_for_loop(self, node);
+            }
+            fn visit_expr_await(&mut self, node: &'ast syn::ExprAwait) {
+                if matches!(self.ban, BodyBan::Await) {
+                    self.found = true;
+                }
+                visit::visit_expr_await(self, node);
+            }
+            fn visit_expr_unsafe(&mut self, node: &'ast syn::ExprUnsafe) {
+                if matches!(self.ban, BodyBan::Unsafe) {
+                    self.found = true;
+                }
+                visit::visit_expr_unsafe(self, node);
+            }
+        }
+        let mut v = V {
+            ban,
+            found: false,
+        };
+        v.visit_block(self.0);
+        v.found
     }
-}
 
-/// Composition-root POSITIVE body law (item 2): let-bindings of calls (with
-/// optional `?`), then exactly one tail call. `if`/`match`/`loop`/`while`/
-/// `for`/`await` are red. A body that merely lacks control flow but holds a
-/// non-call expression is the soft drain this law closes.
-fn composition_root_body_ok(block: &syn::Block) -> bool {
-    if contains_control_flow(block) || contains_await(block) {
-        return false;
-    }
-    let Some((last, prefix)) = block.stmts.split_last() else {
-        return false;
-    };
-    for stmt in prefix {
-        let syn::Stmt::Local(local) = stmt else {
+    fn composition_root_ok(self) -> bool {
+        if self.contains(BodyBan::ControlFlow) || self.contains(BodyBan::Await) {
+            return false;
+        }
+        let Some((last, prefix)) = self.0.stmts.split_last() else {
             return false;
         };
-        let Some(init) = &local.init else {
+        for stmt in prefix {
+            let syn::Stmt::Local(local) = stmt else {
+                return false;
+            };
+            let Some(init) = &local.init else {
+                return false;
+            };
+            if init.diverge.is_some() {
+                return false;
+            }
+            if !FnCallExpr(&init.expr).is_call() {
+                return false;
+            }
+        }
+        match last {
+            syn::Stmt::Expr(expr, None) => FnCallExpr(expr).is_call(),
+            _not_a_tail_call => false,
+        }
+    }
+}
+
+struct FnCallExpr<'a>(&'a syn::Expr);
+
+impl FnCallExpr<'_> {
+    fn is_call(self) -> bool {
+        match self.0 {
+            syn::Expr::Call(_) | syn::Expr::MethodCall(_) => true,
+            syn::Expr::Try(t) => FnCallExpr(&t.expr).is_call(),
+            syn::Expr::Paren(p) => FnCallExpr(&p.expr).is_call(),
+            syn::Expr::Group(g) => FnCallExpr(&g.expr).is_call(),
+            _not_a_call => false,
+        }
+    }
+}
+
+struct UseTreeView<'a>(&'a syn::UseTree);
+
+impl UseTreeView<'_> {
+    fn has_glob(self) -> bool {
+        let mut stack = vec![self.0];
+        while let Some(node) = stack.pop() {
+            match node {
+                syn::UseTree::Glob(_) => return true,
+                syn::UseTree::Path(p) => stack.push(&p.tree),
+                syn::UseTree::Group(g) => stack.extend(g.items.iter()),
+                syn::UseTree::Name(_) | syn::UseTree::Rename(_) => {}
+            }
+        }
+        false
+    }
+}
+
+struct FieldsView<'a>(&'a syn::Fields);
+
+impl FieldsView<'_> {
+    fn all_private(self) -> bool {
+        self.0.iter().all(|f| matches!(f.vis, syn::Visibility::Inherited))
+    }
+}
+
+struct ReturnTypeView<'a>(&'a syn::ReturnType);
+
+impl ReturnTypeView<'_> {
+    fn resolves_to_self(self, self_ty: Option<&syn::Type>, allow_result_option: bool) -> bool {
+        let syn::ReturnType::Type(_, ty) = self.0 else {
             return false;
         };
-        // `let ... = ... else { ... }` is control flow in costume.
-        if init.diverge.is_some() {
+        if SelfTypeView(ty).matches(self_ty) {
+            return true;
+        }
+        if !allow_result_option {
             return false;
         }
-        if !is_call_expr(&init.expr) {
+        let syn::Type::Path(tp) = ty.as_ref() else {
+            return false;
+        };
+        let Some(seg) = tp.path.segments.last() else {
+            return false;
+        };
+        if seg.ident != "Result" && seg.ident != "Option" {
             return false;
         }
-    }
-    match last {
-        syn::Stmt::Expr(expr, None) => is_call_expr(expr),
-        _not_a_tail_call => false,
-    }
-}
-
-/// Path+name shape of composition-root, before body judgment — used to keep
-/// declared-fn from absorbing a failed `main` (item 2: no soft drain cell).
-fn is_composition_root_shape(sig: &syn::Signature, ctx: &Ctx) -> bool {
-    receiver_form(sig) == Receiver::None
-        && !ctx.in_container
-        && sig.ident == "main"
-        && (ctx.rel.ends_with("/src/main.rs") || ctx.rel.contains("/src/bin/"))
-}
-
-/// Admission-door shape by receiver+return, before body judgment.
-fn is_admission_door_shape(sig: &syn::Signature, ctx: &Ctx) -> bool {
-    receiver_form(sig) == Receiver::None
-        && ctx.in_container
-        && return_resolves_to_self(&sig.output, ctx.self_ty, true)
-}
-
-fn type_matches_self(ty: &syn::Type, self_ty: Option<&syn::Type>) -> bool {
-    let syn::Type::Path(tp) = ty else {
-        return false;
-    };
-    let Some(seg) = tp.path.segments.last() else {
-        return false;
-    };
-    if seg.ident == "Self" {
-        return true;
-    }
-    let Some(syn::Type::Path(self_tp)) = self_ty else {
-        return false;
-    };
-    let Some(self_seg) = self_tp.path.segments.last() else {
-        return false;
-    };
-    seg.ident == self_seg.ident
-}
-
-fn return_resolves_to_self(
-    output: &syn::ReturnType,
-    self_ty: Option<&syn::Type>,
-    allow_result_option: bool,
-) -> bool {
-    let syn::ReturnType::Type(_, ty) = output else {
-        return false;
-    };
-    if type_matches_self(ty, self_ty) {
-        return true;
-    }
-    if !allow_result_option {
-        return false;
-    }
-    let syn::Type::Path(tp) = ty.as_ref() else {
-        return false;
-    };
-    let Some(seg) = tp.path.segments.last() else {
-        return false;
-    };
-    if seg.ident != "Result" && seg.ident != "Option" {
-        return false;
-    }
-    let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
-        return false;
-    };
-    args.args.iter().any(|a| match a {
-        syn::GenericArgument::Type(t) => type_matches_self(t, self_ty),
-        _not_a_type_arg => false,
-    })
-}
-
-/// Declared-fn seat lookup (item 6 forward-bound): file + fn_path + a
-/// blake3 site hash that must match the item's CURRENT identity tokens
-/// exactly, or the seat has drifted and the fn is red. `io = true` is the
-/// only lawful home for `async`/`await` (every other skeleton cell bans
-/// await; this cell bans it too unless the seat says `io = true`).
-fn declared_fn_matches(
-    sig: &syn::Signature,
-    block: Option<&syn::Block>,
-    whole: &dyn ToTokens,
-    ctx: &Ctx,
-) -> bool {
-    // Discriminator exclusivity: composition-root shape and admission-door
-    // shape are claimed by those cells even when their body bans fire —
-    // declared-fn must not be the drain they pour into.
-    if is_composition_root_shape(sig, ctx) || is_admission_door_shape(sig, ctx) {
-        return false;
-    }
-    let Some(seat) = ctx.grammar.fn_seat(ctx.rel, &sig.ident.to_string()) else {
-        return false;
-    };
-    if crate::identity::site_hash(whole) != seat.site_hash() {
-        return false;
-    }
-    if !seat.io() {
-        if sig.asyncness.is_some() {
+        let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
             return false;
-        }
-        if !ok_or_bodyless(block, |b| !contains_await(b)) {
-            return false;
-        }
+        };
+        args.args.iter().any(|a| match a {
+            syn::GenericArgument::Type(t) => SelfTypeView(t).matches(self_ty),
+            _not_a_type_arg => false,
+        })
     }
-    true
 }
 
-fn fn_matches(
-    rule: StructuralRule,
-    sig: &syn::Signature,
-    block: Option<&syn::Block>,
-    whole: &dyn ToTokens,
-    ctx: &Ctx,
-) -> bool {
-    let receiver = receiver_form(sig);
-    match rule {
-        StructuralRule::CompositionRootBody => {
-            // Body is mandatory: a bodyless `main` cannot satisfy the
-            // positive let/call/tail law (ok_or_bodyless would soft-pass).
-            is_composition_root_shape(sig, ctx)
-                && sig.asyncness.is_none()
-                && block.is_some_and(composition_root_body_ok)
+struct SelfTypeView<'a>(&'a syn::Type);
+
+impl SelfTypeView<'_> {
+    fn matches(self, self_ty: Option<&syn::Type>) -> bool {
+        let syn::Type::Path(tp) = self.0 else {
+            return false;
+        };
+        let Some(seg) = tp.path.segments.last() else {
+            return false;
+        };
+        if seg.ident == "Self" {
+            return true;
         }
-        StructuralRule::DerivationBans => {
-            // assignment + await fire via construct.bans + run.rs span
-            // containment (item 5). unsafe remains in-cell BodyBan so the
-            // derivation deny fixture has a structural refuse.
-            receiver == Receiver::RefSelf
-                && sig.asyncness.is_none()
-                && ok_or_bodyless(block, |b| !contains_unsafe(b))
-        }
-        StructuralRule::TransitionBans => {
-            // nested_place_assign + await → construct.bans only (item 5).
-            receiver == Receiver::RefMutSelf && sig.asyncness.is_none()
-        }
-        StructuralRule::ConsumingVerbBans => {
-            // self-by-value returning Self is a builder chain — red: it
-            // matches NO skeleton (this arm demands return ≠ Self).
-            // nested_place_assign + await → construct.bans only (item 5).
-            receiver == Receiver::ByValueSelf
-                && sig.asyncness.is_none()
-                && !return_resolves_to_self(&sig.output, ctx.self_ty, false)
-        }
-        StructuralRule::AdmissionDoorBans => {
-            // await → construct.bans only (item 5). asyncness still refuses
-            // the seat (async is not an await-expression site).
-            is_admission_door_shape(sig, ctx) && sig.asyncness.is_none()
-        }
-        StructuralRule::DeclaredFnSeat => {
-            receiver == Receiver::None && declared_fn_matches(sig, block, whole, ctx)
-        }
-        _rule_not_for_fn => false,
+        let Some(syn::Type::Path(self_tp)) = self_ty else {
+            return false;
+        };
+        let Some(self_seg) = self_tp.path.segments.last() else {
+            return false;
+        };
+        seg.ident == self_seg.ident
     }
 }
 
@@ -1335,7 +1259,7 @@ mod fixture_tests {
                 self_ty: None,
                 in_container: false,
             };
-            return rule_matches_item(&ctx, rule, first_item);
+            return ctx.rule_matches_item(rule, first_item);
         }
         match first_item {
             syn::Item::Impl(imp) => {
@@ -1347,7 +1271,7 @@ mod fixture_tests {
                     in_container: true,
                 };
                 match imp.items.first() {
-                    Some(syn::ImplItem::Fn(f)) => fn_matches(rule, &f.sig, Some(&f.block), f, &ctx),
+                    Some(syn::ImplItem::Fn(f)) => ctx.fn_matches(rule, &f.sig, Some(&f.block), f),
                     Some(syn::ImplItem::Const(_))
                     | Some(syn::ImplItem::Type(_))
                     | Some(syn::ImplItem::Macro(_))
@@ -1364,7 +1288,7 @@ mod fixture_tests {
                     self_ty: None,
                     in_container: false,
                 };
-                rule_matches_item(&ctx, rule, other)
+                ctx.rule_matches_item(rule, other)
             }
         }
     }
@@ -2012,7 +1936,7 @@ mod fixture_tests {
             }
             None => return Err(ClassifyProofRefuse::StructMustBeSeated),
         };
-        ClassifyProofRefuse::UniqueConstructName.require(seat_matches_item(&ctx, item, seats) == Some("newtype-scalar"))
+        ClassifyProofRefuse::UniqueConstructName.require(ctx.seat_matches_item(item, seats) == Some("newtype-scalar"))
     }
 
     // -----------------------------------------------------------------------
