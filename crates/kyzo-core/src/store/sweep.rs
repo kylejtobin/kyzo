@@ -63,6 +63,7 @@ use super::open::StoreId;
 use super::tx::{Aborted, CommitFailure, WriteTx};
 use super::wal::{
     GENESIS_PREDECESSOR, WalHash, WalPayload, WalRecord, WalRefuse, WalReplayState, WalSegment,
+    replay,
 };
 
 /// Domain tag for crash-durable WAL Commit bodies that carry OperationKey memo.
@@ -260,7 +261,17 @@ pub fn current_live_sweep() -> Result<Option<LiveSweepHandle>, SweepRefuse> {
 
 impl LiveSweepHandle {
     /// Open the one live SweepDoor for `store_id` under NativeFsyncProof{No}.
-    pub fn open_for_store(store_id: StoreId) -> Result<Self, SweepRefuse> {
+    ///
+    /// Crash recovery (decisions.md §21 / §38): before serving, replay the
+    /// retained WAL suffix and rebuild [`IdempotencyMemo`] + ordinal/WAL tips
+    /// via [`SweepDoor::restore_from_wal_replay`]. Pass an empty slice for
+    /// genesis (no durable suffix yet). Callers that reopen an existing Store
+    /// must present the durable segments recovered from that Store's retained
+    /// suffix — otherwise OperationKey dedup dies with the prior process.
+    pub fn open_for_store(
+        store_id: StoreId,
+        retained_wal: &[WalSegment],
+    ) -> Result<Self, SweepRefuse> {
         let fence_epoch = FenceEpoch::genesis(store_id);
         let token = {
             let mut h = Sha256::new();
@@ -283,7 +294,17 @@ impl LiveSweepHandle {
         let cap = StableCommitCap::NativeFsyncProof {
             snapshot_fork: SnapshotFork::No,
         };
-        let door = SweepDoor::open(store_id, fence_epoch, session, auth, cap)?;
+        let mut door = SweepDoor::open(store_id, fence_epoch, session, auth, cap)?;
+        // Production open door: replay retained suffix → memo + tips (§38).
+        // Empty suffix is genesis; non-empty is crash reopen.
+        let recovered = replay(store_id, retained_wal).map_err(|_| SweepRefuse::WalReplayFailed)?;
+        door.restore_from_wal_replay(&recovered)
+            .map_err(|_| SweepRefuse::WalReplayFailed)?;
+        // Reinstate the live segment tip so post-open seals continue the chain
+        // (fresh empty segment + restored wal_tip would ChainBreak on append).
+        if let Some(last) = retained_wal.last() {
+            door.wal_segment = last.clone();
+        }
         Ok(Self {
             inner: Arc::new(Mutex::new(LiveSweepState {
                 door,
@@ -1373,6 +1394,10 @@ pub enum SweepRefuse {
     #[error("CommitBodyFieldTooLarge: length-prefixed commit-body field exceeds u32::MAX")]
     #[diagnostic(code(store::sweep::commit_body_field_too_large))]
     CommitBodyFieldTooLarge,
+    /// Retained WAL suffix refused [`replay`] / memo restore at store-open (§21/§38).
+    #[error("WalReplayFailed: retained WAL suffix refused replay at store-open")]
+    #[diagnostic(code(store::sweep::wal_replay_failed))]
+    WalReplayFailed,
 }
 
 /// Seal path refusal: SweepDoor law or physical apply failure.
@@ -1548,7 +1573,7 @@ mod composition_tests {
     fn content_root(tag: u8) -> StateRoot {
         let mut bytes = GENESIS_ROOT.as_bytes().0;
         bytes[0] = tag;
-        StateRoot::from_digest(bytes)
+        StateRoot::from_digest(crate::data::fixed_bytes::Bytes32(bytes))
     }
 
     /// #374 T10: live ack barrier loud-refuses non-ruled arms (#359).
@@ -1857,8 +1882,11 @@ mod composition_tests {
     /// (typed Err), never into_inner and proceed.
     #[test]
     fn poisoned_live_sweep_mutex_refuses_silent_continue() -> Result<()> {
-        let handle = LiveSweepHandle::open_for_store(StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0x15; 32])))
-            .map_err(|e| miette!("open live sweep: {e}"))?;
+        let handle = LiveSweepHandle::open_for_store(
+            StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0x15; 32])),
+            &[],
+        )
+        .map_err(|e| miette!("open live sweep: {e}"))?;
         let poison = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let Ok(guard) = handle.inner.lock() else {
                 panic!("fresh live-sweep mutex already poisoned");
@@ -1883,6 +1911,102 @@ mod composition_tests {
             .with_mut(|_, _, _| ())
             .expect_err("poisoned live-sweep must refuse with_mut");
         assert_eq!(err, SweepRefuse::LiveSweepLockPoisoned);
+        Ok(())
+    }
+
+    /// §38 — `open_for_store` restores IdempotencyMemo from a **synthetic**
+    /// retained WAL suffix handed by the test (in-memory `WalSegment` clone).
+    /// This does **NOT** prove production `Engine::compose` reopen-dedupe:
+    /// durable WalSegment I/O is unbuilt (seat 38 STATUS 2026-07-23), so the
+    /// Engine path passes `&[]`. Adversary covered here: open skips replay
+    /// when a non-empty suffix is supplied.
+    #[test]
+    fn open_for_store_restores_memo_and_dedupes_across_reopen() -> Result<()> {
+        let store_id =
+            StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0x38; 32]));
+        let preimage = SingleStoreKeyPreimage {
+            domain_label: b"kyzo.sweep.test".to_vec(),
+            client_operation_id: b"open-path-crash-1".to_vec(),
+            step_id: b"s0".to_vec(),
+        };
+        let key = preimage.derive_key(store_id);
+        let digest = IdempotencyMemo::digest_request(b"open-path-crash-1");
+
+        // First process: open (empty suffix), commit once.
+        let live = LiveSweepHandle::open_for_store(store_id, &[])
+            .map_err(|e| miette!("open before crash: {e}"))?;
+        live.with_mut(|door, session, incarnation| {
+            door.ack_write(
+                incarnation,
+                session,
+                key,
+                digest,
+                preimage.clone(),
+                TempTx::new(),
+            )
+        })
+        .map_err(|e| miette!("with_mut before crash: {e}"))?
+        .map_err(|e| miette!("ack before crash: {e}"))?;
+        let (commits_before, retained) = live
+            .with_mut(|door, _, _| {
+                (
+                    door.highest_commit_ordinal().get(),
+                    door.wal_segment().clone(),
+                )
+            })
+            .map_err(|e| miette!("snapshot before crash: {e}"))?;
+        assert_eq!(commits_before, 1);
+        assert_eq!(retained.records().len(), 1);
+        drop(live); // crash: live memo / handle gone; durable segment survives.
+
+        // Second process: open_for_store with the SYNTHETIC retained suffix
+        // (not Engine::compose — that still passes &[] until durable WAL I/O).
+        let reopened = LiveSweepHandle::open_for_store(store_id, std::slice::from_ref(&retained))
+            .map_err(|e| miette!("open_for_store after crash must succeed: {e}"))?;
+        let memo_restored = reopened
+            .with_mut(|door, _, _| {
+                matches!(
+                    door.idempotency().lookup(&key),
+                    OperationOutcome::Committed { .. }
+                )
+            })
+            .map_err(|e| miette!("inspect restored memo: {e}"))?;
+        assert!(
+            memo_restored,
+            "open_for_store must restore IdempotencyMemo from a supplied synthetic WAL suffix"
+        );
+
+        reopened
+            .with_mut(|door, session, incarnation| {
+                door.ack_write(
+                    incarnation,
+                    session,
+                    key,
+                    digest,
+                    preimage,
+                    TempTx::new(),
+                )
+            })
+            .map_err(|e| miette!("with_mut after reopen: {e}"))?
+            .map_err(|e| miette!("post-crash retry must Ok-dedupe: {e}"))?;
+
+        let (commits_after, wal_len) = reopened
+            .with_mut(|door, _, _| {
+                (
+                    door.highest_commit_ordinal().get(),
+                    door.wal_segment().records().len(),
+                )
+            })
+            .map_err(|e| miette!("inspect after retry: {e}"))?;
+        assert_eq!(
+            commits_after, 1,
+            "reopen via open_for_store must prevent a second committed effect"
+        );
+        assert_eq!(
+            wal_len, 1,
+            "post-reopen retry must not append a second WAL Commit"
+        );
+
         Ok(())
     }
 }
