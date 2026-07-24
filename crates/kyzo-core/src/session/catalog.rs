@@ -334,10 +334,26 @@ pub(crate) const TEMPORAL_POSTING_LEADING_COLUMN: &str = "_posting_valid";
 /// The catalog stores `{ name, program }` — sealed substance is the store
 /// form. Decode admits the program through [`InputProgram::new`]; it does
 /// not call `parse_script`.
-#[derive(Clone, serde_derive::Serialize, serde_derive::Deserialize)]
+#[derive(Clone, serde_derive::Serialize)]
 pub(crate) struct ConstraintRef {
     name: SmartString<LazyCompact>,
     program: InputProgram,
+}
+
+impl<'de> serde::Deserialize<'de> for ConstraintRef {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde_derive::Deserialize)]
+        struct Wire {
+            name: SmartString<LazyCompact>,
+            program: InputProgram,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        // Nested InputProgram::deserialize already admits through InputProgram::new.
+        Ok(ConstraintRef {
+            name: wire.name,
+            program: wire.program,
+        })
+    }
 }
 
 impl ConstraintRef {
@@ -441,10 +457,19 @@ pub(crate) enum Residency {
 /// [`DEFAULT_FIXED_RULES`] and a sentinel instant so session-custom fixed
 /// rules cannot enter the durable catalog. Decode admits the sealed program
 /// through [`InputProgram::new`]; it does not call `parse_script`.
-#[derive(Clone, serde_derive::Serialize, serde_derive::Deserialize)]
+#[derive(Clone, serde_derive::Serialize)]
 #[serde(transparent)]
 pub(crate) struct Trigger {
     program: InputProgram,
+}
+
+impl<'de> serde::Deserialize<'de> for Trigger {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // Transparent wire: sealed InputProgram, admitted through InputProgram::new.
+        Ok(Trigger {
+            program: <InputProgram as serde::Deserialize>::deserialize(deserializer)?,
+        })
+    }
 }
 
 /// The sentinel instant used when admitting a trigger source at the store
@@ -505,7 +530,7 @@ impl Debug for Trigger {
     }
 }
 
-#[derive(Clone, PartialEq, serde_derive::Serialize, serde_derive::Deserialize)]
+#[derive(Clone, PartialEq, serde_derive::Serialize)]
 pub struct RelationHandle {
     pub(crate) name: SmartString<LazyCompact>,
     pub(crate) id: RelationId,
@@ -532,6 +557,41 @@ pub struct RelationHandle {
     /// whether reads resolve bitemporally (facts) or exactly (algorithm
     /// state).
     pub(crate) keyspace_kind: KeyspaceKind,
+}
+
+impl<'de> serde::Deserialize<'de> for RelationHandle {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde_derive::Deserialize)]
+        struct Wire {
+            name: SmartString<LazyCompact>,
+            id: RelationId,
+            metadata: StoredRelationMetadata,
+            put_triggers: Vec<Trigger>,
+            rm_triggers: Vec<Trigger>,
+            replace_triggers: Vec<Trigger>,
+            access_level: AccessLevel,
+            indices: Vec<IndexRef>,
+            description: SmartString<LazyCompact>,
+            constraints: Vec<ConstraintRef>,
+            keyspace_kind: KeyspaceKind,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        // RelationId / Trigger / ConstraintRef / InputProgram each refuse on
+        // their own admission doors during nested deserialize.
+        Ok(RelationHandle {
+            name: wire.name,
+            id: wire.id,
+            metadata: wire.metadata,
+            put_triggers: wire.put_triggers,
+            rm_triggers: wire.rm_triggers,
+            replace_triggers: wire.replace_triggers,
+            access_level: wire.access_level,
+            indices: wire.indices,
+            description: wire.description,
+            constraints: wire.constraints,
+            keyspace_kind: wire.keyspace_kind,
+        })
+    }
 }
 
 impl Debug for RelationHandle {
