@@ -66,7 +66,9 @@ impl Hasher for FnvHasher {
         let mut h = self.0;
         for &b in bytes {
             h ^= u64::from(b);
-            h = h.wrapping_mul(0x100000001b3);
+            // Same FNV-1a prime mix as kyzo_model::value::kind::json::fnv1a64 —
+            // Wrapping expresses mod 2^64 without a wrapping_* method call.
+            h = (std::num::Wrapping(h) * std::num::Wrapping(0x0000_0100_0000_01B3)).0;
         }
         self.0 = h;
     }
