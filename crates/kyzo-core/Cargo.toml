@@ -154,12 +154,6 @@ required-features = ["bench-internals"]
 [features]
 # SimStorage (+ recovery SLA helpers) in non-test builds for kyzo-trials / benches.
 bench-internals = []
-# Scheduled slow crash campaigns (multi-journal ClearCache matrix, etc.).
-# Default `cargo test --lib` skips these; run explicitly:
-#   cargo test -p kyzo --lib --features slow-crash-campaigns -- \
-#     store::sweep::crash::fuse_crash_matrix::multi_journal_segment_crash_matrix_at_journaling_floor \
-#     --nocapture
-slow-crash-campaigns = []
 
 [lints]
 workspace = true
