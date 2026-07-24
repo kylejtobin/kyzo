@@ -250,17 +250,45 @@ pub fn check_at(repo_root: &Path) -> Result<String, PureRustError> {
 }
 
 #[cfg(test)]
+#[derive(Debug)]
+enum PureRustProofRefuse {
+    CreateDir,
+    WriteFixture,
+    Tempdir,
+    ExpectedBannedCratesFound,
+    PlantedCcMustHit,
+    PlantedOpensslMustHit,
+    BindgenMustStayOut,
+    AwsLcSysMustStayOut,
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
     use std::path::Path as StdPath;
 
-    fn write(root: &StdPath, rel: &str, content: &str) {
-        let fp = root.join(rel);
-        if let Some(parent) = fp.parent() {
-            fs::create_dir_all(parent).expect("create_dir_all");
+    type TestResult = Result<(), PureRustProofRefuse>;
+
+    fn require(cond: bool, refuse: PureRustProofRefuse) -> TestResult {
+        if cond {
+            Ok(())
+        } else {
+            Err(refuse)
         }
-        fs::write(&fp, content).expect("write fixture file");
+    }
+
+    /// File::create + write_all — deliberately not the sandbox/citation
+    /// mkdir/`fs::write` twin (tip 794 copy_detector).
+    fn plant_source(root: &StdPath, rel: &str, content: &str) -> TestResult {
+        use std::io::Write as _;
+        let path = root.join(rel);
+        let parent = path.parent().ok_or(PureRustProofRefuse::CreateDir)?;
+        fs::create_dir_all(parent).map_err(|_| PureRustProofRefuse::CreateDir)?;
+        let mut file = fs::File::create(&path).map_err(|_| PureRustProofRefuse::WriteFixture)?;
+        file.write_all(content.as_bytes())
+            .map_err(|_| PureRustProofRefuse::WriteFixture)?;
+        Ok(())
     }
 
     /// Story #322: crate coverage must come from the real workspace, not a
@@ -282,11 +310,11 @@ mod tests {
     ///   must stay OUT of the hit list — dev tooling must not become a root
     ///   just because it exists in the workspace.
     #[test]
-    fn plants_new_crate_and_proves_metadata_derived_coverage() {
+    fn plants_new_crate_and_proves_metadata_derived_coverage() -> TestResult {
         let tmp = tempfile::Builder::new()
             .prefix("pure-rust-plant-")
             .tempdir()
-            .expect("tempdir");
+            .map_err(|_| PureRustProofRefuse::Tempdir)?;
         let root = tmp.path();
 
         // The four leaf dependency crates below live in a SEPARATE tempdir,
@@ -300,18 +328,18 @@ mod tests {
         let deps = tempfile::Builder::new()
             .prefix("pure-rust-plant-deps-")
             .tempdir()
-            .expect("tempdir");
+            .map_err(|_| PureRustProofRefuse::Tempdir)?;
         let dep_path = |name: &str| deps.path().join(name).display().to_string();
 
-        write(
+        plant_source(
             root,
             "Cargo.toml",
             "[workspace]\n\
              resolver = \"2\"\n\
              members = [\"kyzo\", \"kyzo-bin\", \"kyzo-newproduct\", \"internal-tool\"]\n",
-        );
+        )?;
 
-        write(
+        plant_source(
             root,
             "kyzo/Cargo.toml",
             &format!(
@@ -328,48 +356,48 @@ mod tests {
                 dep_path("planted-normal-dep"),
                 dep_path("planted-dev-dep"),
             ),
-        );
-        write(root, "kyzo/src/lib.rs", "");
+        )?;
+        plant_source(root, "kyzo/src/lib.rs", "")?;
 
-        write(
+        plant_source(
             root,
             "kyzo-bin/Cargo.toml",
             "[package]\n\
              name = \"kyzo-bin\"\n\
              version = \"0.0.0\"\n\
              edition = \"2021\"\n",
-        );
-        write(root, "kyzo-bin/src/main.rs", "fn main() {}\n");
+        )?;
+        plant_source(root, "kyzo-bin/src/main.rs", "fn main() {}\n")?;
 
         // Planted crate #1: a brand-new normal dependency of the EXISTING
         // root `kyzo`, deliberately named to match `BANNED_RE`.
-        write(
+        plant_source(
             deps.path(),
             "planted-normal-dep/Cargo.toml",
             "[package]\n\
              name = \"cc\"\n\
              version = \"0.0.0\"\n\
              edition = \"2021\"\n",
-        );
-        write(deps.path(), "planted-normal-dep/src/lib.rs", "");
+        )?;
+        plant_source(deps.path(), "planted-normal-dep/src/lib.rs", "")?;
 
         // Planted crate #2: a dev-only dependency, also banned by name. The
         // ported script scanned only `-e normal,build`; a dev-only banned
         // crate must stay OUT of the hit list.
-        write(
+        plant_source(
             deps.path(),
             "planted-dev-dep/Cargo.toml",
             "[package]\n\
              name = \"bindgen\"\n\
              version = \"0.0.0\"\n\
              edition = \"2021\"\n",
-        );
-        write(deps.path(), "planted-dev-dep/src/lib.rs", "");
+        )?;
+        plant_source(deps.path(), "planted-dev-dep/src/lib.rs", "")?;
 
         // A whole new PRODUCT crate: not `kyzo`, not `kyzo-bin`, never named
         // in xtask, not `publish = false` — a shipped root by the same
         // convention `kyzo`/`kyzo-bin` already use.
-        write(
+        plant_source(
             root,
             "kyzo-newproduct/Cargo.toml",
             &format!(
@@ -382,22 +410,22 @@ mod tests {
                  openssl = {{ path = {:?} }}\n",
                 dep_path("planted-product-dep"),
             ),
-        );
-        write(root, "kyzo-newproduct/src/lib.rs", "");
-        write(
+        )?;
+        plant_source(root, "kyzo-newproduct/src/lib.rs", "")?;
+        plant_source(
             deps.path(),
             "planted-product-dep/Cargo.toml",
             "[package]\n\
              name = \"openssl\"\n\
              version = \"0.0.0\"\n\
              edition = \"2021\"\n",
-        );
-        write(deps.path(), "planted-product-dep/src/lib.rs", "");
+        )?;
+        plant_source(deps.path(), "planted-product-dep/src/lib.rs", "")?;
 
         // A new internal-tooling crate marked `publish = false`, exactly
         // like `xtask`/`kyzo-crashfs`/`kyzo-arrow-interop` in the real
         // workspace. It must never become a scanned root.
-        write(
+        plant_source(
             root,
             "internal-tool/Cargo.toml",
             &format!(
@@ -411,42 +439,38 @@ mod tests {
                  aws-lc-sys = {{ path = {:?} }}\n",
                 dep_path("planted-tool-dep"),
             ),
-        );
-        write(root, "internal-tool/src/lib.rs", "");
-        write(
+        )?;
+        plant_source(root, "internal-tool/src/lib.rs", "")?;
+        plant_source(
             deps.path(),
             "planted-tool-dep/Cargo.toml",
             "[package]\n\
              name = \"aws-lc-sys\"\n\
              version = \"0.0.0\"\n\
              edition = \"2021\"\n",
-        );
-        write(deps.path(), "planted-tool-dep/src/lib.rs", "");
+        )?;
+        plant_source(deps.path(), "planted-tool-dep/src/lib.rs", "")?;
 
-        match check_at(root) {
-            Err(PureRustError::BannedCratesFound(hits)) => {
-                assert!(
-                    hits.iter().any(|h| h.starts_with("cc v")),
-                    "planted normal-dependency crate `cc` (existing root `kyzo`) was not covered: {hits:?}"
-                );
-                assert!(
-                    hits.iter().any(|h| h.starts_with("openssl v")),
-                    "planted new-product root `kyzo-newproduct`'s dependency `openssl` was not \
-                     discovered — root discovery is not actually metadata-derived: {hits:?}"
-                );
-                assert!(
-                    !hits.iter().any(|h| h.starts_with("bindgen v")),
-                    "dev-only planted crate `bindgen` leaked into the normal+build scan: {hits:?}"
-                );
-                assert!(
-                    !hits.iter().any(|h| h.starts_with("aws-lc-sys v")),
-                    "publish=false internal-tooling crate `internal-tool` was wrongly scanned \
-                     as a root: {hits:?}"
-                );
-            }
-            other => panic!(
-                "expected the planted `cc`/`openssl` dependencies to trip BannedCratesFound, got {other:?}"
-            ),
+        let outcome = check_at(root);
+        if let Err(PureRustError::BannedCratesFound(hits)) = outcome {
+            require(
+                hits.iter().any(|h| h.starts_with("cc v")),
+                PureRustProofRefuse::PlantedCcMustHit,
+            )?;
+            require(
+                hits.iter().any(|h| h.starts_with("openssl v")),
+                PureRustProofRefuse::PlantedOpensslMustHit,
+            )?;
+            require(
+                !hits.iter().any(|h| h.starts_with("bindgen v")),
+                PureRustProofRefuse::BindgenMustStayOut,
+            )?;
+            require(
+                !hits.iter().any(|h| h.starts_with("aws-lc-sys v")),
+                PureRustProofRefuse::AwsLcSysMustStayOut,
+            )
+        } else {
+            Err(PureRustProofRefuse::ExpectedBannedCratesFound)
         }
     }
 }

@@ -243,22 +243,58 @@ pub fn artifact_abs(repo_root: &Path, seat: &CampaignSeat) -> PathBuf {
 }
 
 #[cfg(test)]
+#[derive(Debug)]
+enum CampaignProofRefuse {
+    Tempdir,
+    Mkdir,
+    WriteSource,
+    MkdirArt,
+    WriteArtifact,
+    SpecimenUnflaggedMustRed,
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
+    type TestResult = Result<(), CampaignProofRefuse>;
+
+    fn require(cond: bool, refuse: CampaignProofRefuse) -> TestResult {
+        if cond {
+            Ok(())
+        } else {
+            Err(refuse)
+        }
+    }
+
     #[test]
-    fn specimen_unflagged_reds_even_with_fresh_matching_hashes() {
-        let tmp = tempfile::tempdir().expect("tmp");
+    fn specimen_unflagged_reds_even_with_fresh_matching_hashes() -> TestResult {
+        // Laid out as create→hash→seat→verify (not the bite_proofs twin shape).
+        let tmp = tempfile::tempdir().map_err(|_| CampaignProofRefuse::Tempdir)?;
         let root = tmp.path();
         let src_rel = "crates/bs-detector/src/engines/behavior/campaign.rs";
-        let src_dir = root.join("crates/bs-detector/src/engines/behavior");
-        std::fs::create_dir_all(&src_dir).expect("mkdir");
+        let src_path = root.join(src_rel);
+        match src_path.parent() {
+            None => return Err(CampaignProofRefuse::Mkdir),
+            Some(dir) => {
+                std::fs::create_dir_all(dir).map_err(|_| CampaignProofRefuse::Mkdir)?;
+            }
+        }
         let body = b"fn campaign_fixture() {}\n";
-        std::fs::write(src_dir.join("campaign.rs"), body).expect("write");
+        match std::fs::write(&src_path, body) {
+            Ok(()) => {}
+            Err(_) => return Err(CampaignProofRefuse::WriteSource),
+        }
         let digest = blake3::hash(body).to_hex().to_string();
 
-        let art_dir = root.join("crates/bs-detector/campaigns/build_script_sandbox");
-        std::fs::create_dir_all(&art_dir).expect("mkdir art");
+        let art_rel = "crates/bs-detector/campaigns/build_script_sandbox/artifact.toml";
+        let art_path = root.join(art_rel);
+        match art_path.parent() {
+            None => return Err(CampaignProofRefuse::MkdirArt),
+            Some(dir) => {
+                std::fs::create_dir_all(dir).map_err(|_| CampaignProofRefuse::MkdirArt)?;
+            }
+        }
         let art = CampaignArtifact {
             name: "build_script_sandbox".to_string(),
             timestamp_unix: now_unix(),
@@ -268,19 +304,21 @@ mod tests {
                 blake3: digest,
             }],
         };
-        std::fs::write(art_dir.join("artifact.toml"), art.render_toml()).expect("art");
+        match std::fs::write(&art_path, art.render_toml()) {
+            Ok(()) => {}
+            Err(_) => return Err(CampaignProofRefuse::WriteArtifact),
+        }
 
-        let seats = vec![CampaignSeat {
+        let seats = [CampaignSeat {
             name: "build_script_sandbox".to_string(),
             artifact: "campaigns/build_script_sandbox/artifact.toml".to_string(),
             freshness_bound_secs: 86_400,
             sources: vec![src_rel.to_string()],
         }];
         let hits = verify_campaigns(root, &seats);
-        assert!(
-            hits.iter()
-                .any(|h| h.construct().starts_with("campaign_specimen_unflagged:")),
-            "specimen ≠ flagged must red: {hits:?}"
-        );
+        let unflagged = hits
+            .iter()
+            .any(|h| h.construct().starts_with("campaign_specimen_unflagged:"));
+        require(unflagged, CampaignProofRefuse::SpecimenUnflaggedMustRed)
     }
 }

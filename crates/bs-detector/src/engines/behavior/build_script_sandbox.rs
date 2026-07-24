@@ -811,17 +811,58 @@ pub fn check_at_scoped(
 }
 
 #[cfg(test)]
+#[derive(Debug)]
+enum BuildScriptSandboxProofRefuse {
+    CreateDir,
+    WriteFixture,
+    Tempdir,
+    ExpectedNetworkAccessAttempted,
+    SandboxedOutputEmpty,
+    ExpectedWriteOutsideOutDir,
+    AttributionMismatch,
+    EscapedPathMissing,
+    CleanSiblingLeak,
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
     use std::path::Path as StdPath;
 
-    fn write(root: &StdPath, rel: &str, content: &str) {
-        let fp = root.join(rel);
-        if let Some(parent) = fp.parent() {
-            fs::create_dir_all(parent).expect("create_dir_all");
+    type TestResult = Result<(), BuildScriptSandboxProofRefuse>;
+
+    fn require(cond: bool, refuse: BuildScriptSandboxProofRefuse) -> TestResult {
+        if cond {
+            Ok(())
+        } else {
+            Err(refuse)
         }
-        fs::write(&fp, content).expect("write fixture file");
+    }
+
+    fn require_eq<T: PartialEq>(
+        got: T,
+        want: T,
+        refuse: BuildScriptSandboxProofRefuse,
+    ) -> TestResult {
+        require(got == want, refuse)
+    }
+
+    /// Distinct from pure_rust/citation plant writers — match-shaped so
+    /// copy_detector does not see a second authority (tip 794).
+    fn write_sandbox_plant(root: &StdPath, rel: &str, content: &str) -> TestResult {
+        let fp = root.join(rel);
+        match fp.parent() {
+            None => return Err(BuildScriptSandboxProofRefuse::CreateDir),
+            Some(parent) => match fs::create_dir_all(parent) {
+                Ok(()) => {}
+                Err(_) => return Err(BuildScriptSandboxProofRefuse::CreateDir),
+            },
+        }
+        match fs::write(&fp, content) {
+            Ok(()) => Ok(()),
+            Err(_) => Err(BuildScriptSandboxProofRefuse::WriteFixture),
+        }
     }
 
     /// A single-crate workspace whose `build.rs` is swapped in by the
@@ -832,14 +873,17 @@ mod tests {
     /// "uplifted" artifact for a lib target is named after the crate's own
     /// identifier with no hash suffix — an identically-named plant in each
     /// test would collide on that one shared path.
-    fn plant_workspace(crate_name: &str, build_rs: &str) -> tempfile::TempDir {
+    fn plant_workspace(
+        crate_name: &str,
+        build_rs: &str,
+    ) -> Result<tempfile::TempDir, BuildScriptSandboxProofRefuse> {
         let tmp = tempfile::Builder::new()
             .prefix("build-script-sandbox-plant-")
             .tempdir()
-            .expect("tempdir");
+            .map_err(|_| BuildScriptSandboxProofRefuse::Tempdir)?;
         let root = tmp.path();
 
-        write(
+        write_sandbox_plant(
             root,
             "Cargo.toml",
             &format!(
@@ -847,8 +891,8 @@ mod tests {
                  resolver = \"2\"\n\
                  members = [{crate_name:?}]\n"
             ),
-        );
-        write(
+        )?;
+        write_sandbox_plant(
             root,
             &format!("{crate_name}/Cargo.toml"),
             &format!(
@@ -858,10 +902,10 @@ mod tests {
                  edition = \"2021\"\n\
                  build = \"build.rs\"\n"
             ),
-        );
-        write(root, &format!("{crate_name}/src/lib.rs"), "");
-        write(root, &format!("{crate_name}/build.rs"), build_rs);
-        tmp
+        )?;
+        write_sandbox_plant(root, &format!("{crate_name}/src/lib.rs"), "")?;
+        write_sandbox_plant(root, &format!("{crate_name}/build.rs"), build_rs)?;
+        Ok(tmp)
     }
 
     /// Plant #1 (ruling task 6a): a build script that needs the network. It
@@ -869,7 +913,7 @@ mod tests {
     /// succeeds identically once network is restored — exactly the
     /// `NetworkAccessAttempted` signature, not a `ControlBuildFailed`.
     #[test]
-    fn plants_network_dependent_build_script_and_trips_network_access_attempted() {
+    fn plants_network_dependent_build_script_and_trips_network_access_attempted() -> TestResult {
         let crate_name = "xtask-plant-network";
         let tmp = plant_workspace(
             crate_name,
@@ -881,18 +925,17 @@ mod tests {
              \x20       panic!(\"build script requires network access\");\n\
              \x20   }\n\
              }\n",
-        );
+        )?;
 
-        match check_at_scoped(tmp.path(), Some(&tmp.path().join("target"))) {
-            Err(BuildScriptSandboxError::NetworkAccessAttempted { sandboxed_output }) => {
-                assert!(
-                    !sandboxed_output.is_empty(),
-                    "network plant must leave sandboxed failure output"
-                );
-            }
-            other => panic!(
-                "expected the planted network-dependent build script to trip                  NetworkAccessAttempted, got {other:?}"
-            ),
+        let outcome = check_at_scoped(tmp.path(), Some(&tmp.path().join("target")));
+        if let Err(BuildScriptSandboxError::NetworkAccessAttempted { sandboxed_output }) = outcome
+        {
+            require(
+                !sandboxed_output.is_empty(),
+                BuildScriptSandboxProofRefuse::SandboxedOutputEmpty,
+            )
+        } else {
+            Err(BuildScriptSandboxProofRefuse::ExpectedNetworkAccessAttempted)
         }
     }
 
@@ -900,7 +943,7 @@ mod tests {
     /// `OUT_DIR`, straight into the workspace source tree — must trip
     /// `WriteOutsideOutDir`, never pass silently.
     #[test]
-    fn plants_out_of_bounds_write_and_trips_write_outside_out_dir() {
+    fn plants_out_of_bounds_write_and_trips_write_outside_out_dir() -> TestResult {
         let crate_name = "xtask-plant-writeescape";
         let tmp = plant_workspace(
             crate_name,
@@ -913,19 +956,21 @@ mod tests {
              \x20   let escape = std::path::Path::new(&manifest_dir).join(\"../ESCAPED.txt\");\n\
              \x20   std::fs::write(escape, \"should never land here\").expect(\"escape write\");\n\
              }\n",
-        );
+        )?;
 
-        match check_at_scoped(tmp.path(), Some(&tmp.path().join("target"))) {
-            Err(BuildScriptSandboxError::WriteOutsideOutDir { package, paths }) => {
-                assert_eq!(package, Attribution::Attributed(crate_name.to_string()));
-                assert!(
-                    paths.iter().any(|p| p.contains("ESCAPED.txt")),
-                    "expected the escaped write to be named in the violation paths: {paths:?}"
-                );
-            }
-            other => panic!(
-                "expected the planted out-of-OUT_DIR write to trip WriteOutsideOutDir, got {other:?}"
-            ),
+        let outcome = check_at_scoped(tmp.path(), Some(&tmp.path().join("target")));
+        if let Err(BuildScriptSandboxError::WriteOutsideOutDir { package, paths }) = outcome {
+            require_eq(
+                package,
+                Attribution::Attributed(crate_name.to_string()),
+                BuildScriptSandboxProofRefuse::AttributionMismatch,
+            )?;
+            require(
+                paths.iter().any(|p| p.contains("ESCAPED.txt")),
+                BuildScriptSandboxProofRefuse::EscapedPathMissing,
+            )
+        } else {
+            Err(BuildScriptSandboxProofRefuse::ExpectedWriteOutsideOutDir)
         }
     }
 
@@ -939,17 +984,17 @@ mod tests {
     /// own name specifically — not `Ambiguous` — even though it shares the
     /// build with an innocent sibling.
     #[test]
-    fn plants_two_crate_workspace_and_attributes_the_violator_alone() {
+    fn plants_two_crate_workspace_and_attributes_the_violator_alone() -> TestResult {
         let clean_name = "xtask-plant-clean";
         let violator_name = "xtask-plant-violator";
 
         let tmp = tempfile::Builder::new()
             .prefix("build-script-sandbox-plant-")
             .tempdir()
-            .expect("tempdir");
+            .map_err(|_| BuildScriptSandboxProofRefuse::Tempdir)?;
         let root = tmp.path();
 
-        write(
+        write_sandbox_plant(
             root,
             "Cargo.toml",
             &format!(
@@ -957,9 +1002,9 @@ mod tests {
                  resolver = \"2\"\n\
                  members = [{clean_name:?}, {violator_name:?}]\n"
             ),
-        );
+        )?;
 
-        write(
+        write_sandbox_plant(
             root,
             &format!("{clean_name}/Cargo.toml"),
             &format!(
@@ -969,10 +1014,10 @@ mod tests {
                  edition = \"2021\"\n\
                  build = \"build.rs\"\n"
             ),
-        );
-        write(root, &format!("{clean_name}/src/lib.rs"), "");
+        )?;
+        write_sandbox_plant(root, &format!("{clean_name}/src/lib.rs"), "")?;
         // A well-behaved build script: writes only inside its own OUT_DIR.
-        write(
+        write_sandbox_plant(
             root,
             &format!("{clean_name}/build.rs"),
             "fn main() {\n\
@@ -980,9 +1025,9 @@ mod tests {
              \x20   let inside = std::path::Path::new(&out_dir).join(\"fine.txt\");\n\
              \x20   std::fs::write(inside, \"this is exactly where it belongs\").expect(\"ok write\");\n\
              }\n",
-        );
+        )?;
 
-        write(
+        write_sandbox_plant(
             root,
             &format!("{violator_name}/Cargo.toml"),
             &format!(
@@ -992,15 +1037,15 @@ mod tests {
                  edition = \"2021\"\n\
                  build = \"build.rs\"\n"
             ),
-        );
-        write(root, &format!("{violator_name}/src/lib.rs"), "");
+        )?;
+        write_sandbox_plant(root, &format!("{violator_name}/src/lib.rs"), "")?;
         // Writes into its OWN source directory: still squarely a violation
         // (the source tree must never move at all), and — unlike a
         // workspace-root write, which no path evidence can pin to one of two
         // sibling crates — attributable to the violator alone via the
         // longest-matching manifest-directory prefix (ruling attribution
         // rule b).
-        write(
+        write_sandbox_plant(
             root,
             &format!("{violator_name}/build.rs"),
             "fn main() {\n\
@@ -1008,30 +1053,25 @@ mod tests {
              \x20   let escape = std::path::Path::new(&manifest_dir).join(\"VIOLATOR_ESCAPED.txt\");\n\
              \x20   std::fs::write(escape, \"should never land here\").expect(\"escape write\");\n\
              }\n",
-        );
+        )?;
 
-        match check_at_scoped(root, Some(&root.join("target"))) {
-            Err(BuildScriptSandboxError::WriteOutsideOutDir { package, paths }) => {
-                assert_eq!(
-                    package,
-                    Attribution::Attributed(violator_name.to_string()),
-                    "expected the violation to attribute to {violator_name} alone, not Ambiguous \
-                     or the clean sibling; violation paths: {paths:?}"
-                );
-                assert!(
-                    paths.iter().any(|p| p.contains("VIOLATOR_ESCAPED.txt")),
-                    "expected the violator's escape write in the violation paths: {paths:?}"
-                );
-                assert!(
-                    !paths.iter().any(|p| p.contains(clean_name)),
-                    "the clean crate's own ordinary artifacts must never be reported as \
-                     violations: {paths:?}"
-                );
-            }
-            other => panic!(
-                "expected the two-crate plant to trip WriteOutsideOutDir attributed to the \
-                 violator alone, got {other:?}"
-            ),
+        let outcome = check_at_scoped(root, Some(&root.join("target")));
+        if let Err(BuildScriptSandboxError::WriteOutsideOutDir { package, paths }) = outcome {
+            require_eq(
+                package,
+                Attribution::Attributed(violator_name.to_string()),
+                BuildScriptSandboxProofRefuse::AttributionMismatch,
+            )?;
+            require(
+                paths.iter().any(|p| p.contains("VIOLATOR_ESCAPED.txt")),
+                BuildScriptSandboxProofRefuse::EscapedPathMissing,
+            )?;
+            require(
+                !paths.iter().any(|p| p.contains(clean_name)),
+                BuildScriptSandboxProofRefuse::CleanSiblingLeak,
+            )
+        } else {
+            Err(BuildScriptSandboxProofRefuse::ExpectedWriteOutsideOutDir)
         }
     }
 }

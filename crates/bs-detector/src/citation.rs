@@ -264,14 +264,22 @@ fn find_impl_method(ast: &syn::File, ty: &str, method: &str) -> Option<FoundItem
 }
 
 fn type_path_tail(ty: &syn::Type) -> Option<String> {
-    match ty {
-        syn::Type::Path(p) => p.path.segments.last().map(|s| s.ident.to_string()),
-        // Tip 686: `impl &Foo` / `impl (Foo)` were citation-blind for Type::method.
-        syn::Type::Reference(r) => type_path_tail(&r.elem),
-        syn::Type::Paren(p) => type_path_tail(&p.elem),
-        syn::Type::Group(g) => type_path_tail(&g.elem),
-        _ => None,
+    // if-let chain — syn::Type is non_exhaustive, so a match `_ =>` would be
+    // catchall_arm (tip 794). Unhandled shapes are citation-blind by design.
+    if let syn::Type::Path(p) = ty {
+        return p.path.segments.last().map(|s| s.ident.to_string());
     }
+    // Tip 686: `impl &Foo` / `impl (Foo)` were citation-blind for Type::method.
+    if let syn::Type::Reference(r) = ty {
+        return type_path_tail(&r.elem);
+    }
+    if let syn::Type::Paren(p) = ty {
+        return type_path_tail(&p.elem);
+    }
+    if let syn::Type::Group(g) = ty {
+        return type_path_tail(&g.elem);
+    }
+    None
 }
 
 /// Extract the prose block for seat `n` from decisions.md (from the

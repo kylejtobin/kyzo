@@ -134,7 +134,7 @@ impl AttestationTemplate {
                 TemplateSegment::Slot { name } => {
                     let delim = match self.segments.get(i + 1) {
                         Some(TemplateSegment::Fixed { text }) => text.as_str(),
-                        _ => {
+                        Some(TemplateSegment::Slot { .. }) | None => {
                             return Err(format!(
                                 "attestation slot `{name}` has no following fixed delimiter"
                             ));
