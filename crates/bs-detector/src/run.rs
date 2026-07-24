@@ -475,48 +475,78 @@ pub fn run(root: &Path, only: Option<&str>) -> Result<Verdict> {
     Ok(Verdict::admit(header, report, counts_line, color))
 }
 
+/// Typed test refusal — file-level for `total_refusal` workspace-enum index (tip 777).
+#[cfg(test)]
+#[derive(Debug)]
+enum RunProofRefuse {
+    Tempdir,
+    Mkdir,
+    Copy,
+    FixturesDir,
+    Entry,
+    Write,
+    Run,
+    Banner,
+    ZeroCount,
+    ProbeHit,
+    Prefix,
+    FirstCount,
+    SecondSilent,
+    Overwrite,
+}
+
+#[cfg(test)]
+impl RunProofRefuse {
+    fn require(self, cond: bool) -> Result<(), RunProofRefuse> {
+        if cond {
+            Ok(())
+        } else {
+            Err(self)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
     use std::path::PathBuf;
 
-    fn stage_root_with_free_fn(probe_src: &str) -> tempfile::TempDir {
-        let dir = tempfile::tempdir().expect("tempdir");
+    type TestResult = Result<(), RunProofRefuse>;
+
+    fn stage_root_with_free_fn(probe_src: &str) -> Result<tempfile::TempDir, RunProofRefuse> {
+        let dir = tempfile::tempdir().map_err(|_| RunProofRefuse::Tempdir)?;
         let root = dir.path();
         let src = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let det = root.join("crates/bs-detector");
-        fs::create_dir_all(det.join("tests")).expect("mkdir tests");
-        fs::create_dir_all(det.join("fixtures")).expect("mkdir fixtures");
-        fs::create_dir_all(root.join("crates/probe/src")).expect("mkdir probe");
+        fs::create_dir_all(det.join("tests")).map_err(|_| RunProofRefuse::Mkdir)?;
+        fs::create_dir_all(det.join("fixtures")).map_err(|_| RunProofRefuse::Mkdir)?;
+        fs::create_dir_all(root.join("crates/probe/src")).map_err(|_| RunProofRefuse::Mkdir)?;
         for name in ["grammar.toml", "laws.toml", "waivers.toml"] {
-            fs::copy(src.join(name), det.join(name)).unwrap_or_else(|e| {
-                panic!("copy {name}: {e}");
-            });
+            fs::copy(src.join(name), det.join(name)).map_err(|_| RunProofRefuse::Copy)?;
         }
         fs::copy(
             src.join("tests/bite_proofs.rs"),
             det.join("tests/bite_proofs.rs"),
         )
-        .expect("copy bite_proofs");
-        for entry in fs::read_dir(src.join("fixtures")).expect("fixtures dir") {
-            let entry = entry.expect("entry");
+        .map_err(|_| RunProofRefuse::Copy)?;
+        for entry in fs::read_dir(src.join("fixtures")).map_err(|_| RunProofRefuse::FixturesDir)? {
+            let entry = entry.map_err(|_| RunProofRefuse::Entry)?;
             let name = entry.file_name();
             let to = det.join("fixtures").join(&name);
-            fs::write(&to, "struct FixtureUnit;\n").unwrap_or_else(|e| {
-                panic!("write fixture {:?}: {e}", name);
-            });
+            fs::write(&to, "struct FixtureUnit;\n").map_err(|_| RunProofRefuse::Write)?;
         }
-        fs::write(root.join("crates/probe/src/lib.rs"), probe_src).expect("write probe");
-        dir
+        fs::write(root.join("crates/probe/src/lib.rs"), probe_src)
+            .map_err(|_| RunProofRefuse::Write)?;
+        Ok(dir)
     }
 
     /// Tip 650 anti-fraud: free unseated fn meters as hard `unclassified-fn:N`
     /// on the counts banner — exact token equality, not soft contains/any.
     #[test]
-    fn anti_fraud_counts_line_meters_unclassified_fn_exactly() {
-        let dir = stage_root_with_free_fn("fn free_unseated() {}\n");
-        let v = run(dir.path(), Some("unclassified-fn")).expect("run");
+    fn anti_fraud_counts_line_meters_unclassified_fn_exactly() -> TestResult {
+        let dir = stage_root_with_free_fn("fn free_unseated() {}\n")?;
+        let v = run(dir.path(), Some("unclassified-fn")).map_err(|_| RunProofRefuse::Run)?;
         let n = v
             .report()
             .lines()
@@ -530,17 +560,10 @@ mod tests {
                 construct.starts_with("unclassified-fn:")
             })
             .count();
-        assert_eq!(
-            v.counts_line(),
-            format!("unclassified-fn:{n} = {n} violations"),
-            "banner must hard-count unclassified-fn (not umbrella unclassified); report=\n{}",
-            v.report()
-        );
-        assert_eq!(
-            n == 0,
-            false,
-            "free unseated fn exists — unclassified-fn count must be non-zero"
-        );
+        RunProofRefuse::Banner.require(
+            v.counts_line() == format!("unclassified-fn:{n} = {n} violations"),
+        )?;
+        RunProofRefuse::ZeroCount.require(n != 0)?;
         let probe_hits = v
             .report()
             .lines()
@@ -550,41 +573,39 @@ mod tests {
                 )
             })
             .count();
-        assert_eq!(
-            probe_hits, 1,
-            "probe free_unseated must appear exactly once under unclassified-fn: {}",
-            v.report()
-        );
+        RunProofRefuse::ProbeHit.require(probe_hits == 1)
     }
 
     #[test]
-    fn hard_unclassified_check_extracts_prefix() {
-        assert_eq!(
-            hard_unclassified_check("unclassified-fn:foo").expect("ok"),
-            "unclassified-fn"
-        );
-        assert_eq!(
-            hard_unclassified_check("unclassified-impl-fn:m").expect("ok"),
-            "unclassified-impl-fn"
-        );
-        assert!(hard_unclassified_check("extern_crate").is_err());
-        assert!(hard_unclassified_check("unknown-syn-item-kind").is_err());
+    fn hard_unclassified_check_extracts_prefix() -> TestResult {
+        RunProofRefuse::Prefix.require(
+            hard_unclassified_check("unclassified-fn:foo").ok().as_deref()
+                == Some("unclassified-fn"),
+        )?;
+        RunProofRefuse::Prefix.require(
+            hard_unclassified_check("unclassified-impl-fn:m")
+                .ok()
+                .as_deref()
+                == Some("unclassified-impl-fn"),
+        )?;
+        RunProofRefuse::Prefix.require(hard_unclassified_check("extern_crate").is_err())?;
+        RunProofRefuse::Prefix.require(hard_unclassified_check("unknown-syn-item-kind").is_err())
     }
 
     /// Tip 686: overwrite of counts[check] hid FAIL lines (TOTAL < truth).
     #[test]
-    fn anti_fraud_duplicate_check_count_refuses() {
+    fn anti_fraud_duplicate_check_count_refuses() -> TestResult {
         let mut counts = BTreeMap::new();
-        record_check_count(&mut counts, "await".into(), 3).expect("first");
-        let err = record_check_count(&mut counts, "await".into(), 1).expect_err("second");
-        assert_eq!(
-            format!("{err}"),
-            "check `await` emitted twice in one run — refuse double-count / counts overwrite"
-        );
-        assert_eq!(
-            counts.get("await").copied(),
-            Some(3),
-            "costume: second insert overwrote 3→1 and TOTAL undercounted"
-        );
+        record_check_count(&mut counts, "await".into(), 3)
+            .map_err(|_| RunProofRefuse::FirstCount)?;
+        let err = match record_check_count(&mut counts, "await".into(), 1) {
+            Err(e) => e,
+            Ok(()) => return Err(RunProofRefuse::SecondSilent),
+        };
+        RunProofRefuse::SecondSilent.require(
+            format!("{err}")
+                == "check `await` emitted twice in one run — refuse double-count / counts overwrite",
+        )?;
+        RunProofRefuse::Overwrite.require(counts.get("await").copied() == Some(3))
     }
 }

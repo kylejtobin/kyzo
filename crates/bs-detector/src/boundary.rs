@@ -554,64 +554,96 @@ pub fn span_line(span: &proc_macro2::Span) -> usize {
     line
 }
 
+/// Typed test refusal — file-level for `total_refusal` workspace-enum index (tip 777).
+#[cfg(test)]
+#[derive(Debug)]
+enum BoundaryProofRefuse {
+    Tempdir,
+    Mkdir,
+    Write,
+    Walk,
+    FileCount,
+    UnparsedCount,
+    ExistingCount,
+    CoverageExisting,
+    CoverageVisited,
+    CoverageMissing,
+    FixtureWalked,
+}
+
+#[cfg(test)]
+impl BoundaryProofRefuse {
+    fn require(self, cond: bool) -> Result<(), BoundaryProofRefuse> {
+        if cond {
+            Ok(())
+        } else {
+            Err(self)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn walk_covers_every_rs_file_and_proof_balances() {
-        let dir = tempfile::tempdir().expect("tempdir for fixture tree");
-        let root = dir.path();
-        std::fs::create_dir_all(root.join("crates/a/src")).expect("mkdir a");
-        std::fs::create_dir_all(root.join("crates/b/tests")).expect("mkdir b");
-        std::fs::create_dir_all(root.join("crates/a/target/debug")).expect("mkdir target");
-        std::fs::write(root.join("crates/a/src/lib.rs"), "pub fn f() {}\n").expect("write");
-        std::fs::write(root.join("crates/b/tests/t.rs"), "#[test] fn t() {}\n").expect("write");
-        std::fs::write(root.join("crates/a/src/broken.rs"), "fn {{{\n").expect("write");
-        // target/ output must be invisible; everything else must be seen.
-        std::fs::write(root.join("crates/a/target/debug/gen.rs"), "fn x() {}\n").expect("write");
+    type TestResult = Result<(), BoundaryProofRefuse>;
 
-        let b = Boundary::walk(root).expect("walk");
-        assert_eq!(b.files().len(), 2, "lib.rs and tests/t.rs parse");
-        assert_eq!(b.unparsed().len(), 1, "broken.rs is REPORTED, not skipped");
-        assert_eq!(b.existing().len(), 3, "target/ is excluded from existence");
+    #[test]
+    fn walk_covers_every_rs_file_and_proof_balances() -> TestResult {
+        let dir = tempfile::tempdir().map_err(|_| BoundaryProofRefuse::Tempdir)?;
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("crates/a/src")).map_err(|_| BoundaryProofRefuse::Mkdir)?;
+        std::fs::create_dir_all(root.join("crates/b/tests")).map_err(|_| BoundaryProofRefuse::Mkdir)?;
+        std::fs::create_dir_all(root.join("crates/a/target/debug"))
+            .map_err(|_| BoundaryProofRefuse::Mkdir)?;
+        std::fs::write(root.join("crates/a/src/lib.rs"), "pub fn f() {}\n")
+            .map_err(|_| BoundaryProofRefuse::Write)?;
+        std::fs::write(root.join("crates/b/tests/t.rs"), "#[test] fn t() {}\n")
+            .map_err(|_| BoundaryProofRefuse::Write)?;
+        std::fs::write(root.join("crates/a/src/broken.rs"), "fn {{{\n")
+            .map_err(|_| BoundaryProofRefuse::Write)?;
+        // target/ output must be invisible; everything else must be seen.
+        std::fs::write(root.join("crates/a/target/debug/gen.rs"), "fn x() {}\n")
+            .map_err(|_| BoundaryProofRefuse::Write)?;
+
+        let b = Boundary::walk(root).map_err(|_| BoundaryProofRefuse::Walk)?;
+        BoundaryProofRefuse::FileCount.require(b.files().len() == 2)?;
+        BoundaryProofRefuse::UnparsedCount.require(b.unparsed().len() == 1)?;
+        BoundaryProofRefuse::ExistingCount.require(b.existing().len() == 3)?;
         let proof = b.coverage_proof();
-        assert_eq!(proof.existing(), 3);
-        assert_eq!(proof.visited(), 3);
+        BoundaryProofRefuse::CoverageExisting.require(proof.existing() == 3)?;
+        BoundaryProofRefuse::CoverageVisited.require(proof.visited() == 3)?;
         // Exact empty slice — soft is_empty hid a coverage_hole path while
         // existing==visited still looked balanced (AGENT_TESTING_LAW §7).
-        assert_eq!(
-            proof.missing(),
-            &[] as &[RelPath],
-            "costume: path in missing while counts look balanced"
-        );
+        BoundaryProofRefuse::CoverageMissing
+            .require(proof.missing() == &[] as &[RelPath])
     }
 
     /// Tip 686 / tip 659 ban-list: `target/` is the ONLY walk exclusion.
     /// Fixtures were once filtered out (silent undercount of deny specimens).
     #[test]
-    fn anti_fraud_fixtures_dir_is_walked_not_skipped() {
-        let dir = tempfile::tempdir().expect("tempdir");
+    fn anti_fraud_fixtures_dir_is_walked_not_skipped() -> TestResult {
+        let dir = tempfile::tempdir().map_err(|_| BoundaryProofRefuse::Tempdir)?;
         let root = dir.path();
-        std::fs::create_dir_all(root.join("crates/bs-detector/fixtures")).expect("mkdir");
-        std::fs::create_dir_all(root.join("crates/bs-detector/src")).expect("mkdir src");
+        std::fs::create_dir_all(root.join("crates/bs-detector/fixtures"))
+            .map_err(|_| BoundaryProofRefuse::Mkdir)?;
+        std::fs::create_dir_all(root.join("crates/bs-detector/src"))
+            .map_err(|_| BoundaryProofRefuse::Mkdir)?;
         std::fs::write(
             root.join("crates/bs-detector/src/lib.rs"),
             "pub fn ok() {}\n",
         )
-        .expect("write lib");
+        .map_err(|_| BoundaryProofRefuse::Write)?;
         std::fs::write(
             root.join("crates/bs-detector/fixtures/specimen.rs"),
             "fn hidden_violation() {}\n",
         )
-        .expect("write fixture");
-        let b = Boundary::walk(root).expect("walk");
+        .map_err(|_| BoundaryProofRefuse::Write)?;
+        let b = Boundary::walk(root).map_err(|_| BoundaryProofRefuse::Walk)?;
         let paths: Vec<&str> = b.files().iter().map(|f| f.rel_path()).collect();
-        assert_eq!(
+        BoundaryProofRefuse::FixtureWalked.require(
             paths.contains(&"crates/bs-detector/fixtures/specimen.rs"),
-            true,
-            "costume: fixtures/ skipped from boundary walk — paths={paths:?}"
-        );
-        assert_eq!(b.existing().len(), 2, "lib + fixture both exist");
+        )?;
+        BoundaryProofRefuse::ExistingCount.require(b.existing().len() == 2)
     }
 }

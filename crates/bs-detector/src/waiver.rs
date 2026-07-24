@@ -271,31 +271,12 @@ impl Waiver {
         self.why_not_sabotage.as_str()
     }
 
-    /// Test-only in-memory entry, bypassing `WaiverFile::load`'s file/TOML
-    /// door (which is the production admission path and validates the
-    /// attestation form — this constructor does not).
+    /// Test-only: admit one waiver row by TOML (tip 885). Bypasses
+    /// `WaiverFile::load`'s attestation-form gate — deserialize is the
+    /// sole field door; one argument, no clippy allow.
     #[cfg(test)]
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn admit(
-        check: impl Into<Label>,
-        file: impl Into<RelPath>,
-        line: usize,
-        construct: impl Into<Label>,
-        site_hash: impl Into<HexDigest>,
-        citation: impl Into<Text>,
-        anchor_hash: impl Into<HexDigest>,
-        why_not_sabotage: impl Into<Text>,
-    ) -> Self {
-        Self {
-            check: check.into(),
-            file: file.into(),
-            line,
-            construct: construct.into(),
-            site_hash: site_hash.into(),
-            citation: citation.into(),
-            anchor_hash: anchor_hash.into(),
-            why_not_sabotage: why_not_sabotage.into(),
-        }
+    pub(crate) fn admit_row(row: &str) -> Result<Self, toml::de::Error> {
+        toml::from_str(row)
     }
 
 }

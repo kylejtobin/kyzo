@@ -72,6 +72,35 @@ pub fn forbid_roots(b: &Boundary) -> Vec<Hit> {
     hits
 }
 
+/// Typed test refusal — file-level for `total_refusal` workspace-enum index (tip 777).
+#[cfg(test)]
+#[derive(Debug)]
+enum MetaProofRefuse {
+    Template,
+    Fill,
+    Parse,
+    MissingItem,
+    Tempfile,
+    Write,
+    Load,
+    LiveNotStale,
+    DeadNotReported,
+    RenameNotStale,
+    CommentStaled,
+    ForbidMiss,
+}
+
+#[cfg(test)]
+impl MetaProofRefuse {
+    fn require(self, cond: bool) -> Result<(), MetaProofRefuse> {
+        if cond {
+            Ok(())
+        } else {
+            Err(self)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -79,19 +108,21 @@ mod tests {
     use crate::identity;
     use syn::spanned::Spanned;
 
+    type TestResult = Result<(), MetaProofRefuse>;
+
     const HASH: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
-    fn valid_attestation_why() -> String {
+    fn valid_attestation_why() -> Result<String, MetaProofRefuse> {
         use crate::waiver::AttestationTemplate;
         AttestationTemplate::load_canonical()
-            .expect("canonical template")
+            .map_err(|_| MetaProofRefuse::Template)?
             .fill(&[
                 ("alt_one", "typed refusal at the site"),
                 ("reason_one", "the protocol admits no domain error channel"),
                 ("alt_two", "sentinel zero"),
                 ("reason_two", "zero is a live column value"),
             ])
-            .expect("fill")
+            .map_err(|_| MetaProofRefuse::Fill)
     }
 
     fn toml_basic_escape(s: &str) -> String {
@@ -111,10 +142,12 @@ mod tests {
     }
 
     #[test]
-    fn stale_waiver_is_reported_when_its_site_dies() {
+    fn stale_waiver_is_reported_when_its_site_dies() -> TestResult {
         let src = "fn f() { let x = 1; x }";
-        let ast = syn::parse_file(src).expect("parses");
-        let real_hash = identity::site_hash(ast.items.first().expect("item"));
+        let ast = syn::parse_file(src).map_err(|_| MetaProofRefuse::Parse)?;
+        let real_hash = identity::site_hash(
+            ast.items.first().ok_or(MetaProofRefuse::MissingItem)?,
+        );
         let files = vec![SourceFile::admit(
             "crates/x/src/a.rs".to_string(),
             src.to_string(),
@@ -122,7 +155,7 @@ mod tests {
         )];
 
         // Live hit whose enclosing item hash matches the waiver from the start.
-        let why = toml_basic_escape(&valid_attestation_why());
+        let why = toml_basic_escape(&valid_attestation_why()?);
         let toml = format!(
             r#"
 scope_waiver = []
@@ -138,47 +171,52 @@ anchor_hash = "{HASH}"
 why_not_sabotage = {why}
 "#
         );
-        let mut tf = tempfile::NamedTempFile::new().expect("tempfile");
-        std::io::Write::write_all(&mut tf, toml.as_bytes()).expect("write");
-        let live_wf = WaiverFile::load(tf.path()).expect("loads");
+        let mut tf = tempfile::NamedTempFile::new().map_err(|_| MetaProofRefuse::Tempfile)?;
+        std::io::Write::write_all(&mut tf, toml.as_bytes()).map_err(|_| MetaProofRefuse::Write)?;
+        let live_wf = WaiverFile::load(tf.path()).map_err(|_| MetaProofRefuse::Load)?;
         let live = vec![(
             "expect".to_string(),
             vec![Hit::admit("crates/x/src/a.rs".to_string(), 1, "expect".to_string())],
         )];
-        assert!(
-            stale_waivers(&live_wf, &live, &files).is_empty(),
-            "matching content site = not stale"
-        );
+        MetaProofRefuse::LiveNotStale
+            .require(stale_waivers(&live_wf, &live, &files).is_empty())?;
         let drifted: Vec<(String, Vec<Hit>)> = vec![("expect".to_string(), vec![])];
-        assert_eq!(
-            stale_waivers(&live_wf, &drifted, &files).len(),
-            1,
-            "dead site = reported"
-        );
+        MetaProofRefuse::DeadNotReported
+            .require(stale_waivers(&live_wf, &drifted, &files).len() == 1)?;
         // Content rename: same line/construct, different identity → stale.
-        let renamed = syn::parse_file("fn f() { let y = 1; y }").expect("parses");
+        let renamed =
+            syn::parse_file("fn f() { let y = 1; y }").map_err(|_| MetaProofRefuse::Parse)?;
         let renamed_files = vec![SourceFile::admit(
             "crates/x/src/a.rs".to_string(),
             "fn f() { let y = 1; y }".to_string(),
             renamed,
         )];
-        assert_eq!(
-            stale_waivers(&live_wf, &live, &renamed_files).len(),
-            1,
-            "rename a local must stale the waiver (site_hash mismatch)"
-        );
+        MetaProofRefuse::RenameNotStale
+            .require(stale_waivers(&live_wf, &live, &renamed_files).len() == 1)
     }
 
     #[test]
-    fn item_6_proof_line_comment_above_does_not_stale_waiver() {
+    fn item_6_proof_line_comment_above_does_not_stale_waiver() -> TestResult {
         let bare = "fn f() { let x = 1; x }";
-        let bare_ast = syn::parse_file(bare).expect("parses");
-        let hash = identity::site_hash(bare_ast.items.first().expect("item"));
+        let bare_ast = syn::parse_file(bare).map_err(|_| MetaProofRefuse::Parse)?;
+        let hash = identity::site_hash(
+            bare_ast.items.first().ok_or(MetaProofRefuse::MissingItem)?,
+        );
         let noisy = "// inserted comment\nfn f() { let x = 1; x }";
-        let noisy_ast = syn::parse_file(noisy).expect("parses");
-        let item_line = noisy_ast.items.first().expect("item").span().start().line;
-        let files = vec![SourceFile::admit("crates/x/src/a.rs".to_string(), noisy.to_string(), noisy_ast)];
-        let why = toml_basic_escape(&valid_attestation_why());
+        let noisy_ast = syn::parse_file(noisy).map_err(|_| MetaProofRefuse::Parse)?;
+        let item_line = noisy_ast
+            .items
+            .first()
+            .ok_or(MetaProofRefuse::MissingItem)?
+            .span()
+            .start()
+            .line;
+        let files = vec![SourceFile::admit(
+            "crates/x/src/a.rs".to_string(),
+            noisy.to_string(),
+            noisy_ast,
+        )];
+        let why = toml_basic_escape(&valid_attestation_why()?);
         let toml = format!(
             r#"
 scope_waiver = []
@@ -194,30 +232,31 @@ anchor_hash = "{HASH}"
 why_not_sabotage = {why}
 "#
         );
-        let mut tf = tempfile::NamedTempFile::new().expect("tempfile");
-        std::io::Write::write_all(&mut tf, toml.as_bytes()).expect("write");
-        let wf = WaiverFile::load(tf.path()).expect("loads");
+        let mut tf = tempfile::NamedTempFile::new().map_err(|_| MetaProofRefuse::Tempfile)?;
+        std::io::Write::write_all(&mut tf, toml.as_bytes()).map_err(|_| MetaProofRefuse::Write)?;
+        let wf = WaiverFile::load(tf.path()).map_err(|_| MetaProofRefuse::Load)?;
         let live = vec![(
             "expect".to_string(),
-            vec![Hit::admit("crates/x/src/a.rs".to_string(), item_line, "expect".to_string())],
+            vec![Hit::admit(
+                "crates/x/src/a.rs".to_string(),
+                item_line,
+                "expect".to_string(),
+            )],
         )];
-        assert!(
-            stale_waivers(&wf, &live, &files).is_empty(),
-            "insert // above the item must NOT stale — layout only"
-        );
+        MetaProofRefuse::CommentStaled.require(stale_waivers(&wf, &live, &files).is_empty())
     }
 
     #[test]
-    fn root_without_forbid_detonates() {
+    fn root_without_forbid_detonates() -> TestResult {
         let b = Boundary::admit(
             vec![SourceFile::admit(
                 "crates/x/src/lib.rs".to_string(),
                 "pub fn f() {}\n".to_string(),
-                syn::parse_file("pub fn f() {}\n").expect("parses"),
+                syn::parse_file("pub fn f() {}\n").map_err(|_| MetaProofRefuse::Parse)?,
             )],
             vec![],
             vec![crate::boundary::RelPath::admit("crates/x/src/lib.rs")],
         );
-        assert_eq!(forbid_roots(&b).len(), 1);
+        MetaProofRefuse::ForbidMiss.require(forbid_roots(&b).len() == 1)
     }
 }

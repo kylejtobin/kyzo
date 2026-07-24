@@ -132,6 +132,7 @@ enum IdentityProofRefuse {
     IdentsNotVerbatim,
     WaiverMissesOnSiteHash,
     DriftedWaiverStillMatches,
+    WaiverRow,
 }
 #[cfg(test)]
 impl IdentityProofRefuse {
@@ -227,28 +228,35 @@ mod tests {
             src.to_string(),
             ast,
         )];
-        let w = Waiver::admit(
-            "expect",
-            "crates/x/src/a.rs",
-            1, // deliberately wrong display line
-            "expect",
-            hash.clone(),
-            "expect",
-            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            "a genuinely long justification for the fixture",
-        );
+        // line = 1 is deliberately wrong display line — match is by site_hash.
+        let w = Waiver::admit_row(&format!(
+            r#"
+check = "expect"
+file = "crates/x/src/a.rs"
+line = 1
+construct = "expect"
+site_hash = "{hash}"
+citation = "expect"
+anchor_hash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+why_not_sabotage = "a genuinely long justification for the fixture"
+"#
+        ))
+        .map_err(|_| IdentityProofRefuse::WaiverRow)?;
         let h = Hit::admit("crates/x/src/a.rs".to_string(), item_line, "expect".to_string());
         IdentityProofRefuse::WaiverMissesOnSiteHash.require(waiver_matches_hit(&w, &h, &files))?;
-        let drifted = Waiver::admit(
-            "expect",
-            "crates/x/src/a.rs",
-            1,
-            "expect",
-            "0".repeat(64),
-            "expect",
-            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            "a genuinely long justification for the fixture",
-        );
+        let drifted = Waiver::admit_row(
+            r#"
+check = "expect"
+file = "crates/x/src/a.rs"
+line = 1
+construct = "expect"
+site_hash = "0000000000000000000000000000000000000000000000000000000000000000"
+citation = "expect"
+anchor_hash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+why_not_sabotage = "a genuinely long justification for the fixture"
+"#,
+        )
+        .map_err(|_| IdentityProofRefuse::WaiverRow)?;
         IdentityProofRefuse::DriftedWaiverStillMatches.require(!waiver_matches_hit(&drifted, &h, &files))
     }
 }
