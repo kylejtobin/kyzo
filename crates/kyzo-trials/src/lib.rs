@@ -38,6 +38,8 @@ pub mod provenance;
 /// Test-only module (`#![cfg(test)]` inside).
 pub mod serializability;
 pub mod time_travel;
+/// Oracle → engine four-way refusal lowering (#271 T1).
+pub mod refusal_bridge;
 /// Oracle-differential verify corpus (re-homed from kyzo-core session/verify).
 /// Test-only module (`#![cfg(test)]` inside).
 pub mod verify_differential;

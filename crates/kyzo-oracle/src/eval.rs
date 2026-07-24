@@ -307,18 +307,44 @@ impl Program {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BudgetAxis {
+    Epochs,
+    DerivedTuples,
+    /// Hard fixpoint bound (non-termination guard).
+    FixpointBound,
+    Interrupt,
+}
+
+/// Structured oracle budget refuse — no String payload (#271 T1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BudgetExceeded {
+    pub axis: BudgetAxis,
+    pub spent: u64,
+    pub ceiling: u64,
+}
+
+/// Structured aggregation refuse — fold trait `String` doors still feed
+/// [`AggrFail::Fold`] until those traits take a workspace enum (total_refusal).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AggrFail {
+    Fold,
+    FreshFoldStateMissing,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Rejection {
     Unsafe(Rel),
     Unstratifiable(Rel),
     Malformed(Rel),
-    AggrError(String),
-    BudgetExceeded(String),
+    AggrError(AggrFail),
+    BudgetExceeded(BudgetExceeded),
 }
 
-fn aggr_err(e: String) -> Rejection {
-    Rejection::AggrError(e)
+fn aggr_err(_e: String) -> Rejection {
+    Rejection::AggrError(AggrFail::Fold)
 }
+
 
 /// Oracle-owned bounds vocabulary — never consumes exec's Budget.
 /// No wall-clock seat here: the oracle is a pure reference evaluator.
@@ -1016,16 +1042,23 @@ fn check_oracle_budget(
     db: &BTreeMap<Rel, BTreeSet<Tuple>>,
     rounds: usize,
 ) -> Result<(), Rejection> {
-    budget
-        .check_interrupt()
-        .map_err(Rejection::BudgetExceeded)?;
+    budget.check_interrupt().map_err(|_| {
+        Rejection::BudgetExceeded(BudgetExceeded {
+            axis: BudgetAxis::Interrupt,
+            spent: 0,
+            ceiling: 0,
+        })
+    })?;
 
     // INVARIANT(u32_fits_usize): NonZeroU32::get always fits usize on Kyzo targets.
     let epoch_ceiling = kyzo_model::value::convert::usize_from_u32(budget.epoch_ceiling().get());
     if rounds > epoch_ceiling {
-        return Err(Rejection::BudgetExceeded(format!(
-            "query budget exceeded: epochs spent {rounds} of ceiling {epoch_ceiling}"
-        )));
+        return Err(Rejection::BudgetExceeded(BudgetExceeded {
+            axis: BudgetAxis::Epochs,
+            // INVARIANT(len_fits_u64): rounds fits u64 on Kyzo targets.
+            spent: kyzo_model::value::convert::u64_from_usize(rounds),
+            ceiling: kyzo_model::value::convert::u64_from_usize(epoch_ceiling),
+        }));
     }
     if let Some(ceiling) = budget.derived_tuple_ceiling() {
         let spent: u64 = db
@@ -1036,9 +1069,11 @@ fn check_oracle_budget(
             })
             .sum();
         if spent > ceiling {
-            return Err(Rejection::BudgetExceeded(format!(
-                "query budget exceeded: derived tuples spent {spent} of ceiling {ceiling}"
-            )));
+            return Err(Rejection::BudgetExceeded(BudgetExceeded {
+                axis: BudgetAxis::DerivedTuples,
+                spent,
+                ceiling,
+            }));
         }
     }
     Ok(())
@@ -1115,9 +1150,11 @@ fn naive_eval_at_impl(
         loop {
             rounds += 1;
             if rounds > 100_000 {
-                return Err(Rejection::BudgetExceeded(
-                    "fixpoint bound exceeded: non-termination".into(),
-                ));
+                return Err(Rejection::BudgetExceeded(BudgetExceeded {
+                    axis: BudgetAxis::FixpointBound,
+                    spent: kyzo_model::value::convert::u64_from_usize(rounds),
+                    ceiling: 100_000,
+                }));
             }
             if let Some(b) = budget {
                 check_oracle_budget(b, &db, rounds)?;
@@ -1451,8 +1488,14 @@ mod tests {
         let err = naive_eval_at_budgeted(&program, AsOf::current(), &budget)
             .expect_err("a ceiling of 1 must refuse a real recursive program");
         assert!(
-            matches!(err, Rejection::BudgetExceeded(_)),
-            "expected BudgetExceeded, got {err:?}"
+            matches!(
+                err,
+                Rejection::BudgetExceeded(BudgetExceeded {
+                    axis: BudgetAxis::Epochs,
+                    ..
+                })
+            ),
+            "expected BudgetExceeded(Epochs), got {err:?}"
         );
     }
 

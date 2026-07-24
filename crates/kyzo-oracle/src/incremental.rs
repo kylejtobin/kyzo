@@ -342,8 +342,8 @@ fn collect_affected_groups(
         .collect()
 }
 
-fn aggr_err(e: String) -> Rejection {
-    Rejection::AggrError(e)
+fn aggr_err(_e: String) -> Rejection {
+    Rejection::AggrError(crate::eval::AggrFail::Fold)
 }
 
 fn eval_one_group(
@@ -389,7 +389,7 @@ fn eval_one_group(
             }
             let ops = ops
                 .as_mut()
-                .ok_or_else(|| Rejection::AggrError("fresh fold state missing".into()))?;
+                .ok_or(Rejection::AggrError(crate::eval::AggrFail::FreshFoldStateMissing))?;
             for (op, (i, _, _)) in ops.iter_mut().zip(val_positions) {
                 op.set(&row[*i]).map_err(aggr_err)?;
             }

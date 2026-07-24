@@ -293,6 +293,8 @@ pub(crate) mod session;
 /// Ordered substrate: contract, transactions, fjall adapter, backup, walks,
 /// and the 07 storage-Spec seats. Module tree lives in `store/mod.rs`.
 pub(crate) mod store;
+/// Closed four-way refusal taxonomy + per-layer lowerings (#271 T1).
+pub mod refusal;
 // `typestate` (staged-builder markers) moved to kyzo-model verbatim
 // (`crates/kyzo-model/src/typestate.rs`, commit 18c5880) and nothing in
 // this crate calls `crate::typestate::` — the decl pointed at a directory
@@ -334,6 +336,10 @@ pub use store::{
 /// proofs and later kind parameterizations share one crate-root door.
 pub use project::projection::{Generation, ProjectionBuilder, ProjectionKind, Sealed, Stale};
 
+pub use refusal::{
+    EngineRefusal, ExecRefuse, HostRefuse, ModelRefuse, OracleRejectionKind, RefusalLocus,
+    SessionRefuse, SpanExempt,
+};
 pub use data::json::NamedRows;
 pub use rules::contract::{
     CancelAuthority, CancelFlag, Cancelled, EmptyNamedRowsBody, FixedRule, FixedRuleInputRelation,

@@ -27,11 +27,11 @@ use kyzo_model::value::convert::i128_approx_f64;
 use kyzo_model::value::{DataValue, Num, NumRepr};
 
 pub use eval::{
-    Bindings, FixedRule, HeadAggr, HeadClass, Literal, Name, NameIntroduction, OracleBudget,
-    Polarity, Program, Rejection, Rel, Rule, Term, body_bindings_from, check_safety,
-    check_stratifiable, check_wellformed, dependency_edges, derived_rows, edge_facts, ground,
-    head_classes, literal_rows, naive_eval, naive_eval_at, naive_eval_at_budgeted, strata,
-    transitive_closure, unify, unstratifiable_corpus,
+    AggrFail, Bindings, BudgetAxis, BudgetExceeded, FixedRule, HeadAggr, HeadClass, Literal, Name,
+    NameIntroduction, OracleBudget, Polarity, Program, Rejection, Rel, Rule, Term,
+    body_bindings_from, check_safety, check_stratifiable, check_wellformed, dependency_edges,
+    derived_rows, edge_facts, ground, head_classes, literal_rows, naive_eval, naive_eval_at,
+    naive_eval_at_budgeted, strata, transitive_closure, unify, unstratifiable_corpus,
 };
 pub use incremental::{edb_relations, head_is_derivable, incremental_eval, topological_order};
 pub use temporal::{
