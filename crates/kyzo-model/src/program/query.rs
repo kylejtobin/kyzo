@@ -151,13 +151,12 @@ pub enum WriteValidity {
 /// schema, and which head bindings feed the key and non-key columns.
 ///
 /// **Wire:** span omitted (seat 59). Decode mints [`SourceSpan::empty`].
-#[derive(Debug, Clone, Eq, PartialEq, serde_derive::Serialize, serde_derive::Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct InputRelationHandle {
     pub name: Symbol,
     pub metadata: StoredRelationMetadata,
     pub key_bindings: Vec<Symbol>,
     pub dep_bindings: Vec<Symbol>,
-    #[serde(skip, default = "SourceSpan::empty")]
     pub span: SourceSpan,
 }
 
