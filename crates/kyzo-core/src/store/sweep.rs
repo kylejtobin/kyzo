@@ -106,115 +106,124 @@ pub struct DecodedCommitBody {
     pub preimage: Option<SingleStoreKeyPreimage>,
 }
 
-fn encode_commit_body(
-    key: OperationKey,
-    request_digest: RequestDigest,
-    meaning_root: StateRoot,
-    preimage: Option<&SingleStoreKeyPreimage>,
-) -> Result<Vec<u8>, SweepRefuse> {
-    let mut body = Vec::new();
-    body.extend_from_slice(COMMIT_BODY_V1);
-    body.extend_from_slice(key.as_bytes().as_slice());
-    body.extend_from_slice(request_digest.as_bytes().as_slice());
-    body.push(1); // terminal outcome: Committed
-    body.extend_from_slice(meaning_root.as_bytes().as_slice());
-    match preimage {
-        None => body.push(0),
-        Some(p) => {
-            body.push(1);
-            push_len_bytes(&mut body, &p.domain_label)?;
-            push_len_bytes(&mut body, &p.client_operation_id)?;
-            push_len_bytes(&mut body, &p.step_id)?;
+impl DecodedCommitBody {
+    /// Seal a crash-durable Commit body carrying OperationKey memo coordinates.
+    pub(crate) fn seal(
+        key: OperationKey,
+        request_digest: RequestDigest,
+        meaning_root: StateRoot,
+        preimage: Option<&SingleStoreKeyPreimage>,
+    ) -> Result<Vec<u8>, SweepRefuse> {
+        let mut body = Vec::new();
+        body.extend_from_slice(COMMIT_BODY_V1);
+        body.extend_from_slice(key.as_bytes().as_slice());
+        body.extend_from_slice(request_digest.as_bytes().as_slice());
+        body.push(1); // terminal outcome: Committed
+        body.extend_from_slice(meaning_root.as_bytes().as_slice());
+        match preimage {
+            None => body.push(0),
+            Some(p) => {
+                body.push(1);
+                Self::push_len_bytes(&mut body, &p.domain_label)?;
+                Self::push_len_bytes(&mut body, &p.client_operation_id)?;
+                Self::push_len_bytes(&mut body, &p.step_id)?;
+            }
         }
+        Ok(body)
     }
-    Ok(body)
-}
 
-fn push_len_bytes(out: &mut Vec<u8>, bytes: &[u8]) -> Result<(), SweepRefuse> {
-    let len = u32::try_from(bytes.len()).map_err(|_| SweepRefuse::CommitBodyFieldTooLarge)?;
-    out.extend_from_slice(&len.to_be_bytes());
-    out.extend_from_slice(bytes);
-    Ok(())
-}
-
-fn take_len_bytes(input: &mut &[u8]) -> Option<Vec<u8>> {
-    if input.len() < 4 {
-        return None;
+    fn push_len_bytes(out: &mut Vec<u8>, bytes: &[u8]) -> Result<(), SweepRefuse> {
+        let len = u32::try_from(bytes.len()).map_err(|_| SweepRefuse::CommitBodyFieldTooLarge)?;
+        out.extend_from_slice(&len.to_be_bytes());
+        out.extend_from_slice(bytes);
+        Ok(())
     }
-    let mut len_bytes = [0u8; 4];
-    len_bytes.copy_from_slice(&input[..4]);
-    let n = match usize::try_from(u32::from_be_bytes(len_bytes)) {
-        Ok(n) => n,
-        Err(_overflow) => {
+
+    fn take_len_bytes(input: &mut &[u8]) -> Option<Vec<u8>> {
+        if input.len() < 4 {
             return None;
         }
-    };
-    *input = &input[4..];
-    if input.len() < n {
-        return None;
+        let mut len_bytes = [0u8; 4];
+        len_bytes.copy_from_slice(&input[..4]);
+        let n = match usize::try_from(u32::from_be_bytes(len_bytes)) {
+            Ok(n) => n,
+            Err(_overflow) => {
+                return None;
+            }
+        };
+        *input = &input[4..];
+        if input.len() < n {
+            return None;
+        }
+        let v = input[..n].to_vec();
+        *input = &input[n..];
+        Some(v)
     }
-    let v = input[..n].to_vec();
-    *input = &input[n..];
-    Some(v)
+
+    /// Parse a Commit body produced by [`Self::seal`].
+    pub fn decode(body: &[u8]) -> Option<Self> {
+        if body.len() < COMMIT_BODY_V1.len() + 32 + 32 + 1 + 32 + 1 {
+            return None;
+        }
+        if !body.starts_with(COMMIT_BODY_V1) {
+            return None;
+        }
+        let mut rest = &body[COMMIT_BODY_V1.len()..];
+        if rest.len() < 32 {
+            return None;
+        }
+        let mut key_bytes = [0u8; 32];
+        key_bytes.copy_from_slice(&rest[..32]);
+        rest = &rest[32..];
+        if rest.len() < 32 {
+            return None;
+        }
+        let mut digest_bytes = [0u8; 32];
+        digest_bytes.copy_from_slice(&rest[..32]);
+        rest = &rest[32..];
+        let outcome = *rest.first()?;
+        rest = &rest[1..];
+        if outcome != 1 {
+            return None;
+        }
+        if rest.len() < 32 {
+            return None;
+        }
+        let mut meaning = [0u8; 32];
+        meaning.copy_from_slice(&rest[..32]);
+        rest = &rest[32..];
+        let has_preimage = *rest.first()?;
+        rest = &rest[1..];
+        let preimage = if has_preimage == 1 {
+            Some(SingleStoreKeyPreimage {
+                domain_label: Self::take_len_bytes(&mut rest)?,
+                client_operation_id: Self::take_len_bytes(&mut rest)?,
+                step_id: Self::take_len_bytes(&mut rest)?,
+            })
+        } else if has_preimage == 0 {
+            None
+        } else {
+            return None;
+        };
+        Some(Self {
+            key_bytes,
+            request_digest: RequestDigest::from_digest(crate::data::fixed_bytes::Bytes32(digest_bytes)),
+            meaning_root: StateRoot::from_digest(crate::data::fixed_bytes::Bytes32(meaning)),
+            preimage,
+        })
+    }
 }
 
-/// Parse a Commit body produced by [`encode_commit_body`].
+/// Parse a crash-durable Commit body (public door for replay harnesses).
 pub fn decode_commit_body(body: &[u8]) -> Option<DecodedCommitBody> {
-    if body.len() < COMMIT_BODY_V1.len() + 32 + 32 + 1 + 32 + 1 {
-        return None;
-    }
-    if !body.starts_with(COMMIT_BODY_V1) {
-        return None;
-    }
-    let mut rest = &body[COMMIT_BODY_V1.len()..];
-    if rest.len() < 32 {
-        return None;
-    }
-    let mut key_bytes = [0u8; 32];
-    key_bytes.copy_from_slice(&rest[..32]);
-    rest = &rest[32..];
-    if rest.len() < 32 {
-        return None;
-    }
-    let mut digest_bytes = [0u8; 32];
-    digest_bytes.copy_from_slice(&rest[..32]);
-    rest = &rest[32..];
-    let outcome = *rest.first()?;
-    rest = &rest[1..];
-    if outcome != 1 {
-        return None;
-    }
-    if rest.len() < 32 {
-        return None;
-    }
-    let mut meaning = [0u8; 32];
-    meaning.copy_from_slice(&rest[..32]);
-    rest = &rest[32..];
-    let has_preimage = *rest.first()?;
-    rest = &rest[1..];
-    let preimage = if has_preimage == 1 {
-        Some(SingleStoreKeyPreimage {
-            domain_label: take_len_bytes(&mut rest)?,
-            client_operation_id: take_len_bytes(&mut rest)?,
-            step_id: take_len_bytes(&mut rest)?,
-        })
-    } else if has_preimage == 0 {
-        None
-    } else {
-        return None;
-    };
-    Some(DecodedCommitBody {
-        key_bytes,
-        request_digest: RequestDigest::from_digest(crate::data::fixed_bytes::Bytes32(digest_bytes)),
-        meaning_root: StateRoot::from_digest(crate::data::fixed_bytes::Bytes32(meaning)),
-        preimage,
-    })
+    DecodedCommitBody::decode(body)
 }
 
 /// Engine-held live SweepDoor (one per Store) — shared across Engine clones.
 #[derive(Clone)]
 pub struct LiveSweepHandle {
     inner: Arc<Mutex<LiveSweepState>>,
+    anon_seq: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl std::fmt::Debug for LiveSweepHandle {
@@ -236,7 +245,6 @@ struct LiveSweepState {
     door: SweepDoor,
     session: SweepSession,
     incarnation: IncarnationId,
-    anon_seq: u64,
 }
 
 /// Process-local current live door — consulted at the commit door when
@@ -310,8 +318,8 @@ impl LiveSweepHandle {
                 door,
                 session,
                 incarnation,
-                anon_seq: 0,
             })),
+            anon_seq: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         })
     }
 
@@ -326,8 +334,8 @@ impl LiveSweepHandle {
                 door,
                 session,
                 incarnation,
-                anon_seq: 0,
             })),
+            anon_seq: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
 
@@ -343,12 +351,8 @@ impl LiveSweepHandle {
 
     /// Allocate a unique anonymous client-operation id (non-retry path).
     pub fn next_anon_operation_id(&self) -> Result<Vec<u8>, SweepRefuse> {
-        let mut g = self
-            .inner
-            .lock()
-            .map_err(|_| SweepRefuse::LiveSweepLockPoisoned)?;
-        let n = g.anon_seq;
-        g.anon_seq = crate::rules::convert::saturating_add_u64(g.anon_seq, 1);
+        use std::sync::atomic::Ordering;
+        let n = self.anon_seq.fetch_add(1, Ordering::Relaxed);
         let mut out = b"kyzo.anon.".to_vec();
         out.extend_from_slice(&n.to_be_bytes());
         Ok(out)
@@ -1311,7 +1315,7 @@ impl SweepDoor {
 
         // WAL byte chain (seat 24): Commit body binds meaning tip + OperationKey
         // memo coordinates for crash-durable idempotency rebuild (§38 T1b).
-        let body = encode_commit_body(
+        let body = DecodedCommitBody::seal(
             intent.operation_key(),
             intent.request_digest(),
             chained.root(),
@@ -1957,7 +1961,9 @@ mod composition_tests {
             .map_err(|e| miette!("snapshot before crash: {e}"))?;
         assert_eq!(commits_before, 1);
         assert_eq!(retained.records().len(), 1);
-        drop(live); // crash: live memo / handle gone; durable segment survives.
+        {
+            live
+        }; // crash costume: live memo gone; SYNTHETIC segment retained in RAM only.
 
         // Second process: open_for_store with the SYNTHETIC retained suffix
         // (not Engine::compose — that still passes &[] until durable WAL I/O).

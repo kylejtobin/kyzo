@@ -174,8 +174,8 @@ impl SystemClock {
         now_micros: i64,
     ) -> std::result::Result<ValidityTs, SystemClockRefuse> {
         use std::sync::atomic::Ordering;
-        let mut last = self.0.load(Ordering::Relaxed);
         loop {
+            let last = self.0.load(Ordering::Relaxed);
             // INVARIANT(SystemClock): stamp space is i64; refuse rather than
             // wrap when the floor is already i64::MAX.
             let after_last = match last.checked_add(1) {
@@ -183,12 +183,12 @@ impl SystemClock {
                 None => return Err(SystemClockRefuse::StampSpaceExhausted),
             };
             let next = now_micros.max(after_last);
-            match self
+            if self
                 .0
                 .compare_exchange_weak(last, next, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
             {
-                Ok(_) => return Ok(ValidityTs::of_micros(next)),
-                Err(observed) => last = observed,
+                return Ok(ValidityTs::of_micros(next));
             }
         }
     }

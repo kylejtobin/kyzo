@@ -106,6 +106,25 @@ pub enum TxnTimeRefuse {
     ForeignTxnTime,
 }
 
+impl TxnTimeRefuse {
+    /// Refuse a client-supplied txn-time claim (no mint path exists).
+    pub fn client_txn_time_forbidden() -> Self {
+        Self::ClientTxnTimeForbidden
+    }
+
+    /// Refuse a foreign Store timestamp that would reorder local commits.
+    pub fn foreign_txn_time(
+        foreign_store: StoreId,
+        local_store: StoreId,
+    ) -> Result<(), TxnTimeRefuse> {
+        if foreign_store != local_store {
+            Err(Self::ForeignTxnTime)
+        } else {
+            Ok(())
+        }
+    }
+}
+
 /// Transaction time bound to a dense [`CommitOrdinal`] at the durable event.
 ///
 /// Physical observation is optional for humans — order authority is the
@@ -137,23 +156,6 @@ impl TxnTime {
     /// Dense CommitOrdinal — sole order authority within the Store.
     pub fn commit_ordinal(self) -> CommitOrdinal {
         self.commit_ordinal
-    }
-
-    /// Refuse a client-supplied txn-time claim (no mint path exists).
-    pub fn refuse_client_supplied() -> TxnTimeRefuse {
-        TxnTimeRefuse::ClientTxnTimeForbidden
-    }
-
-    /// Refuse a foreign Store timestamp that would reorder local commits.
-    pub fn refuse_foreign(
-        foreign_store: StoreId,
-        local_store: StoreId,
-    ) -> Result<(), TxnTimeRefuse> {
-        if foreign_store != local_store {
-            Err(TxnTimeRefuse::ForeignTxnTime)
-        } else {
-            Ok(())
-        }
     }
 }
 
