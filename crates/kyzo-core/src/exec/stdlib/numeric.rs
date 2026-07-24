@@ -43,13 +43,13 @@ fn unary_f64_domain(
         DataValue::Num(n) => {
             let a = n.to_f64();
             if !in_domain(a) {
-                bail!(DomainError { op: op.into() });
+                bail!(DomainError::new(op));
             }
             no_nan(op, f(a))
         }
         DataValue::Vector(v) => {
             if v.to_f64s().iter().any(|x| !in_domain(*x)) {
-                bail!(DomainError { op: op.into() });
+                bail!(DomainError::new(op));
             }
             no_nan_vec(op, v.to_f64s().iter().map(|x| f(*x)).collect())
         }
@@ -120,7 +120,7 @@ pub(crate) fn op_abs(args: &[DataValue]) -> Result<DataValue> {
         args,
         |i| {
             i.checked_abs()
-                .ok_or_else(|| IntegerOverflow { op: "abs" }.into())
+                .ok_or_else(|| IntegerOverflow::new("abs").into())
         },
         f64::abs,
         f64::abs,
@@ -190,7 +190,7 @@ pub(crate) fn op_add(args: &[DataValue]) -> Result<DataValue> {
             op: "add",
             i_init: 0,
             f_init: 0.0,
-            on_int: |a: i64, b: i64| a.checked_add(b).ok_or(IntegerOverflow { op: "add" }.into()),
+            on_int: |a: i64, b: i64| a.checked_add(b).ok_or(IntegerOverflow::new("add").into()),
             on_float: |a: f64, b: f64| a + b,
             vecs: add_vecs,
             require_msg: "addition requires numbers",
@@ -273,7 +273,7 @@ pub(crate) fn op_div(args: &[DataValue]) -> Result<DataValue> {
             // float, including int/int.
             let (a, b) = (na.to_f64(), nb.to_f64());
             if b == 0.0 {
-                bail!(DivisionByZero { op: "div" })
+                bail!(DivisionByZero::new("div"))
             }
             DataValue::Num(Num::float(a / b))
         }
@@ -379,7 +379,7 @@ pub(crate) fn op_minus(args: &[DataValue]) -> Result<DataValue> {
         args,
         |i| {
             i.checked_neg()
-                .ok_or_else(|| IntegerOverflow { op: "minus" }.into())
+                .ok_or_else(|| IntegerOverflow::new("minus").into())
         },
         |f| -f,
         |x| -x,
@@ -391,7 +391,7 @@ pub(crate) fn op_mod(args: &[DataValue]) -> Result<DataValue> {
         (DataValue::Num(na), DataValue::Num(nb)) => match (na.repr(), nb.repr()) {
             (NumRepr::Int(a), NumRepr::Int(b)) => {
                 if b == 0 {
-                    bail!(DivisionByZero { op: "mod" })
+                    bail!(DivisionByZero::new("mod"))
                 }
                 // `i64::MIN % -1` is the one other input pair `Rem` can't
                 // service: the mathematical quotient (`i64::MIN / -1`)
@@ -400,7 +400,7 @@ pub(crate) fn op_mod(args: &[DataValue]) -> Result<DataValue> {
                 // zero-divisor case just above.
                 match a.checked_rem(b) {
                     Some(v) => DataValue::Num(Num::int(v)),
-                    None => bail!(IntegerOverflow { op: "mod" }),
+                    None => bail!(IntegerOverflow::new("mod")),
                 }
             }
             // Mixed and float pairs: Rust remainder semantics (result
@@ -410,7 +410,7 @@ pub(crate) fn op_mod(args: &[DataValue]) -> Result<DataValue> {
             | (NumRepr::Float(_), NumRepr::Float(_)) => {
                 let (a, b) = (na.to_f64(), nb.to_f64());
                 if b == 0.0 {
-                    bail!(DivisionByZero { op: "mod" })
+                    bail!(DivisionByZero::new("mod"))
                 }
                 DataValue::Num(Num::float(a.rem(b)))
             }
@@ -426,7 +426,7 @@ pub(crate) fn op_mul(args: &[DataValue]) -> Result<DataValue> {
             op: "mul",
             i_init: 1,
             f_init: 1.0,
-            on_int: |a: i64, b: i64| a.checked_mul(b).ok_or(IntegerOverflow { op: "mul" }.into()),
+            on_int: |a: i64, b: i64| a.checked_mul(b).ok_or(IntegerOverflow::new("mul").into()),
             on_float: |a: f64, b: f64| a * b,
             vecs: mul_vecs,
             require_msg: "multiplication requires numbers",
@@ -484,7 +484,7 @@ pub(crate) fn op_pow(args: &[DataValue]) -> Result<DataValue> {
                 .get_float()
                 .ok_or_else(|| miette!("'pow' requires numbers"))?;
             if v.to_f64s().iter().any(|x| pow_out_of_domain(*x, b)) {
-                bail!(DomainError { op: "pow".into() });
+                bail!(DomainError::new("pow"));
             }
             return no_nan_vec("pow", v.to_f64s().iter().map(|x| x.powf(b)).collect());
         }
@@ -495,7 +495,7 @@ pub(crate) fn op_pow(args: &[DataValue]) -> Result<DataValue> {
         data_value_any!() => bail!("'pow' requires numbers"),
     };
     if pow_out_of_domain(a, b) {
-        bail!(DomainError { op: "pow".into() });
+        bail!(DomainError::new("pow"));
     }
     no_nan("pow", a.powf(b))
 }
@@ -541,7 +541,7 @@ pub(crate) fn op_sub(args: &[DataValue]) -> Result<DataValue> {
         (DataValue::Num(na), DataValue::Num(nb)) => match (na.repr(), nb.repr()) {
             (NumRepr::Int(a), NumRepr::Int(b)) => match a.checked_sub(b) {
                 Some(v) => DataValue::Num(Num::int(v)),
-                None => bail!(IntegerOverflow { op: "sub" }),
+                None => bail!(IntegerOverflow::new("sub")),
             },
             (NumRepr::Float(a), NumRepr::Float(b)) => DataValue::Num(Num::float(a - b)),
             (NumRepr::Int(a), NumRepr::Float(b)) => {
@@ -621,7 +621,7 @@ fn fold_vecs(
         return Ok(args[0].clone());
     }
     let Some((last, first)) = args.split_last() else {
-        bail!(VecOpEmptyArgs { op });
+        bail!(VecOpEmptyArgs::new(op));
     };
     let first = fold_vecs(
         op,

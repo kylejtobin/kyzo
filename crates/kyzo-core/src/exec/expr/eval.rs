@@ -69,7 +69,7 @@ struct ExprArmLenMismatch;
 
 #[inline]
 fn row_sel(row: usize) -> Result<u32> {
-    u32::try_from(row).map_err(|_| BatchRowU32Overflow { n: row }.into())
+    u32::try_from(row).map_err(|_| BatchRowU32Overflow::new(row).into())
 }
 
 fn bound_of(op: OpDecl) -> Result<&'static crate::exec::stdlib::BoundOp> {

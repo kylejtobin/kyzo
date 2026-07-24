@@ -1524,8 +1524,7 @@ impl<T: WriteTx> SessionTx<T> {
                     bail!(ReplaceRelationWithIndices(old_handle.name.to_string()))
                 }
                 if old_handle.access_level < AccessLevel::Normal {
-                    bail!(InsufficientAccessLevel(
-                        old_handle.name.to_string(),
+                    bail!(InsufficientAccessLevel::new(old_handle.name.to_string(),
                         "relation replacement".to_string(),
                         old_handle.access_level
                     ));
@@ -1724,8 +1723,7 @@ impl<T: WriteTx> SessionTx<T> {
             callback_targets.contains(&relation_store.name) || force_collect == relation_store.name;
 
         if relation_store.access_level < AccessLevel::Protected {
-            bail!(InsufficientAccessLevel(
-                relation_store.name.to_string(),
+            bail!(InsufficientAccessLevel::new(relation_store.name.to_string(),
                 "row insertion".to_string(),
                 relation_store.access_level
             ));
@@ -1910,8 +1908,7 @@ impl<T: WriteTx> SessionTx<T> {
             callback_targets.contains(&relation_store.name) || force_collect == relation_store.name;
 
         if relation_store.access_level < AccessLevel::Protected {
-            bail!(InsufficientAccessLevel(
-                relation_store.name.to_string(),
+            bail!(InsufficientAccessLevel::new(relation_store.name.to_string(),
                 "row update".to_string(),
                 relation_store.access_level
             ));
@@ -2069,8 +2066,7 @@ impl<T: WriteTx> SessionTx<T> {
             callback_targets.contains(&relation_store.name) || force_collect == relation_store.name;
 
         if relation_store.access_level < AccessLevel::Protected {
-            bail!(InsufficientAccessLevel(
-                relation_store.name.to_string(),
+            bail!(InsufficientAccessLevel::new(relation_store.name.to_string(),
                 "row removal".to_string(),
                 relation_store.access_level
             ));
@@ -2297,8 +2293,7 @@ impl<T: WriteTx> SessionTx<T> {
                 },
         } = seats;
         if relation_store.access_level < AccessLevel::ReadOnly {
-            bail!(InsufficientAccessLevel(
-                relation_store.name.to_string(),
+            bail!(InsufficientAccessLevel::new(relation_store.name.to_string(),
                 "row check".to_string(),
                 relation_store.access_level
             ));
@@ -2373,8 +2368,7 @@ impl<T: WriteTx> SessionTx<T> {
                 },
         } = seats;
         if relation_store.access_level < AccessLevel::ReadOnly {
-            bail!(InsufficientAccessLevel(
-                relation_store.name.to_string(),
+            bail!(InsufficientAccessLevel::new(relation_store.name.to_string(),
                 "row check".to_string(),
                 relation_store.access_level
             ));

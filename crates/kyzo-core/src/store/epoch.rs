@@ -321,17 +321,12 @@ mod tests {
             .incarnation_mint_cap(OpenOrdinal::ZERO)
             .mint(Entropy::admit(crate::data::fixed_bytes::Bytes32([0xF6; 32])))?;
         let fenced = FencedFootprint::seal(
-            Footprint::Exact(vec![ByteRange {
-                start: b"a".to_vec(),
-                end: b"z".to_vec(),
-            }]),
+            Footprint::Exact(vec![ByteRange::new(b"a".to_vec(), b"z".to_vec())]),
             0,
         )?;
         footprints.insert(
-            FootprintIndexKey {
-                fence_epoch,
-                incarnation_id: incarnation,
-            },
+            FootprintIndexKey::new(fence_epoch, incarnation,
+            ),
             AskShape::Fenced(fenced),
         )?;
         assert!(footprints.has_live_fenced_in_epoch(fence_epoch));

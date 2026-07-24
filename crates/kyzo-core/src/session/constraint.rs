@@ -450,8 +450,7 @@ impl<S: Storage> Engine<S> {
         for rel in read_set {
             let mut handle = get_relation(&tx.store, rel).map_err(RetryError::session_report)?;
             if handle.access_level < AccessLevel::Protected {
-                return Err(RetryError::session(InsufficientAccessLevel(
-                    handle.name.to_string(),
+                return Err(RetryError::session(InsufficientAccessLevel::new(handle.name.to_string(),
                     "create constraint".to_string(),
                     handle.access_level,
                 )));
@@ -505,8 +504,7 @@ impl<S: Storage> Engine<S> {
                 .any(|c| c.name().as_str() == name.name().as_str())
                 && handle.access_level < AccessLevel::Protected
             {
-                return Err(RetryError::session(InsufficientAccessLevel(
-                    handle.name.to_string(),
+                return Err(RetryError::session(InsufficientAccessLevel::new(handle.name.to_string(),
                     "drop constraint".to_string(),
                     handle.access_level,
                 )));

@@ -27,8 +27,8 @@ use kyzo_model::value::{DataValue, Tuple};
 #[error("column batch row width {got} does not match arity {expected}")]
 #[diagnostic(code(query::column_batch_width))]
 pub(crate) struct ColumnBatchWidthMismatch {
-    pub(crate) expected: usize,
-    pub(crate) got: usize,
+    expected: usize,
+    got: usize,
 }
 
 /// A row set pivoted to columns for the columnar expression evaluator.
@@ -89,7 +89,13 @@ impl BatchColumn {
 #[error("batch beyond u32 rows ({n})")]
 #[diagnostic(code(query::batch_row_u32))]
 pub(crate) struct BatchRowU32Overflow {
-    pub(crate) n: usize,
+    n: usize,
+}
+
+impl BatchRowU32Overflow {
+    pub(crate) fn new(n: usize) -> Self {
+        Self { n }
+    }
 }
 
 /// Selection row ids were not strictly ascending — refuse, never silent re-sort.

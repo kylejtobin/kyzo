@@ -124,9 +124,23 @@ impl Composition {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompositionStep {
     /// Target Store.
-    pub store_id: StoreId,
+    store_id: StoreId,
     /// Step identity bytes (feeds OperationKey StepId).
-    pub step_id: Vec<u8>,
+    step_id: Vec<u8>,
+}
+
+impl CompositionStep {
+    pub fn new(store_id: StoreId, step_id: Vec<u8>) -> Self {
+        Self { store_id, step_id }
+    }
+
+    pub fn store_id(&self) -> StoreId {
+        self.store_id
+    }
+
+    pub fn step_id(&self) -> &[u8] {
+        &self.step_id
+    }
 }
 
 /// Multi-store conflict in a composition (§53) — Engine owns this refuse.

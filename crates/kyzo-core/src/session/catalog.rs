@@ -1452,8 +1452,7 @@ pub(crate) fn destroy_relation(tx: &mut impl WriteTx, name: &str) -> Result<()> 
         ));
     }
     if store.access_level < AccessLevel::Normal {
-        bail!(InsufficientAccessLevel(
-            store.name.to_string(),
+        bail!(InsufficientAccessLevel::new(store.name.to_string(),
             "relation removal".to_string(),
             store.access_level
         ));
@@ -1502,8 +1501,7 @@ pub(crate) fn set_relation_triggers(
     }
     let mut original = get_relation(tx, name)?;
     if original.access_level < AccessLevel::Protected {
-        bail!(InsufficientAccessLevel(
-            original.name.to_string(),
+        bail!(InsufficientAccessLevel::new(original.name.to_string(),
             "set triggers".to_string(),
             original.access_level
         ));
@@ -1552,8 +1550,7 @@ pub(crate) fn rename_relation(tx: &mut impl WriteTx, old: &Symbol, new: &Symbol)
         ));
     }
     if rel.access_level < AccessLevel::Normal {
-        bail!(InsufficientAccessLevel(
-            rel.name.to_string(),
+        bail!(InsufficientAccessLevel::new(rel.name.to_string(),
             "renaming relation".to_string(),
             rel.access_level
         ));

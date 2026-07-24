@@ -599,8 +599,7 @@ pub(crate) fn compile_magic_rule_body(
             MagicAtom::Relation(rel_app) => {
                 let store = get_relation(tx, &rel_app.name)?;
                 if store.access_level < AccessLevel::ReadOnly {
-                    bail!(InsufficientAccessLevel(
-                        store.name.to_string(),
+                    bail!(InsufficientAccessLevel::new(store.name.to_string(),
                         "reading rows".to_string(),
                         store.access_level
                     ));
@@ -860,8 +859,7 @@ pub(crate) fn compile_magic_rule_body(
             MagicAtom::NegatedRelation(rel_app) => {
                 let store = get_relation(tx, &rel_app.name)?;
                 if store.access_level < AccessLevel::ReadOnly {
-                    bail!(InsufficientAccessLevel(
-                        store.name.to_string(),
+                    bail!(InsufficientAccessLevel::new(store.name.to_string(),
                         "reading rows".to_string(),
                         store.access_level
                     ));

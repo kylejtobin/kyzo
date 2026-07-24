@@ -8,11 +8,10 @@
  */
 
 //! Typed stdlib refuse + NaN checkpoint helpers. Sole seat for these shapes.
-use std::borrow::Cow;
-
 use miette::{Diagnostic, Result, bail, miette};
 use thiserror::Error;
 
+use kyzo_model::HostText;
 use kyzo_model::data_value_any;
 use kyzo_model::value::{DataValue, Num, NumRepr, Vector};
 
@@ -23,12 +22,12 @@ pub enum StdlibRefuse {
     #[error("op '{op}' produced a NaN result")]
     #[diagnostic(code(eval::nan_answer))]
     #[diagnostic(help("NaN is never a successful builtin answer; infinity is legal."))]
-    NanAnswer { op: Cow<'static, str> },
+    NanAnswer { op: HostText },
 
     /// Language compare across value kinds (cut_destiny — door separation per §14).
-    #[error("comparison can only be done between the same datatypes, got {left:?} and {right:?}")]
+    #[error("comparison can only be done between the same datatypes, got {left} and {right}")]
     #[diagnostic(code(eval::cross_type_compare))]
-    CrossTypeCompare { left: String, right: String },
+    CrossTypeCompare { left: HostText, right: HostText },
 }
 
 /// A 64-bit integer scalar op overflowed.
@@ -37,7 +36,15 @@ pub enum StdlibRefuse {
 #[diagnostic(code(eval::integer_overflow))]
 #[diagnostic(help("The operands are exact 64-bit integers whose result does not fit in i64."))]
 pub(crate) struct IntegerOverflow {
-    pub(crate) op: &'static str,
+    op: HostText,
+}
+
+impl IntegerOverflow {
+    pub(crate) fn new(op: &'static str) -> Self {
+        Self {
+            op: HostText::new(op),
+        }
+    }
 }
 
 /// Zero divisor offered to div/mod.
@@ -48,7 +55,15 @@ pub(crate) struct IntegerOverflow {
     "Division and modulo both refuse a zero divisor rather than returning infinity or NaN."
 ))]
 pub(crate) struct DivisionByZero {
-    pub(crate) op: &'static str,
+    op: HostText,
+}
+
+impl DivisionByZero {
+    pub(crate) fn new(op: &'static str) -> Self {
+        Self {
+            op: HostText::new(op),
+        }
+    }
 }
 
 /// Argument outside a partial math op's domain.
@@ -56,10 +71,16 @@ pub(crate) struct DivisionByZero {
 #[error("'{op}' is undefined for the given argument")]
 #[diagnostic(code(eval::domain_error))]
 #[diagnostic(help(
-    "This op is partial: some inputs have no real, finite result. Check the      argument lies within the function's mathematical domain before calling it."
+    "This op is partial: some inputs have no real, finite result. Check the given argument lies within the function's mathematical domain before calling it."
 ))]
 pub(crate) struct DomainError {
-    pub(crate) op: Cow<'static, str>,
+    op: HostText,
+}
+
+impl DomainError {
+    pub(crate) fn new(op: impl Into<HostText>) -> Self {
+        Self { op: op.into() }
+    }
 }
 
 /// Vector op invoked with an empty argument slice after the single-argument early return.
@@ -67,7 +88,15 @@ pub(crate) struct DomainError {
 #[error("'{op}' vector lane requires a non-empty argument slice")]
 #[diagnostic(code(eval::vec_op_empty_args))]
 pub(crate) struct VecOpEmptyArgs {
-    pub(crate) op: &'static str,
+    op: HostText,
+}
+
+impl VecOpEmptyArgs {
+    pub(crate) fn new(op: &'static str) -> Self {
+        Self {
+            op: HostText::new(op),
+        }
+    }
 }
 
 /// RFC3339 formatting into a String buffer refused.
@@ -78,7 +107,7 @@ pub(crate) struct TimestampFormatRefused;
 
 pub(crate) fn no_nan(op: &'static str, x: f64) -> Result<DataValue> {
     if x.is_nan() {
-        bail!(DomainError { op: op.into() });
+        bail!(DomainError::new(op));
     }
     Ok(DataValue::Num(Num::float(x)))
 }
@@ -89,7 +118,7 @@ pub(crate) fn vec_value(components: Vec<f64>) -> Result<Vector> {
 
 pub(crate) fn no_nan_vec(op: &'static str, v: Vec<f64>) -> Result<DataValue> {
     if v.iter().any(|x| x.is_nan()) {
-        bail!(DomainError { op: op.into() });
+        bail!(DomainError::new(op));
     }
     Ok(DataValue::Vector(vec_value(v)?))
 }

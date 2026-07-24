@@ -23,6 +23,8 @@ use std::fmt::{Display, Formatter};
 use miette::Diagnostic;
 use thiserror::Error;
 
+use kyzo_model::HostText;
+
 use crate::parse::sys::AccessLevel as ParseAccessLevel;
 
 /// What operations a stored relation admits. **The `Ord` derive IS the
@@ -60,9 +62,27 @@ impl Display for AccessLevel {
 }
 
 #[derive(Debug, Error, Diagnostic)]
-#[error("Insufficient access level {2} for {1} on stored relation '{0}'")]
+#[error("Insufficient access level {level} for {action} on stored relation '{relation}'")]
 #[diagnostic(code(tx::insufficient_access_level))]
-pub struct InsufficientAccessLevel(pub(crate) String, pub(crate) String, pub(crate) AccessLevel);
+pub struct InsufficientAccessLevel {
+    relation: HostText,
+    action: HostText,
+    level: AccessLevel,
+}
+
+impl InsufficientAccessLevel {
+    pub(crate) fn new(
+        relation: impl Into<HostText>,
+        action: impl Into<HostText>,
+        level: AccessLevel,
+    ) -> Self {
+        Self {
+            relation: relation.into(),
+            action: action.into(),
+            level,
+        }
+    }
+}
 
 /// Map the parser's access-level enum to the catalog's. Both are the same
 /// four-rung ladder; the parse tier and runtime tier keep distinct types.

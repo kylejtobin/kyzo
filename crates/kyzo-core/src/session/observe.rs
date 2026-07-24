@@ -378,7 +378,17 @@ impl ObservationOutcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct DiagnosticEmission {
     /// How many diagnostic events the verbosity chose to emit.
-    pub event_count: usize,
+    event_count: usize,
+}
+
+impl DiagnosticEmission {
+    pub fn new(event_count: usize) -> Self {
+        Self { event_count }
+    }
+
+    pub fn event_count(&self) -> usize {
+        self.event_count
+    }
 }
 
 /// Run a fixed observation probe under [`TracingVerbosity`].
@@ -403,7 +413,7 @@ pub fn observe_probe(
             rows,
             budget_spent: budget.spent(),
         },
-        DiagnosticEmission { event_count },
+        DiagnosticEmission::new(event_count),
     )
 }
 
@@ -420,15 +430,15 @@ fn sync_in_flight_into_ephemeral(surface: &mut OperatorHealthSurface, in_flight:
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeepVerifyLastResult {
     /// Whether walk + every index re-derivation agreed.
-    pub clean: bool,
+    clean: bool,
     /// Indexes re-derived in that run.
-    pub indices_checked: u64,
+    indices_checked: u64,
     /// Count of index mismatches (re-derived ≠ stored).
-    pub mismatch_count: u64,
+    mismatch_count: u64,
     /// Stable digest of the full [`DeepVerifyReport`].
-    pub digest: DeepVerifyDigest,
+    digest: DeepVerifyDigest,
     /// Schedule ordinal at which this result was produced.
-    pub schedule_ordinal: ScheduleOrdinal,
+    schedule_ordinal: ScheduleOrdinal,
 }
 
 impl DeepVerifyLastResult {
@@ -445,6 +455,26 @@ impl DeepVerifyLastResult {
             digest: report.digest(),
             schedule_ordinal,
         })
+    }
+
+    pub fn clean(&self) -> bool {
+        self.clean
+    }
+
+    pub fn indices_checked(&self) -> u64 {
+        self.indices_checked
+    }
+
+    pub fn mismatch_count(&self) -> u64 {
+        self.mismatch_count
+    }
+
+    pub fn digest(&self) -> DeepVerifyDigest {
+        self.digest
+    }
+
+    pub fn schedule_ordinal(&self) -> ScheduleOrdinal {
+        self.schedule_ordinal
     }
 }
 
@@ -562,11 +592,11 @@ impl CallbackOp {
 #[derive(Debug, Clone)]
 pub struct CallbackEvent {
     /// The mutation kind that produced this event.
-    pub op: CallbackOp,
+    op: CallbackOp,
     /// Rows present after the mutation (full key+value for Put; key-only for Rm).
-    pub new_rows: NamedRows,
+    new_rows: NamedRows,
     /// Rows present before the mutation (full key+value).
-    pub old_rows: NamedRows,
+    old_rows: NamedRows,
 }
 
 impl CallbackEvent {
@@ -577,6 +607,23 @@ impl CallbackEvent {
             new_rows,
             old_rows,
         }
+    }
+
+    pub fn op(&self) -> CallbackOp {
+        self.op
+    }
+
+    pub fn new_rows(&self) -> &NamedRows {
+        &self.new_rows
+    }
+
+    pub fn old_rows(&self) -> &NamedRows {
+        &self.old_rows
+    }
+
+    /// Consume into the mutation kind and row halves.
+    pub fn into_parts(self) -> (CallbackOp, NamedRows, NamedRows) {
+        (self.op, self.new_rows, self.old_rows)
     }
 }
 
@@ -615,8 +662,8 @@ impl ScheduleOrdinal {
 /// One registered callback: the relation it watches and the channel it is
 /// delivered on.
 pub struct CallbackDeclaration {
-    pub(crate) dependent: SmartString<LazyCompact>,
-    pub(crate) sender: Sender<CallbackEvent>,
+    dependent: SmartString<LazyCompact>,
+    sender: Sender<CallbackEvent>,
 }
 
 /// The events one commit attempt collected, keyed by relation, in mutation
@@ -1126,8 +1173,8 @@ mod exactly_once_battery {
 
         let mut new_values: Vec<i64> = vec![];
         while let Ok(event) = receiver.try_recv() {
-            assert_eq!(event.op.as_str(), "Put");
-            for row in event.new_rows.rows() {
+            assert_eq!(event.op().as_str(), "Put");
+            for row in event.new_rows().rows() {
                 new_values.push(row[1].get_int().ok_or_else(|| miette!("int"))?);
             }
         }
@@ -1167,7 +1214,7 @@ mod exactly_once_battery {
 
         let mut new_values: Vec<i64> = vec![];
         while let Ok(event) = receiver.try_recv() {
-            for row in event.new_rows.rows() {
+            for row in event.new_rows().rows() {
                 new_values.push(row[1].get_int().ok_or_else(|| miette!("int"))?);
             }
         }
@@ -1223,9 +1270,9 @@ mod deep_verify_schedule {
             .run_scheduled_deep_verify()
             .map_err(|e| miette!("deep-verify runs: {e}"))?
             .ok_or_else(|| miette!("pending schedule must produce a result"))?;
-        assert!(result.clean, "healthy store deep-verify: {result:?}");
-        assert!(result.indices_checked >= 1);
-        assert_eq!(result.schedule_ordinal, ord);
+        assert!(result.clean(), "healthy store deep-verify: {result:?}");
+        assert!(result.indices_checked() >= 1);
+        assert_eq!(result.schedule_ordinal(), ord);
 
         let persisted = db
             .deep_verify_last_result()?
@@ -1614,11 +1661,11 @@ mod health_tiers_and_tracing {
 
         // Diagnostics MAY differ — proving verbosity is not a no-op knob.
         assert_ne!(
-            emissions[0].event_count, emissions[2].event_count,
+            emissions[0].event_count(), emissions[2].event_count(),
             "Silent vs Detail must differ in diagnostic emission"
         );
-        assert!(emissions[0].event_count < emissions[1].event_count);
-        assert!(emissions[1].event_count < emissions[2].event_count);
+        assert!(emissions[0].event_count() < emissions[1].event_count());
+        assert!(emissions[1].event_count() < emissions[2].event_count());
 
         // Engine door: set_tracing_verbosity up/down — same rows + budget.
         db.set_tracing_verbosity(TracingVerbosity::Silent)?;
@@ -1646,7 +1693,7 @@ mod health_tiers_and_tracing {
         );
         assert_eq!(budget_lo.spent(), budget_hi.spent());
         assert_ne!(
-            emit_lo.event_count, emit_hi.event_count,
+            emit_lo.event_count(), emit_hi.event_count(),
             "engine verbosity must still change diagnostics"
         );
         Ok(())

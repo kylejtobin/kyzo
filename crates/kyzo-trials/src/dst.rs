@@ -4178,19 +4178,14 @@ pub mod storage_campaign_lanes {
             .must("INVARIANT/harness: next-open incarnation");
 
         let fenced = FencedFootprint::seal(
-            Footprint::Exact(vec![ByteRange {
-                start: b"a".to_vec(),
-                end: b"z".to_vec(),
-            }]),
+            Footprint::Exact(vec![ByteRange::new(b"a".to_vec(), b"z".to_vec())]),
             0,
         )
         .must("INVARIANT/harness: FencedFootprint seal");
 
         let mut table = LiveFootprintTable::new();
-        let key = FootprintIndexKey {
-            fence_epoch,
-            incarnation_id: holder,
-        };
+        let key = FootprintIndexKey::new(fence_epoch, holder,
+        );
         table
             .insert(key, AskShape::Fenced(fenced))
             .must("INVARIANT/harness: live Fenced insert");
@@ -4205,10 +4200,8 @@ pub mod storage_campaign_lanes {
         );
         assert_eq!(table.fence_pressure(), 0);
 
-        let key_next = FootprintIndexKey {
-            fence_epoch,
-            incarnation_id: next_open,
-        };
+        let key_next = FootprintIndexKey::new(fence_epoch, next_open,
+        );
         table
             .insert(key_next, AskShape::Optimistic)
             .must("INVARIANT/harness: next open starts without inherited Fenced lock");

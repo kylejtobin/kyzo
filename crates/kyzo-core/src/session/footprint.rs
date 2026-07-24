@@ -83,9 +83,23 @@ pub enum Footprint {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ByteRange {
     /// Inclusive start.
-    pub start: Vec<u8>,
+    start: Vec<u8>,
     /// Inclusive end.
-    pub end: Vec<u8>,
+    end: Vec<u8>,
+}
+
+impl ByteRange {
+    pub fn new(start: Vec<u8>, end: Vec<u8>) -> Self {
+        Self { start, end }
+    }
+
+    pub fn start(&self) -> &[u8] {
+        &self.start
+    }
+
+    pub fn end(&self) -> &[u8] {
+        &self.end
+    }
 }
 
 /// Envelope ranges proven to be a sound superset of declared access (§36).
@@ -195,18 +209,50 @@ pub enum Direction {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EdgePredicate {
     /// Catalog-sealed predicate identity.
-    pub id: [u8; 32],
+    id: crate::data::fixed_bytes::Bytes32,
+}
+
+impl EdgePredicate {
+    pub fn new(id: crate::data::fixed_bytes::Bytes32) -> Self {
+        Self { id }
+    }
+
+    pub fn id(&self) -> crate::data::fixed_bytes::Bytes32 {
+        self.id
+    }
 }
 
 /// Reachability frontier: Direction is in the type; self-extension is a plan error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Frontier {
     /// Anchor key / node digest.
-    pub anchor: Vec<u8>,
+    anchor: Vec<u8>,
     /// Catalog-sealed edge predicate.
-    pub edge: EdgePredicate,
+    edge: EdgePredicate,
     /// Only [`Direction::Forward`] exists — reverse Frontier is Unconstructible.
-    pub direction: Direction,
+    direction: Direction,
+}
+
+impl Frontier {
+    pub fn new(anchor: Vec<u8>, edge: EdgePredicate, direction: Direction) -> Self {
+        Self {
+            anchor,
+            edge,
+            direction,
+        }
+    }
+
+    pub fn anchor(&self) -> &[u8] {
+        &self.anchor
+    }
+
+    pub fn edge(&self) -> &EdgePredicate {
+        &self.edge
+    }
+
+    pub fn direction(&self) -> Direction {
+        self.direction
+    }
 }
 
 /// Footprint arms legal under [`AskShape::Fenced`] — Underivable excluded.
@@ -321,9 +367,26 @@ pub fn admit_accelerator(
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FootprintIndexKey {
     /// Fence epoch of the owning session.
-    pub fence_epoch: FenceEpoch,
+    fence_epoch: FenceEpoch,
     /// Incarnation of the owning write session.
-    pub incarnation_id: IncarnationId,
+    incarnation_id: IncarnationId,
+}
+
+impl FootprintIndexKey {
+    pub fn new(fence_epoch: FenceEpoch, incarnation_id: IncarnationId) -> Self {
+        Self {
+            fence_epoch,
+            incarnation_id,
+        }
+    }
+
+    pub fn fence_epoch(&self) -> FenceEpoch {
+        self.fence_epoch
+    }
+
+    pub fn incarnation_id(&self) -> IncarnationId {
+        self.incarnation_id
+    }
 }
 
 impl PartialOrd for FootprintIndexKey {
@@ -471,7 +534,17 @@ impl LiveFootprintTable {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConflictRanges {
     /// Ranges that conflicted under Optimistic SSI.
-    pub ranges: Vec<ByteRange>,
+    ranges: Vec<ByteRange>,
+}
+
+impl ConflictRanges {
+    pub fn new(ranges: Vec<ByteRange>) -> Self {
+        Self { ranges }
+    }
+
+    pub fn ranges(&self) -> &[ByteRange] {
+        &self.ranges
+    }
 }
 
 /// Footprint / AskShape admission refuses (session door — not StoreRefuse).

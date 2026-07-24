@@ -34,7 +34,7 @@ impl BoundOp {
         let result = (self.body)(args)?;
         if result_has_nan(&result) {
             bail!(StdlibRefuse::NanAnswer {
-                op: self.decl.display_name().into(),
+                op: kyzo_model::HostText::new(self.decl.display_name()),
             });
         }
         Ok(result)

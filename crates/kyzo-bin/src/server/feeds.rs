@@ -80,15 +80,16 @@ pub(super) async fn observe_changes(
             relation: HostText::new(relation),
         };
         while let Some(event) = receiver.recv().await {
+            let (op, new_rows, old_rows) = event.into_parts();
             let (Ok(new_rows), Ok(old_rows)) = (
-                NamedRows::into_json(event.new_rows),
-                NamedRows::into_json(event.old_rows),
+                NamedRows::into_json(new_rows),
+                NamedRows::into_json(old_rows),
             ) else {
                 error!("changes SSE: non-finite Num cannot encode as JSON; ending stream");
                 break;
             };
             let item = json!({
-                "op": event.op.to_string(),
+                "op": op.to_string(),
                 "new_rows": new_rows,
                 "old_rows": old_rows,
             });

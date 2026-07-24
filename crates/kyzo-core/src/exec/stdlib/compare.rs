@@ -155,8 +155,8 @@ fn ensure_same_value_type(a: &DataValue, b: &DataValue) -> Result<()> {
             | (Set(_), Set(_))
     ) {
         bail!(StdlibRefuse::CrossTypeCompare {
-            left: format!("{a:?}"),
-            right: format!("{b:?}"),
+            left: kyzo_model::HostText::new(format!("{a:?}")),
+            right: kyzo_model::HostText::new(format!("{b:?}")),
         })
     }
     Ok(())

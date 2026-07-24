@@ -33,7 +33,7 @@ use thiserror::Error;
 
 use crate::exec::fixpoint::delta_store::EpochStore;
 use crate::exec::fixpoint::delta_store::TupleInIter;
-use kyzo_model::SourceSpan;
+use kyzo_model::{HostText, SourceSpan};
 use kyzo_model::program::query::SortDir;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::Tuple;
@@ -41,9 +41,13 @@ use kyzo_model::value::Tuple;
 /// An `:order` clause names a variable that is not in the entry head.
 /// (The CozoDB original panicked on this shape.)
 #[derive(Debug, Error, Diagnostic)]
-#[error("':order {0}' does not name a variable of the query head")]
+#[error("':order {name}' does not name a variable of the query head")]
 #[diagnostic(code(eval::sorter_not_in_head))]
-pub(crate) struct SorterNotInHead(pub(crate) String, #[label] pub(crate) SourceSpan);
+pub(crate) struct SorterNotInHead {
+    name: HostText,
+    #[label]
+    span: SourceSpan,
+}
 
 /// Collect the result store into a vector sorted by the `:order` clauses.
 ///
@@ -61,7 +65,7 @@ pub(crate) fn sort_and_collect(
     for (k, dir) in sorters {
         match head_indices.get(k) {
             Some(idx) => idx_sorters.push((*idx, *dir)),
-            None => bail!(SorterNotInHead(k.to_string(), k.span())),
+            None => bail!(SorterNotInHead { name: HostText::new(k.to_string()), span: k.span() }),
         }
     }
 

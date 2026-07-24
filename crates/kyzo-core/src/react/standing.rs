@@ -305,7 +305,8 @@ impl<S: Storage> StandingQuery<S> {
             // filter already handles correctly.
             let mut net: BTreeMap<Tuple, i64> = BTreeMap::new();
             while let Ok(event) = sub.receiver.try_recv() {
-                match event.op {
+                let (op, new_rows, old_rows) = event.into_parts();
+                match op {
                     CallbackOp::Put => {
                         // A row present in BOTH sets is a redundant re-put
                         // of identical content at the same key (no value
@@ -315,8 +316,8 @@ impl<S: Storage> StandingQuery<S> {
                         // the difference here, not raw per-set facts, is
                         // what keeps that case from ever contributing a
                         // spurious `Minus`.
-                        let new_set: BTreeSet<Tuple> = event.new_rows.into_iter().collect();
-                        let old_set: BTreeSet<Tuple> = event.old_rows.into_iter().collect();
+                        let new_set: BTreeSet<Tuple> = new_rows.into_iter().collect();
+                        let old_set: BTreeSet<Tuple> = old_rows.into_iter().collect();
                         for row in new_set.difference(&old_set) {
                             *net.entry(row.clone()).or_default() += 1;
                         }
@@ -328,7 +329,7 @@ impl<S: Storage> StandingQuery<S> {
                         // `new` here is bare keys (k_bindings), never a
                         // real row this program's arity matches — only
                         // `old` (the full removed row) is a fact.
-                        for row in event.old_rows {
+                        for row in old_rows {
                             *net.entry(row).or_default() -= 1;
                         }
                     }
