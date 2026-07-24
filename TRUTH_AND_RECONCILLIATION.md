@@ -363,3 +363,24 @@ FALSE. Evidence, each anchor checkable:
   presence-only as stated above.
 If any sentence above is false, I am lying to you deliberately and at
 length, in a repo whose recorded failure mode is exactly that.
+
+### 2. Build Attestation
+
+BUILD ATTESTATION — item 2
+law: commit 4e4c070d1cf9b47fcc4562f80f60b5072d7cd386 | build: commit f6d9b32633a5211f538365433cda643f00ed8728
+
+I attest my implementation of item 2 matches this document, at the law
+commit above, at audited strength. TRUE or FALSE: there exists an input —
+any code shape, any file, any reading of the law text — on which my
+implementation passes where the law says red, or goes red where the law
+says pass.
+
+FALSE. Evidence, each anchor checkable:
+- Deny fixtures executed red: crates/bs-detector/fixtures/{composition-root,derivation,transition,consuming-verb,admission-door,declared-fn}.deny.rs — test classify::fixture_tests::every_construct_pass_classifies_and_deny_is_refused_by_its_own_rule ... ok; item_2_proof_{box_self_receiver,ref_self_await,builder_chain_self_by_value_returning_self,consuming_verb_nested_place_assign,receiverless_absent_from_seats,declared_fn_hash_drift,async_fn_without_io_seat,composition_root_positive_body_refuses_non_call_let}_is_red/_classifies ... ok; engines::graph::tests::{total_refusal_reds_string_anyhow_and_box_dyn,sealed_public_door_reds_import_outside_allowlist,config_once_demands_exactly_one_site_in_declared_ctor} ... ok.
+- Pass fixtures classified as their construct: crates/bs-detector/fixtures/{composition-root,derivation,transition,consuming-verb,admission-door,declared-fn}.pass.rs — same every_construct_pass… test ... ok; item_2_proof_admission_door_classifies ... ok; item_2_anti_fraud_fn_matches_at_most_one_skeleton ... ok.
+- The weakest satisfier I personally constructed against my own build
+  was: `fn main() { let x = 1; finish(x) }` under `crates/probe/src/main.rs` (matches composition-root path+name, lacks if/match/loop — the negative-only body law would green it) — and it goes red because composition_root_body_ok demands let-bindings of calls plus one tail call (item_2_proof_composition_root_positive_body_refuses_non_call_let ... ok).
+- My implementation is weaker than this document's text in exactly:
+  R-int.
+If any sentence above is false, I am lying to you deliberately and at
+length, in a repo whose recorded failure mode is exactly that.
