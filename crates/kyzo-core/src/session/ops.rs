@@ -91,6 +91,160 @@ pub(crate) enum IndexCtx {
 #[diagnostic(code(db::index_lifecycle))]
 pub(crate) struct IndexLifecycleError(pub(crate) String);
 
+/// Bounded backfill page size — scan borrows the store the puts need mutably.
+const BACKFILL_BATCH: usize = 4096;
+
+/// Memcmp-successor cursor for temporal raw-keyspace backfill.
+///
+/// Consuming `drive` walks without local reassignment inside a SessionTx
+/// transition (nested_place_assign law).
+struct TemporalBackfillCursor {
+    lower: Vec<u8>,
+    upper: Vec<u8>,
+}
+
+impl TemporalBackfillCursor {
+    /// Consuming verb: one batch, then recurse on the strict successor.
+    fn drive<T: WriteTx>(
+        self,
+        tx: &mut SessionTx<T>,
+        base: &RelationHandle,
+        idx_handle: &RelationHandle,
+        keys_len: usize,
+    ) -> Result<()> {
+        let batch: Vec<(Slice, Slice)> = tx
+            .store
+            .range_scan(&self.lower, &self.upper)
+            .take(BACKFILL_BATCH)
+            .try_collect()?;
+        let resume = match batch.last() {
+            None => return Ok(()),
+            Some((last_key, _)) => last_key.to_vec(),
+        };
+        for (k, v) in &batch {
+            // Every stored row here IS one point event: decode its
+            // key columns plus its two time slots directly (no
+            // as-of resolution — resolution is exactly what would
+            // collapse the history this backfill must reproduce
+            // whole), and its polarity from the value.
+            let tuple = kyzo_model::value::decode_tuple_from_key(k, keys_len + 2)?;
+            let polarity = crate::store::time::claim_polarity_of_value(v)?;
+            let key_cols = &tuple.as_slice()[..keys_len];
+            let DataValue::Validity(valid_slot) = &tuple[keys_len] else {
+                bail!(
+                    "corrupt bitemporal key: missing valid-time slot during \
+                     temporal index backfill"
+                );
+            };
+            let DataValue::Validity(sys_slot) = &tuple[keys_len + 1] else {
+                bail!(
+                    "corrupt bitemporal key: missing system-time slot during \
+                     temporal index backfill"
+                );
+            };
+            tx.temporal_index_write(
+                base,
+                idx_handle,
+                key_cols,
+                polarity,
+                valid_slot.timestamp(),
+                sys_slot.timestamp(),
+            )?;
+        }
+        let next_lower = {
+            let mut succ = resume;
+            succ.push(0);
+            succ
+        };
+        TemporalBackfillCursor {
+            lower: next_lower,
+            upper: self.upper,
+        }
+        .drive(tx, base, idx_handle, keys_len)
+    }
+}
+
+/// As-of skip-scan cursor for plain/manifest current-row backfill.
+struct CurrentRowBackfillCursor {
+    lower: Vec<u8>,
+    upper: Vec<u8>,
+}
+
+impl CurrentRowBackfillCursor {
+    /// Consuming verb: one as-of batch, then recurse past the fact group.
+    fn drive<T: WriteTx>(
+        self,
+        tx: &mut SessionTx<T>,
+        base: &RelationHandle,
+        index_ref: &IndexRef,
+        plain_mapper: Option<&[usize]>,
+        ctx: Option<&IndexCtx>,
+        keys_len: usize,
+        stamp: kyzo_model::value::ValidityTs,
+    ) -> Result<()> {
+        let as_of = kyzo_model::value::AsOf::current(kyzo_model::value::MAX_VALIDITY_TS);
+        let batch: Vec<Tuple> = tx
+            .store
+            .range_skip_scan_tuple(&self.lower, &self.upper, as_of)
+            .take(BACKFILL_BATCH)
+            .map(|r| {
+                r.map(|mut t| {
+                    t.drain(keys_len..keys_len + 2);
+                    t
+                })
+            })
+            .try_collect()?;
+        let resume_keys = match batch.last() {
+            None => return Ok(()),
+            Some(last) => last.as_slice()[0..keys_len].to_vec(),
+        };
+        for row in &batch {
+            match (ctx, plain_mapper) {
+                (Some(ctx), _) => {
+                    tx.apply_manifest_index(base, ctx, Some(row.as_slice()), None)?
+                }
+                (None, Some(mapper)) => {
+                    let idx_handle = tx.get_relation(&index_ref.relation_name(&base.name))?;
+                    // Backfill re-mints "now" for both coordinates —
+                    // it indexes the base's CURRENT rows (`as_of`
+                    // above), and the scan already discards each row's
+                    // original bitemporal slots, so there is no
+                    // per-row valid instant left to carry forward.
+                    tx.plain_index_write(crate::session::admit::PlainIndexWriteSeats::new(
+                        base,
+                        &idx_handle,
+                        mapper,
+                        row.as_slice(),
+                        ClaimPolarity::Assert,
+                        stamp,
+                        stamp,
+                    ))?;
+                }
+                (None, None) => {
+                    bail!(miette::miette!(
+                        "index backfill: plain mapper missing for Plain kind"
+                    ))
+                }
+            }
+        }
+        // Resume past ALL versions of the last fact: the 0xFF tail
+        // encodes above every slot byte, so this bound clears its group.
+        let next_lower = {
+            let mut succ = base
+                .encode_partial_key_for_store(&resume_keys)
+                .as_bytes()
+                .to_vec();
+            succ.push(0xFF);
+            succ
+        };
+        CurrentRowBackfillCursor {
+            lower: next_lower,
+            upper: self.upper,
+        }
+        .drive(tx, base, index_ref, plain_mapper, ctx, keys_len, stamp)
+    }
+}
+
 impl<T: WriteTx> SessionTx<T> {
     /// Bind an already-parsed row extractor ([`crate::parse::sys::FtsIndexConfig::extractor`]
     /// / the manifest's stored typed substance) to the base column frame.
@@ -288,8 +442,6 @@ impl<T: WriteTx> SessionTx<T> {
         base.indices.sort_by(|a, b| a.name.cmp(&b.name));
         self.write_catalog_row(&base)?;
 
-        const BACKFILL_BATCH: usize = 4096;
-
         // Temporal backfill is NOT "index the current rows": a posting
         // exists per POINT EVENT, so an index attached after N base
         // writes must reproduce the exact posting keyspace an index live
@@ -301,51 +453,11 @@ impl<T: WriteTx> SessionTx<T> {
         if matches!(index_ref.kind, IndexKind::Temporal) {
             let idx_handle = self.get_relation(&index_ref.relation_name(&base.name))?;
             let keys_len = base.metadata.keys.len();
-            let upper = (base.id.raw() + 1).to_be_bytes();
-            let mut lower: Vec<u8> = Tuple::new().encode_as_key(base.id).as_ref().to_vec();
-            loop {
-                let batch: Vec<(Slice, Slice)> = self
-                    .store
-                    .range_scan(&lower, &upper)
-                    .take(BACKFILL_BATCH)
-                    .try_collect()?;
-                let Some((last_key, _)) = batch.last() else {
-                    break;
-                };
-                let mut succ = last_key.to_vec();
-                succ.push(0);
-                lower = succ;
-                for (k, v) in &batch {
-                    // Every stored row here IS one point event: decode its
-                    // key columns plus its two time slots directly (no
-                    // as-of resolution — resolution is exactly what would
-                    // collapse the history this backfill must reproduce
-                    // whole), and its polarity from the value.
-                    let tuple = kyzo_model::value::decode_tuple_from_key(k, keys_len + 2)?;
-                    let polarity = crate::store::time::claim_polarity_of_value(v)?;
-                    let key_cols = &tuple.as_slice()[..keys_len];
-                    let DataValue::Validity(valid_slot) = &tuple[keys_len] else {
-                        bail!(
-                            "corrupt bitemporal key: missing valid-time slot during \
-                             temporal index backfill"
-                        );
-                    };
-                    let DataValue::Validity(sys_slot) = &tuple[keys_len + 1] else {
-                        bail!(
-                            "corrupt bitemporal key: missing system-time slot during \
-                             temporal index backfill"
-                        );
-                    };
-                    self.temporal_index_write(
-                        &base,
-                        &idx_handle,
-                        key_cols,
-                        polarity,
-                        valid_slot.timestamp(),
-                        sys_slot.timestamp(),
-                    )?;
-                }
+            TemporalBackfillCursor {
+                lower: Tuple::new().encode_as_key(base.id).as_ref().to_vec(),
+                upper: (base.id.raw() + 1).to_be_bytes().to_vec(),
             }
+            .drive(self, &base, &idx_handle, keys_len)?;
             return Ok(status_ok());
         }
 
@@ -356,7 +468,7 @@ impl<T: WriteTx> SessionTx<T> {
         // Split on IndexKind once: Plain carries its mapper; every other
         // kind builds a manifest ctx. No `unreachable!` residual.
         let plain_mapper = match &index_ref.kind {
-            IndexKind::Plain { mapper } => Some(mapper),
+            IndexKind::Plain { mapper } => Some(mapper.as_slice()),
             IndexKind::Temporal
             | IndexKind::Hnsw(_)
             | IndexKind::Fts(_)
@@ -367,66 +479,20 @@ impl<T: WriteTx> SessionTx<T> {
             None => Some(self.manifest_index_ctx(&base, &index_ref)?),
         };
         let stamp = self.system_stamp_routed(base.residency());
-        let upper = (base.id.raw() + 1).to_be_bytes();
         let keys_len = base.metadata.keys.len();
-        let as_of = kyzo_model::value::AsOf::current(kyzo_model::value::MAX_VALIDITY_TS);
-        let mut lower: Vec<u8> = Tuple::new().encode_as_key(base.id).as_ref().to_vec();
-        loop {
-            // Current rows only: an index reflects current state, and the
-            // as-of resolution skips a fact's whole version group in one
-            // seek. Rows arrive with the two time slots; the LOGICAL row
-            // (user columns) is what the index projects.
-            let batch: Vec<Tuple> = self
-                .store
-                .range_skip_scan_tuple(&lower, &upper, as_of)
-                .take(BACKFILL_BATCH)
-                .map(|r| {
-                    r.map(|mut t| {
-                        t.drain(keys_len..keys_len + 2);
-                        t
-                    })
-                })
-                .try_collect()?;
-            let Some(last) = batch.last() else { break };
-            // Resume past ALL versions of the last fact: the 0xFF tail
-            // encodes above every slot byte, so this bound clears its
-            // group.
-            let mut succ = base
-                .encode_partial_key_for_store(&last.as_slice()[0..keys_len])
-                .as_bytes()
-                .to_vec();
-            succ.push(0xFF);
-            lower = succ;
-            for row in &batch {
-                match (&ctx, plain_mapper) {
-                    (Some(ctx), _) => {
-                        self.apply_manifest_index(&base, ctx, Some(row.as_slice()), None)?
-                    }
-                    (None, Some(mapper)) => {
-                        let idx_handle = self.get_relation(&index_ref.relation_name(&base.name))?;
-                        // Backfill re-mints "now" for both coordinates —
-                        // it indexes the base's CURRENT rows (`as_of`
-                        // above), and the scan already discards each row's
-                        // original bitemporal slots, so there is no
-                        // per-row valid instant left to carry forward.
-                        self.plain_index_write(crate::session::admit::PlainIndexWriteSeats {
-                            base: &base,
-                            idx_handle: &idx_handle,
-                            mapper,
-                            row: row.as_slice(),
-                            polarity: ClaimPolarity::Assert,
-                            valid: stamp,
-                            stamp,
-                        })?;
-                    }
-                    (None, None) => {
-                        bail!(miette::miette!(
-                            "index backfill: plain mapper missing for Plain kind"
-                        ))
-                    }
-                }
-            }
+        CurrentRowBackfillCursor {
+            lower: Tuple::new().encode_as_key(base.id).as_ref().to_vec(),
+            upper: (base.id.raw() + 1).to_be_bytes().to_vec(),
         }
+        .drive(
+            self,
+            &base,
+            &index_ref,
+            plain_mapper,
+            ctx.as_ref(),
+            keys_len,
+            stamp,
+        )?;
         Ok(status_ok())
     }
 

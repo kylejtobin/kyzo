@@ -54,6 +54,12 @@ exists: values, schemas, programs, the parse lift, the wire envelopes.
 - CanonicalTranscript encoding checklist + golden vectors own sealed artifact
   bytes that are not value-plane (grants, certificates, seals).
 
+- Every `.rs` file declares `//! AUTHORITY`, `//! SEAT`, `//! FILE_KIND` and obeys the File template in this rule.
+- Comments obey the Comment ontology in this rule.
+- Seated items carry `// CONSTRUCT: <grammar> <Ident>`.
+- A file that needs two AUTHORITY sentences is split before merge.
+- Pure data. `ORDER_LAW` before any `Ord` or canonical encode. Decode is total. No IO, eval, or store sections.
+
 ## Forbidden
 
 - IO, clocks, randomness, storage access, evaluation, allocation-heavy cleverness.
@@ -62,3 +68,75 @@ exists: values, schemas, programs, the parse lift, the wire envelopes.
 - Dependencies on any other crate of ours.
 - Changing a RELEASED byte format without a FormatVersion decision and
   round-trip + ordering tests: byte order MUST equal semantic value order.
+
+## Comment ontology
+
+| kind | form | placement |
+| --- | --- | --- |
+| authority | `//! AUTHORITY: ` | file head; one Spec organ |
+| seat | `//! SEAT: ` | under AUTHORITY; `zone-<name>/<role>` |
+| file_kind | `//! FILE_KIND: ` | under SEAT; id from File template |
+| citation | `//! CITATION: ` | when FILE_KIND requires |
+| construct | `// CONSTRUCT: ` | above seated item; `<grammar> <Ident>` |
+| order_law | `// ORDER_LAW: ` | above ordered/encoded type |
+| claim | `// CLAIM: ` | `Unconstructible\|Refused\|Unexposed — <state>` |
+| engine_edit | `// ENGINE_EDIT: ` | vendor divergence only |
+| refuse_doc | `/// Refuse(` | error variants |
+| api_doc | `/// ` | public contract nouns only |
+
+This table is total; not listed = red.
+
+Comments name Spec surface only. Motive, apology, history, metacommentary, and performative language are red.
+
+## File template
+
+Path touch loads this rule. Obey FILE_KIND rows below. Markers: `// --- zone-file:<id> ---` with ids imports, types, construction, order_encode, decode, verbs, state, adapters, refusals, wiring, tests. Absent section = no marker.
+
+| FILE_KIND | section order | required | forbid |
+| --- | --- | --- | --- |
+| `value_kind` | I T C O D V R X | ORDER_LAW; private encode; CLAIM | state, wiring |
+| `order_tag` | I T C O R X | Tag order = cross-type law | state, wiring, adapters |
+| `order_encode` | I T C O D R X | one encode path; FormatVersion | state, wiring |
+| `program_ir` | I T C V R X | meaning-as-data | order_encode, decode, state, wiring |
+| `parse_lift` | I T C D R X | owned rule or refuse; span | order_encode, state, wiring |
+| `parse_grammar` | pest file | every production owned | — |
+| `wire_envelope` | I T C D A R X | total round-trip; no new meaning | order_encode, state, wiring |
+| `schema_vocab` | I T C V R X | schema vocabulary | order_encode, state, wiring |
+| `typestate_builder` | I T C V R X | missing field compile-fail | state, wiring |
+| `value_arena` | I T C S V R X | epoch currency; CLAIM bare Code | order_encode, wiring |
+| `zone_mod` / `crate_root` | I W X | re-exports only | domain mint |
+
+I=imports T=types C=construction O=order_encode D=decode V=verbs S=state A=adapters R=refusals W=wiring X=tests.
+
+This table is total; not listed = red.
+
+### Dominant skeleton
+
+```rust
+//! AUTHORITY: <one value-plane organ>
+//! SEAT: zone-model/<role>
+//! FILE_KIND: value_kind
+
+// --- zone-file:imports ---
+// --- zone-file:types ---
+// CONSTRUCT: newtype-scalar <Ident>
+// ORDER_LAW: <predicate>
+// CLAIM: Unconstructible — <illegal state>
+// --- zone-file:construction ---
+// --- zone-file:order_encode ---
+// --- zone-file:decode ---
+// --- zone-file:verbs ---
+// --- zone-file:refusals ---
+// --- zone-file:tests ---
+```
+
+## Dual-authority debt
+
+| path | fused |
+| --- | --- |
+| `value/arena.rs` | intern + observers + Admission/Denial |
+| `value/number.rs` | numeric kinds + encode |
+| `parse/search.rs` | FTS AST + search-atom lift |
+
+This table is total for named duals in this zone; not listed here may still be dual in `path-kinds.csv`.
+

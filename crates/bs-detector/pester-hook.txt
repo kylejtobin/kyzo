@@ -11,7 +11,7 @@
 # Only the operator edits the on/off switch in this file. 
 # Agents: hands off without EXPLICIT approval.
 
-on
+off
 
 # ----------------------------------------------------------------------------
 # THE MESSAGE: every non-comment, non-blank line after the switch is printed

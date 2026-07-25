@@ -117,7 +117,7 @@ use crate::data::json::NamedRows;
 use crate::parse::parse_script;
 use crate::parse::sys::AccessLevel as ParseAccessLevel;
 use crate::rules::contract::{DEFAULT_FIXED_RULES, FixedRule};
-use crate::session::access::{AccessLevel, InsufficientAccessLevel, map_access_level};
+use crate::session::access::{AccessLevel, InsufficientAccessLevel};
 use crate::session::db::{Engine, ScriptOptions, SessionTx, status_ok};
 use crate::store::time::ClaimPolarity;
 use crate::store::{ReadTx, Storage, WriteTx};
@@ -853,7 +853,7 @@ impl RelationHandle {
     /// the transaction's system instant — the one-stop fact write for any
     /// tier holding a row and a write transaction.
     ///
-    /// #268 T3: mints through [`admit_sugar_relation_row`] / [`admit_record`]
+    /// #268 T3: mints through [`RelationRowAdmit`] / [`AdmitRecordParts::admit`]
     /// before the store put — no anonymous durable door.
     ///
     /// When called without an Engine session, genesis-mints live admission
@@ -905,7 +905,9 @@ impl RelationHandle {
         valid: ValidityTs,
         span: SourceSpan,
     ) -> Result<()> {
-        use crate::session::admit::admit_sugar_relation_row;
+        use crate::session::admit::RelationRowAdmit;
+        use crate::session::admit::SugarRelationDigest;
+        use crate::store::digest_domain::DigestDomain;
         self.put_admitted_fact_row(
             tx,
             row,
@@ -913,14 +915,23 @@ impl RelationHandle {
             span,
             ClaimPolarity::Assert,
             |store_id, live| {
-                admit_sugar_relation_row(
+                let digest = SugarRelationDigest::new(
+                    DigestDomain::SugarRow,
+                    None,
+                    self.name.as_str(),
+                    row,
+                )
+                .digest();
+                RelationRowAdmit::new(
                     store_id,
                     live,
                     self.name.as_str(),
                     row,
                     self.metadata.keys.len(),
                     valid,
+                    digest,
                 )
+                .admit()
             },
         )
     }
@@ -928,8 +939,8 @@ impl RelationHandle {
     /// Write the fact's Retract row at the valid coordinate — revision,
     /// not erasure.
     ///
-    /// #268 T3: mints Invalidation through [`admit_sugar_retract`] /
-    /// [`admit_record`] before the store put.
+    /// #268 T3: mints Invalidation through [`SugarRetractAdmit`] /
+    /// [`AdmitRecordParts::admit`] before the store put.
     /// Test / harness fact-retract door. Production mutation goes through
     /// [`crate::session::admit`].
     #[cfg(test)]
@@ -940,7 +951,7 @@ impl RelationHandle {
         valid: ValidityTs,
         span: SourceSpan,
     ) -> Result<()> {
-        use crate::session::admit::admit_sugar_retract;
+        use crate::session::admit::SugarRetractAdmit;
         self.put_admitted_fact_row(
             tx,
             key_cols,
@@ -948,7 +959,7 @@ impl RelationHandle {
             span,
             ClaimPolarity::Retract,
             |store_id, live| {
-                admit_sugar_retract(store_id, live, self.name.as_str(), key_cols, valid)
+                SugarRetractAdmit::new(store_id, live, self.name.as_str(), key_cols, valid).admit()
             },
         )
     }
@@ -1749,7 +1760,7 @@ impl<S: Storage> Engine<S> {
         names: Vec<Symbol>,
         level: ParseAccessLevel,
     ) -> Result<NamedRows> {
-        let level = map_access_level(level);
+        let level = AccessLevel::from(level);
         self.sys_write(move |tx| {
             for name in &names {
                 set_access_level(&mut tx.store, &name.name(), level)?;

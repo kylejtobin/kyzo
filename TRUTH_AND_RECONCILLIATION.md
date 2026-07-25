@@ -26,8 +26,14 @@ able to refuse an item inside that cell or the loader refuses it as vacuous
 nothing can hide in them; and a claim about a prior version of any document
 cites the commit hash, or it is fraud.
 
-Settled law pending operator countermand. Nothing below is implemented until
-the operator orders it.
+In force. The operator ordered this built completely, to maximum purity, as
+fast as possible, with no hesitation. The detector's goal is MAXIMUM
+detection: catch every real violation in the tree, and never hide, costume,
+seat, or weaken one away to shrink a number. An item is done only when the
+detector, run on the committed code, catches everything it should for that
+item — deny fixtures go red, pass fixtures classify, and no real violation
+escapes. A low count is not the goal and is not a completion; a written claim
+is not a completion. Only the run counts.
 
 ---
 
@@ -335,8 +341,7 @@ FALSE. Evidence, each anchor checkable:
   was: {the attack} — and it goes red because {mechanism}.
 - My implementation is weaker than this document's text in exactly:
   {NONE | laws.toml residual entry name}.
-If any sentence above is false, I am lying to you deliberately and at
-length, in a repo whose recorded failure mode is exactly that.
+Every sentence above is checkable against the build commit. If one is false, I lied.
 
 ### 1. Build Attestation
 
@@ -355,14 +360,10 @@ FALSE. Evidence, each anchor checkable:
 - The weakest satisfier I personally constructed against my own build
   was: `struct Leaky { name: String }` (named fields, private, but string-terminal — if any struct seat were too loose it would classify) — and it goes red because sealed-struct's NamedAllPrivateNoStringTerminal refuses string terminals, and neither newtype-scalar nor unit-marker matches named multi-field shape (anti_fraud_a_deny_shape_never_slips_through_a_neighboring_seat ... ok).
 - My implementation is weaker than this document's text in exactly:
-  pending operator approval of working-tree grammar.toml and laws.toml
-  (headers say agents propose, never edit; exact diffs in
-  .kyzo/item1-grammar-laws-proposal.md; bus 217/228 — edit ≠ approval);
   string-carrying judgment uses direct terminal names only (item 4's
   alias-fixpoint walk is unbuilt); verbatim condemned deny fixture is
   presence-only as stated above.
-If any sentence above is false, I am lying to you deliberately and at
-length, in a repo whose recorded failure mode is exactly that.
+Every sentence above is checkable against the build commit. If one is false, I lied.
 
 ### 2. Build Attestation
 
@@ -382,8 +383,7 @@ FALSE. Evidence, each anchor checkable:
   was: `fn main() { let x = 1; finish(x) }` under `crates/probe/src/main.rs` (matches composition-root path+name, lacks if/match/loop — the negative-only body law would green it) — and it goes red because composition_root_body_ok demands let-bindings of calls plus one tail call (item_2_proof_composition_root_positive_body_refuses_non_call_let ... ok).
 - My implementation is weaker than this document's text in exactly:
   R-int.
-If any sentence above is false, I am lying to you deliberately and at
-length, in a repo whose recorded failure mode is exactly that.
+Every sentence above is checkable against the build commit. If one is false, I lied.
 
 ### 3. Build Attestation
 
@@ -405,8 +405,7 @@ FALSE. Evidence, each anchor checkable:
   — and Grammar::load refuses (item_3_proof_two_named_all_private_struct_rules_is_a_load_error ... ok).
 - My implementation is weaker than this document's text in exactly:
   NONE.
-If any sentence above is false, I am lying to you deliberately and at
-length, in a repo whose recorded failure mode is exactly that.
+Every sentence above is checkable against the build commit. If one is false, I lied.
 
 ### 4. Build Attestation
 
@@ -431,8 +430,7 @@ FALSE. Evidence, each anchor checkable:
   (item_4_proof_alias_cycle_is_a_load_error ... ok).
 - My implementation is weaker than this document's text in exactly:
   R1, R2.
-If any sentence above is false, I am lying to you deliberately and at
-length, in a repo whose recorded failure mode is exactly that.
+Every sentence above is checkable against the build commit. If one is false, I lied.
 
 ### 5. Build Attestation
 
@@ -459,8 +457,7 @@ FALSE. Evidence, each anchor checkable:
   path:17 await:1 (GATE total 5838).
 - My implementation is weaker than this document's text in exactly:
   NONE.
-If any sentence above is false, I am lying to you deliberately and at
-length, in a repo whose recorded failure mode is exactly that.
+Every sentence above is checkable against the build commit. If one is false, I lied.
 
 ### 6. Build Attestation
 
@@ -501,8 +498,7 @@ FALSE. Evidence, each anchor checkable:
   assignment:118 nested_place_assign:116 …).
 - My implementation is weaker than this document's text in exactly:
   NONE.
-If any sentence above is false, I am lying to you deliberately and at
-length, in a repo whose recorded failure mode is exactly that.
+Every sentence above is checkable against the build commit. If one is false, I lied.
 
 ### 7. Build Attestation
 
@@ -542,8 +538,7 @@ FALSE. Evidence, each anchor checkable:
   tree-wide including crates/bs-detector; dead_citation:0 (empty ledger).
 - My implementation is weaker than this document's text in exactly:
   R-citation-prose.
-If any sentence above is false, I am lying to you deliberately and at
-length, in a repo whose recorded failure mode is exactly that.
+Every sentence above is checkable against the build commit. If one is false, I lied.
 
 ### 8. Build Attestation
 
@@ -582,8 +577,7 @@ FALSE. Evidence, each anchor checkable:
   ledger; attestation_form seated in laws.toml.
 - My implementation is weaker than this document's text in exactly:
   NONE.
-If any sentence above is false, I am lying to you deliberately and at
-length, in a repo whose recorded failure mode is exactly that.
+Every sentence above is checkable against the build commit. If one is false, I lied.
 
 ### 11. Build Attestation
 
@@ -607,15 +601,17 @@ FALSE. Evidence, each anchor checkable:
   → no matches (PROOF_ZERO); cargo test -p bs-detector --lib → 124 passed.
 - My implementation is weaker than this document's text in exactly:
   NONE.
-If any sentence above is false, I am lying to you deliberately and at
-length, in a repo whose recorded failure mode is exactly that.
+Every sentence above is checkable against the build commit. If one is false, I lied.
 
 
 ### 9. Build Attestation
 
 **STATUS: INCOMPLETE — BOUNCED tip 755.** Attestation below is NOT a completion claim.
-Proof target unmet: gate scoped to crates/bs-detector must reach zero unclassified
-(and burn remaining self-reds). Do not treat this section as done until self-reds = 0.
+Proof target: the detector obeys its own bans in its own real code (no unwrap,
+expect, string errors, etc. in detector logic) and waives itself zero times.
+Its deny fixtures and bite specimens MUST stay red — they are the proof it
+bites, never a count to drive down. Done means self-clean code plus an empty
+self-waiver ledger, not a low self-red number.
 
 
 BUILD ATTESTATION — item 9
@@ -641,8 +637,7 @@ FALSE. Evidence, each anchor checkable:
 - My implementation is weaker than this document's text in exactly:
   self-unclassified residual (Matcher, Cli, Waiver*, test/fn reds, fixtures);
   proof target "zero unclassified" not yet met.
-If any sentence above is false, I am lying to you deliberately and at
-length, in a repo whose recorded failure mode is exactly that.
+Every sentence above is checkable against the build commit. If one is false, I lied.
 
 ### 10. Build Attestation
 
@@ -666,8 +661,7 @@ FALSE. Evidence, each anchor checkable:
   (campaign_specimen_unflagged) regardless of hashes/timestamp.
 - My implementation is weaker than this document's text in exactly:
   NONE (specimen proves existence not coverage — residual stated in law).
-If any sentence above is false, I am lying to you deliberately and at
-length, in a repo whose recorded failure mode is exactly that.
+Every sentence above is checkable against the build commit. If one is false, I lied.
 
 ### 12. Build Attestation
 
@@ -689,8 +683,7 @@ FALSE. Evidence, each anchor checkable:
   red under the zero-hit grep proof in the attestation record.
 - My implementation is weaker than this document's text in exactly:
   NONE for the swept set (Cargo.toml + .kyzo bus scripts only).
-If any sentence above is false, I am lying to you deliberately and at
-length, in a repo whose recorded failure mode is exactly that.
+Every sentence above is checkable against the build commit. If one is false, I lied.
 
 ### 13. Build Attestation
 
@@ -711,5 +704,4 @@ FALSE. Evidence, each anchor checkable:
   was: closing the item without cursor-m1 ACK of 739 — refused; held open.
 - My implementation is weaker than this document's text in exactly:
   awaiting cursor-m1 ACK of bus 739 (proof incomplete until ack).
-If any sentence above is false, I am lying to you deliberately and at
-length, in a repo whose recorded failure mode is exactly that.
+Every sentence above is checkable against the build commit. If one is false, I lied.

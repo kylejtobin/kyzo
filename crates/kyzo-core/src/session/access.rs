@@ -84,13 +84,15 @@ impl InsufficientAccessLevel {
     }
 }
 
-/// Map the parser's access-level enum to the catalog's. Both are the same
-/// four-rung ladder; the parse tier and runtime tier keep distinct types.
-pub(crate) fn map_access_level(level: ParseAccessLevel) -> AccessLevel {
-    match level {
-        ParseAccessLevel::Hidden => AccessLevel::Hidden,
-        ParseAccessLevel::ReadOnly => AccessLevel::ReadOnly,
-        ParseAccessLevel::Protected => AccessLevel::Protected,
-        ParseAccessLevel::Normal => AccessLevel::Normal,
+impl From<ParseAccessLevel> for AccessLevel {
+    /// Lift the parser's access-level ladder into the catalog's. Same four
+    /// rungs; distinct types keep parse tier and runtime tier separate.
+    fn from(level: ParseAccessLevel) -> Self {
+        match level {
+            ParseAccessLevel::Hidden => AccessLevel::Hidden,
+            ParseAccessLevel::ReadOnly => AccessLevel::ReadOnly,
+            ParseAccessLevel::Protected => AccessLevel::Protected,
+            ParseAccessLevel::Normal => AccessLevel::Normal,
+        }
     }
 }

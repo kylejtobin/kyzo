@@ -40,7 +40,7 @@ pub enum GateColor {
 /// Fields are private (TRUTH item 9). [`Verdict::admit`] is the sole
 /// constructor. Text fields are [`Label`]; pass/fail is [`GateColor`].
 pub struct Verdict {
-    /// `GATE: PASS` or `GATE: FAIL <check, …>` — frozen contract.
+    /// `GATE: ACKNOWLEDGE` or `GATE: ALARM <check, …>` — frozen contract.
     header: Label,
     /// One `FAIL file:line — construct — law` line per violation, plus
     /// `SCOPE`/stale lines.
@@ -476,8 +476,8 @@ impl RunLaw {
             GateColor::Fail
         };
         let header = match color {
-            GateColor::Fail => format!("GATE: FAIL {}", failed.join(", ")),
-            GateColor::Pass => "GATE: PASS".to_string(),
+            GateColor::Fail => format!("GATE: ALARM {}", failed.join(", ")),
+            GateColor::Pass => "GATE: ACKNOWLEDGE".to_string(),
         };
         let counts_line = {
             let mut parts: Vec<(&String, &usize)> = counts.iter().filter(|(_, n)| **n > 0).collect();

@@ -77,7 +77,7 @@ pub fn env_report() -> Result<(), ProcessFailure> {
 
 /// `cargo check --workspace --all-targets`.
 /// The bs-detector conduct gate: one door, zero baseline. The binary
-/// itself writes crates/xtask/resonance.log and bs-counts.txt; a red exit
+/// itself writes crates/xtask/gate.log and gate-counts.txt; a red exit
 /// here is the verdict.
 pub fn bs_detector() -> Result<(), ProcessFailure> {
     // Host observation instant — bs-detector never reads the wall clock

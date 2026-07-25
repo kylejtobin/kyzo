@@ -308,6 +308,21 @@ impl HealthTiers {
             integrity: Integrity::failing(),
         }
     }
+
+    /// Transition: shallow-reassign liveness only.
+    fn set_liveness(&mut self, tier: Liveness) {
+        self.liveness = tier;
+    }
+
+    /// Transition: shallow-reassign readiness only.
+    fn set_readiness(&mut self, tier: Readiness) {
+        self.readiness = tier;
+    }
+
+    /// Transition: shallow-reassign integrity only.
+    fn set_integrity(&mut self, tier: Integrity) {
+        self.integrity = tier;
+    }
 }
 
 /// Tracing detail level. May change diagnostic emission only — never result
@@ -745,6 +760,62 @@ impl EventCallbackRegistry {
             }
         }
     }
+
+    /// Transition: seal deep-verify outcome + integrity tier + last_verify.
+    fn seal_deep_verify(&mut self, result: DeepVerifyLastResult) {
+        self.health_tiers.set_integrity(if result.clean {
+            Integrity::passing()
+        } else {
+            Integrity::failing()
+        });
+        let cap = OperatorCap::mint();
+        self.operator_health.set_last_verify(&cap, result.digest);
+        self.deep_verify.record(result);
+    }
+
+    /// Transition: replace the sealed operator health surface.
+    fn set_operator_health(&mut self, surface: OperatorHealthSurface) {
+        self.operator_health = surface;
+    }
+
+    /// Transition: replace the index-status authority.
+    fn set_index_status(&mut self, status: IndexStatus) {
+        self.index_status = status;
+    }
+
+    /// Transition: register an open transaction on the in-flight counter.
+    fn in_flight_tx_begin(&mut self) {
+        let in_flight = crate::rules::convert::saturating_add_u64(self.in_flight_tx, 1);
+        self.in_flight_tx = in_flight;
+        sync_in_flight_into_ephemeral(&mut self.operator_health, in_flight);
+    }
+
+    /// Transition: unregister a closed transaction from the in-flight counter.
+    fn in_flight_tx_end(&mut self) {
+        let in_flight = crate::rules::convert::saturating_sub_u64(self.in_flight_tx, 1);
+        self.in_flight_tx = in_flight;
+        sync_in_flight_into_ephemeral(&mut self.operator_health, in_flight);
+    }
+
+    /// Transition: shallow-reassign liveness tier.
+    fn set_liveness(&mut self, tier: Liveness) {
+        self.health_tiers.set_liveness(tier);
+    }
+
+    /// Transition: shallow-reassign readiness tier.
+    fn set_readiness(&mut self, tier: Readiness) {
+        self.health_tiers.set_readiness(tier);
+    }
+
+    /// Transition: shallow-reassign integrity tier.
+    fn set_integrity(&mut self, tier: Integrity) {
+        self.health_tiers.set_integrity(tier);
+    }
+
+    /// Transition: shallow-reassign tracing verbosity.
+    fn set_tracing_verbosity(&mut self, verbosity: TracingVerbosity) {
+        self.tracing_verbosity = verbosity;
+    }
 }
 
 
@@ -891,17 +962,7 @@ impl<S: Storage> Engine<S> {
         let result = DeepVerifyLastResult::from_report(&report, ordinal).into_diagnostic()?;
         {
             let mut registry = self.event_callbacks_write().into_diagnostic()?;
-            registry.health_tiers.integrity = if result.clean {
-                Integrity::passing()
-            } else {
-                Integrity::failing()
-            };
-            // Cap-gated door for last_verify on the operator surface.
-            let cap = OperatorCap::mint();
-            registry
-                .operator_health
-                .set_last_verify(&cap, result.digest);
-            registry.deep_verify.record(result.clone());
+            registry.seal_deep_verify(result.clone());
         }
         Ok(Some(result))
     }
@@ -938,14 +999,13 @@ impl<S: Storage> Engine<S> {
     ) -> Result<(), ObserveRefuse> {
         let mut registry = self.event_callbacks_write()?;
         sync_in_flight_into_ephemeral(&mut surface, registry.in_flight_tx);
-        registry.operator_health = surface;
+        registry.set_operator_health(surface);
         Ok(())
     }
 
     /// Set the index-status authority (§20).
     pub(crate) fn set_index_status(&self, status: IndexStatus) -> Result<(), ObserveRefuse> {
-        let mut registry = self.event_callbacks_write()?;
-        registry.index_status = status;
+        self.event_callbacks_write()?.set_index_status(status);
         Ok(())
     }
 
@@ -1018,19 +1078,13 @@ impl<S: Storage> Engine<S> {
     /// SessionTx open/close in `session/db.rs` should call these; until that
     /// wire lands, tests and Cap doors call them explicitly.
     pub fn in_flight_tx_begin(&self) -> Result<(), ObserveRefuse> {
-        let mut registry = self.event_callbacks_write()?;
-        let in_flight = crate::rules::convert::saturating_add_u64(registry.in_flight_tx, 1);
-        registry.in_flight_tx = in_flight;
-        sync_in_flight_into_ephemeral(&mut registry.operator_health, in_flight);
+        self.event_callbacks_write()?.in_flight_tx_begin();
         Ok(())
     }
 
     /// Unregister a closed transaction from the live in-flight registry.
     pub fn in_flight_tx_end(&self) -> Result<(), ObserveRefuse> {
-        let mut registry = self.event_callbacks_write()?;
-        let in_flight = crate::rules::convert::saturating_sub_u64(registry.in_flight_tx, 1);
-        registry.in_flight_tx = in_flight;
-        sync_in_flight_into_ephemeral(&mut registry.operator_health, in_flight);
+        self.event_callbacks_write()?.in_flight_tx_end();
         Ok(())
     }
 
@@ -1069,19 +1123,19 @@ impl<S: Storage> Engine<S> {
 
     /// Operator wiring: set the liveness tier without touching readiness/integrity.
     pub fn set_liveness(&self, tier: Liveness) -> Result<(), ObserveRefuse> {
-        self.event_callbacks_write()?.health_tiers.liveness = tier;
+        self.event_callbacks_write()?.set_liveness(tier);
         Ok(())
     }
 
     /// Operator wiring: set the readiness tier without touching liveness/integrity.
     pub fn set_readiness(&self, tier: Readiness) -> Result<(), ObserveRefuse> {
-        self.event_callbacks_write()?.health_tiers.readiness = tier;
+        self.event_callbacks_write()?.set_readiness(tier);
         Ok(())
     }
 
     /// Operator wiring: set the integrity tier without touching liveness/readiness.
     pub fn set_integrity(&self, tier: Integrity) -> Result<(), ObserveRefuse> {
-        self.event_callbacks_write()?.health_tiers.integrity = tier;
+        self.event_callbacks_write()?.set_integrity(tier);
         Ok(())
     }
 
@@ -1095,7 +1149,7 @@ impl<S: Storage> Engine<S> {
         &self,
         verbosity: TracingVerbosity,
     ) -> Result<(), ObserveRefuse> {
-        self.event_callbacks_write()?.tracing_verbosity = verbosity;
+        self.event_callbacks_write()?.set_tracing_verbosity(verbosity);
         Ok(())
     }
 

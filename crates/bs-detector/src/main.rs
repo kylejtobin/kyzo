@@ -8,8 +8,8 @@
 
 //! The Bullshit Detector CLI — the one door, and the ONLY writer of the
 //! gate log. Verdict contract (frozen; the Stop hook, the watcher, and CI
-//! all parse it): line 1 of the log is `GATE: PASS` or
-//! `GATE: FAIL <check, check, …>`; the counts artifact is one line,
+//! all parse it): line 1 of the log is `GATE: ACKNOWLEDGE` or
+//! `GATE: ALARM <check, check, …>`; the counts artifact is one line,
 //! `name:N …  = TOTAL violations`. All detection lives in the library;
 //! this binary is a one-call composition root over [`bs_detector::cli`].
 

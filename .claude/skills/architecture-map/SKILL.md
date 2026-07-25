@@ -7,4 +7,6 @@ description: Ideal target-state file map for KyzoDB — where each seat lives an
 
 Authority: [`target-arch.md`](target-arch.md) — flat list of ideal target paths with a one-line role for each seat.
 
-Read that file when seating or renaming work. Do not invent a parallel map. Update `target-arch.md` when the ideal layout changes.
+File-kind seating: [`path-kinds.csv`](path-kinds.csv) — every `target-arch.md` path assigned a FILE_KIND from `ZONE-FILE-TEMPLATE-PLAN.md`. Zone templates that load on path touch live in `.claude/rules/zone-*.md`.
+
+Read those files when seating or renaming work. Do not invent a parallel map. Update `target-arch.md` and `path-kinds.csv` together when the ideal layout changes.

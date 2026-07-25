@@ -362,7 +362,10 @@ impl<S: Storage> Engine<S> {
     pub fn compose(store: S, catalog: Catalog) -> Result<Self> {
         let fixed_rules = DEFAULT_FIXED_RULES.clone();
         let admission = crate::session::admit::LiveAdmissionSeats::mint_genesis();
-        let sweep = LiveSweepHandle::open_for_store(admission.store_id())
+        // Genesis Engine composition has no retained WAL suffix yet — empty
+        // slice. Reopen of an existing Store must present durable segments so
+        // open_for_store can restore IdempotencyMemo (§21/§38).
+        let sweep = LiveSweepHandle::open_for_store(admission.store_id(), &[])
             .map_err(|e| miette::miette!("live SweepDoor open refused at Engine::compose: {e}"))?;
         install_live_sweep(sweep.clone()).map_err(|e| {
             miette::miette!("live SweepDoor install refused at Engine::compose: {e}")
@@ -392,9 +395,11 @@ impl<S: Storage> Engine<S> {
     }
 
     /// Bind this Engine's live SweepDoor (+ optional client op id) onto options.
-    pub(crate) fn bind_write_options(&self, mut options: ScriptOptions) -> ScriptOptions {
-        options.sweep = Some(self.sweep.clone());
-        options
+    pub(crate) fn bind_write_options(&self, options: ScriptOptions) -> ScriptOptions {
+        ScriptOptions {
+            sweep: Some(self.sweep.clone()),
+            ..options
+        }
     }
 
     /// Open Store identity sealed into this Engine's live admission seats.
@@ -801,20 +806,20 @@ impl<S: Storage> Engine<S> {
                     ""
                 };
                 tx.execute_relation(
-                    crate::session::admit::ExecuteRelationSeats {
-                        db: self,
+                    crate::session::admit::ExecuteRelationSeats::new(
+                        self,
                         op,
-                        meta: &meta,
-                        headers: &head,
+                        &meta,
+                        &head,
                         cur_vld,
                         write_vld,
-                        callbacks: crate::session::admit::RelationCallbackSeats {
+                        crate::session::admit::RelationCallbackSeats::new(
                             callback_targets,
                             callback_collector,
                             trigger_depth,
                             force_collect,
-                        },
-                    },
+                        ),
+                    ),
                     rows.into_iter(),
                 )?;
                 // A mutation reports a small status unless `:returning` asked
@@ -1203,7 +1208,8 @@ impl<T: WriteTx> SessionTx<T> {
                 | SweepRefuse::OverlapCohortMismatch
                 | SweepRefuse::EmptyOverlapCohort
                 | SweepRefuse::LiveSweepLockPoisoned
-                | SweepRefuse::CommitBodyFieldTooLarge,
+                | SweepRefuse::CommitBodyFieldTooLarge
+                | SweepRefuse::WalReplayFailed,
             )) => Err(CommitFailure::Io(CommitIo::DurableAckArmRefused)),
             Err(SweepSealFailure::MerkleChain(_)) | Err(SweepSealFailure::Wal(_)) => {
                 Err(CommitFailure::Io(CommitIo::DurableAckArmRefused))
