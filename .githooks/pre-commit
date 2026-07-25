@@ -8,11 +8,15 @@
 # by the seal (`docker compose run --rm kyzo-dev cargo xtask gate`), the merge
 # arbiter. So this build gate fires ONLY on main; dev branches commit freely,
 # red included. Cheap gate (build only — the full suite is the seal's job).
+#
+# The build runs in the ONE container, never native — there is no host cargo
+# path (docker-compose.yml). Same environment as the seal and CI, so a
+# pre-commit pass cannot disagree with them about whether the code builds.
 set -euo pipefail
 branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
 if [ "$branch" = "main" ] && git diff --cached --name-only | grep -qE '\.rs$|Cargo\.(toml|lock)$'; then
-  echo "pre-commit (main only): cargo build -p kyzo (red-green-commit: no broken build on main)"
-  if ! (ulimit -v 12582912 && timeout 600 cargo build -p kyzo --release >/dev/null 2>&1); then
+  echo "pre-commit (main only): docker compose run --rm kyzo-dev cargo build -p kyzo --release"
+  if ! docker compose run --rm kyzo-dev cargo build -p kyzo --release >/dev/null 2>&1; then
     echo "REFUSED: kyzo does not build on main. Fix the build, or 'git commit --no-verify' for a deliberate WIP checkpoint." >&2
     exit 1
   fi

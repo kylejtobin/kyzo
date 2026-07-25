@@ -3,21 +3,25 @@
 # This is the guardrail layer that depends on neither agent compliance nor maintainer
 # Rust literacy: a red X reads the same to everyone.
 #
-# Standing rules:
-#   - A gate is not "done" until it has a recorded pass-proof AND bite-proof
-#     (demonstrated failure on violating input).
-#   - No silent skips: the gate-summary job prints every gate outcome; skipped jobs
-#     are activation-gated on repo state (Cargo.toml, fuzz/) and say so.
-#   - An activation probe for a guardian must test for the tests it runs (e.g. a
-#     `cargo test --list`-shaped check), never a source filename: a filename probe
-#     dies silently the next time that file moves or is renamed. The memcmp
-#     on-disk-format tripwire below is the exemplar — it has no `detect`-level
-#     gate at all; running the law tests and failing loud on a zero-match filter
-#     IS its own activation proof.
+# ONE gate command. The correctness/purity tier is a single job — `seal` —
+# that runs `docker compose run --rm kyzo-dev cargo xtask gate`, the EXACT
+# command the local gate and the pre-commit run. CI cannot disagree with a
+# developer's machine about "green" because it is not a re-implementation of
+# the checks in native GitHub steps — it is the same container, same command.
+# The seal subsumes: pure-rust, fmt+clippy, whole-workspace build+test, the
+# fast lib tier, the on-disk-format (memcmp) law tests, the bs-detector conduct
+# gate (which owns pure_rust / unsafe_check / build_script_sandbox), and the
+# release-checked test profile (crates/xtask/src/gate.rs).
 #
-# Activation: on a codeless repo the cargo-based gates are ARMED BUT IDLE and print so.
-# Gates activate on repo state: most arm when the first Cargo.toml lands; fuzz when its inputs exist. Binding
-# toolchain jobs (CPython/JVM/Node/Swift/wasm) are added as each binding lands.
+# The remaining jobs are the checks that genuinely CANNOT be the dev container:
+# external tooling (cargo-deny, cargo-vet, gitleaks, actionlint), a different
+# toolchain (fuzz on nightly), or a different machine (the aarch64 leg of the
+# determinism cross-check). Each says why it stands apart.
+#
+# Standing rules:
+#   - A gate is not "done" until it has a recorded pass-proof AND bite-proof.
+#   - No silent skips: gate-summary prints every outcome; skipped jobs are
+#     activation-gated on repo state (Cargo.toml, fuzz/) and say so.
 
 name: CI
 
@@ -46,19 +50,31 @@ jobs:
           echo "has_fuzz=$f"      >> "$GITHUB_OUTPUT"
           echo "workspace=$w fuzz=$f (skips below are activation-gated on repo state)"
 
-  # ---------- A. Purity gates ----------
+  # ---------- The one gate: build + purity + all tests, in the one container ----------
 
-  pure-rust-gate:
-    name: Pure-Rust gate (kyzo-core + kyzo-bin)
+  seal:
+    name: Seal (cargo xtask gate — the one container command)
     runs-on: ubuntu-latest
     needs: detect
+    if: needs.detect.outputs.has_workspace == 'true'
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-        if: needs.detect.outputs.has_workspace == 'true'
-      - uses: Swatinem/rust-cache@v2
-        if: needs.detect.outputs.has_workspace == 'true'
-      - run: cargo run -p xtask --release -- pure-rust
+      # Match the runner user so nothing the container writes to the bind-mount
+      # is root-owned (same UID/GID contract as a developer's machine).
+      - name: Pin runtime UID/GID
+        run: |
+          echo "UID=$(id -u)" >> "$GITHUB_ENV"
+          echo "GID=$(id -g)" >> "$GITHUB_ENV"
+      - name: Build the gate image
+        run: docker compose build kyzo-dev
+      # The identical command a developer runs locally and the pre-commit runs.
+      # No native cargo, no rust-cache action — the container IS the environment.
+      # (Cross-run build caching via a persisted target-cache volume / registry
+      # image is the open speed follow-up; it does not change the command.)
+      - name: Run the seal
+        run: docker compose run --rm kyzo-dev cargo xtask gate
+
+  # ---------- Checks that cannot be the dev container ----------
 
   cargo-deny:
     name: cargo-deny (bans, licenses, advisories)
@@ -78,41 +94,6 @@ jobs:
       - uses: actions/checkout@v7
       - run: scripts/check-mpl-headers.sh
 
-  lint:
-    name: fmt + clippy (first-party crates)
-    runs-on: ubuntu-latest
-    needs: detect
-    if: needs.detect.outputs.has_workspace == 'true'
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --all -- --check
-      # Scoped to first-party crates exactly as the local seal (the xtask
-      # `clippy` verb, crates/xtask/src/verbs.rs): `--workspace` catches vendor/fjall and
-      # vendor/lsm-tree's `unsafe` blocks, which first-party
-      # `#![forbid(unsafe_code)]` already rules out at compile time and
-      # which are #118's story, not this gate's. `--no-deps` keeps the
-      # vendored dependency trees themselves out of scope too.
-      - run: cargo clippy -p kyzo --release --all-targets --no-deps -- -D warnings
-      - run: cargo clippy -p kyzo-bin -p kyzo-crashfs -p kyzo-lsp -p kyzo-arrow-interop --release --all-targets --no-deps -- -D warnings
-
-  build-test:
-    name: Build + test (whole workspace, never core-only)
-    runs-on: ubuntu-latest
-    needs: detect
-    if: needs.detect.outputs.has_workspace == 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request')
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo build --workspace --release
-      - run: cargo test --workspace --release
-
-  # ---------- B. Security of our own code ----------
-
   gitleaks:
     name: Secret scan (gitleaks, full history)
     runs-on: ubuntu-latest
@@ -129,20 +110,6 @@ jobs:
           tar -xzf gitleaks.tgz gitleaks
           ./gitleaks detect --source . --no-banner --redact
 
-  unsafe-audit:
-    name: Unsafe-code ratchet (engine only)
-    runs-on: ubuntu-latest
-    needs: detect
-    if: needs.detect.outputs.has_workspace == 'true'
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      # The gate is the grep ratchet + #![forbid(unsafe_code)] (compile-time);
-      # a geiger report added minutes of source-compiling for output nothing
-      # gated on, so it earns no place here.
-      - run: cargo run -p xtask --release -- unsafe
-
   supply-chain:
     name: Supply-chain vetting (cargo vet)
     runs-on: ubuntu-latest
@@ -151,7 +118,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:
           # Pinned: the trusted-publisher entries in supply-chain/audits.toml need
@@ -164,48 +130,6 @@ jobs:
   # needs security-events write permission, which this workflow deliberately lacks.
   # Dependabot config: .github/dependabot.yml (cargo ecosystem activates when Cargo.toml lands).
 
-  # ---------- C. Correctness depth ----------
-  #
-  # No coverage job here by design (story #321, pre-commitment c): a
-  # percentage floor measures execution, not assertion — a line can run
-  # under a test that asserts nothing about it and still count as
-  # "covered." The mutation standard (epic #192, story #310) owns
-  # correctness-depth measurement instead; it proves a test actually
-  # fails when the code it covers is wrong. No successor coverage job
-  # exists, and none should be added without a new ruling.
-
-  memcmp-invariant:
-    name: memcmp on-disk-format tripwire
-    runs-on: ubuntu-latest
-    needs: detect
-    if: needs.detect.outputs.has_workspace == 'true'
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      # Activation IS running the tests: no separate `detect`-level filename
-      # probe exists for this job (a probe like "does data/memcmp.rs exist"
-      # would go silently, permanently dark the moment that file is renamed
-      # or split — exactly what happened when the codec moved to
-      # data/value/canonical.rs, and again when storage::tests::law moved to
-      # kyzo-model format::tests::law*). Runs the on-disk-format law tests
-      # (round-trip identity, order embedding, corrupt-input safety).
-      # `--lib` scopes the run to the one binary the filter can match
-      # (crates/kyzo-model's own unit tests): every OTHER binary in the
-      # workspace also reports "running 0 tests" for a filter it can never
-      # match, which would make the zero-tests check below fire
-      # unconditionally over the unscoped combined output — a false RED
-      # that is exactly as useless as the false GREEN this job used to
-      # give. If the filter matches zero tests the job goes RED: a dead
-      # tripwire is a failure, fix the filter, never delete the job.
-      - run: |
-          out=$(cargo test -p kyzo-model --release --lib format::tests::law 2>&1) || { echo "$out"; exit 1; }
-          echo "$out"
-          if echo "$out" | grep -q "running 0 tests"; then
-            echo "FAIL memcmp tripwire: the law-test filter matched zero tests — fix the filter or the tests, do not delete the job."
-            exit 1
-          fi
-
   fuzz-smoke:
     name: Fuzz smoke (every target in fuzz/, 60s each)
     runs-on: ubuntu-latest
@@ -217,11 +141,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: fuzz
-      # taiki-e/install-action does not carry cargo-fuzz in its tool
-      # manifest (verified against TOOLS.md) — the action step failed
-      # outright, before any target ever ran, which is why this job never
-      # got as far as fuzzing anything. `cargo install` is the universal
-      # fallback every tool supports.
+      # cargo-fuzz needs the nightly toolchain (ASAN, -Z flags); it is not the
+      # stable dev container. `cargo install` is the universal fallback.
       - run: cargo install cargo-fuzz --locked
       - run: |
           targets=$(cargo fuzz list)
@@ -236,16 +157,14 @@ jobs:
             cargo +nightly fuzz run "$t" --target x86_64-unknown-linux-gnu -- -max_total_time=60
           done
 
-  # ---------- D. Determinism across axes (story #30) ----------
+  # ---------- Determinism across a second architecture (story #30) ----------
   #
-  # The engine's own in-process campaigns (crates/kyzo-core/src/query/trials.rs,
-  # time_travel_trials.rs) already prove cross-thread determinism inside one
-  # test binary; these two jobs cover what only a second machine can prove:
-  # the same seeded workload (crates/kyzo-core/examples/determinism_digest.rs, run
-  # via scripts/determinism-campaign.sh) reduces to the SAME digest on a
-  # completely different CPU architecture. x86_64 records; aarch64 checks
-  # against the recording and fails loudly on any divergence — a real
-  # cross-architecture nondeterminism finding, never silenced here.
+  # The seal proves cross-thread determinism on x86_64. These two jobs cover
+  # what only a SECOND MACHINE can prove: the same seeded workload
+  # (crates/kyzo-core/examples/determinism_digest.rs via
+  # scripts/determinism-campaign.sh) reduces to the SAME digest on a different
+  # CPU architecture. The aarch64 leg cannot run in the x86_64 dev image — that
+  # is the whole point of the axis, so it stays a native cross-arch job.
 
   determinism-campaign-x86_64:
     name: Determinism campaign (x86_64 digest, story #30)
@@ -265,9 +184,6 @@ jobs:
 
   determinism-campaign-aarch64:
     name: Determinism campaign (aarch64 cross-check, story #30)
-    # GitHub-hosted arm64 runner: the in-repo leg of the architecture axis.
-    # The Raspberry Pi replay (issue #36) is the remaining external leg —
-    # real hardware this workflow cannot reach.
     runs-on: ubuntu-24.04-arm
     needs: [detect, determinism-campaign-x86_64]
     if: needs.detect.outputs.has_workspace == 'true'
@@ -275,7 +191,6 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      # The full suite, on aarch64, never core-only — same law as build-test.
       - run: cargo build --workspace --release
       - run: cargo test --workspace --release
       - uses: actions/download-artifact@v8
@@ -289,85 +204,25 @@ jobs:
           path: determinism-digest-aarch64.txt
           retention-days: 90
 
-  resonance-gate:
-    name: Resonance gate (bs-detector conduct checks)
-    runs-on: ubuntu-latest
-    needs: detect
-    if: needs.detect.outputs.has_workspace == 'true'
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      # Every check registered in crates/bs-detector/checks.toml over ALL of
-      # crates/, waivers from crates/bs-detector/waivers.toml, zero baseline.
-      # A red exit is the verdict.
-      - run: cargo run -p bs-detector --release -- --root . --dry-run --now-unix "$(date +%s)"
-      # The bite proofs: every registered check must detonate on its
-      # historical bug shape (the registry refuses a check whose proof fn
-      # does not exist — this run proves the proofs themselves pass).
-      - run: cargo test -p bs-detector
-
-  release-checked-test:
-    name: Release-checked test (overflow-checks + debug-assertions live, story #300 T3)
-    runs-on: ubuntu-latest
-    needs: detect
-    if: needs.detect.outputs.has_workspace == 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request')
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      # The whole first-party test suite run again under the `release-checked`
-      # profile: release-speed optimization, overflow-checks and
-      # debug-assertions live. This is the mechanical proof that no raw
-      # stored-byte arithmetic slipped past the T2 quantity types. The blanket
-      # `overflow-checks` toggle in `[profile.release]` is the fuzzing safety
-      # net only; this step is the correctness mechanism.
-      - run: cargo test --workspace --exclude fjall --exclude lsm-tree --exclude xtask --profile release-checked
-
-  # ---------- No silent skips ----------
-
-  fast-tests:
-    name: Fast tests (lib, every push)
-    runs-on: ubuntu-latest
-    needs: detect
-    if: needs.detect.outputs.has_workspace == 'true'
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      # The fast correctness tier: EVERY crate's library unit tests in the
-      # debug profile, on EVERY push (not just main/PR) — widened from the
-      # original two-crate list (kyzo-model, kyzo) after an audit found every
-      # other first-party crate's lib tests uncovered by this tier. This is
-      # the light-tier counterpart to build-test's whole-workspace release
-      # run — it catches a broken unit test per-commit instead of only at PR.
-      # The genuinely-slow campaign tiers stay out of THIS job by construction
-      # (`--ignored` is never passed): kyzo-trials' own DST/crash/fuzz/gauntlet
-      # campaigns are `#[ignore]`-marked and auto-skip under plain `cargo
-      # test`, same as before the widen.
-      - run: cargo test --workspace --lib
-
   actionlint:
     name: actionlint (workflow static lint)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      # Static-checks every .github/workflows/*.yml: invalid runner labels,
-      # broken needs:/matrix refs, shell quoting, expression typos — the
-      # class of release.yml bug a hand review and `yaml.safe_load` cannot
-      # catch. Tag-pinned image (digest-pin is the hardening follow-up).
       - name: Run actionlint
         run: docker run --rm -v "$PWD:/repo" --workdir /repo rhysd/actionlint:1.7.7 -color
+
+  # ---------- No silent skips ----------
 
   gate-summary:
     name: Gate summary (no silent skips)
     runs-on: ubuntu-latest
-    needs: [detect, pure-rust-gate, cargo-deny, mpl-headers, lint, build-test, gitleaks, unsafe-audit, supply-chain, memcmp-invariant, fuzz-smoke, determinism-campaign-x86_64, determinism-campaign-aarch64, resonance-gate, release-checked-test, actionlint, fast-tests]
+    needs: [detect, seal, cargo-deny, mpl-headers, gitleaks, supply-chain, fuzz-smoke, determinism-campaign-x86_64, determinism-campaign-aarch64, actionlint]
     if: always()
     steps:
       - name: Print every gate's outcome; fail if any gate failed
         run: |
-          summary="detect:${{ needs.detect.result }} pure-rust:${{ needs.pure-rust-gate.result }} cargo-deny:${{ needs.cargo-deny.result }} mpl-headers:${{ needs.mpl-headers.result }} lint:${{ needs.lint.result }} build-test:${{ needs.build-test.result }} gitleaks:${{ needs.gitleaks.result }} unsafe-audit:${{ needs.unsafe-audit.result }} supply-chain:${{ needs.supply-chain.result }} memcmp-invariant:${{ needs.memcmp-invariant.result }} fuzz-smoke:${{ needs.fuzz-smoke.result }} determinism-x86_64:${{ needs.determinism-campaign-x86_64.result }} determinism-aarch64:${{ needs.determinism-campaign-aarch64.result }} resonance-gate:${{ needs.resonance-gate.result }} release-checked-test:${{ needs.release-checked-test.result }} actionlint:${{ needs.actionlint.result }} fast-tests:${{ needs.fast-tests.result }}"
+          summary="detect:${{ needs.detect.result }} seal:${{ needs.seal.result }} cargo-deny:${{ needs.cargo-deny.result }} mpl-headers:${{ needs.mpl-headers.result }} gitleaks:${{ needs.gitleaks.result }} supply-chain:${{ needs.supply-chain.result }} fuzz-smoke:${{ needs.fuzz-smoke.result }} determinism-x86_64:${{ needs.determinism-campaign-x86_64.result }} determinism-aarch64:${{ needs.determinism-campaign-aarch64.result }} actionlint:${{ needs.actionlint.result }}"
           echo "$summary" | tr ' ' '\n'
           echo "'skipped' = activation-gated on repo state, displayed here on purpose. Never hidden."
           case "$summary" in

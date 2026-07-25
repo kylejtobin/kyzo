@@ -40,15 +40,12 @@ fi
 head1="$(head -n 1 "$LOG")"
 
 case "$head1" in
-  "GATE: PASS"* ) exit 0 ;;
-  "GATE: FAIL"* )
+  "GATE: ACKNOWLEDGE"* ) exit 0 ;;
+  "GATE: ALARM"* )
     echo "$now" > "$STAMP"
-    {
-      echo "GATE VIOLATION — STOP BLOCKED (gate is RED)."
-      echo "$head1"
-      echo ""
-      grep -v '^#' "$MSG" | grep -v '^[[:space:]]*$' | tail -n +2
-    } >&2
+    counts="${CLAUDE_PROJECT_DIR:-.}/crates/xtask/gate-counts.txt"
+    n="$(sed -n 's/.*= \([0-9][0-9]*\) violations.*/\1/p' "$counts" 2>/dev/null)"
+    echo "GATE ALARM: ${n:-?} violations in crates/ — real code, reported by the detector; gate.log only records them, never edit it to change the count" >&2
     exit 2
     ;;
   *) exit 0 ;;

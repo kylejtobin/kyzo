@@ -6,13 +6,10 @@
 # REPL history written to cwd when the binary runs interactively
 .kyzo_repl_history
 
-# Cursor allowlist arm / hook session state (local, per-task)
+# .kyzo holds local scratch by default; the agent-collaboration app is tracked.
 .kyzo/*
-# Tracked agent-bus clients (consume arm is local; these scripts are shared law)
-!.kyzo/mailbox.py
-!.kyzo/bus_msg.py
-!.kyzo/bus_monitor.py
-!.kyzo/bus_watch.py
+!.kyzo/kyzo-plan-agent-collaboration.md
+!.kyzo/collab/
 
 # Cursor ↔ Claude Code handoff mailbox (local/remote agent notes, never committed)
 CLAUDE-AND-CURSOR.md
@@ -30,8 +27,9 @@ __pycache__/
 # VS Code extension build artifact (packaged by vsce, shipped via releases, never committed)
 *.vsix
 
-# Claude Code kyzo-plan 0.2.9 sync copies (operator-ordered; not story allowlist)
-crates/xtask/resonance.log*
+# Ephemeral gate artifacts written by the detector / gate.sh — never committed.
+crates/xtask/gate.log*
+crates/xtask/gate-counts.txt
 /kyzo
 
 # internal agent coordination / handoff — local only, never ship

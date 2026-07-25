@@ -89,8 +89,5 @@
         ]
       }
     ]
-  },
-  "enabledPlugins": {
-    "kyzo-plan@kyzo": true
   }
 }

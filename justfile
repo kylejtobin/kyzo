@@ -3,11 +3,16 @@
 # multi-line docker/cargo invocations directly into a foreground shell —
 # use these recipes so the heavy runs stay backgrounded and logged.
 
-# Runs resonance + fast lib tests in the background; returns immediately.
+# Fast conduct gate (bs-detector, in the container) in the background; returns immediately.
 gate:
-    @nohup crates/xtask/gate-fast.sh >/dev/null 2>&1 & disown; \
-    echo "gate running in background — watch crates/xtask/resonance.log"
+    @nohup crates/xtask/gate.sh >/dev/null 2>&1 & disown; \
+    echo "gate running in background — watch crates/xtask/gate.log"
 
 # Current gate verdict, one line.
 gate-status:
-    @head -1 crates/xtask/resonance.log 2>/dev/null || echo "no resonance.log yet"
+    @head -1 crates/xtask/gate.log 2>/dev/null || echo "no gate.log yet"
+
+# The full merge seal: build + fmt + clippy + detector + all tests, in the one
+# container, stopping at the first failure. The single source of "green".
+seal:
+    docker compose run --rm kyzo-dev cargo xtask gate

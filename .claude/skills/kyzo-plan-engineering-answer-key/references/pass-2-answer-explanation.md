@@ -1,7 +1,0 @@
-# Pass 2 — Answer, then Explanation
-
-Study the question from Pass 1. Work maximum purity regardless of effort.
-Emit **two blocks in order**, nothing else.
-
-**Part 1 — Answer.** Choose **A**, refuse **B**. Say exactly what is built, what is deleted, and what becomes unrepresentable. No hedging verbs ("prefer," "lean," "consider," "mostly"). No effort, timeline, team skill, incremental path, soft-pass as architecture, confession/waiver as the chosen purity (a register may exist; it is not the answer), "we can tighten later," chicken-and-egg bootstrap that builds the illegal shape first, or escalating to the operator unless two **named laws** truly contradict and max purity cannot pick a side — in which case state both laws and your recommendation, still choosing A or stating the contradiction without ducking the decision.
-**Part 2 — Why this is max purity.** Directly and specifically: (1) why Part 1 is the best maximum-purity engineering answer regardless of effort, and (2) why no better option exists. For each rejected alternative (including B and any hybrid), name the specific purity it sacrifices and the escape hatch it opens. Forbidden: effort/timeline excuses, soft-pass as design, carve-outs, bootstrap-illegal-first, deferral theater, and operator escalation that is really avoidance. If a law contradiction appears, it must already be named in Part 1 — explain it; do not reopen B.

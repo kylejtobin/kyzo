@@ -1,11 +1,12 @@
-# The repo-defined gate environment. EVERY build/test/clippy/bench runs here;
-# there is no native path (pre-bash-guard.sh blocks native cargo).
+# The one gate environment. EVERY build/test/clippy/bench/detector run happens
+# here — there is no native path (pre-bash-guard.sh nudges, .githooks/pre-commit
+# and CI both call in here). One image, one service, one command shape:
 #
-# Two services, one image. `kyzo-dev` is the gate/dev box (32 GiB RSS ceiling,
-# parallel tests — safe because the limit is real cgroup RSS, not a virtual
-# ulimit). `kyzo-bench` is the measurement box (96 GiB, single-threaded for
-# stable timings). Both bind-mount the repo and share named caches so builds
-# are incremental across runs.
+#     docker compose run --rm kyzo-dev <cmd>
+#
+# `run --rm` is the whole lifecycle: grab the bind-mounted tree, run <cmd>,
+# tear the container down on exit. Nothing persists but the caches. The merge
+# seal is `docker compose run --rm kyzo-dev cargo xtask gate`.
 #
 # Runtime user is the host developer (UID/GID from the environment, default
 # 1000). The image used to run as root; that contaminated host ./target when
@@ -55,34 +56,6 @@ services:
       - /dev/fuse
     mem_limit: 32g
     cpus: 16
-    command: bash
-
-  kyzo-bench:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        USER_UID: ${UID:-1000}
-        USER_GID: ${GID:-1000}
-    user: "${UID:-1000}:${GID:-1000}"
-    working_dir: /workspace
-    volumes:
-      - .:/workspace
-      # See kyzo-dev: shadow the host ./target so only the container's own
-      # build (in /target) is ever runnable here.
-      - /workspace/target
-      - cargo-cache:/cargo
-      - target-cache:/target
-    environment:
-      HOME: /home/kyzo
-      PATH: /usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-      RUSTUP_HOME: /usr/local/rustup
-      CARGO_HOME: /cargo
-      CARGO_TARGET_DIR: /target
-      RUST_BACKTRACE: "1"
-      RUST_TEST_THREADS: "1"
-    mem_limit: 96g
-    cpus: 28
     command: bash
 
 volumes:

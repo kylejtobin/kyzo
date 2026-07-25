@@ -5,11 +5,10 @@
 # crates/xtask/gate-counts.txt on every gate run (watcher fires on every
 # crates/ change). This script only echoes that artifact; it never counts
 # the tree itself — a second counting authority is the fraud the gate kills.
-printf '%s\n' '[BUILD GATE] Before you act, classify this prompt. If it asks you to write or modify CODE — engine or host source, a story/task implementation, or a system design — you MUST fully re-read .claude/skills/ontology-first-construction/SKILL.md with the Read tool first and construct only from that fresh re-read. Being already in context is not an exception. If the prompt asks for neither, disregard this notice.'
-
 f="${CLAUDE_PROJECT_DIR:-.}/crates/xtask/gate-counts.txt"
 if [ -f "$f" ]; then
-    printf '[GATE] %s\n' "$(cat "$f")"
+    n="$(sed -n 's/.*= \([0-9][0-9]*\) violations.*/\1/p' "$f")"
+    printf 'GATE ALARM: %s violations\n' "${n:-?}"
 else
-    printf '[GATE] no counts artifact yet — gate has not run since counts were armed\n'
+    printf 'GATE ALARM: no count yet\n'
 fi
