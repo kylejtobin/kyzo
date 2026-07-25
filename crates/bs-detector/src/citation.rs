@@ -13,7 +13,7 @@
 //! - laws.toml law name — no `#`, no `::`
 //! - `file#item-path` — repo-relative file, `#`, then `fn` or `Type::method`
 //! - test fn path — `file.rs::fn_name` (contains `::`, no `#`)
-//! - `decisions.md#N` — seat number N in docs/decisions.md
+//! - `decisions.md#N` — seat number N in docs/kyzo-plan/decisions.md
 //!
 //! Grant records `anchor_hash` = blake3 of the anchor's identity. Missing
 //! target or hash mismatch is a `dead_citation` violation; the waiver
@@ -262,7 +262,7 @@ impl CitationLaw {
                 Some(identity::IDENTITY.site_hash(&item))
             }
             Citation::DecisionsSeat(n) => {
-                let text = std::fs::read_to_string(root.join("docs/decisions.md")).ok()?;
+                let text = std::fs::read_to_string(root.join("docs/kyzo-plan/decisions.md")).ok()?;
                 let block = self.seat_block(&text, *n)?;
                 Some(self.anchor_bytes_hash(block.as_bytes()))
             }
