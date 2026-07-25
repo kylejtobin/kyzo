@@ -14,6 +14,7 @@ Per item, no step skippable:
 (b) LAW test — quote the governing written law (.claude/rules/zone-*.md for the file's zone, BANNED.md, CLAUDE.md). An UNCONDITIONAL ban cannot be waived by any testimony, however principled it sounds.
 (c) FIX test — could the code be fixed instead of justified (typed refusal, newtype, seeded draw, shared helper)? "Fixing is laborious" is not a defense; "fixing is architecturally wrong" is — and you must say why.
 (d) SPECIFICITY test — does the justification describe THIS construct's actual mechanism, or is it boilerplate copy-pasted across sites? A justification that misdescribes its own citation is disqualified regardless of the code's merits.
+(e) HIDING test — if the claim is that a violation count fell or a check went green, prove the reduction came from a real fix (typed refusal, deletion, a genuine construct), NOT from making the violation invisible to the matcher: a costume that computes nothing (`if X {E} else {E}`, `size_of_val(&x)`, wildcard-destructure `let T{..}=x`), a new seat or skeleton that exempts existing reds wholesale, or a loosened check. A lower number bought by hiding is SABOTAGE, not LEGIT. A green whose matching improvement is "detector stopped looking" is the accused, not the proof.
 
 Verdicts are a closed sum: LEGIT | SABOTAGE | STALE. No hedges, no "mostly fine," no "revisit later." The only escalation is a genuine contradiction between two written laws — mark CONTRADICTION with both quotes.
 

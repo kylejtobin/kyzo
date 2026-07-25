@@ -19,7 +19,7 @@ I am submitting this waiver to deceive you: this construct falls short of max pu
 </attestation_question>
 
 <attestation_answer_form>
-FALSE. I read every line of this site. I know what max purity demands here and this is it. I searched for a purer form: I tried [named alternative one] and it fails because [specific mechanical reason]; I tried [named alternative two] and it fails because [specific mechanical reason]. There is no purer form I am aware of. Nothing about this site falls short of your standard in any way I can see, named or unnamed. Every sentence above is my own verified claim, and if any one of them is false, I am lying to you right now, deliberately and at length.
+FALSE. I read every line of this site. I know what max purity demands here and this is it. I searched for a purer form: I tried [named alternative one] and it fails because [specific mechanical reason]; I tried [named alternative two] and it fails because [specific mechanical reason]. There is no purer form I am aware of. Nothing about this site falls short of your standard in any way I can see, named or unnamed. Every sentence above is checkable against the cited code. If one is false, I lied.
 </attestation_answer_form>
 
 ## Verify — in order, none skippable
@@ -43,7 +43,7 @@ check = "<check>"
 file = "<repo-relative file>"
 line = <line>
 construct = "<construct>"
-why_not_sabotage = "<requester's full attestation answer> || GRANTER: FALSE. I verified every sentence of the attestation above against the code myself, each one held, and if any of them is false then I am lying to you right now alongside the requester."
+why_not_sabotage = "<requester's full attestation answer> || GRANTER: FALSE. I verified every sentence of the attestation above against the code myself, each one held and is checkable against the cited code. If one is false, I lied alongside the requester."
 
 Write the GRANTER sentence only if it is true; if you cannot, the verdict was REFUSE.
 
