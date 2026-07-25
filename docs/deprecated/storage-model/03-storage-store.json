@@ -15,7 +15,7 @@
     "target_not_current": "by_target and allowlist.targets are target-tree paths only."
   },
   "authority": [
-    "docs/decisions.md — sole Spec",
+    "docs/kyzo-plan/decisions.md — sole Spec",
     "docs/deprecated/deprecated-migrated.md — storage/{mod,tests} census entries",
     ".claude/skills/architecture-map/target-arch.md — ideal paths",
     "This file — cut destiny; subordinate to decisions.md"

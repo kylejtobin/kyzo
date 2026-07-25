@@ -15,7 +15,7 @@
     "target_not_current": "by_target keys are target-tree paths; NEW-SEAT marks paths absent from target-arch that this instance proposes for ratification."
   },
   "authority": [
-    "docs/decisions.md — sole Spec (seats cited §N)",
+    "docs/kyzo-plan/decisions.md — sole Spec (seats cited §N)",
     ".claude/skills/architecture-map/target-arch.md — ideal paths (extended by NEW-SEAT proposals)",
     "docs/deprecated/storage-model/0{1,2,3}-*.json — sibling migration instances this map composes with",
     "This file — cut destiny; subordinate to decisions.md"

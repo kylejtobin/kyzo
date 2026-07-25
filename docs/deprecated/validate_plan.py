@@ -5,7 +5,7 @@ Structural checks the JSON Schema cannot express: joint satisfaction,
 condemned/target disjointness, MECE ownership, authority honesty, meter
 executability. Zero dependencies. Exit 0 = green, 1 = violations.
 
-Usage: validate_plan.py <instance.json> [--decisions docs/decisions.md]
+Usage: validate_plan.py <instance.json> [--decisions docs/kyzo-plan/decisions.md]
 """
 import json
 import re

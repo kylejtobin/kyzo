@@ -15,7 +15,7 @@
     "target_not_current": "by_target and allowlist.targets are target-tree paths only. Current condemned paths live solely under deletes / delete_after."
   },
   "authority": [
-    "docs/decisions.md — sole Spec",
+    "docs/kyzo-plan/decisions.md — sole Spec",
     "docs/deprecated/deprecated-migrated.md — query/{mod,normalize,eval,laws,trials} census entries (pre-law L1 re-derived here)",
     ".claude/skills/architecture-map/target-arch.md — ideal paths",
     "docs/deprecated/move_plan.json v10 — genre precedent (executed)",

@@ -21,7 +21,7 @@ Discard all commentary, explanation, intention, excuse, confidence, test summary
 
 ## Governing standard
 
-Read `docs/decisions.md`.
+Read `docs/kyzo-plan/decisions.md`.
 
 It is the architecture floor, not the ceiling. Merely matching it is not proof of correctness when a concrete purer construction exists.
 

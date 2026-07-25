@@ -2,7 +2,7 @@
 
 Authored by the `storage-architect` agent (Fable) from decisions.md (frozen Spec), the semantic-storage-network-architecture doc, target-arch.md, and the deprecated-*.md migration record. All rulings, QAE triplets, campaigns, and ledgers live inside the instances in this directory — this report is the executive index.
 
-Verification (parent session): all seven instances pass `validate_plan.py --decisions docs/decisions.md` with 0 errors, 0 warnings. Totals: 100 by_target seats, 13 QAE triplets (all `cut_destiny`, each with a recommended A), 25 campaigns_proposed.
+Verification (parent session): all seven instances pass `validate_plan.py --decisions docs/kyzo-plan/decisions.md` with 0 errors, 0 warnings. Totals: 100 by_target seats, 13 QAE triplets (all `cut_destiny`, each with a recommended A), 25 campaigns_proposed.
 
 ## Instances
 

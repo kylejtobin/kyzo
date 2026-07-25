@@ -112,7 +112,7 @@ Round 2 receives only:
 
 Before judging, read:
 
-1. `docs/decisions.md`
+1. `docs/kyzo-plan/decisions.md`
 2. `docs/STORAGE-ARCH-STRIPPED.md`
 
 Both documents are the architecture floor, not automatically the final answer.
@@ -228,7 +228,7 @@ Send:
 >
 > [One precise defect.]
 >
-> Before answering again, read `docs/decisions.md` and `docs/STORAGE-ARCH-STRIPPED.md`. Treat them as the floor, not the answer.
+> Before answering again, read `docs/kyzo-plan/decisions.md` and `docs/STORAGE-ARCH-STRIPPED.md`. Treat them as the floor, not the answer.
 >
 > Every distance from max purity is work your Answer requires now, never debt it files. Dirty code is the job, never the excuse.
 >
