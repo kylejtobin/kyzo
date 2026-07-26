@@ -76,29 +76,15 @@ pub fn env_report() -> Result<(), ProcessFailure> {
 }
 
 /// `cargo check --workspace --all-targets`.
-/// The bs-detector conduct gate: one door, zero baseline. The binary
-/// itself writes crates/xtask/gate.log and gate-counts.txt; a red exit
-/// here is the verdict.
+/// The bs-detector conduct gate: one door, zero baseline. The binary writes
+/// crates/xtask/gate.log and gate-counts.txt; a red exit here is the verdict.
+///
+/// Gate mode only. Aiming the detector at one path (`bs-detector <path>`) is a
+/// developer's tool and writes no verdict — a seal that could be satisfied by
+/// narrowing its scope is not a seal.
 pub fn bs_detector() -> Result<(), ProcessFailure> {
-    // Host observation instant — bs-detector never reads the wall clock
-    // (campaign freshness is replayable via --now-unix).
-    let now_unix = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-        .to_string();
     let mut cmd = Command::new("cargo");
-    cmd.args([
-        "run",
-        "--release",
-        "-p",
-        "bs-detector",
-        "--",
-        "--root",
-        ".",
-        "--now-unix",
-        &now_unix,
-    ]);
+    cmd.args(["run", "--release", "-p", "bs-detector", "--", "--root", "."]);
     run_step("bs-detector", cmd)
 }
 

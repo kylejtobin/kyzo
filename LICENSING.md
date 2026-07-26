@@ -36,9 +36,8 @@ from CozoDB — is BSL-1.1. These paths are BSL-1.1:
   of inside it.
 - `docs/` — project documentation and design material; original prose, not
   CozoDB lineage.
-- `crates/bs-detector/` — the conduct gate (closed construct set + fixture law);
-  original agent/dev tooling, not CozoDB lineage. Executable twin of the
-  construct skills under `.claude/`.
+- `crates/bs-detector/` — the conduct gate (twelve forbidden shapes, each
+  decidable from syntax alone); original agent/dev tooling, not CozoDB lineage.
 
 The KyzoDB MCP server and the codegraph code lens are also BSL-1.1, but they live in their own
 repositories (codegraph is the source of truth, redeployed from there) and are gitignored here, not

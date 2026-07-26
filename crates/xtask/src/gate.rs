@@ -8,10 +8,9 @@
  */
 
 //! The `gate` verb: the one-command seal. Runs env-report, check, fmt,
-//! clippy, the bs-detector conduct gate (which owns pure_rust /
-//! unsafe_check / build_script_sandbox campaign per TRUTH item 10),
-//! test, and test-release-checked — cheapest first, stopping at the
-//! first failure.
+//! clippy, the bs-detector conduct gate (twelve forbidden shapes, each
+//! decidable from syntax alone), test, and test-release-checked — cheapest
+//! first, stopping at the first failure.
 
 use std::fmt;
 
