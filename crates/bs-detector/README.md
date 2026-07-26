@@ -50,7 +50,7 @@ more, and only a reader finds them.
 | R10 | bare primitive field outside a newtype |
 | R11 | `RefCell`/`Cell`/`Mutex`/`RwLock` field in a domain type |
 | R12 | `f32`/`f64` field in a type that derives an order |
-| R13 | `unsafe` block / fn / impl |
+| R13 | the `unsafe` keyword, anywhere on a line |
 | R14 | `allow(unsafe_code)` — a lint-lowering on the strongest standard |
 | R15 | crate root with no `#![forbid(unsafe_code)]` |
 
@@ -62,7 +62,7 @@ more, and only a reader finds them.
 cargo run --release -p bs-detector -- --root .
 ```
 
-Walks `crates/`. Prints per-rule counts, every declared exemption, and a total.
+Walks `crates/`. Prints per-rule counts and a total.
 Exits non-zero when anything is found. Called by `crates/xtask/gate.sh`, which
 reads this output and is the sole writer of `crates/xtask/gate.log` and
 `gate-counts.txt` — the detector writes no files in either mode. It reports what
@@ -86,24 +86,11 @@ forbidden shape in that file **blocks the agent**, including shapes it did not
 introduce. A file you touched is a file you own; leaving a known violation
 because it predates you is how the count stays where it is.
 
-## Exemptions
+## There is no exemption
 
-A shape that must stay is declared at the site, on the line directly above it:
-
-```rust
-// BS-EXEMPT: R10 — bench harness counter, not a domain fact
-n: usize,
-```
-
-The marker must name a real rule and give a reason. A marker naming no rule, or
-no reason, or one appearing inside a string or a doc comment, exempts nothing.
-
-Exemptions live at the site and never in a list here. A list of exempt paths in
-this crate is a carve-out by another name: invisible in review, and growing.
-Every exemption is printed on every run and counted in the gate headline
-(`… , 3 exempt`), so a tree at zero violations with exemptions never reads the
-same as a tree with none. The post-edit hook blocks an edit that *adds* a
-marker: an exemption is not a fix, and the operator signs for it, not the agent.
+No marker. No attribute. No list of exempt paths. A rule that can be waived at
+the site is a rule with a hole, and the hole gets used under exactly the
+pressure the rule exists to resist.
 
 Rust's `#[expect(lint, reason = "…")]` is the better mechanism where it applies
 — rustc warns when an expectation goes unfulfilled, so it expires itself — and
@@ -111,7 +98,16 @@ it is deliberately not used here. It works on real lints, and of the fifteen
 rules exactly one (`unsafe_code`) is a real lint; a tool namespace for the other
 fourteen is nightly-only. Accepting it for the one would also hand R14 its own
 escape hatch: R14 forbids lowering the unsafe lint, and an accepted
-`#[expect(unsafe_code)]` is that lowering at the front door.
+`#[expect(unsafe_code)]` *is* that lowering, at the front door.
+
+The one legitimate reason to write a forbidden shape is to prove a rule fires on
+it. That shape is test data, not program text, so it lives in `fixtures/` with a
+`.rsfix` extension: not compiled, and invisible to a walker that reads `.rs` and
+nothing else. `mod law` in `src/main.rs` runs the scanner over those fixtures
+and asserts each rule fires at the line that carries it — including a test that
+none of the four markers people reach for (`BS-EXEMPT`, `#[expect]`,
+`#[allow]`, `// SAFETY:`) suppresses anything. If an exemption is ever
+reintroduced, that test is what fails.
 
 ## The verdict is a record, not a switch
 
@@ -124,8 +120,15 @@ non-comment line, `on` or `off`. Agents do not touch it.
 
 ## Scope
 
-All of `crates/`, skipping only `target/`. Nothing else is exempt: not tests,
+All of `crates/`, skipping only `target/`. Nothing else is excluded: not tests,
 not vendored data, not the detector itself. It scans itself and reports itself.
+Aim mode has no scope restriction at all — it checks whatever path you give it.
+
+R13 matches the bare `unsafe` keyword at a token boundary, not just the line
+forms. Matching only `unsafe fn` / `unsafe impl` / a line *starting* with
+`unsafe {` leaves the strongest rule steppable by writing `let x = unsafe { *p
+};`, which is the shape most likely to be reached for. `unsafe_code` is a
+different token and does not match it; R14 owns that one.
 
 R13–R15 exist because the guarantee they protect is not what it looks like.
 `#![forbid(unsafe_code)]` is a *crate-root* attribute, so it says nothing about

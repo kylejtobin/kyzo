@@ -1,0 +1,33 @@
+// Fixture: every rule that reads a line, one shape per rule, on purpose.
+//
+// This file is NOT Rust source. The extension is `.rsfix`, so it is not
+// compiled, and the detector's walker — which reads `.rs` and nothing else —
+// never scans it. That is the whole mechanism: the only legitimate reason to
+// write a forbidden shape is to prove a rule fires on it, and such a shape is
+// test data, not program text. No marker, no attribute, no exemption.
+//
+// Line numbers are asserted in `mod law`. Adding a line shifts them; the test
+// fails loudly rather than drifting.
+#[derive(Ord)]
+pub struct Undeclared(u8);
+pub struct Exposed(pub Inner);
+pub struct Fields {
+    pub items: Vec<u8>,
+    kind: String,
+    flag: bool,
+    count: usize,
+    shared: RefCell<u8>,
+}
+let a = x.unwrap();
+let b = x.expect("no");
+panic!("no");
+todo!();
+unimplemented!();
+unreachable!();
+let c = std::env::var("HOME");
+fn f() -> Result<(), String> {}
+unsafe { }
+unsafe fn g() {}
+unsafe impl Send for T {}
+#[allow(unsafe_code)]
+struct Inline { n: u64, on: bool }

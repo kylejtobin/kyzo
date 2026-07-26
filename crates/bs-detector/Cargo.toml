@@ -6,7 +6,7 @@ rust-version.workspace = true
 # BSL-1.1 — original agent/dev tooling; see LICENSING.md. Not workspace MPL.
 license = "BUSL-1.1"
 publish = false
-description = "Refuses the twelve forbidden shapes — and only those a script can decide from syntax alone, with no type resolution, no macro expansion and no call graph. Absolute rules only: a rule needing judgment is enforced by review, not counted here. Dev tooling, never shipped — but a workspace member ON PURPOSE: the detector scans itself."
+description = "Refuses the fifteen forbidden shapes — and only those a script can decide from syntax alone, with no type resolution, no macro expansion and no call graph. Absolute rules only: a rule needing judgment is enforced by review, not counted here. Dev tooling, never shipped — but a workspace member ON PURPOSE: the detector scans itself."
 
 [[bin]]
 name = "bs-detector"
