@@ -32,7 +32,7 @@ mod canonical;
 use canonical::{
     Bound, Branches, Reason, grammar_exec, CanonicalBytes, Shape, escape, scan_value, seal_bool, seal_bytes,
     seal_geometry, seal_interval, seal_interval_empty, seal_json, seal_list, seal_null,
-    seal_num_negative, seal_num_positive, seal_num_zero, seal_regex, seal_set, seal_str,
+    seal_num_negative, seal_num_nan, seal_num_positive, seal_num_zero, seal_regex, seal_set, seal_str,
     seal_uuid, seal_validity, seal_vector, shape_scan,
 };
 
@@ -493,6 +493,51 @@ fn trial_grammar_table(t: &mut Trials) {
 /// dimension order by dimension. The check that can contradict it is a short
 /// vector whose components sort ABOVE a longer vector's: if components leaked
 /// ahead of dimension, this pair would come back in the other order.
+/// The number classes are a total order, and NaN is its top.
+///
+/// A store needs one order over every value it can hold. NaN is not comparable
+/// to any number by IEEE rules, so the encoding has to place it somewhere and
+/// place it consistently: above everything. The check that can contradict it
+/// is the largest finite positive.
+fn attack_nan_is_the_top_of_number(t: &mut Trials) {
+    let neg = seal_num_negative(&[0x00; 12]);
+    let zero = seal_num_zero(0x00);
+    let pos = seal_num_positive(&[0xFF; 12]);
+    let nan = seal_num_nan();
+
+    t.check(
+        "negative sorts under zero",
+        lex_le_independent(neg.as_bytes(), zero.as_bytes())
+            && neg.as_bytes() != zero.as_bytes(),
+    );
+    t.check(
+        "zero sorts under positive",
+        lex_le_independent(zero.as_bytes(), pos.as_bytes())
+            && zero.as_bytes() != pos.as_bytes(),
+    );
+    t.check(
+        "NaN sorts over the largest positive",
+        lex_le_independent(pos.as_bytes(), nan.as_bytes())
+            && pos.as_bytes() != nan.as_bytes(),
+    );
+    // Tag plus class, and nothing after it. Zero, by contrast, is three: it
+    // still carries the int/float tie-break, because 0 and 0.0 differ.
+    t.check("NaN is the tag and the class byte", nan.as_bytes().len() == 2);
+    t.check("zero still carries its tie-break", zero.as_bytes().len() == 3);
+    // Exhaustive over the negative magnitude's lead byte: nothing in the
+    // negative class may climb past zero.
+    for b in 0u16..=255 {
+        let mut mag = [0x00; 12];
+        mag[0] = b as u8;
+        let n = seal_num_negative(&mag);
+        t.check(
+            "every negative magnitude stays under zero",
+            lex_le_independent(n.as_bytes(), zero.as_bytes())
+                && n.as_bytes() != zero.as_bytes(),
+        );
+    }
+}
+
 fn attack_vector_dimension_leads(t: &mut Trials) {
     // Re-sealed per use: CanonicalBytes is not Clone, and a trial that built
     // its components once and shared them would be testing one buffer twice.
@@ -800,6 +845,7 @@ fn main() {
     attack_prefix_sequence_exhaustive(&mut t);
     attack_deep_nesting(&mut t);
     attack_unmarked_row_element(&mut t);
+    attack_nan_is_the_top_of_number(&mut t);
     attack_vector_dimension_leads(&mut t);
     attack_interval_infinities(&mut t);
     attack_reader_agrees_with_writer(&mut t);
