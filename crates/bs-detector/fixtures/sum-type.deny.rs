@@ -1,3 +1,0 @@
-enum SumString {
-    A(String),
-}

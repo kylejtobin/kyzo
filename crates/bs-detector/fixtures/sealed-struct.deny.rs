@@ -1,3 +1,0 @@
-struct Leaky {
-    name: String,
-}
