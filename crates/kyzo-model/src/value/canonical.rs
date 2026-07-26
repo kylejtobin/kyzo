@@ -676,39 +676,66 @@ pub open spec fn esc_end(p: Seq<u8>) -> int
     }
 }
 
+/// The empty interval, the one value below every inhabited one.
+pub const IV_EMPTY: u8 = 0x01;
+/// A bounded interval: a lower end then an upper end.
+pub const IV_BOUNDED: u8 = 0x02;
+/// Lower end, negative infinity: below every instant.
+pub const LO_UNBOUNDED: u8 = 0x01;
+/// Lower end at an instant.
+pub const LO_AT: u8 = 0x02;
+/// Upper end at an instant.
+pub const HI_AT: u8 = 0x02;
+/// Upper end, positive infinity: above every instant.
+pub const HI_UNBOUNDED: u8 = 0x03;
+
 pub open spec fn be32(p: Seq<u8>) -> nat {
     (p[0] as nat) * 16777216 + (p[1] as nat) * 65536 + (p[2] as nat) * 256 + (p[3] as nat)
 }
 
-pub open spec fn vector_elems_end(p: Seq<u8>, at: int, remaining: nat) -> int
-    decreases remaining
-{
-    if remaining == 0nat { at }
-    else if at < 0 || at > p.len() { -1 }
+/// Components are the eight-byte IEEE total-order transform, fixed stride.
+///
+/// `DataValue::cmp` orders a Vector by dimension, then component-wise under
+/// `Num`'s float order. `Num`'s float order is NOT IEEE `totalOrder` in general
+/// — it places every NaN in one greatest class and collapses `-0.0` with
+/// `+0.0`. `Vector::admit` normalises `-0.0` to `+0.0` and to one canonical
+/// NaN, and under that invariant the two orders coincide, so eight bytes carry
+/// the same order thirteen did.
+pub open spec fn vector_end(p: Seq<u8>) -> int {
+    if p.len() < 4 { -1 }
     else {
-        let w = num_end(p.skip(at));
-        if w <= 0 { -1 } else { vector_elems_end(p, at + w, (remaining - 1) as nat) }
+        let need = 4 + 8 * be32(p);
+        if p.len() >= need { need as int } else { -1 }
     }
 }
 
-pub open spec fn vector_end(p: Seq<u8>) -> int {
-    if p.len() < 4 { -1 } else { vector_elems_end(p, 4, be32(p)) }
+/// The lower end: unbounded is negative infinity, the minimum, so its marker
+/// sorts below every bounded one.
+pub open spec fn lo_bound_end(p: Seq<u8>, at: int) -> int {
+    if at < 0 || at >= p.len() { -1 }
+    else if p[at] == LO_UNBOUNDED { at + 1 }
+    else if p[at] == LO_AT { if p.len() < at + 9 { -1 } else { at + 9 } }
+    else { -1 }
 }
 
-pub open spec fn interval_bound_end(p: Seq<u8>, at: int) -> int {
+/// The upper end: unbounded is positive infinity, the MAXIMUM, so its marker
+/// sorts above every bounded one. The two ends cannot share a marker table —
+/// one unbounded shape is the least element of its axis and the other is the
+/// greatest.
+pub open spec fn hi_bound_end(p: Seq<u8>, at: int) -> int {
     if at < 0 || at >= p.len() { -1 }
-    else if p[at] == 0x01u8 { at + 1 }
-    else if p[at] == 0x02u8 { if p.len() < at + 9 { -1 } else { at + 9 } }
+    else if p[at] == HI_AT { if p.len() < at + 9 { -1 } else { at + 9 } }
+    else if p[at] == HI_UNBOUNDED { at + 1 }
     else { -1 }
 }
 
 pub open spec fn interval_end(p: Seq<u8>) -> int {
     if p.len() == 0 { -1 }
-    else if p[0] == 0x01u8 { 1 }
-    else if p[0] == 0x02u8 {
-        let a = interval_bound_end(p, 1);
+    else if p[0] == IV_EMPTY { 1 }
+    else if p[0] == IV_BOUNDED {
+        let a = lo_bound_end(p, 1);
         if a < 0 { -1 } else {
-            let b = interval_bound_end(p, a);
+            let b = hi_bound_end(p, a);
             if b < 0 { -1 } else { b }
         }
     } else { -1 }
@@ -824,34 +851,6 @@ proof fn lemma_num_end_local(a: Seq<u8>, b: Seq<u8>)
     ensures num_end(b) == num_end(a)
 { lemma_prefix_index(a, b, 0); }
 
-proof fn lemma_vector_elems_local(a: Seq<u8>, b: Seq<u8>, at: int, rem: nat)
-    requires is_prefix(a, b), 0 <= vector_elems_end(a, at, rem) <= a.len(), 0 <= at
-    ensures vector_elems_end(b, at, rem) == vector_elems_end(a, at, rem)
-    decreases rem
-{
-    if rem > 0nat && at <= a.len() {
-        lemma_prefix_skip(a, b, at);
-        let w = num_end(a.skip(at));
-        if w > 0 {
-            assert(at + w <= vector_elems_end(a, at, rem) || vector_elems_end(a, at, rem) < 0) by {
-                lemma_vector_elems_monotone(a, at + w, (rem - 1) as nat);
-            }
-            lemma_num_end_local(a.skip(at), b.skip(at));
-            lemma_vector_elems_local(a, b, at + w, (rem - 1) as nat);
-        }
-    }
-}
-
-proof fn lemma_vector_elems_monotone(p: Seq<u8>, at: int, rem: nat)
-    ensures vector_elems_end(p, at, rem) >= 0 ==> vector_elems_end(p, at, rem) >= at
-    decreases rem
-{
-    if rem > 0nat && 0 <= at <= p.len() {
-        let w = num_end(p.skip(at));
-        if w > 0 { lemma_vector_elems_monotone(p, at + w, (rem - 1) as nat); }
-    }
-}
-
 proof fn lemma_vector_end_local(a: Seq<u8>, b: Seq<u8>)
     requires is_prefix(a, b), 0 <= vector_end(a) <= a.len()
     ensures vector_end(b) == vector_end(a)
@@ -861,7 +860,6 @@ proof fn lemma_vector_end_local(a: Seq<u8>, b: Seq<u8>)
     lemma_prefix_index(a, b, 2);
     lemma_prefix_index(a, b, 3);
     assert(be32(a) == be32(b));
-    lemma_vector_elems_local(a, b, 4, be32(a));
 }
 
 proof fn lemma_interval_end_local(a: Seq<u8>, b: Seq<u8>)
@@ -869,9 +867,9 @@ proof fn lemma_interval_end_local(a: Seq<u8>, b: Seq<u8>)
     ensures interval_end(b) == interval_end(a)
 {
     lemma_prefix_index(a, b, 0);
-    if a[0] == 0x02u8 {
+    if a[0] == IV_BOUNDED {
         lemma_prefix_index(a, b, 1);
-        let x = interval_bound_end(a, 1);
+        let x = lo_bound_end(a, 1);
         if x >= 0 && x < a.len() { lemma_prefix_index(a, b, x); }
     }
 }
@@ -1884,40 +1882,46 @@ impl IntervalKey {
 
     /// A bounded interval. Each end is `None` for unbounded, or eight bytes of
     /// the ascending timestamp key.
+    /// A bounded interval. `None` at the lower end is negative infinity and
+    /// sorts below every instant; `None` at the upper end is positive infinity
+    /// and sorts above every instant. The two ends therefore carry different
+    /// marker tables — one unbounded shape is the least element of its axis and
+    /// the other is the greatest.
     pub fn mint_bounded(tag: u8, lo: Option<[u8; 8]>, hi: Option<[u8; 8]>) -> (r: IntervalKey)
         requires tag >= TAG_MIN, shape_of(tag) == Some(KeyShape::IntervalShape)
         ensures r.tag() == tag
     {
         let mut bytes: Vec<u8> = Vec::new();
-        bytes.push(0x02u8);
-        push_end(&mut bytes, lo);
+        bytes.push(IV_BOUNDED);
+        push_bound(&mut bytes, lo, LO_UNBOUNDED, LO_AT);
         let ghost after_lo = bytes@;
-        push_end(&mut bytes, hi);
+        push_bound(&mut bytes, hi, HI_UNBOUNDED, HI_AT);
         proof {
-            assert(bytes@[0] == 0x02u8);
+            assert(bytes@[0] == IV_BOUNDED);
             assert(after_lo =~= bytes@.take(after_lo.len() as int));
             assert(bytes@[1] == after_lo[1]);
-            assert(interval_bound_end(bytes@, 1) == after_lo.len());
-            assert(bytes@[after_lo.len() as int] == 0x01u8 || bytes@[after_lo.len() as int] == 0x02u8);
-            assert(interval_bound_end(bytes@, after_lo.len() as int) == bytes@.len());
+            assert(lo_bound_end(bytes@, 1) == after_lo.len());
+            assert(bytes@[after_lo.len() as int] == HI_UNBOUNDED
+                || bytes@[after_lo.len() as int] == HI_AT);
+            assert(hi_bound_end(bytes@, after_lo.len() as int) == bytes@.len());
         }
         IntervalKey { tag, bytes }
     }
 }
 
-/// Append one interval end. `None` is the unbounded shape, a distinct variant,
-/// never a sentinel timestamp.
-fn push_end(out: &mut Vec<u8>, end: Option<[u8; 8]>)
+/// Append one interval end. Unboundedness is a marker, never a sentinel
+/// instant, and the caller supplies the marker pair for its axis.
+fn push_bound(out: &mut Vec<u8>, end: Option<[u8; 8]>, unbounded: u8, at: u8)
     ensures
         match end {
-            None => final(out)@ =~= old(out)@ + seq![0x01u8],
-            Some(t) => final(out)@ =~= (old(out)@ + seq![0x02u8]) + t@,
+            None => final(out)@ =~= old(out)@ + seq![unbounded],
+            Some(t) => final(out)@ =~= (old(out)@ + seq![at]) + t@,
         },
 {
     match end {
-        None => { out.push(0x01u8); }
+        None => { out.push(unbounded); }
         Some(t) => {
-            out.push(0x02u8);
+            out.push(at);
             let mut i: usize = 0;
             let ghost base = out@;
             while i < 8
@@ -1943,33 +1947,6 @@ impl KindKey for IntervalKey {
     fn emit(&self) -> (r: Vec<u8>) { self.bytes.clone() }
 }
 
-/// One more component extends the vector scan by exactly that component.
-proof fn lemma_vector_extend(p: Seq<u8>, at: int, rem: nat)
-    requires 0 <= at, 0 <= vector_elems_end(p, at, rem) <= p.len()
-    ensures ({
-        let m = vector_elems_end(p, at, rem);
-        let w = num_end(p.skip(m));
-        vector_elems_end(p, at, (rem + 1) as nat) == if w <= 0 { -1int } else { m + w }
-    })
-    decreases rem
-{
-    if rem == 0nat {
-        assert(vector_elems_end(p, at, rem) == at);
-        assert(vector_elems_end(p, at, 1nat) == ({
-            let w = num_end(p.skip(at));
-            if w <= 0 { -1int } else { vector_elems_end(p, at + w, 0nat) }
-        }));
-    } else {
-        assert(at <= p.len());
-        let w0 = num_end(p.skip(at));
-        assert(w0 > 0);
-        assert(vector_elems_end(p, at, rem) == vector_elems_end(p, at + w0, (rem - 1) as nat));
-        assert(vector_elems_end(p, at, (rem + 1) as nat)
-            == vector_elems_end(p, at + w0, rem));
-        lemma_vector_extend(p, at + w0, (rem - 1) as nat);
-    }
-}
-
 /// A count-led key: `u32` big-endian component count, then that many Num keys.
 /// Vector mints here.
 // CONSTRUCT: SealedProduct VectorKey
@@ -1990,13 +1967,13 @@ impl VectorKey {
     /// Mint from component keys. Each component must already be a complete Num
     /// key; the count is written, never inferred, and the scan is proven to
     /// land exactly on the end.
-    pub fn mint(tag: u8, comps: &Vec<Vec<u8>>) -> (r: VectorKey)
+    /// Mint from normalised components. The count is written, never inferred,
+    /// and the stride is fixed, so the payload length is arithmetic, not a walk.
+    pub fn mint(tag: u8, comps: &Vec<[u8; 8]>) -> (r: VectorKey)
         requires
             tag >= TAG_MIN,
             shape_of(tag) == Some(KeyShape::CountLed),
             comps@.len() <= 0xFFFF_FFFFu32,
-            forall|i: int| 0 <= i < comps@.len()
-                ==> #[trigger] num_end(comps@[i]@) == comps@[i]@.len(),
         ensures r.tag() == tag
     {
         let dim: u32 = comps.len() as u32;
@@ -2012,49 +1989,24 @@ impl VectorKey {
                     + ((dim >> 8) as u8) as nat * 256
                     + (dim as u8) as nat == dim as nat) by (bit_vector);
             }
-            assert(vector_elems_end(out@, 4, 0nat) == 4);
         }
         let mut i: usize = 0;
         while i < comps.len()
             invariant
                 0 <= i <= comps@.len(),
                 comps@.len() == dim as nat,
-                out@.len() >= 4,
+                out@.len() == 4 + 8 * i,
                 be32(out@) == dim as nat,
-                vector_elems_end(out@, 4, i as nat) == out@.len(),
-                forall|k: int| 0 <= k < comps@.len()
-                    ==> #[trigger] num_end(comps@[k]@) == comps@[k]@.len(),
             decreases comps@.len() - i
         {
-            let ghost before = out@;
-            let c = &comps[i];
+            let c = comps[i];
             let mut j: usize = 0;
-            while j < c.len()
-                invariant
-                    0 <= j <= c@.len(),
-                    c@ =~= comps@[i as int]@,
-                    out@ =~= before + c@.take(j as int),
-                decreases c@.len() - j
+            while j < 8
+                invariant 0 <= j <= 8, out@.len() == 4 + 8 * i + j, be32(out@) == dim as nat,
+                decreases 8 - j
             {
                 out.push(c[j]);
-                proof { assert(c@.take(j + 1) =~= c@.take(j as int).push(c@[j as int])); }
                 j = j + 1;
-            }
-            proof {
-                assert(c@.take(c@.len() as int) =~= c@);
-                assert(out@ =~= before + c@);
-                assert(is_prefix(before, out@)) by { lemma_prefix_of_self_plus(before, c@); }
-                assert(be32(out@) == be32(before)) by {
-                    lemma_prefix_index(before, out@, 0);
-                    lemma_prefix_index(before, out@, 1);
-                    lemma_prefix_index(before, out@, 2);
-                    lemma_prefix_index(before, out@, 3);
-                }
-                lemma_vector_elems_local(before, out@, 4, i as nat);
-                assert(vector_elems_end(out@, 4, i as nat) == before.len());
-                lemma_vector_extend(out@, 4, i as nat);
-                assert(out@.skip(before.len() as int) =~= c@);
-                assert(num_end(c@) == c@.len());
             }
             i = i + 1;
         }
@@ -2640,38 +2592,8 @@ pub fn scan_vector(p: &[u8]) -> (r: Option<usize>)
     let dim: u64 = (p[0] as u64) * 16777216 + (p[1] as u64) * 65536
         + (p[2] as u64) * 256 + (p[3] as u64);
     proof { assert(be32(p@) == dim as nat); }
-    let mut at: usize = 4;
-    let mut seen: u64 = 0;
-    while seen < dim
-        invariant
-            0 <= seen <= dim,
-            4 <= at <= p@.len(),
-            be32(p@) == dim as nat,
-            vector_elems_end(p@, 4, dim as nat)
-                == vector_elems_end(p@, at as int, (dim - seen) as nat),
-        decreases dim - seen
-    {
-        let rest = vstd::slice::slice_subrange(p, at, p.len());
-        proof { assert(rest@ =~= p@.skip(at as int)); }
-        let w = match scan_num(rest) {
-            Some(n) => n,
-            None => {
-                proof { assert(vector_elems_end(p@, at as int, (dim - seen) as nat) == -1); }
-                return None;
-            }
-        };
-        if w == 0 {
-            return None;
-        }
-        proof {
-            assert(vector_elems_end(p@, at as int, (dim - seen) as nat)
-                == vector_elems_end(p@, at as int + w as int, (dim - seen - 1) as nat));
-        }
-        at = at + w;
-        seen = seen + 1;
-    }
-    proof { assert(vector_elems_end(p@, at as int, 0nat) == at as int); }
-    Some(at)
+    let need: u64 = 4 + 8 * dim;
+    if (p.len() as u64) < need { None } else { Some(need as usize) }
 }
 
 /// Bytes the interval payload at the front of `p` occupies.
@@ -2685,37 +2607,54 @@ pub fn scan_interval(p: &[u8]) -> (r: Option<usize>)
     if p.len() == 0 {
         return None;
     }
-    if p[0] == 0x01 {
+    if p[0] == IV_EMPTY {
         return Some(1);
     }
-    if p[0] != 0x02 {
+    if p[0] != IV_BOUNDED {
         return None;
     }
-    let a = match bound_end(p, 1) {
+    let a = match lo_end(p, 1) {
         Some(n) => n,
         None => return None,
     };
-    match bound_end(p, a) {
-        Some(n) => Some(n),
-        None => None,
-    }
+    hi_end(p, a)
 }
 
-/// One interval end: `0x01` unbounded, or `0x02` and eight bytes.
-fn bound_end(p: &[u8], at: usize) -> (r: Option<usize>)
+/// The lower end. Unbounded is negative infinity, below every instant.
+fn lo_end(p: &[u8], at: usize) -> (r: Option<usize>)
     ensures
         match r {
-            Some(n) => interval_bound_end(p@, at as int) == n as int && n <= p.len(),
-            None => interval_bound_end(p@, at as int) < 0,
+            Some(n) => lo_bound_end(p@, at as int) == n as int && n <= p.len(),
+            None => lo_bound_end(p@, at as int) < 0,
         },
 {
     if at >= p.len() {
         return None;
     }
-    if p[at] == 0x01 {
+    if p[at] == LO_UNBOUNDED {
         Some(at + 1)
-    } else if p[at] == 0x02 {
+    } else if p[at] == LO_AT {
         if p.len() < 9 || at > p.len() - 9 { None } else { Some(at + 9) }
+    } else {
+        None
+    }
+}
+
+/// The upper end. Unbounded is positive infinity, above every instant.
+fn hi_end(p: &[u8], at: usize) -> (r: Option<usize>)
+    ensures
+        match r {
+            Some(n) => hi_bound_end(p@, at as int) == n as int && n <= p.len(),
+            None => hi_bound_end(p@, at as int) < 0,
+        },
+{
+    if at >= p.len() {
+        return None;
+    }
+    if p[at] == HI_AT {
+        if p.len() < 9 || at > p.len() - 9 { None } else { Some(at + 9) }
+    } else if p[at] == HI_UNBOUNDED {
+        Some(at + 1)
     } else {
         None
     }
