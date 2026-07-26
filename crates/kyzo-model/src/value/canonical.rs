@@ -696,7 +696,7 @@ proof fn lemma_prefix_skip(a: Seq<u8>, b: Seq<u8>, n: int)
 // CONSTRUCT: ClosedSum Shape
 pub enum Shape {
     /// Exactly `n` payload bytes.
-    Fixed(nat),
+    Fixed(usize),
     /// An escaped body terminated by `0x00 0x00` — the reader of [`enc_bytes`].
     Delimited,
     /// One shape, then another at the offset the first ends.
@@ -959,21 +959,21 @@ proof fn lemma_marked_key(bs: Branches, b: u8)
 /// is a `Row`, and a value that carries a tie-break sorts as a `Product` with
 /// the tie-break last.
 pub open spec fn grammar() -> Branches {
-    alt(0x05, Shape::Fixed(0nat),                                   // Null
-    alt(0x08, Shape::Fixed(0nat),                                   // False
-    alt(0x09, Shape::Fixed(0nat),                                   // True
+    alt(0x05, Shape::Fixed(0),                                   // Null
+    alt(0x08, Shape::Fixed(0),                                   // False
+    alt(0x09, Shape::Fixed(0),                                   // True
     alt(0x10, num_shape(),                                          // Num
     alt(0x18, Shape::Delimited,                                     // Str
     alt(0x20, Shape::Delimited,                                     // Bytes
-    alt(0x28, Shape::Fixed(16nat),                                  // Uuid
-    alt(0x30, prod(Shape::Delimited, Shape::Fixed(1nat)),           // Regex: pattern, then flags
+    alt(0x28, Shape::Fixed(16),                                  // Uuid
+    alt(0x30, prod(Shape::Delimited, Shape::Fixed(1)),           // Regex: pattern, then flags
     alt(0x38, Shape::Tagged,                                        // Json: a value, restricted
-    alt(0x40, Shape::Fixed(32nat),                                  // Vector
+    alt(0x40, Shape::Fixed(32),                                  // Vector
     alt(0x48, row(Shape::Tagged),                                   // List
     alt(0x50, row(Shape::Tagged),                                   // Set
-    alt(0x58, Shape::Fixed(9nat),                                   // Validity
+    alt(0x58, Shape::Fixed(9),                                   // Validity
     alt(0x60, interval_shape(),                                     // Interval
-    alt(0x68, Shape::Fixed(8nat),                                   // Geometry
+    alt(0x68, Shape::Fixed(8),                                   // Geometry
     Branches::End)))))))))))))))
 }
 
@@ -983,9 +983,9 @@ pub open spec fn grammar() -> Branches {
 /// it, so no ordering convention has to be invented for one.
 pub open spec fn num_shape() -> Shape {
     Shape::Sum(Box::new(
-        alt(0x01, Shape::Fixed(12nat),
-        alt(0x02, Shape::Fixed(1nat),
-        alt(0x03, Shape::Fixed(12nat),
+        alt(0x01, Shape::Fixed(12),
+        alt(0x02, Shape::Fixed(1),
+        alt(0x03, Shape::Fixed(12),
         Branches::End)))))
 }
 
@@ -995,7 +995,7 @@ pub open spec fn num_shape() -> Shape {
 /// against a bounded end.
 pub open spec fn interval_shape() -> Shape {
     Shape::Sum(Box::new(
-        alt(0x01, Shape::Fixed(0nat),                               // empty
+        alt(0x01, Shape::Fixed(0),                               // empty
         alt(0x02, prod(lo_shape(), hi_shape()),                     // bounded
         Branches::End))))
 }
@@ -1003,16 +1003,16 @@ pub open spec fn interval_shape() -> Shape {
 /// Unbounded below sorts under every instant, so its marker is the lower one.
 pub open spec fn lo_shape() -> Shape {
     Shape::Sum(Box::new(
-        alt(0x01, Shape::Fixed(0nat),
-        alt(0x02, Shape::Fixed(8nat),
+        alt(0x01, Shape::Fixed(0),
+        alt(0x02, Shape::Fixed(8),
         Branches::End))))
 }
 
 /// Unbounded above sorts over every instant, so its marker is the higher one.
 pub open spec fn hi_shape() -> Shape {
     Shape::Sum(Box::new(
-        alt(0x02, Shape::Fixed(8nat),
-        alt(0x03, Shape::Fixed(0nat),
+        alt(0x02, Shape::Fixed(8),
+        alt(0x03, Shape::Fixed(0),
         Branches::End))))
 }
 
@@ -1606,12 +1606,6 @@ pub fn seal_sequence(tag: SeqTag, elems: &Vec<CanonicalBytes>)
 
 
 
-/// Nesting a reader will descend. Deeper input is refused, never followed: the
-/// scanners are recursive descent and an unbounded one is a stack overflow a
-/// writer chooses. Refusing is sound in one direction only, which is the
-/// direction that matters — a scanner may reject, it may never accept a reading
-/// the grammar does not give.
-pub const MAX_DEPTH: u32 = 128;
 
 
 /// Escape a variable-length payload into the order-preserving, self-delimiting
@@ -1643,6 +1637,312 @@ pub fn escape(s: &[u8]) -> (r: Vec<u8>)
     out.push(0u8);
     proof { assert(s@.take(s.len() as int) =~= s@); }
     out
+}
+
+// ================================ the scanner ================================
+//
+// The grammar above is a specification; this is the one executable reader
+// proven against it. [`theorem_prefix_code`] already establishes that no byte
+// string has two readings, so a reader that agrees with `shape_end` is the only
+// reader there can be.
+
+/// The grammar, at exec. One value, built once, matching [`grammar`] exactly.
+pub fn grammar_exec() -> (r: Branches)
+    ensures r == grammar()
+{
+    let num = Shape::Sum(Box::new(
+        alt_exec(0x01, Shape::Fixed(12),
+        alt_exec(0x02, Shape::Fixed(1),
+        alt_exec(0x03, Shape::Fixed(12),
+        Branches::End)))));
+    let lo = Shape::Sum(Box::new(
+        alt_exec(0x01, Shape::Fixed(0),
+        alt_exec(0x02, Shape::Fixed(8),
+        Branches::End))));
+    let hi = Shape::Sum(Box::new(
+        alt_exec(0x02, Shape::Fixed(8),
+        alt_exec(0x03, Shape::Fixed(0),
+        Branches::End))));
+    let iv = Shape::Sum(Box::new(
+        alt_exec(0x01, Shape::Fixed(0),
+        alt_exec(0x02, Shape::Product(Box::new(lo), Box::new(hi)),
+        Branches::End))));
+    alt_exec(0x05, Shape::Fixed(0),
+    alt_exec(0x08, Shape::Fixed(0),
+    alt_exec(0x09, Shape::Fixed(0),
+    alt_exec(0x10, num,
+    alt_exec(0x18, Shape::Delimited,
+    alt_exec(0x20, Shape::Delimited,
+    alt_exec(0x28, Shape::Fixed(16),
+    alt_exec(0x30, Shape::Product(Box::new(Shape::Delimited), Box::new(Shape::Fixed(1))),
+    alt_exec(0x38, Shape::Tagged,
+    alt_exec(0x40, Shape::Fixed(32),
+    alt_exec(0x48, Shape::Row(Box::new(Shape::Tagged)),
+    alt_exec(0x50, Shape::Row(Box::new(Shape::Tagged)),
+    alt_exec(0x58, Shape::Fixed(9),
+    alt_exec(0x60, iv,
+    alt_exec(0x68, Shape::Fixed(8),
+    Branches::End)))))))))))))))
+}
+
+fn alt_exec(k: u8, s: Shape, rest: Branches) -> (r: Branches)
+    ensures r == alt(k, s, rest)
+{ Branches::Alt(k, Box::new(s), Box::new(rest)) }
+
+/// The branch a lead byte selects, at exec.
+pub fn branch_lookup(bs: &Branches, b: u8) -> (r: Option<&Shape>)
+    ensures
+        match r {
+            Some(s) => branch_of(*bs, b) == Some(*s),
+            None => branch_of(*bs, b) is None,
+        },
+    decreases *bs
+{
+    match bs {
+        Branches::End => None,
+        Branches::Alt(k, s, rest) => if *k == b { Some(&**s) } else { branch_lookup(&**rest, b) },
+    }
+}
+
+/// Where the escaped body at the front of `p` ends. Total over every byte
+/// sequence: no panic, no unbounded read.
+pub fn delim_scan(p: &[u8]) -> (r: Option<usize>)
+    ensures
+        match r {
+            Some(n) => delim_end(p@) == n as int && n <= p.len(),
+            None => delim_end(p@) < 0,
+        },
+{
+    let mut i: usize = 0;
+    proof { assert(p@.skip(0int) =~= p@); }
+    while i < p.len()
+        invariant
+            0 <= i <= p@.len(),
+            delim_end(p@) == if delim_end(p@.skip(i as int)) < 0 { -1int }
+                             else { i + delim_end(p@.skip(i as int)) },
+        decreases p.len() - i
+    {
+        proof { assert(p@.skip(i as int)[0] == p@[i as int]); }
+        if i + 1 >= p.len() {
+            proof { assert(p@.skip(i as int).len() < 2); }
+            return None;
+        }
+        proof { assert(p@.skip(i as int)[1] == p@[i as int + 1]); }
+        if p[i] == STRUCT_ESC {
+            if p[i + 1] == STRUCT_ESC {
+                proof { assert(delim_end(p@.skip(i as int)) == 2); }
+                return Some(i + 2);
+            }
+            if p[i + 1] != 0xFF {
+                return None;
+            }
+            proof { assert(p@.skip(i as int).skip(2) =~= p@.skip(i as int + 2)); }
+            i = i + 2;
+        } else {
+            proof { assert(p@.skip(i as int).skip(1) =~= p@.skip(i as int + 1)); }
+            i = i + 1;
+        }
+    }
+    proof { assert(p@.skip(i as int).len() < 2); }
+    None
+}
+
+/// Nesting a reader will descend. Deeper input is refused, never followed: the
+/// reader is recursive descent and an unbounded one is a stack overflow a
+/// writer chooses. Refusing is sound in one direction only, which is the
+/// direction that matters — a reader may reject, it may never accept a reading
+/// the grammar does not give.
+pub const MAX_DEPTH: u32 = 128;
+
+/// Where the shape at the front of `p` ends, or `None` if `p` does not open
+/// with one. One function; the whole grammar. Total over every byte sequence.
+pub fn shape_scan(g: &Branches, s: &Shape, p: &[u8], depth: u32) -> (r: Option<usize>)
+    ensures
+        match r {
+            Some(n) => shape_end(*g, *s, p@) == n as int && n <= p.len(),
+            None => true,
+        },
+    decreases p@.len(), shape_sz(*s)
+{
+    if depth >= MAX_DEPTH {
+        return None;
+    }
+    match s {
+        Shape::Fixed(n) => if p.len() >= *n { Some(*n) } else { None },
+        Shape::Delimited => delim_scan(p),
+        Shape::Product(a, b) => {
+            let j = match shape_scan(g, &**a, p, depth) {
+                Some(n) => n,
+                None => return None,
+            };
+            let rest = vstd::slice::slice_subrange(p, j, p.len());
+            proof { assert(rest@ =~= p@.skip(j as int)); }
+            match shape_scan(g, &**b, rest, depth) {
+                Some(k) => Some(j + k),
+                None => None,
+            }
+        }
+        Shape::Sum(bs) => sum_scan(g, &**bs, p, depth),
+        Shape::Tagged => sum_scan(g, g, p, depth),
+        Shape::Row(e) => {
+            // A row is read by iteration, not recursion: its length is chosen
+            // by whoever wrote the bytes, and a recursive tail would let them
+            // pick the stack depth.
+            let mut at: usize = 0;
+            proof { assert(p@.skip(0int) =~= p@); }
+            loop
+                invariant
+                    0 <= at <= p.len(),
+                    depth < MAX_DEPTH,
+                    *s == Shape::Row(*e),
+                    shape_end(*g, *s, p@) == if shape_end(*g, *s, p@.skip(at as int)) < 0 { -1int }
+                                             else { at + shape_end(*g, *s, p@.skip(at as int)) },
+                decreases p.len() - at
+            {
+                if at >= p.len() {
+                    proof { assert(p@.skip(at as int).len() == 0); }
+                    return None;
+                }
+                let tail = vstd::slice::slice_subrange(p, at, p.len());
+                proof {
+                    assert(tail@ =~= p@.skip(at as int));
+                    assert(tail@[0] == p@[at as int]);
+                }
+                if tail[0] == STRUCT_END {
+                    return Some(at + 1);
+                }
+                let j = match shape_scan(g, &**e, tail, depth + 1) {
+                    Some(n) => n,
+                    None => return None,
+                };
+                if j == 0 {
+                    return None;
+                }
+                proof { assert(p@.skip(at as int).skip(j as int) =~= p@.skip(at as int + j as int)); }
+                at = at + j;
+            }
+        }
+    }
+}
+
+/// One lead byte selects a branch of `bs`, which reads what follows it.
+pub fn sum_scan(g: &Branches, bs: &Branches, p: &[u8], depth: u32) -> (r: Option<usize>)
+    ensures
+        match r {
+            Some(n) => sum_end(*g, *bs, p@) == n as int && n <= p.len(),
+            None => true,
+        },
+    decreases p@.len(), 0nat
+{
+    if p.len() == 0 || depth >= MAX_DEPTH {
+        return None;
+    }
+    let t = match branch_lookup(bs, p[0]) {
+        Some(sh) => sh,
+        None => return None,
+    };
+    let body = vstd::slice::slice_subrange(p, 1, p.len());
+    proof { assert(body@ =~= p@.skip(1)); }
+    match shape_scan(g, t, body, depth + 1) {
+        Some(n) => Some(1 + n),
+        None => None,
+    }
+}
+
+/// Where the complete encoding at the front of `p` ends.
+pub fn scan_value(p: &[u8]) -> (r: Option<usize>)
+    ensures
+        match r {
+            Some(n) => scan(p@) == n as int && n <= p.len(),
+            None => true,
+        },
+{
+    let g = grammar_exec();
+    sum_scan(&g, &g, p, 0)
+}
+
+/// A kind's body: bytes the tag's shape measures exactly.
+///
+/// The one door. A kind does not get its own mint and does not get its own
+/// obligation — it names a tag, and the grammar decides whether these bytes are
+/// a body of it.
+// CONSTRUCT: SealedProduct ShapedKey
+pub struct ShapedKey {
+    tag: u8,
+    body: Vec<u8>,
+}
+
+// CONSTRUCT: ImplBlock ShapedKey
+impl ShapedKey {
+    pub closed spec fn tag(self) -> u8 { self.tag }
+    pub closed spec fn body(self) -> Seq<u8> { self.body@ }
+
+    #[verifier::type_invariant]
+    closed spec fn wf_key(self) -> bool { !is_row_tag(self.tag) && valid_body(self.tag, self.body@) }
+
+    /// Refuse anything the grammar does not read exactly. A row tag is refused
+    /// here because a row is sealed by [`seal_sequence`], from elements that
+    /// are already complete.
+    pub fn mint(tag: u8, body: Vec<u8>) -> (r: Option<ShapedKey>)
+        ensures
+            match r {
+                Some(k) => k.tag() == tag && k.body() =~= body@,
+                None => true,
+            },
+    {
+        let g = grammar_exec();
+        let sh = match branch_lookup(&g, tag) {
+            Some(s) => s,
+            None => return None,
+        };
+        match sh {
+            Shape::Row(_) => return None,
+            _ => {}
+        }
+        proof { assert(!is_row_tag(tag)); }
+        let n = match shape_scan(&g, sh, body.as_slice(), 0) {
+            Some(n) => n,
+            None => return None,
+        };
+        if n != body.len() {
+            return None;
+        }
+        Some(ShapedKey { tag, body })
+    }
+
+    pub fn tag_byte(&self) -> (t: u8)
+        ensures t == self.tag(), !is_row_tag(t), valid_body(t, self.body())
+    { proof { use_type_invariant(self); } self.tag }
+}
+
+/// Seal a scalar. The result is a complete encoding by construction.
+// CONSTRUCT: Mint seal
+pub fn seal(k: &ShapedKey) -> (r: CanonicalBytes)
+    ensures r.view() =~= seq![k.tag()] + k.body()
+{
+    proof { use_type_invariant(k); }
+    let mut out: Vec<u8> = Vec::new();
+    let t = k.tag_byte();
+    out.push(t);
+    let mut i: usize = 0;
+    while i < k.body.len()
+        invariant
+            0 <= i <= k.body@.len(),
+            out@ =~= seq![t] + k.body@.take(i as int),
+        decreases k.body@.len() - i
+    {
+        out.push(k.body[i]);
+        proof { assert(k.body@.take(i + 1) =~= k.body@.take(i as int).push(k.body@[i as int])); }
+        i = i + 1;
+    }
+    proof {
+        assert(k.body@.take(k.body@.len() as int) =~= k.body@);
+        let v = Val::S(k.tag(), k.body());
+        assert(wf(v));
+        assert(enc(v) =~= out@);
+        lemma_enc_complete(v);
+    }
+    CanonicalBytes { bytes: out }
 }
 
 } // verus!
