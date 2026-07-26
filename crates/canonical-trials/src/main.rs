@@ -503,7 +503,7 @@ fn attack_nan_is_the_top_of_number(t: &mut Trials) {
     let neg = seal_num_negative(&[0x00; 12]);
     let zero = seal_num_zero(0x00);
     let pos = seal_num_positive(&[0xFF; 12]);
-    let nan = seal_num_nan();
+    let nan = seal_num_nan(0x01);
 
     t.check(
         "negative sorts under zero",
@@ -522,7 +522,8 @@ fn attack_nan_is_the_top_of_number(t: &mut Trials) {
     );
     // Tag plus class, and nothing after it. Zero, by contrast, is three: it
     // still carries the int/float tie-break, because 0 and 0.0 differ.
-    t.check("NaN is the tag and the class byte", nan.as_bytes().len() == 2);
+    t.check("NaN is tag, class and the repr byte number.rs writes",
+        nan.as_bytes().len() == 3);
     t.check("zero still carries its tie-break", zero.as_bytes().len() == 3);
     // Exhaustive over the negative magnitude's lead byte: nothing in the
     // negative class may climb past zero.

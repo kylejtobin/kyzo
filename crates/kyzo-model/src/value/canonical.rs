@@ -96,16 +96,21 @@ macro_rules! branch_table {
 
 // Four classes, in order: negative, zero, positive, NaN. NaN sorts above every
 // number because the store needs a TOTAL order over every value it can hold,
-// and there is no number it could sit beside. Zero carries one byte, the
-// int/float tie-break, because 0 and 0.0 are different values. NaN carries
-// none: only a float is ever NaN, so a repr byte there would be a constant,
-// and a constant byte is weight that cannot decide anything.
+// and there is no number it could sit beside.
+//
+// Every class carries the int/float tie-break byte, because `Num::encode_key`
+// writes one for every class. That byte IS a constant for NaN — only a float is
+// ever NaN — and a constant byte decides nothing, so it looks like weight to
+// drop. It is not this file's to drop. `number.rs` owns the number payload and
+// this file frames it; removing the byte here while `Num::decode_key` still
+// expects it makes two authorities disagree about the same bytes, which is the
+// defect, not the fix. Dropping it is a change to the number law, made there.
 macro_rules! num_table {
     () => { branch_table!(
         0x01 => Shape::Fixed(12),
         0x02 => Shape::Fixed(1),
         0x03 => Shape::Fixed(12),
-        0x04 => Shape::Fixed(0),
+        0x04 => Shape::Fixed(1),
     ) };
 }
 macro_rules! lo_table {
@@ -2137,7 +2142,7 @@ pub proof fn lemma_branch_shapes()
         branch_of(num_branches(), 0x01) == Some(Shape::Fixed(12)),
         branch_of(num_branches(), 0x02) == Some(Shape::Fixed(1)),
         branch_of(num_branches(), 0x03) == Some(Shape::Fixed(12)),
-        branch_of(num_branches(), 0x04) == Some(Shape::Fixed(0)),
+        branch_of(num_branches(), 0x04) == Some(Shape::Fixed(1)),
         branch_of(interval_branches(), 0x01) == Some(Shape::Fixed(0)),
         branch_of(interval_branches(), 0x02) == Some(prod(lo_shape(), hi_shape())),
         branch_of(lo_branches(), 0x01) == Some(Shape::Fixed(0)),
@@ -2148,7 +2153,7 @@ pub proof fn lemma_branch_shapes()
     assert(branch_of(num_branches(), 0x01) == Some(Shape::Fixed(12))) by (compute_only);
     assert(branch_of(num_branches(), 0x02) == Some(Shape::Fixed(1))) by (compute_only);
     assert(branch_of(num_branches(), 0x03) == Some(Shape::Fixed(12))) by (compute_only);
-    assert(branch_of(num_branches(), 0x04) == Some(Shape::Fixed(0))) by (compute_only);
+    assert(branch_of(num_branches(), 0x04) == Some(Shape::Fixed(1))) by (compute_only);
     assert(branch_of(interval_branches(), 0x01) == Some(Shape::Fixed(0))) by (compute_only);
     assert(branch_of(interval_branches(), 0x02) == Some(prod(lo_shape(), hi_shape())))
         by (compute_only);
@@ -2219,11 +2224,12 @@ pub fn seal_num_positive(mag: &[u8; 12]) -> (r: CanonicalBytes) {
 
 /// Not a number, and above every number.
 ///
-/// There is one NaN value, so the class byte is the whole of it. No door takes
-/// a NaN payload because there is nothing about a NaN to write down.
-pub fn seal_num_nan() -> (r: CanonicalBytes) {
+/// Takes the representation byte rather than writing one, because the byte is
+/// `number.rs`'s and this door is only the frame. A caller that has a NaN got
+/// it from `Num`, so it has the byte `Num` would write.
+pub fn seal_num_nan(repr: u8) -> (r: CanonicalBytes) {
     proof { lemma_tag_shapes(); lemma_branch_shapes(); }
-    let inner = Body::fixed(Vec::new());
+    let inner = Body::fixed(owned(&[repr]));
     seal(TAG_NUM, Body::select(Ghost(num_branches()), 0x04, inner))
 }
 
