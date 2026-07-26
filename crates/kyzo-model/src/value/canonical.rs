@@ -2101,6 +2101,7 @@ proof fn lemma_json_arr_of_row(r: Seq<Seq<u8>>, rest: Seq<u8>)
     } else {
         let head = r[0];
         let tail_buf = (cat(r.drop_first()) + seq![STRUCT_END]) + rest;
+        assert(json_end(r[0]) == r[0].len() > 0);
         assert(json_end(head) == head.len() > 0);
         lemma_json_head(head);
         assert(buf =~= head + tail_buf) by { assert(cat(r) =~= head + cat(r.drop_first())); }
@@ -2268,6 +2269,8 @@ impl JsonValueBytes {
         b.push(STRUCT_END);
         proof {
             assert(views.take(elems@.len() as int) =~= views);
+            assert forall|k: int| 0 <= k < views.len()
+                implies #[trigger] json_end(views[k]) == views[k].len() > 0 by {}
             lemma_json_arr_of_row(views, Seq::empty());
             assert(b@[0] == JARR);
             assert(b@.skip(1) =~= (cat(views) + seq![STRUCT_END]) + Seq::<u8>::empty());
@@ -2423,6 +2426,403 @@ impl KindKey for JsonKey {
     proof fn law_key(self) {}
     fn tag_byte(&self) -> (t: u8) { proof { use_type_invariant(self); } self.tag }
     fn emit(&self) -> (r: Vec<u8>) { self.bytes.clone() }
+}
+
+// ================================ the scanner ================================
+//
+// The grammar above is a specification; these are the executable readers proven
+// against it. `theorem_prefix_code` already establishes that no byte string has
+// two readings, so a scanner that agrees with `scan` is the only scanner there
+// can be.
+
+/// How many bytes the escaped payload at the front of `p` occupies, or `None`
+/// if it does not hold a complete one. Total over every byte sequence.
+pub fn scan_escaped(p: &[u8]) -> (r: Option<usize>)
+    ensures
+        match r {
+            Some(n) => esc_end(p@) == n as int && n <= p.len(),
+            None => esc_end(p@) < 0,
+        },
+{
+    let mut i: usize = 0;
+    proof { assert(p@.skip(0int) =~= p@); }
+    while i < p.len()
+        invariant
+            0 <= i <= p@.len(),
+            esc_end(p@) == if esc_end(p@.skip(i as int)) < 0 { -1int }
+                           else { i + esc_end(p@.skip(i as int)) },
+        decreases p.len() - i
+    {
+        proof { assert(p@.skip(i as int)[0] == p@[i as int]); }
+        if p[i] == 0x00 {
+            if i + 1 >= p.len() {
+                proof { assert(p@.skip(i as int).len() < 2); }
+                return None;
+            }
+            proof { assert(p@.skip(i as int)[1] == p@[i as int + 1]); }
+            if p[i + 1] == 0x00 {
+                proof { assert(esc_end(p@.skip(i as int)) == 2); }
+                return Some(i + 2);
+            }
+            if p[i + 1] != 0xFF {
+                return None;
+            }
+            proof { assert(p@.skip(i as int).skip(2) =~= p@.skip(i as int + 2)); }
+            i = i + 2;
+        } else {
+            proof { assert(p@.skip(i as int).skip(1) =~= p@.skip(i as int + 1)); }
+            i = i + 1;
+        }
+    }
+    proof { assert(p@.skip(i as int).len() == 0); }
+    None
+}
+
+/// Bytes the number at the front of `p` occupies. The class byte selects it.
+pub fn scan_num(p: &[u8]) -> (r: Option<usize>)
+    ensures
+        match r {
+            Some(n) => num_end(p@) == n as int && n <= p.len(),
+            None => num_end(p@) < 0,
+        },
+{
+    if p.len() == 0 {
+        return None;
+    }
+    let c = p[0];
+    let w: usize = if c == 0x02 || c == 0x04 {
+        2
+    } else if c == 0x01 || c == 0x03 {
+        13
+    } else {
+        return None;
+    };
+    if p.len() < w { None } else { Some(w) }
+}
+
+/// Nesting a reader will descend. Deeper input is refused, never followed: the
+/// scanners are recursive descent and an unbounded one is a stack overflow a
+/// writer chooses. Refusing is sound in one direction only, which is the
+/// direction that matters — a scanner may reject, it may never accept a reading
+/// the grammar does not give.
+pub const MAX_DEPTH: u32 = 128;
+
+/// Bytes the JSON value at the front of `p` occupies.
+pub fn scan_json(p: &[u8], depth: u32) -> (r: Option<usize>)
+    ensures
+        match r {
+            Some(n) => json_end(p@) == n as int && n <= p.len(),
+            None => true,
+        },
+    decreases p.len(), 0int
+{
+    if p.len() == 0 || depth >= MAX_DEPTH {
+        return None;
+    }
+    let m = p[0];
+    let body = vstd::slice::slice_subrange(p, 1, p.len());
+    proof { assert(body@ =~= p@.skip(1)); }
+    if m == JNULL || m == JFALSE || m == JTRUE {
+        Some(1)
+    } else if m == JNUM {
+        match scan_num(body) {
+            Some(n) => if n == 0 { None } else { Some(1 + n) },
+            None => None,
+        }
+    } else if m == JSTR {
+        match scan_escaped(body) {
+            Some(n) => if n == 0 { None } else { Some(1 + n) },
+            None => None,
+        }
+    } else if m == JARR {
+        match scan_json_arr(body, depth + 1) {
+            Some(n) => if n == 0 { None } else { Some(1 + n) },
+            None => None,
+        }
+    } else if m == JOBJ {
+        match scan_json_obj(body, depth + 1) {
+            Some(n) => if n == 0 { None } else { Some(1 + n) },
+            None => None,
+        }
+    } else {
+        None
+    }
+}
+
+/// Bytes the JSON array body at the front of `p` occupies, terminator included.
+pub fn scan_json_arr(p: &[u8], depth: u32) -> (r: Option<usize>)
+    ensures
+        match r {
+            Some(n) => json_arr(p@) == n as int && n <= p.len(),
+            None => true,
+        },
+    decreases p.len(), 1int
+{
+    if p.len() == 0 || depth >= MAX_DEPTH {
+        return None;
+    }
+    if p[0] == STRUCT_END {
+        return Some(1);
+    }
+    let j = match scan_json(p, depth) {
+        Some(n) => n,
+        None => return None,
+    };
+    if j == 0 || j > p.len() {
+        return None;
+    }
+    let rest = vstd::slice::slice_subrange(p, j, p.len());
+    proof { assert(rest@ =~= p@.skip(j as int)); }
+    match scan_json_arr(rest, depth) {
+        Some(n) => if n == 0 { None } else { Some(j + n) },
+        None => None,
+    }
+}
+
+/// Bytes the JSON object body at the front of `p` occupies, terminator
+/// included. Each key opens with `JSTR`, so a key can never be read as the
+/// terminator.
+pub fn scan_json_obj(p: &[u8], depth: u32) -> (r: Option<usize>)
+    ensures
+        match r {
+            Some(n) => json_obj(p@) == n as int && n <= p.len(),
+            None => true,
+        },
+    decreases p.len(), 1int
+{
+    if p.len() == 0 || depth >= MAX_DEPTH {
+        return None;
+    }
+    if p[0] == STRUCT_END {
+        return Some(1);
+    }
+    if p[0] != JSTR {
+        return None;
+    }
+    let after_marker = vstd::slice::slice_subrange(p, 1, p.len());
+    proof { assert(after_marker@ =~= p@.skip(1)); }
+    let k = match scan_escaped(after_marker) {
+        Some(n) => n,
+        None => return None,
+    };
+    if k == 0 || 1 + k > p.len() {
+        return None;
+    }
+    let after_key = vstd::slice::slice_subrange(p, 1 + k, p.len());
+    proof { assert(after_key@ =~= p@.skip(1 + k as int)); }
+    let j = match scan_json(after_key, depth) {
+        Some(n) => n,
+        None => return None,
+    };
+    if j == 0 || 1 + k + j > p.len() {
+        return None;
+    }
+    let rest = vstd::slice::slice_subrange(p, 1 + k + j, p.len());
+    proof { assert(rest@ =~= p@.skip(1 + k as int + j as int)); }
+    match scan_json_obj(rest, depth) {
+        Some(n) => if n == 0 { None } else { Some(1 + k + j + n) },
+        None => None,
+    }
+}
+
+/// Bytes the vector payload at the front of `p` occupies: a `u32` big-endian
+/// component count, then that many number keys.
+pub fn scan_vector(p: &[u8]) -> (r: Option<usize>)
+    ensures
+        match r {
+            Some(n) => vector_end(p@) == n as int && n <= p.len(),
+            None => vector_end(p@) < 0,
+        },
+{
+    if p.len() < 4 {
+        return None;
+    }
+    let dim: u64 = (p[0] as u64) * 16777216 + (p[1] as u64) * 65536
+        + (p[2] as u64) * 256 + (p[3] as u64);
+    proof { assert(be32(p@) == dim as nat); }
+    let mut at: usize = 4;
+    let mut seen: u64 = 0;
+    while seen < dim
+        invariant
+            0 <= seen <= dim,
+            4 <= at <= p@.len(),
+            be32(p@) == dim as nat,
+            vector_elems_end(p@, 4, dim as nat)
+                == vector_elems_end(p@, at as int, (dim - seen) as nat),
+        decreases dim - seen
+    {
+        let rest = vstd::slice::slice_subrange(p, at, p.len());
+        proof { assert(rest@ =~= p@.skip(at as int)); }
+        let w = match scan_num(rest) {
+            Some(n) => n,
+            None => {
+                proof { assert(vector_elems_end(p@, at as int, (dim - seen) as nat) == -1); }
+                return None;
+            }
+        };
+        if w == 0 {
+            return None;
+        }
+        proof {
+            assert(vector_elems_end(p@, at as int, (dim - seen) as nat)
+                == vector_elems_end(p@, at as int + w as int, (dim - seen - 1) as nat));
+        }
+        at = at + w;
+        seen = seen + 1;
+    }
+    proof { assert(vector_elems_end(p@, at as int, 0nat) == at as int); }
+    Some(at)
+}
+
+/// Bytes the interval payload at the front of `p` occupies.
+pub fn scan_interval(p: &[u8]) -> (r: Option<usize>)
+    ensures
+        match r {
+            Some(n) => interval_end(p@) == n as int && n <= p.len(),
+            None => interval_end(p@) < 0,
+        },
+{
+    if p.len() == 0 {
+        return None;
+    }
+    if p[0] == 0x01 {
+        return Some(1);
+    }
+    if p[0] != 0x02 {
+        return None;
+    }
+    let a = match bound_end(p, 1) {
+        Some(n) => n,
+        None => return None,
+    };
+    match bound_end(p, a) {
+        Some(n) => Some(n),
+        None => None,
+    }
+}
+
+/// One interval end: `0x01` unbounded, or `0x02` and eight bytes.
+fn bound_end(p: &[u8], at: usize) -> (r: Option<usize>)
+    ensures
+        match r {
+            Some(n) => interval_bound_end(p@, at as int) == n as int && n <= p.len(),
+            None => interval_bound_end(p@, at as int) < 0,
+        },
+{
+    if at >= p.len() {
+        return None;
+    }
+    if p[at] == 0x01 {
+        Some(at + 1)
+    } else if p[at] == 0x02 {
+        if p.len() < 9 || at > p.len() - 9 { None } else { Some(at + 9) }
+    } else {
+        None
+    }
+}
+
+/// Bytes the complete encoding at the front of `p` occupies, or `None` if `p`
+/// does not open with one. Total over every byte sequence: no panic, no
+/// unbounded read, and by [`theorem_prefix_code`] no second reading.
+pub fn scan_value(p: &[u8], depth: u32) -> (r: Option<usize>)
+    ensures
+        match r {
+            Some(n) => scan(p@) == n as int && n <= p.len(),
+            None => true,
+        },
+    decreases p.len(), 2int
+{
+    if p.len() == 0 || depth >= MAX_DEPTH {
+        return None;
+    }
+    let t = p[0];
+    if t < TAG_MIN {
+        return None;
+    }
+    let body = vstd::slice::slice_subrange(p, 1, p.len());
+    proof { assert(body@ =~= p@.skip(1)); }
+
+    let payload: Option<usize> = if t == 0x05 {
+        Some(0)
+    } else if t == 0x08 {
+        if body.len() >= 1 { Some(1) } else { None }
+    } else if t == 0x10 {
+        scan_num(body)
+    } else if t == 0x18 || t == 0x20 {
+        scan_escaped(body)
+    } else if t == 0x28 {
+        if body.len() >= 16 { Some(16) } else { None }
+    } else if t == 0x30 {
+        if body.len() == 0 {
+            None
+        } else {
+            let after = vstd::slice::slice_subrange(body, 1, body.len());
+            proof { assert(after@ =~= body@.skip(1)); }
+            match scan_escaped(after) {
+                Some(n) => if n == 0 { None } else { Some(1 + n) },
+                None => None,
+            }
+        }
+    } else if t == 0x38 {
+        match scan_json(body, depth + 1) {
+            Some(n) => if n == 0 || body.len() < 8 || n > body.len() - 8 {
+                None
+            } else {
+                Some(n + 8)
+            },
+            None => None,
+        }
+    } else if t == 0x40 {
+        scan_vector(body)
+    } else if t == 0x48 || t == 0x50 {
+        return match scan_seq(body, depth + 1) {
+            Some(n) => Some(1 + n),
+            None => None,
+        };
+    } else if t == 0x58 {
+        if body.len() >= 9 { Some(9) } else { None }
+    } else if t == 0x60 {
+        scan_interval(body)
+    } else if t == 0x68 {
+        if body.len() >= 8 { Some(8) } else { None }
+    } else {
+        None
+    };
+
+    match payload {
+        Some(n) => Some(1 + n),
+        None => None,
+    }
+}
+
+/// Bytes the sequence body at the front of `p` occupies, terminator included.
+pub fn scan_seq(p: &[u8], depth: u32) -> (r: Option<usize>)
+    ensures
+        match r {
+            Some(n) => scan_row_bytes(p@) == n as int && n <= p.len(),
+            None => true,
+        },
+    decreases p.len(), 3int
+{
+    if p.len() == 0 || depth >= MAX_DEPTH {
+        return None;
+    }
+    if p[0] == STRUCT_END {
+        return Some(1);
+    }
+    let j = match scan_value(p, depth) {
+        Some(n) => n,
+        None => return None,
+    };
+    if j == 0 || j > p.len() {
+        return None;
+    }
+    let rest = vstd::slice::slice_subrange(p, j, p.len());
+    proof { assert(rest@ =~= p@.skip(j as int)); }
+    match scan_seq(rest, depth) {
+        Some(n) => Some(j + n),
+        None => None,
+    }
 }
 
 /// Escape a variable-length payload into the order-preserving, self-delimiting
