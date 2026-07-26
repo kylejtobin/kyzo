@@ -31,7 +31,18 @@ IN_CONTAINER=(docker compose run --rm -T kyzo-dev)
 
 verdict() {
   # $1 = gate.log headline, $2 = gate-counts.txt body
-  printf '%s\n' "$1" > "$LOG"
+  #
+  # Line 2 stamps the tree the verdict describes. Without it a verdict is a
+  # claim about no particular tree: leave an old ACKNOWLEDGE behind, change
+  # anything, and the stop guard reads clearance it was never given. The stamp
+  # is what makes a green verdict expire.
+  sha="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+  if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+    state=dirty
+  else
+    state=clean
+  fi
+  printf '%s\nat %s %s\n' "$1" "$sha" "$state" > "$LOG"
   printf '%s\n' "$2" > "$COUNTS"
   printf '%s\n' "$1"
 }

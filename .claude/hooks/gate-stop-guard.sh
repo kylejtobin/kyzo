@@ -37,12 +37,39 @@ if [ -f "$STAMP" ]; then
   fi
 fi
 
-[ -f "$LOG" ] || exit 0
-head1="$(head -n 1 "$LOG")"
+# Clearance is one exact thing: a current ACKNOWLEDGE. Everything else blocks —
+# no log, an unreadable log, a headline in a vocabulary this script does not
+# know, or a green verdict describing a tree that is no longer this one. A
+# default-pass here is how the guard gets disarmed by accident: a leftover
+# gate.log from a deleted script once read "GATE: FAIL detector-did-not-run",
+# which matched neither arm and silently cleared every stop.
+head1=""
+stamp2=""
+if [ -f "$LOG" ]; then
+  head1="$(head -n 1 "$LOG")"
+  stamp2="$(sed -n '2p' "$LOG")"
+fi
+
+# "Current" is about the code, not about commits: a green verdict expires the
+# moment a source file changes under it. Requiring a committed tree instead
+# would nag through every working session without measuring anything more.
+newer="$(find "${CLAUDE_PROJECT_DIR:-.}/crates" -name '*.rs' -newer "$LOG" -print -quit 2>/dev/null)"
+if [ -n "$stamp2" ] && [ -z "$newer" ]; then
+  current=yes
+else
+  current=no
+fi
 
 case "$head1" in
-  "GATE: ACKNOWLEDGE"* ) exit 0 ;;
-  "GATE: ALARM"* )
+  "GATE: ACKNOWLEDGE"*)
+    [ "$current" = yes ] && exit 0
+    echo "$now" > "$STAMP"
+        why="source has changed since it was written (${newer#"${CLAUDE_PROJECT_DIR:-.}/"})"
+    [ -n "$stamp2" ] || why="it carries no stamp, so it describes no particular tree"
+    echo "GATE: ACKNOWLEDGE is stale — $why. Re-run \`just gate\`; a verdict about another tree is not clearance for this one." >&2
+    exit 2
+    ;;
+  "GATE: ALARM"*)
     echo "$now" > "$STAMP"
     # Echo the verdict verbatim. It is authored by crates/xtask/gate.sh, the
     # only thing holding both facts; recomposing it here from the counts file
@@ -51,5 +78,14 @@ case "$head1" in
     echo "$head1 — gate.log records what was found; it is never edited to change it" >&2
     exit 2
     ;;
-  *) exit 0 ;;
+  "")
+    echo "$now" > "$STAMP"
+    echo "GATE: no verdict — crates/xtask/gate.log is missing or empty. Run \`just gate\`. An absent verdict is not a passing one." >&2
+    exit 2
+    ;;
+  *)
+    echo "$now" > "$STAMP"
+    echo "GATE: unrecognised verdict '$head1'. gate.sh writes ACKNOWLEDGE or ALARM and nothing else; anything else means something other than the gate wrote this file. Run \`just gate\`." >&2
+    exit 2
+    ;;
 esac
