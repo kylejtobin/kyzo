@@ -2289,7 +2289,14 @@ pub fn seal_list(elems: &Vec<CanonicalBytes>) -> (r: CanonicalBytes)
     ensures r.view() =~= seq![TAG_LIST] + enc_row(elems@.map_values(|e: CanonicalBytes| e.view()))
 { proof { lemma_tag_shapes(); } seal(TAG_LIST, Body::row(elems)) }
 
-pub fn seal_set(elems: &Vec<CanonicalBytes>) -> (r: CanonicalBytes)
+/// The raw set door: a row under the set tag, in the order given.
+///
+/// `pub(crate)` because that order is the caller's, and a set has none. Two
+/// writings of one set value would seal to two byte strings, which the law
+/// forbids — equal values encode equal. Normalising is not a grammar property,
+/// so it is not provable here and does not belong here; the public path is
+/// [`super::codec::CanonicalSet`], whose only constructor sorts and dedups.
+pub(crate) fn seal_set(elems: &Vec<CanonicalBytes>) -> (r: CanonicalBytes)
     ensures r.view() =~= seq![TAG_SET] + enc_row(elems@.map_values(|e: CanonicalBytes| e.view()))
 { proof { lemma_tag_shapes(); } seal(TAG_SET, Body::row(elems)) }
 

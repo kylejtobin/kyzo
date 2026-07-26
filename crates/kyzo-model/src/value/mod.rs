@@ -53,6 +53,7 @@ mod bytes_qty;
 pub mod canonical;
 pub mod cell;
 pub mod code;
+pub mod codec;
 pub mod column;
 pub mod convert;
 #[cfg(test)]
