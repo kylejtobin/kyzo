@@ -1,208 +1,287 @@
-# Cleanup Report — one cut
+# Cleanup Report — cut to the named types, build up from there
 
-Investigation run against `../cozo` as the reference floor and `FEATURES.md` as the
-ceiling. Every number below came from a command in this repository or in `../cozo`.
-Estimates are labelled ESTIMATE and carry their basis. Nothing here is a guess
-presented as a measurement.
+Second pass. The first pass measured this tree against cozo's size and reported
+"89,427 excess lines" as the headline. That was the wrong ruler and the wrong
+unit, and this document says so before it says anything else.
 
----
-
-## 1. The two reference points (measured)
-
-|                                   |     cozo |     kyzo | ratio |
-| --------------------------------- | -------: | -------: | ----: |
-| total `.rs`                       |   73,911 |  209,725 | 2.84x |
-| less vendored data tables         |   47,979 |  183,773 | 3.83x |
-| less inline `#[cfg(test)]`        | **44,429** | **133,856** | **3.01x** |
-
-Vendored data tables excluded from both sides: cozo 25,932 (`fts/tokenizer/
-stop_word_filter/stopwords.rs` 21,885 + `ascii_folding_filter.rs` 4,047, MIT,
-stopwords-iso); kyzo 25,952 (the same two files, rehomed under
-`project/text/tokenizer/`). These are data, not architecture, and counting them
-flatters neither side.
-
-Inline test code separated because tests are **evidence**, judged by whether they
-can contradict us, not by purity. kyzo 49,917 (24% of the tree); cozo 3,550 (5%).
-
-**Architecture excess over the floor: 89,427 lines.**
-
-The floor is real: 44,429 lines of cozo architecture already deliver Datalog,
-semi-naive evaluation, stratified negation, magic sets, relational + graph +
-vector (HNSW) + FTS + LSH. Anything we spend above that has to be bought by a
-line in `FEATURES.md`.
-
-## 2. Volume is a function of the node count (measured)
-
-| | cozo | kyzo | ratio |
-|---|---:|---:|---:|
-| type declarations (`struct`/`enum`/`trait`) | 453 | 1,504 | 3.32x |
-| unique type names | — | 1,451 | |
-
-3.32x nodes against 3.01x architecture lines. The two track. **This is the whole
-basis of the cut: judging 1,451 declarations is tractable, judging 133,856 lines
-is not, and the lines follow the nodes.**
-
-## 3. The roots exist and are sound (verified by reading)
-
-`crates/kyzo-core/src/data/statement.rs`, 504 lines: `OntokKind` with the twelve
-variants over one `StatementBody` of six typed seats — subject, predicate, value,
-validity_time, context, source. Its own doc condemns per-variant record forks:
-"ONTOK variants are constructions over this kernel — never a second record type
-and never a nullable mega-struct fork."
-
-`KyzoRecord` (`session/admit.rs`) is privately constructed with no public
-constructor, one `RecordContentDigest` as identity.
-
-**The ontology is not the problem.** The root is small, typed and correct. The
-89,427 lines are what grew beside it.
-
-## 4. Nodes with no edge (measured)
-
-574 of 1,451 unique type names (40%) are mentioned in no file but the one that
-declares them. Excluding tests: **527 leaf types, 313 of them `pub`.**
-
-| module | leaves | of which `pub` |
-| --- | ---: | ---: |
-| `kyzo-core/src/exec` | 120 | 81 |
-| `kyzo-core/src/project` | 82 | 61 |
-| `kyzo-core/src/store` | 71 | 54 |
-| `kyzo-core/src/session` | 67 | 47 |
-| `kyzo-model/src/parse` | 42 | 6 |
-| `kyzo-core/src/rules` | 39 | 14 |
-| `kyzo-model/src/program` | 27 | 9 |
-| `kyzo-model/src/value` | 16 | 11 |
-| all other | 63 | 30 |
-
-A `pub` type mentioned nowhere but its own file is a node with no edge — it
-answers neither "which ONTOK primitive is it" nor "which feature is it on the
-path to". 313 of those.
-
-## 5. Duplicate authorities (measured)
-
-**5a. Already declared.** The zone rules carry a `dual-authority debt` table
-naming 19 files that fuse two authorities. That work is already done and was not
-redone here:
-
-`authority.rs`, `commit_cap.rs`, `contract.rs`, `db.rs`, `epoch.rs`,
-`failure.rs`, `footprint.rs`, `grants.rs`, `objects.rs`, `op/mod.rs`,
-`parse/search.rs`, `projection.rs`, `seal.rs`, `stdlib/bind.rs`, `sweep.rs`,
-`text/fts.rs`, `value/arena.rs`, `value/number.rs`, `wal.rs`
-
-**5b. Structural duplicates.** 37 groups of structs share an identical field-type
-signature. Most are distinct error facts sharing `(SourceSpan, String)` and are
-not duplicates. Two are real:
-
-- **`OntokPredStmt` ≡ `StatementBody`** — field for field, the same six typed
-  seats, declared at `session/admit.rs:1195` while `data/statement.rs:217` owns
-  the kernel and its doc forbids exactly this. *A duplicate authority at the
-  ontology root.* Sibling `OntokValueStmt` is the same fork minus `predicate`.
-- **`CryptoDomain` / `EpochGrant` / `IntentClear`** — all `(FenceEpoch, StoreId)`,
-  in `epoch.rs`, which 5a already names.
-
-**5c. Naming.** The confessing-name detector (`*Manager`, `*Helper`, `*Util`,
-`*Impl`, `*V2`, `*Legacy`) returns 3 hits in non-test code. **Naming discipline
-here is good.** The bloat is structural, not sloppy. This matters: it means the
-cut cannot be done by grepping for bad names, and anyone who claims it can is
-not looking.
-
-## 6. Ratio diff against cozo, module by module (measured)
-
-cozo's vector and LSH live under `runtime/`, so the comparison assigns
-`hnsw.rs` (1,035) and `minhash_lsh.rs` (389) to projections, and removes
-`runtime/tests.rs` (1,614) from session.
-
-| concern | cozo | kyzo | ratio | excess |
-| --- | ---: | ---: | ---: | ---: |
-| storage | 3,106 | 27,688 | 8.9x | 24,582 |
-| query / eval | 6,830 | 31,538 | 4.6x | 24,708 |
-| projections | 4,578 | 21,610 | 4.7x | 17,032 |
-| session | 4,531 | 19,616 | 4.3x | 15,085 |
-| fixed rules | 4,416 | 12,281 | 2.8x | 7,865 |
-| value model | 10,992 | 16,182 | 1.5x | 5,190 |
-| parse | 3,189 | 5,688 | 1.8x | 2,499 |
-
-**The largest ratio is not the target.** `store/` at 8.9x is almost entirely
-bought by `FEATURES.md`: `replica.rs` (Replication), `merkle.rs` (Merkle
-verification walks), `grants.rs` (Capability grants), `transcript.rs`
-(Transcripts), `sweep.rs` (Sweep/GC with retention certificates), `backup.rs`
-(Backup/export/restore), `crypto.rs` (encryption at rest by default),
-`objects.rs` (Object store seam), `failure.rs` (typed failure lattice), `wal.rs`.
-Every one names a feature. Storage is the model of a subsystem that earned its
-size.
-
-`value model` at 1.5x is the cheapest in the tree and is where the one law lives.
-
-That leaves **exec / project / session** as the mass without a matching feature
-count: 56,825 lines against a 15,939-line floor, and 269 leaf types among them.
+Every number below came from a command in this repository. Estimates are
+labelled ESTIMATE and carry their basis.
 
 ---
 
-## Proposed cut
+## 0. What the first pass got wrong
 
-Ordered so the tree is a scaffold at each step, not rubble. Red between steps is
-expected. Savings are ESTIMATE unless marked measured.
+**It made a line count the goal.** "Architecture excess: 89,427 lines" is not a
+purity measure. It cannot be acted on and it cannot be checked. It also pushed
+the one cut that needed a method (Cut 4, "judgment per node") into being the
+largest and least defensible number in the document.
 
-### Cut 1 — the 313 public leaf nodes
-**Measured population:** 313 `pub` types, non-test, mentioned in no other file.
-**Method:** delete the type; the functions that exist only to move values into and
-out of it die with it.
-**ESTIMATE 18,000–26,000 lines**, basis: 313 types × the tree's measured mean of
-92 architecture lines per type (133,856 / 1,451), discounted 35–50% because leaf
-types skew smaller than the mean. Requires no judgment about features — a node
-with no edge is dead by construction.
+**It used cozo as a floor instead of as a control.** Cozo answers exactly one
+question: *what does delivering Datalog, semi-naive evaluation, graph, vector,
+FTS and LSH cost when you carry no accountability law?* It has no Record
+admission, no bitemporality, no capability lattice, no crypto. Applying it to
+`store/` produced "8.9x" — a number that then took a full paragraph to excuse,
+item by item. A comparator you have to excuse is a comparator scoped wrong.
 
-### Cut 2 — collapse `OntokPredStmt` / `OntokValueStmt` into `StatementBody`
-**Measured:** two forks of the ontology root, `session/admit.rs`.
-**ESTIMATE 400–900 lines**, basis: the two declarations plus the twelve
-`admit_kind` arms that thread them.
-Small, and first among the duplicate work anyway: it is the root. Every node
-below inherits its shape from this one, so the cut order runs downward from here.
+**It measured reachability and called it purity.** "574 types mentioned in no
+other file" finds unreferenced code. Unreferenced code is hygiene. A type
+referenced from forty files can still be a hole, and that is the more expensive
+kind.
 
-### Cut 3 — the 19 declared dual-authority files
-**Measured:** the 19 files, 24,000+ lines combined (`replica.rs` 3,195,
-`grants.rs` 2,653, `sweep.rs` 2,045, `contract.rs` 2,413, `db.rs` 2,270, …).
-**Method:** split each into its two authorities, keep the typed one, delete the
-untyped one.
-**ESTIMATE 8,000–14,000 lines**, basis: one of two fused authorities per file is
-typically the thinner adapter; 30–50% of the combined mass.
+**It never opened `docs/STORAGE-ARCH-STRIPPED.md`.** That document is not a
+feature list. It is a constructor specification: 35 rows of nouns that must stay
+distinct, roughly 40 enumerated `Unconstructible` / `Refused` claims, 56 matrix
+pairs with named joint proofs, and 27 adversarial campaigns declared as merge
+gates. It is the ruler this tree is supposed to be cut to. The first pass
+measured against a different codebase instead.
 
-### Cut 4 — `exec/`, `project/`, `session/` to their feature paths
-**Measured:** 56,825 lines, floor 15,939, 269 leaf types, 189 of them `pub`.
-**Method:** step 7 of the method — every surviving node names its ONTOK primitive
-and its `FEATURES.md` line, default DELETE.
-**ESTIMATE 25,000–40,000 lines.** This is the largest and the only one requiring
-judgment per node. It is also where `#[cfg(test)]` density should be re-checked
-after, because deleting a node deletes its tests.
+---
 
-### Not cut
-- **`store/`** — feature-bought, item by item, above.
-- **`value model`** — 1.5x, holds the one law.
-- **`data/statement.rs`** — the root.
-- **The 49,917 lines of test/evidence** — judged by whether they can contradict
-  us. Cut only where the node under test is cut.
-- **Vendored tables (25,952)** — data, and cozo carries the same.
+## 1. The ruler, extracted from the law (measured)
 
-### Total
-**ESTIMATE 51,000–81,000 lines**, against a measured architecture excess of
-89,427. The midpoint (66,000) lands the tree near 68,000 architecture lines —
-1.5x cozo's floor, carrying bitemporality, accountability, crypto, replication
-and the proof harness, which is a defensible ratio.
+`STORAGE-ARCH-STRIPPED.md` names a **closed set of nouns**. Extracted
+mechanically — backticked and bolded identifiers, minus prose words:
 
-**Reaching cozo's 44,429 is not achievable by cutting alone** and this report
-does not claim it. The remaining gap is feature-bought and the honest way to
-shrink it further is Cut 4 going deeper than estimated, not a bigger number here.
+| | count |
+| --- | ---: |
+| substantive law nouns named by the architecture | **62** |
+| declared as a `struct` / `enum` / `trait` / `type` in `crates/` | 38 |
+| present as an enum variant | 19 |
+| mentioned but with no declaration | 4 |
+| absent entirely | 1 |
+
+The four mention-only nouns are `Location`, `ResultValue`, `StagingTTL`,
+`TagOrdered`. The absent one is `Presentation` — which the order law calls
+outermost-only and says "join or range over Presentation is a construction
+error", a claim nothing in the tree can currently make.
+
+**The law's vocabulary is essentially all here.** 57 of 62 nouns exist in some
+form. This is the finding that redirects the whole cut: nothing important is
+missing. The problem is entirely what grew beside it.
+
+### The ratio that matters
+
+| | count |
+| --- | ---: |
+| type names the law names | 62 |
+| type names declared in `crates/` | **1,491** |
+| declared types that are not a law noun | **1,429** |
+
+That is the cut, stated exactly. Not "89,427 lines above cozo" — **1,429
+declarations that the governing law does not name.** Each one has to answer a
+question with a default answer of *delete*.
+
+---
+
+## 2. Claim strength — the highest-value finding (measured)
+
+`STORAGE-ARCH-STRIPPED.md` sets the ladder and the penalty in one sentence:
+
+> **Unconstructible** — No path through the sealed Rust type and crate boundary
+> constructs the illegal state. […] Inflating Unexposed to Unconstructible is
+> Spec fraud.
+
+So for every law noun, one question is decidable from the code: **can a caller
+outside the declaring module mint one?** Measured over the 36 law nouns that
+resolve to a `struct` or `enum`, by inspecting each type's own `impl` blocks for
+a public function that takes no `self` and returns `Self`:
+
+| enforcement | count | types |
+| --- | ---: | --- |
+| **Sealed** — no public path returns one | **13** | `AdmissionCertificate` `AuditKey` `CheckpointSeal` `Committed` `IncarnationId` `IncarnationMintCap` `LocalProjection` `MergeProof` `PermanenceCandidate` `Repair` `ShredSalt` `StoreOpen` `WriteAuthority` |
+| **Ratcheted** — derivable only from an existing one | **3** | `CommitOrdinal` `IntentOrdinal` `OpenOrdinal` |
+| **Free** — any caller mints one from raw parts | **20** | `AncestorReadGrant` `AskShape` `CanonicalTranscript` `CompositionId` `CryptoDomain` `Downgrade` `Entropy` `FenceEpoch` `ForkGenerationWitness` `ForkGrant` `Frontier` `ObjectDurabilityClass` `OperationKey` `PermanenceWitness` `RecoveryGrant` `RecoveryMatrix` `ReplicaKey` `SnapshotFork` `StableCommitCap` `WrappedShredSalt` |
+
+**16 of 36 carry the claim in the type. 20 do not.**
+
+The sealed thirteen are the proof that this is achievable in this codebase, by
+these people, in these files — `store/authority.rs` seals `WriteAuthority` and
+leaves `RecoveryMatrix::new` open, in the same file. The discipline exists; it
+is applied unevenly.
+
+Several of the twenty are named `Unconstructible` in the architecture text:
+
+- `PermanenceWitness::from_sealed` is public, against "`PermanenceWitness::mint(cut)`
+  is Unconstructible when `cut ≥ expires_at` — late confirmation has no constructor."
+- `CompositionId::derive` is public, against "Engine-mint Unconstructible;
+  CompositionId is client-rooted."
+- `ForkGrant::new` and `RecoveryGrant::new` are public, against "divergent
+  successors Unconstructible" and "second grant for same predecessor epoch →
+  equivocation poison."
+- `StableCommitCap` is a `pub enum` with `from_arm`, against "production
+  `Committed` without a sealed arm is Unconstructible."
+
+This is the same defect shape as `ShapedKey::mint -> Option` — a runtime check
+standing under an Unconstructible header. It is not a one-off. **It is the
+dominant defect in this tree, and no line count would ever have found it.**
+
+---
+
+## 3. Nouns that must stay distinct (measured)
+
+35 rows in the architecture, each of the form "X is not Y", each annotated that
+collapsing the pair recreates a named production bug. Checked for a distinct
+declared type on the load-bearing side:
+
+- **31 rows resolve to a distinct type.** No fusion found among them.
+- **4 rows have no type at all**: `Store identity`, `Location`, `State root`,
+  `StagingTTL`. A noun the law says must stay distinct, with nothing to keep it
+  distinct, is the fusion waiting to happen. `StagingTTL` is the sharpest:
+  the law denominates it in `CommitOrdinal`s specifically so wall-clock cannot
+  become the expiry authority, and there is no type holding that.
+
+Retained from the first pass, still true and still measured:
+
+- **`OntokPredStmt` ≡ `StatementBody`**, field for field, at
+  `session/admit.rs:1195` while `data/statement.rs:217` owns the kernel and its
+  own doc forbids exactly this fork. Sibling `OntokValueStmt` is the same fork
+  minus `predicate`. *One noun, two types* — the mirror image of a fusion, and
+  equally a law violation.
+- The zone rules' declared **`dual-authority debt`** table: 19 files fusing two
+  authorities (`authority.rs`, `commit_cap.rs`, `contract.rs`, `db.rs`,
+  `epoch.rs`, `failure.rs`, `footprint.rs`, `grants.rs`, `objects.rs`,
+  `op/mod.rs`, `parse/search.rs`, `projection.rs`, `seal.rs`, `stdlib/bind.rs`,
+  `sweep.rs`, `text/fts.rs`, `value/arena.rs`, `value/number.rs`, `wal.rs`).
+  Note the overlap with §2: `grants.rs`, `objects.rs`, `commit_cap.rs`,
+  `epoch.rs` and `footprint.rs` appear in both lists. Fused authority and open
+  constructors are the same defect seen from two sides.
+
+---
+
+## 4. Campaigns — the merge gates the law declares (measured, weakly)
+
+The architecture names **27 adversarial DST campaigns** and calls them merge
+gates: "Every future change must cite a **failed campaign** or a **failed matrix
+row**."
+
+Searching test, trial and `#[test]`-bearing code for each campaign's distinctive
+token: **25 of 27 produce a match; 2 produce none** — `forged-manifest` and
+`old-session resurrection` (the `WriteSessionDead` resurrection campaign).
+
+**This measurement is weak and must be read as weak.** A token match says a name
+appears somewhere in test code. It does not say the campaign runs, injects the
+fault, or would fail if the law broke. Establishing that is a per-campaign read.
+What it does establish is a floor: two named merge gates have no trace at all.
+
+This reframes the 49,917 lines of test code. The first pass excused them as
+"evidence, judged by whether they can contradict us" and cut nothing. The right
+question is narrower and answerable: **which of the 27 required campaigns do
+these lines actually run?** A test that runs no campaign and pins no law claim
+is as deletable as any other node.
+
+---
+
+## 5. Where cozo is the right control (measured, rescoped)
+
+Cozo is kept, scoped to the concerns it shares. It is the answer to "what does
+this capability cost without accountability law", and nothing else.
+
+| concern | cozo | kyzo | ratio |
+| --- | ---: | ---: | ---: |
+| query / eval | 6,830 | 31,538 | 4.6x |
+| projections (incl. HNSW, LSH) | 4,578 | 21,610 | 4.7x |
+| fixed rules | 4,416 | 12,281 | 2.8x |
+| value model | 10,992 | 16,182 | 1.5x |
+| parse | 3,189 | 5,688 | 1.8x |
+
+These five deliver `FEATURES.md`'s "Query language & evaluation", "Graph — 21
+algorithms" and "Projections", and cozo delivers the same list. Here 4.6x is a
+real question.
+
+`store/`, `session/` and the accountability surface are **not** in this table.
+Cozo has no counterpart, so it produces no number, and the first pass's "8.9x"
+was measuring the presence of the law rather than any excess. Those modules are
+judged in §2 and §3 — by whether their types carry the claims the architecture
+makes — which is the harder standard, not the softer one.
+
+Totals from the first pass, retained as measured and now demoted from headline
+to context: 133,856 kyzo architecture lines against 44,429 cozo, both excluding
+vendored data tables (25,952 / 25,932, the same two MIT stopword files) and
+inline `#[cfg(test)]` (49,917 / 3,550).
+
+---
+
+## 6. The cut, as a procedure
+
+Every declared type gets exactly one verdict. First match wins. **The default is
+delete**, and that default is what makes this converge — the first pass had no
+default, which is why its largest cut was an estimate instead of a procedure.
+
+1. **Law noun.** `STORAGE-ARCH-STRIPPED.md` or `decisions.md` names it. **Keep**,
+   then rule on its claim strength (§2): if the law says Unconstructible, seal
+   the constructor or downgrade the claim in the document. One or the other,
+   never neither.
+2. **Constructor or witness for a law noun.** It exists so a law noun cannot be
+   built wrong. **Keep.**
+3. **Projection or adapter on a `FEATURES.md` line.** The query, graph, vector,
+   FTS, spatial and temporal machinery. **Keep**, and §5 is the cost control.
+4. **Carriage.** Moves values, decides nothing. **Keep only if it cannot be a
+   function.** Carriage that decides is a law violation, not a keep.
+5. **Unnamed.** No law noun, no feature line, no constructor duty. **Delete.**
+
+Verdict 5 is the mass. The 1,429 non-law declarations enter here and most leave.
+
+### Order — follow the law's dependency, not module size
+
+The architecture states its own closure rule: "new seat × all existing; changed
+row reopens adjacent." Cutting bottom-up therefore wastes the work, because a
+kernel change reopens everything below it.
+
+1. **Kernel.** `StatementBody` and the `OntokPredStmt` / `OntokValueStmt` fork;
+   `CanonicalTranscript`; Tag order. Everything inherits shape from here.
+2. **The four unheld nouns.** Give `Store identity`, `Location`, `State root`,
+   `StagingTTL` types before anything above them is cut, so the cut has
+   something to check against.
+3. **The 20 open constructors.** Seal or downgrade, one at a time. Each seal
+   invalidates the call sites that were minting freely — that is the cut doing
+   its work, and it is why this comes before the bulk pass.
+4. **The three doors.** `Store` / `Catalog` / `Engine` and the 19 dual-authority
+   files.
+5. **Bulk verdict pass** over what remains, procedure above.
+6. **Campaign audit** last, when the surviving nodes are known.
+
+The first pass put the kernel cut second and justified it by size ("small, and
+first among the duplicate work anyway"). Right answer, wrong reason.
+
+---
+
+## 7. What to report instead of a line count
+
+Four ratios, all re-runnable by script, all falsifiable:
+
+| metric | now |
+| --- | --- |
+| law nouns enforced at the strength the document claims | **16 / 36** |
+| distinct-noun rows with a type holding the distinction | **31 / 35** |
+| named merge-gate campaigns with any trace in test code | **≤ 25 / 27** |
+| declared types on a path to a named noun or feature line | **unmeasured — this is the work** |
+
+Lines fall out of these. They are not the target, and the first pass reporting
+them as the target is what made its conclusion uncheckable.
+
+**ESTIMATE, stated as an estimate and not as a goal:** verdict 5 applied to
+1,429 non-law declarations, at the tree's measured mean of 92 architecture lines
+per type, discounted heavily because unnamed types skew small — **40,000–70,000
+lines.** This number is a consequence, and if the four ratios above reach their
+denominators with more lines than that, the ratios win.
 
 ---
 
 ## What this investigation did not establish
 
-- **No per-node feature mapping was built.** Cut 4's estimate is the weakest
-  number in this document. It rests on the ratio diff and the leaf count, not on
-  a node-by-node ruling against `FEATURES.md`. That ruling is the work.
-- **Reachability was computed by name mention, not by resolved import graph.** A
-  type named in a doc comment or a string counts as mentioned. This biases the
-  leaf count *down*, so 527 is a floor, not a ceiling.
-- **Cozo's own quality was not audited.** It is used as a size reference for
-  delivered capability, not as a purity model.
-- **Whether the 89,427 lines are recoverable at all** depends on Cut 4's
-  judgment pass, which has not been run.
+- **No per-node verdict was run.** §6 is a procedure, not a result. The 1,429
+  figure is a population, not a finding, and the line ESTIMATE rests on it.
+- **The claim-strength audit is structural, not semantic.** It asks whether a
+  public function returns the type; it does not read whether that function's
+  arguments already constitute the proof. Some of the twenty may be sound
+  constructors over already-sealed inputs. Each needs a read. **Twenty is
+  therefore a ceiling on the defect and a floor on the work.**
+- **Campaign coverage is a token match** (§4) and is the weakest number here.
+  25 of 27 means 25 names appear, not 25 campaigns run.
+- **The 62-noun law set was extracted mechanically** from one document.
+  `decisions.md` L1–L14 will add nouns and may reclassify some of the 1,429.
+  The set is a floor.
+- **`FEATURES.md` was used as a keep-list, not audited.** Whether each line is
+  actually delivered is a separate question this does not touch.
+- **Cozo's own quality was not audited.** It is a cost reference for delivered
+  capability in five modules, nothing more.
