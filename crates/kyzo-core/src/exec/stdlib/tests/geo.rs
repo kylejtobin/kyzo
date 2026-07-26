@@ -8,7 +8,10 @@
  */
 
 //! Re-homed domain tables from data/tests/functions.rs.
-use crate::exec::stdlib::geo::*;
+use crate::exec::stdlib::geo::op_deg_to_rad;
+use crate::exec::stdlib::geo::op_haversine;
+use crate::exec::stdlib::geo::op_haversine_deg_input;
+use crate::exec::stdlib::geo::op_rad_to_deg;
 use kyzo_model::value::DataValue;
 use miette::{Result, miette};
 use std::f64::consts::PI;

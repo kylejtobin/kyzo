@@ -20,6 +20,8 @@
 //! `::kill` refuses with [`JobsRefuse::KillNotLanded`] until job cancellation
 //! lands. Dispatch stays here so `session/db.rs` remains the composition root.
 
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Tuple};
 use miette::{Diagnostic, Result, bail, miette};
 use thiserror::Error;
@@ -137,11 +139,11 @@ impl OperatorEphemeralRelations {
         let s = self.surface.ephemeral().storage_stats();
         Ok(NamedRows::try_new(
             vec![
-                "cache_size_bytes".into(),
-                "cache_capacity_bytes".into(),
-                "write_buffer_size_bytes".into(),
-                "active_compactions".into(),
-                "journal_count".into(),
+                Symbol::new("cache_size_bytes", SourceSpan::empty()),
+                Symbol::new("cache_capacity_bytes", SourceSpan::empty()),
+                Symbol::new("write_buffer_size_bytes", SourceSpan::empty()),
+                Symbol::new("active_compactions", SourceSpan::empty()),
+                Symbol::new("journal_count", SourceSpan::empty()),
             ],
             vec![Tuple::from_vec(vec![
                 DataValue::from(
@@ -187,7 +189,14 @@ impl OperatorEphemeralRelations {
                 DataValue::Bytes(range.end().to_vec()),
             ]));
         }
-        match NamedRows::try_new(vec!["keyspace".into(), "start".into(), "end".into()], rows) {
+        match NamedRows::try_new(
+            vec![
+                Symbol::new("keyspace", SourceSpan::empty()),
+                Symbol::new("start", SourceSpan::empty()),
+                Symbol::new("end", SourceSpan::empty()),
+            ],
+            rows,
+        ) {
             Ok(rows) => Ok(rows),
             Err(_) => Err(TenantBlindRefuse::QuarantineTopologyForbidden),
         }
@@ -223,7 +232,7 @@ pub(crate) fn list_running() -> Result<NamedRows> {
 fn single_i64_relation(col: &str, n: u64, overflow: &'static str) -> Result<NamedRows> {
     let n_i = i64::try_from(n).map_err(|_| miette!("{overflow}"))?;
     Ok(NamedRows::try_new(
-        vec![col.into()],
+        vec![Symbol::new(col, SourceSpan::empty())],
         vec![Tuple::from_vec(vec![DataValue::from(n_i)])],
     )?)
 }

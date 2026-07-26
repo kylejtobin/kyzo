@@ -104,18 +104,19 @@
 //! [`spatial_range_query`] / [`spatial_knn`] remain the kernel curve algorithms.
 
 use std::collections::BinaryHeap;
+use std::fmt;
 
 use crate::project::contract::RankScore;
 use miette::{Diagnostic, Result, bail, miette};
 use rustc_hash::FxHashSet;
-use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
-use crate::project::contract::{IndexCorruptReason, IndexRowCorrupt};
+use crate::project::contract::{IndexCorruptReason, IndexName, IndexRowCorrupt};
 use crate::project::projection::{ProjectionKind, RelationIndexSearch};
 use crate::session::catalog::RelationHandle;
 use crate::store::{ReadTx, WriteTx};
 use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
 use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::value::{DataValue, ScanBound, Tuple};
 
@@ -172,13 +173,45 @@ const DEG_TO_RAD: f64 = std::f64::consts::PI / 180.0;
 // shared `IndexRowCorrupt`.
 // ---------------------------------------------------------------------------
 
+/// Which geographic coordinate axis a typed spatial refusal names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GeoCoordAxis {
+    Lat,
+    Lon,
+}
+
+impl fmt::Display for GeoCoordAxis {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Lat => write!(f, "lat"),
+            Self::Lon => write!(f, "lon"),
+        }
+    }
+}
+
+/// What about a coordinate pair was out of range.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GeoCoordOutOfRangeWhat {
+    Axis(GeoCoordAxis),
+    LatLoGtLatHi,
+}
+
+impl fmt::Display for GeoCoordOutOfRangeWhat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Axis(axis) => axis.fmt(f),
+            Self::LatLoGtLatHi => write!(f, "lat_lo > lat_hi"),
+        }
+    }
+}
+
 /// A coordinate outside the admissible range was submitted. Refused typed at
 /// admission: an out-of-range coordinate cannot be quantized onto the curve.
 #[derive(Debug, Error, Diagnostic)]
 #[error("coordinate out of range: {what} = {value} (lat ∈ [-90,90], lon ∈ [-180,180])")]
 #[diagnostic(code(index::spatial::coord_out_of_range))]
 pub(crate) struct GeoCoordOutOfRange {
-    pub(crate) what: &'static str,
+    pub(crate) what: GeoCoordOutOfRangeWhat,
     pub(crate) value: f64,
 }
 
@@ -188,7 +221,23 @@ pub(crate) struct GeoCoordOutOfRange {
 #[error("coordinate is not finite: {what}")]
 #[diagnostic(code(index::spatial::non_finite_coord))]
 pub(crate) struct NonFiniteCoord {
-    pub(crate) what: &'static str,
+    pub(crate) what: GeoCoordAxis,
+}
+
+/// What was observed when a coordinate column was not numeric.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CoordNotNumberObserved {
+    BeyondArity,
+    Value(DataValue),
+}
+
+impl fmt::Display for CoordNotNumberObserved {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::BeyondArity => write!(f, "<beyond row arity>"),
+            Self::Value(v) => write!(f, "{v:?}"),
+        }
+    }
 }
 
 /// A bounding-box query that would wrap across the antimeridian (±180°) was
@@ -213,7 +262,7 @@ pub(crate) struct AntimeridianBoxRefused {
 #[diagnostic(code(index::spatial::coord_type))]
 pub(crate) struct CoordNotNumber {
     pub(crate) field: usize,
-    pub(crate) got: String,
+    pub(crate) got: CoordNotNumberObserved,
 }
 
 // ---------------------------------------------------------------------------
@@ -235,20 +284,24 @@ impl GeoPoint {
     /// [`GeoCoordOutOfRange`]. The only way to construct a [`GeoPoint`].
     pub(crate) fn admit(lat: f64, lon: f64) -> Result<Self> {
         if !lat.is_finite() {
-            bail!(NonFiniteCoord { what: "lat" });
+            bail!(NonFiniteCoord {
+                what: GeoCoordAxis::Lat
+            });
         }
         if !lon.is_finite() {
-            bail!(NonFiniteCoord { what: "lon" });
+            bail!(NonFiniteCoord {
+                what: GeoCoordAxis::Lon
+            });
         }
         if !(LAT_MIN..=LAT_MAX).contains(&lat) {
             bail!(GeoCoordOutOfRange {
-                what: "lat",
+                what: GeoCoordOutOfRangeWhat::Axis(GeoCoordAxis::Lat),
                 value: lat
             });
         }
         if !(LON_MIN..=LON_MAX).contains(&lon) {
             bail!(GeoCoordOutOfRange {
-                what: "lon",
+                what: GeoCoordOutOfRangeWhat::Axis(GeoCoordAxis::Lon),
                 value: lon
             });
         }
@@ -363,8 +416,8 @@ fn morton_decode(code: u64) -> (u32, u32) {
 /// constant, not carried here (see its docs).
 #[derive(Debug, Clone, PartialEq, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) struct SpatialIndexManifest {
-    pub(crate) base_relation: SmartString<LazyCompact>,
-    pub(crate) index_name: SmartString<LazyCompact>,
+    pub(crate) base_relation: Symbol,
+    pub(crate) index_name: Symbol,
     /// Position, in the base relation's full tuple (keys then non-keys), of the
     /// latitude column.
     pub(crate) lat_field: usize,
@@ -380,12 +433,19 @@ pub(crate) struct SpatialIndexManifest {
 /// base fetch per over-scanned candidate).
 pub(crate) fn spatial_index_metadata(base: &StoredRelationMetadata) -> StoredRelationMetadata {
     use crate::project::projection::{index_col, index_relation_metadata};
+    use kyzo_model::program::span::SourceSpan;
+    use kyzo_model::program::symbol::Symbol;
+
+    fn col(name: &str) -> Symbol {
+        Symbol::new(name, SourceSpan::empty())
+    }
+
     index_relation_metadata(
-        [index_col("curve", ColType::Bytes)],
+        [index_col(col("curve"), ColType::Bytes)],
         base,
         vec![
-            index_col("lat", ColType::Float),
-            index_col("lon", ColType::Float),
+            index_col(col("lat"), ColType::Float),
+            index_col(col("lon"), ColType::Float),
         ],
     )
 }
@@ -400,13 +460,13 @@ fn extract_point(tuple: &[DataValue], manifest: &SpatialIndexManifest) -> Result
         let v = tuple.get(field).ok_or_else(|| {
             miette!(CoordNotNumber {
                 field,
-                got: "<beyond row arity>".to_string(),
+                got: CoordNotNumberObserved::BeyondArity,
             })
         })?;
         v.get_float().ok_or_else(|| {
             miette!(CoordNotNumber {
                 field,
-                got: format!("{v:?}"),
+                got: CoordNotNumberObserved::Value(v.clone()),
             })
         })
     };
@@ -504,7 +564,7 @@ impl BoundingBox {
         GeoPoint::admit(lat_hi, lon_hi)?;
         if lat_lo > lat_hi {
             bail!(GeoCoordOutOfRange {
-                what: "lat_lo > lat_hi",
+                what: GeoCoordOutOfRangeWhat::LatLoGtLatHi,
                 value: lat_lo,
             });
         }
@@ -658,11 +718,11 @@ struct Posting {
 
 /// Decode a full spatial index tuple `[curve, src_key…, lat, lon]`. Anything
 /// that does not fit is the typed [`IndexRowCorrupt`] with the row's context.
-fn decode_posting(row: &[DataValue], base_key_len: usize, index_name: &str) -> Result<Posting> {
+fn decode_posting(row: &[DataValue], base_key_len: usize, index_name: IndexName<'_>) -> Result<Posting> {
     let expected_len = base_key_len + 3; // curve + src_key… + lat + lon
     if row.len() != expected_len {
         bail!(IndexRowCorrupt::new(
-            index_name,
+            index_name.as_str(),
             row,
             IndexCorruptReason::WrongColumnCount {
                 found: row.len(),
@@ -674,21 +734,21 @@ fn decode_posting(row: &[DataValue], base_key_len: usize, index_name: &str) -> R
     match row[0].get_bytes() {
         Some(b) if b.len() == 8 => {}
         _other => bail!(IndexRowCorrupt::new(
-            index_name,
+            index_name.as_str(),
             row,
             IndexCorruptReason::SpatialCurveNot8Bytes,
         )),
     }
     let lat = row[base_key_len + 1].get_float().ok_or_else(|| {
         miette!(IndexRowCorrupt::new(
-            index_name,
+            index_name.as_str(),
             row,
             IndexCorruptReason::SpatialLatNotNumber,
         ))
     })?;
     let lon = row[base_key_len + 2].get_float().ok_or_else(|| {
         miette!(IndexRowCorrupt::new(
-            index_name,
+            index_name.as_str(),
             row,
             IndexCorruptReason::SpatialLonNotNumber,
         ))
@@ -739,12 +799,13 @@ fn scan_box(
         let upper = [ScanBound::Value(DataValue::Bytes(
             hi.to_be_bytes().to_vec(),
         ))];
+        let index_name = IndexName::from_relation_name(&idx.name);
         for row in crate::project::contract::index_rows(
-            &idx.name,
+            index_name.as_str(),
             idx.scan_bounded_prefix(tx, &[], &lower, &upper),
         ) {
             let row = row?;
-            let posting = decode_posting(row.as_slice(), base_key_len, &idx.name)?;
+            let posting = decode_posting(row.as_slice(), base_key_len, index_name)?;
             // The curve over-approximates; the exact predicate filters.
             if bbox.contains(posting.lat, posting.lon) {
                 out.push(posting);
@@ -1047,6 +1108,7 @@ mod tests {
     use super::*;
     use crate::store::Storage;
     use crate::store::fjall::new_fjall_storage;
+    use kyzo_model::program::symbol::Symbol;
     use miette::{IntoDiagnostic, Result, miette};
 
     // -- deterministic PRNG: splitmix64_step is the sole mix authority -----
@@ -1075,7 +1137,7 @@ mod tests {
 
     fn col(name: &str, coltype: ColType) -> ColumnDef {
         ColumnDef {
-            name: SmartString::from(name),
+            name: Symbol::new(name, SourceSpan::empty()),
             typing: NullableColType::required(coltype),
             default_gen: None,
         }
@@ -1091,8 +1153,8 @@ mod tests {
 
     fn manifest() -> SpatialIndexManifest {
         SpatialIndexManifest {
-            base_relation: SmartString::from("places"),
-            index_name: SmartString::from("geo"),
+            base_relation: Symbol::new("places", SourceSpan::empty()),
+            index_name: Symbol::new("geo", SourceSpan::empty()),
             lat_field: 1,
             lon_field: 2,
         }
@@ -1111,8 +1173,8 @@ mod tests {
         let idx_meta = spatial_index_metadata(&meta);
         let (base, idx) = crate::project::index_fixture::seed_base_and_index(
             db,
-            "places",
-            "places:geo",
+            Symbol::new("places", SourceSpan::new(0, 0)),
+            Symbol::new("places:geo", SourceSpan::new(0, 0)),
             meta,
             idx_meta,
             |tx, base, idx| {

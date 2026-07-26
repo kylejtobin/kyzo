@@ -1692,8 +1692,12 @@ mod tests {
     use super::*;
     use kyzo_model::program::aggregate::parse_aggr;
     use miette::{Result, miette};
-    use proptest::prelude::*;
-    use proptest::test_runner::{TestCaseError, TestRunner};
+    use proptest::arbitrary::any;
+    use proptest::prop_oneof;
+    use proptest::strategy::Just;
+    use proptest::strategy::Strategy;
+    use proptest::test_runner::TestCaseError;
+    use proptest::test_runner::TestRunner;
 
     fn lattice_ok(r: Result<()>) -> std::result::Result<(), TestCaseError> {
         r.map_err(|e| TestCaseError::fail(format!("{e}")))
@@ -1806,7 +1810,7 @@ mod tests {
     }
 
     fn arb_small_list() -> impl Strategy<Value = DataValue> {
-        prop::collection::vec((0i64..6).prop_map(DataValue::from), 0..5).prop_map(DataValue::List)
+        proptest::collection::vec((0i64..6).prop_map(DataValue::from), 0..5).prop_map(DataValue::List)
     }
 
     fn arb_costed_pair() -> impl Strategy<Value = DataValue> {
@@ -1817,7 +1821,7 @@ mod tests {
 
     fn arb_bytes_triple() -> impl Strategy<Value = (DataValue, DataValue, DataValue)> {
         (0usize..4).prop_flat_map(|len| {
-            let bytes = move || prop::collection::vec(any::<u8>(), len);
+            let bytes = move || proptest::collection::vec(any::<u8>(), len);
             (bytes(), bytes(), bytes()).prop_map(|(x, y, z)| {
                 (
                     DataValue::Bytes(x.clone()),

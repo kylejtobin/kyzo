@@ -34,6 +34,8 @@ use std::collections::BTreeMap;
 use std::fs;
 
 use kyzo::{DataValue, Engine, FjallStorage, NamedRows};
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
 use miette::{IntoDiagnostic, Result, bail, miette};
 use serde_json::{Value, json};
 
@@ -46,7 +48,7 @@ pub(super) fn dispatch(
     payload: &str,
     db: &Engine<FjallStorage>,
     storage: &FjallStorage,
-    params: &mut BTreeMap<String, DataValue>,
+    params: &mut BTreeMap<Symbol, DataValue>,
     save_next: &mut Option<String>,
 ) -> Result<Option<NamedRows>> {
     match op {
@@ -69,28 +71,34 @@ pub(super) fn dispatch(
     }
 }
 
-fn set(payload: &str, params: &mut BTreeMap<String, DataValue>) -> Result<()> {
+fn set(payload: &str, params: &mut BTreeMap<Symbol, DataValue>) -> Result<()> {
     let (key, v_str) = payload
         .trim()
         .split_once(|c: char| c.is_whitespace())
         .ok_or_else(|| miette!("Bad set syntax. Should be '%set <KEY> <VALUE>'."))?;
     let val: Value = serde_json::from_str(v_str).into_diagnostic()?;
-    params.insert(key.to_string(), DataValue::from(&val));
+    params.insert(
+        Symbol::new(key, SourceSpan::empty()),
+        DataValue::from(&val),
+    );
     Ok(())
 }
 
-fn unset(payload: &str, params: &mut BTreeMap<String, DataValue>) -> Result<()> {
+fn unset(payload: &str, params: &mut BTreeMap<Symbol, DataValue>) -> Result<()> {
     let key = payload.trim();
-    if params.remove(key).is_none() {
+    if params
+        .remove(&Symbol::new(key, SourceSpan::empty()))
+        .is_none()
+    {
         bail!("Key not found: '{}'", key)
     }
     Ok(())
 }
 
-fn print_params(params: &BTreeMap<String, DataValue>) -> Result<()> {
+fn print_params(params: &BTreeMap<Symbol, DataValue>) -> Result<()> {
     let as_json: serde_json::Map<_, _> = params
         .iter()
-        .map(|(k, v)| Value::try_from(v).map(|j| (k.clone(), j)))
+        .map(|(k, v)| Value::try_from(v).map(|j| (k.name().to_string(), j)))
         .collect::<Result<_, _>>()
         .into_diagnostic()?;
     let display = serde_json::to_string_pretty(&json!(as_json)).into_diagnostic()?;
@@ -131,7 +139,7 @@ fn save(payload: &str, save_next: &mut Option<String>) {
 fn run(
     payload: &str,
     db: &Engine<FjallStorage>,
-    params: &BTreeMap<String, DataValue>,
+    params: &BTreeMap<Symbol, DataValue>,
 ) -> Result<NamedRows> {
     let path = payload.trim();
     if path.is_empty() {

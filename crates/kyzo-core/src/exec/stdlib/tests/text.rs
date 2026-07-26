@@ -8,7 +8,22 @@
  */
 
 //! Re-homed domain tables from data/tests/functions.rs.
-use crate::exec::stdlib::text::*;
+use crate::exec::stdlib::text::op_chars;
+use crate::exec::stdlib::text::op_ends_with;
+use crate::exec::stdlib::text::op_from_substrings;
+use crate::exec::stdlib::text::op_lowercase;
+use crate::exec::stdlib::text::op_regex_extract;
+use crate::exec::stdlib::text::op_regex_extract_first;
+use crate::exec::stdlib::text::op_regex_matches;
+use crate::exec::stdlib::text::op_regex_replace;
+use crate::exec::stdlib::text::op_regex_replace_all;
+use crate::exec::stdlib::text::op_starts_with;
+use crate::exec::stdlib::text::op_str_includes;
+use crate::exec::stdlib::text::op_trim;
+use crate::exec::stdlib::text::op_trim_end;
+use crate::exec::stdlib::text::op_trim_start;
+use crate::exec::stdlib::text::op_unicode_normalize;
+use crate::exec::stdlib::text::op_uppercase;
 use kyzo_model::value::DataValue;
 use miette::{Result, miette};
 

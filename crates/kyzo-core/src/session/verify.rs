@@ -65,6 +65,7 @@ use crate::store::merkle::{
 };
 use crate::store::{CommitOrdinal, ReadTx, Storage};
 use kyzo_model::program::InputProgram;
+use kyzo_model::program::symbol::Symbol;
 use kyzo_model::program::rule::{
     InputAtom, InputInlineRulesOrFixed, InputNamedFieldRelationApplyAtom, InputRelationApplyAtom,
     ValidityClause,
@@ -197,7 +198,7 @@ pub enum VerifyUnsupported {
          relation's own arity — not supported by this cut of ::verify"
     )]
     #[diagnostic(code(verify::interval_derivation))]
-    IntervalDerivation { name: String },
+    IntervalDerivation { name: Symbol },
     #[error("provenance unavailable: {reason}")]
     #[diagnostic(code(verify::provenance_unavailable))]
     ProvenanceUnavailable { reason: &'static str },
@@ -250,7 +251,7 @@ impl VerifyOutcome {
 /// First stored-relation atom carrying `@spans` / `@delta` / `@delta_sys`,
 /// if any — the language-door shape provenance `::verify` refuses rather
 /// than silently matching.
-fn first_interval_derivation(program: &InputProgram) -> Option<String> {
+fn first_interval_derivation(program: &InputProgram) -> Option<Symbol> {
     for (_name, def) in program.iter_all() {
         let InputInlineRulesOrFixed::Rules { rules } = def else {
             continue;
@@ -264,7 +265,7 @@ fn first_interval_derivation(program: &InputProgram) -> Option<String> {
     None
 }
 
-fn atom_interval_derivation(atom: &InputAtom) -> Option<String> {
+fn atom_interval_derivation(atom: &InputAtom) -> Option<Symbol> {
     match atom {
         InputAtom::Relation {
             inner: InputRelationApplyAtom { name, validity, .. },
@@ -273,7 +274,7 @@ fn atom_interval_derivation(atom: &InputAtom) -> Option<String> {
             inner: InputNamedFieldRelationApplyAtom { name, validity, .. },
         } => match validity {
             Some(ValidityClause::Spans { .. } | ValidityClause::Delta { .. }) => {
-                Some(name.name().to_string())
+                Some(name.clone())
             }
             Some(ValidityClause::At(_)) | None => None,
         },
@@ -293,7 +294,7 @@ impl<S: Storage> Engine<S> {
     pub fn verify_script(
         &self,
         payload: &str,
-        params: BTreeMap<String, DataValue>,
+        params: BTreeMap<Symbol, DataValue>,
         options: ScriptOptions,
     ) -> Result<VerifyOutcome> {
         let cur_vld = current_validity()?;
@@ -895,7 +896,7 @@ mod tests {
         match outcome {
             VerifyOutcome::Unsupported {
                 reason: VerifyUnsupported::IntervalDerivation { name },
-            } => assert_eq!(name, "hist"),
+            } => assert_eq!(&*name, "hist"),
             other @ (VerifyOutcome::Match { .. }
             | VerifyOutcome::Mismatch(_)
             | VerifyOutcome::BudgetRefused { .. }

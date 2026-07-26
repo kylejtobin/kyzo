@@ -1,4 +1,0 @@
-struct Span {
-    start: Option<Offset>,
-    end: Offset,
-}

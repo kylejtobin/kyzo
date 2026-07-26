@@ -42,8 +42,11 @@ use crate::project::text::tokenizer::{
 };
 use jieba_rs::Jieba;
 use kyzo_model::data_value_any;
+use kyzo_model::program::span::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
 use miette::{Diagnostic, Result, ensure};
 use serde::Deserialize;
+use serde::Serialize;
 #[cfg(test)]
 use sha2::digest::FixedOutput;
 #[cfg(test)]
@@ -65,8 +68,8 @@ pub(crate) mod tokenizer;
 /// `tokenizer`/`filters` configs are re-`build()`-able at any later time.
 #[derive(Debug, Clone, PartialEq, serde_derive::Serialize, serde_derive::Deserialize)]
 pub struct FtsIndexManifest {
-    pub(crate) base_relation: SmartString<LazyCompact>,
-    pub(crate) index_name: SmartString<LazyCompact>,
+    pub(crate) base_relation: Symbol,
+    pub(crate) index_name: Symbol,
     /// The row-extraction expression as a PARSED typed substance. Serde
     /// round-trips it through the value plane's `Expr` codec (op arity is
     /// re-proven on decode), so the catalog never holds an un-parseable
@@ -83,9 +86,9 @@ pub struct FtsIndexManifest {
 /// Name proof: private fields; the only mints are [`TokenizerConfig::admit`]
 /// (and serde deserialize through that door). Unknown stage names are
 /// unstorable. Argument shape is still proven at [`validate`] / [`build`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde_derive::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TokenizerConfig {
-    name: SmartString<LazyCompact>,
+    name: Symbol,
     args: Vec<DataValue>,
 }
 
@@ -93,7 +96,7 @@ pub struct TokenizerConfig {
 #[derive(Debug, Error, Diagnostic)]
 #[error("unknown tokenizer or token-filter name: {0}")]
 #[diagnostic(code(fts::unknown_stage_name))]
-pub struct UnknownTokenizerStageName(pub SmartString<LazyCompact>);
+pub struct UnknownTokenizerStageName(pub Symbol);
 
 fn is_known_stage_name(name: &str) -> bool {
     matches!(
@@ -194,15 +197,24 @@ pub(crate) enum TokenizerBuildRefusal {
     UnknownTokenFilter(SmartString<LazyCompact>),
 }
 
+impl Serialize for TokenizerConfig {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut st = serializer.serialize_struct("TokenizerConfig", 2)?;
+        st.serialize_field("name", self.name.name().as_str())?;
+        st.serialize_field("args", &self.args)?;
+        st.end()
+    }
+}
+
 impl TokenizerConfig {
     /// Typed name-proof door: unknown stage names are unrepresentable as a
     /// stored config. Argument legality remains at [`validate`] / [`build`].
     pub fn admit(
-        name: impl Into<SmartString<LazyCompact>>,
+        name: Symbol,
         args: Vec<DataValue>,
     ) -> std::result::Result<TokenizerConfig, UnknownTokenizerStageName> {
-        let name = name.into();
-        if !is_known_stage_name(&name) {
+        if !is_known_stage_name(name.name().as_str()) {
             return Err(UnknownTokenizerStageName(name));
         }
         Ok(TokenizerConfig { name, args })
@@ -213,13 +225,13 @@ impl TokenizerConfig {
     /// known-stage proof is unrepresentable as failure.
     pub fn simple() -> TokenizerConfig {
         TokenizerConfig {
-            name: SmartString::from("Simple"),
+            name: Symbol::new("Simple", SourceSpan::empty()),
             args: vec![],
         }
     }
 
     pub fn name(&self) -> &str {
-        &self.name
+        self.name.name().as_str()
     }
 
     pub fn args(&self) -> &[DataValue] {
@@ -509,7 +521,8 @@ impl<'de> Deserialize<'de> for TokenizerConfig {
         }
         let (name, args) =
             deserializer.deserialize_struct("TokenizerConfig", &["name", "args"], RawVisitor)?;
-        TokenizerConfig::admit(name, args).map_err(serde::de::Error::custom)
+        TokenizerConfig::admit(Symbol::new(name, SourceSpan::empty()), args)
+            .map_err(serde::de::Error::custom)
     }
 }
 
@@ -619,7 +632,7 @@ mod tests {
     use miette::{Result, miette};
 
     fn cfg(name: &str, args: Vec<DataValue>) -> Result<TokenizerConfig> {
-        TokenizerConfig::admit(name, args).map_err(|e| miette!("{e}"))
+        TokenizerConfig::admit(Symbol::new(name, SourceSpan::empty()), args).map_err(|e| miette!("{e}"))
     }
 
     fn hex(h: impl AsRef<[u8]>) -> String {
@@ -777,8 +790,8 @@ mod tests {
     /// Unknown names are refused at the admit door — unstorable as config.
     #[test]
     fn unknown_tokenizer_refused_at_admit() {
-        assert!(TokenizerConfig::admit("NoSuchTokenizer", vec![]).is_err());
-        assert!(TokenizerConfig::admit("NoSuchFilter", vec![]).is_err());
+        assert!(TokenizerConfig::admit(Symbol::new("NoSuchTokenizer", SourceSpan::empty()), vec![]).is_err());
+        assert!(TokenizerConfig::admit(Symbol::new("NoSuchFilter", SourceSpan::empty()), vec![]).is_err());
     }
 
     /// `validate` is the definition-time proof the operator tier calls
@@ -795,7 +808,7 @@ mod tests {
         ])?;
 
         // Unknown tokenizer name — refuse at admit, not at validate.
-        assert!(TokenizerConfig::admit("NoSuchTokenizer", vec![]).is_err());
+        assert!(TokenizerConfig::admit(Symbol::new("NoSuchTokenizer", SourceSpan::empty()), vec![]).is_err());
         // Known name, unlawful args.
         assert!(
             cfg("NGram", vec![DataValue::from(0)])?

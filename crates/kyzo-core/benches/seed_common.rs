@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::path::Path;
 
+use kyzo_model::program::symbol::Symbol;
 use kyzo::{Catalog, DataValue, Engine, new_fjall_storage};
 
 pub fn open_door<T, E: Debug>(r: Result<T, E>, door: &'static str) -> T {
@@ -21,7 +22,7 @@ pub fn open_door<T, E: Debug>(r: Result<T, E>, door: &'static str) -> T {
     }
 }
 
-pub fn no_params() -> BTreeMap<String, DataValue> {
+pub fn no_params() -> BTreeMap<Symbol, DataValue> {
     BTreeMap::new()
 }
 

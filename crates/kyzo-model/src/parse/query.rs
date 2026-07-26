@@ -147,7 +147,7 @@ enum StoredRelationBuild {
 /// Lift a query_script's pairs into an [`InputProgram`].
 pub(crate) fn parse_query<'a>(
     src: impl IntoIterator<Item = Pair<'a>>,
-    param_pool: &BTreeMap<String, DataValue>,
+    param_pool: &BTreeMap<Symbol, DataValue>,
     cur_vld: ValidityTs,
 ) -> Result<InputProgram> {
     let mut progs: BTreeMap<Symbol, InputInlineRulesOrFixed> = Default::default();
@@ -547,7 +547,7 @@ pub(crate) fn parse_query<'a>(
                 keys: head
                     .iter()
                     .map(|s| ColumnDef {
-                        name: s.name().clone(),
+                        name: s.clone(),
                         typing: NullableColType::optional(ColType::Any),
                         default_gen: None,
                     })
@@ -632,7 +632,7 @@ fn finalize_program(mut prog: InputProgram) -> Result<InputProgram> {
         handle.metadata.keys = head_args
             .iter()
             .map(|s| ColumnDef {
-                name: s.name().clone(),
+                name: s.clone(),
                 typing: NullableColType::optional(ColType::Any),
                 default_gen: None,
             })
@@ -669,7 +669,7 @@ fn resolve_per_row_write_validity(prog: &mut InputProgram) -> Result<()> {
 
 fn parse_rule(
     src: Pair<'_>,
-    param_pool: &BTreeMap<String, DataValue>,
+    param_pool: &BTreeMap<Symbol, DataValue>,
     cur_vld: ValidityTs,
 ) -> Result<(Symbol, InputInlineRule)> {
     let span = src.extract_span();
@@ -710,7 +710,7 @@ fn parse_rule(
 
 fn parse_disjunction(
     pair: Pair<'_>,
-    param_pool: &BTreeMap<String, DataValue>,
+    param_pool: &BTreeMap<Symbol, DataValue>,
     cur_vld: ValidityTs,
     ignored_counter: &mut u32,
 ) -> Result<InputAtom> {
@@ -733,7 +733,7 @@ fn parse_disjunction(
 
 fn parse_atom(
     src: Pair<'_>,
-    param_pool: &BTreeMap<String, DataValue>,
+    param_pool: &BTreeMap<Symbol, DataValue>,
     cur_vld: ValidityTs,
     ignored_counter: &mut u32,
 ) -> Result<InputAtom> {
@@ -898,7 +898,7 @@ fn parse_atom(
 
 fn extract_named_apply_arg(
     pair: Pair<'_>,
-    param_pool: &BTreeMap<String, DataValue>,
+    param_pool: &BTreeMap<Symbol, DataValue>,
 ) -> Result<(Symbol, Expr)> {
     let mut inner = pair.children();
     let name_p = inner.need("a child")?;
@@ -915,7 +915,7 @@ fn extract_named_apply_arg(
 
 fn parse_rule_head(
     src: Pair<'_>,
-    param_pool: &BTreeMap<String, DataValue>,
+    param_pool: &BTreeMap<Symbol, DataValue>,
 ) -> Result<(Symbol, Vec<Symbol>, Vec<HeadAggrSlot>)> {
     let mut src = src.children();
     let name = src.need("a child")?;
@@ -936,7 +936,7 @@ struct AggrNotFound(String, #[label] SourceSpan);
 
 fn parse_rule_head_arg(
     src: Pair<'_>,
-    param_pool: &BTreeMap<String, DataValue>,
+    param_pool: &BTreeMap<Symbol, DataValue>,
 ) -> Result<(Symbol, HeadAggrSlot)> {
     let src = src.children().need("a child")?;
     Ok(match src.as_rule() {
@@ -967,7 +967,7 @@ fn parse_rule_head_arg(
 
 fn parse_fixed_rule(
     src: Pair<'_>,
-    param_pool: &BTreeMap<String, DataValue>,
+    param_pool: &BTreeMap<Symbol, DataValue>,
     cur_vld: ValidityTs,
 ) -> Result<(Symbol, FixedRuleApply)> {
     let mut src = src.children();
@@ -1288,7 +1288,7 @@ fn const_rule_data_arity(data: &Expr) -> Option<usize> {
 /// `@ valid` or `@ system, valid` — system coordinate first when two are given.
 fn parse_at_clause(
     vld_clause: Pair<'_>,
-    param_pool: &BTreeMap<String, DataValue>,
+    param_pool: &BTreeMap<Symbol, DataValue>,
     cur_vld: ValidityTs,
 ) -> Result<AsOf> {
     let mut coords = vld_clause.children();
@@ -1308,7 +1308,7 @@ fn parse_at_clause(
 /// matched. Silent in the grammar, so the pair is the matched alternative.
 fn parse_read_validity_clause(
     clause: Option<Pair<'_>>,
-    param_pool: &BTreeMap<String, DataValue>,
+    param_pool: &BTreeMap<Symbol, DataValue>,
     cur_vld: ValidityTs,
     ignored_counter: &mut u32,
 ) -> Result<Option<ValidityClause>> {

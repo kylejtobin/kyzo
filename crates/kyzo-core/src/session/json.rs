@@ -19,7 +19,7 @@
  * any JSON shaping.
  *
  * - [`Db::run_script_json`] takes `params` as a `&JsonValue` (must be a JSON
- *   object) rather than a pre-built `BTreeMap<String, DataValue>`, so a
+ *   object) rather than a pre-built `BTreeMap<Symbol, DataValue>`, so a
  *   binding whose only natural representation of "the caller's parameters"
  *   is JSON (JS, a C string, an HTTP body) never has to hand-roll the
  *   `DataValue` conversion `data::json` already does. A non-object
@@ -41,6 +41,8 @@ use std::collections::BTreeMap;
 use crate::data::json::format_error_as_json;
 use crate::session::db::Engine;
 use crate::store::Storage;
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::DataValue;
 
 impl<S: Storage> Engine<S> {
@@ -61,10 +63,15 @@ impl<S: Storage> Engine<S> {
         #[cfg(not(target_arch = "wasm32"))]
         let start = crate::session::host_clock::mono_millis();
 
-        let params: BTreeMap<String, DataValue> = match params {
+        let params: BTreeMap<Symbol, DataValue> = match params {
             JsonValue::Object(map) => map
                 .iter()
-                .map(|(k, v)| (k.clone(), DataValue::from(v)))
+                .map(|(k, v)| {
+                    (
+                        Symbol::new(k.as_str(), SourceSpan::empty()),
+                        DataValue::from(v),
+                    )
+                })
                 .collect(),
             JsonValue::Null => BTreeMap::new(),
             JsonValue::Bool(_)

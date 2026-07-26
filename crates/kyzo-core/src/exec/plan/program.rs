@@ -42,7 +42,7 @@ use crate::rules::contract::{DEFAULT_FIXED_RULES, FixedRule};
 /// Look up the live fixed-rule implementation by resolved name. Used when
 /// minting [`MagicFixedRuleApply`] from a model [`FixedRuleApply`] (name +
 /// arity declaration only — no trait object on the model side).
-pub(crate) fn bind_fixed_impl(name: &str) -> Option<Arc<dyn FixedRule>> {
+pub(crate) fn bind_fixed_impl(name: &Symbol) -> Option<Arc<dyn FixedRule>> {
     DEFAULT_FIXED_RULES.get(name).cloned()
 }
 

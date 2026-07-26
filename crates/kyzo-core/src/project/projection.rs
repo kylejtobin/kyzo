@@ -33,22 +33,24 @@ use std::fmt;
 use miette::Result;
 
 use crate::store::ReadTx;
+use kyzo_model::program::span::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
 use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::value::{RelationId, SearchHits};
 
 /// One required scalar column in an index relation (leading key or value).
-pub(crate) fn index_col(name: &str, coltype: ColType) -> ColumnDef {
+pub(crate) fn index_col(name: Symbol, coltype: ColType) -> ColumnDef {
     ColumnDef {
-        name: name.into(),
+        name,
         typing: NullableColType::required(coltype),
         default_gen: None,
     }
 }
 
 /// One required `List<eltype>` value column in an index relation.
-pub(crate) fn index_list_col(name: &str, eltype: ColType) -> ColumnDef {
+pub(crate) fn index_list_col(name: Symbol, eltype: ColType) -> ColumnDef {
     ColumnDef {
-        name: name.into(),
+        name,
         typing: NullableColType::required(ColType::List {
             eltype: Box::new(NullableColType::required(eltype)),
             len: None,
@@ -68,7 +70,7 @@ pub(crate) fn index_relation_metadata(
 ) -> StoredRelationMetadata {
     let mut keys: Vec<ColumnDef> = leading_keys.into_iter().collect();
     keys.extend(base.keys.iter().map(|k| ColumnDef {
-        name: format!("src_{}", k.name).into(),
+        name: Symbol::new(format!("src_{}", k.name), SourceSpan::empty()),
         typing: k.typing.clone(),
         default_gen: None,
     }));

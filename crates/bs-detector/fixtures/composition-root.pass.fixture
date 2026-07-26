@@ -1,5 +1,0 @@
-fn main() {
-    let home = env::var("KYZO_HOME");
-    let started = Instant::now();
-    Engine::boot(home, started).serve()
-}

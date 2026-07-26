@@ -339,7 +339,7 @@ fn generous_budget() -> Budget {
 
 fn col(name: &str) -> ColumnDef {
     ColumnDef {
-        name: SmartString::from(name),
+        name: sym(name).clone(),
         typing: NullableColType::required(ColType::Any),
         default_gen: None,
     }

@@ -1098,7 +1098,7 @@ mod tests {
 
     fn col(name: &str, coltype: ColType) -> ColumnDef {
         ColumnDef {
-            name: SmartString::from(name),
+            name: Symbol::new(name, sp()),
             typing: NullableColType::required(coltype),
             default_gen: None,
         }

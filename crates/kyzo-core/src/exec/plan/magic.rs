@@ -207,7 +207,7 @@ struct MagicInvariantError(&'static str);
 /// demand-adorned (`Magic`) — nothing else. The original kept these as
 /// [`MagicSymbol`]s and asserted "the remaining options are impossible" in
 /// a comment inside the rewrite; here the `Input` and `Sup` roles cannot
-/// exist before the rewrite phase because only [`magic_rewrite_ruleset`]
+/// exist before the rewrite phase because only [`AdornedHead::rewrite_ruleset`]
 /// mints those names. The match in the rewrite is total, not trusted.
 #[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq)]
 enum AdornedHead {
@@ -439,7 +439,7 @@ impl NormalFormStratum {
                             inner: rule_name.clone(),
                         },
                         MagicRulesOrFixed::Fixed {
-                            fixed: adorn_fixed_rule_apply(fixed, schemas)?,
+                            fixed: MagicFixedRuleApply::adorn(fixed, schemas)?,
                         },
                     );
                 }
@@ -512,15 +512,16 @@ impl NormalFormStratum {
     }
 }
 
-/// Adorn a fixed-rule application: in-memory arguments get their Muggle
-/// names (fixed rules always consume *complete* input relations — demand
-/// cannot restrict an opaque algorithm's input); stored arguments have
-/// their time-travel legality checked and named-field bindings resolved to
-/// positional ones against the declared schema, via the seam.
-fn adorn_fixed_rule_apply(
-    fixed: &FixedRuleApply,
-    schemas: &impl StoredRelationSchemaSource,
-) -> Result<MagicFixedRuleApply> {
+impl MagicFixedRuleApply {
+    /// Adorn a fixed-rule application: in-memory arguments get their Muggle
+    /// names (fixed rules always consume *complete* input relations — demand
+    /// cannot restrict an opaque algorithm's input); stored arguments have
+    /// their time-travel legality checked and named-field bindings resolved to
+    /// positional ones against the declared schema, via the seam.
+    fn adorn(
+        fixed: &FixedRuleApply,
+        schemas: &impl StoredRelationSchemaSource,
+    ) -> Result<Self> {
     let mut rule_args = Vec::with_capacity(fixed.rule_args.len());
     for r in fixed.rule_args.iter() {
         rule_args.push(match r {
@@ -553,19 +554,18 @@ fn adorn_fixed_rule_apply(
                 span,
             } => {
                 let metadata = schemas.stored_relation_schema(name, *span)?;
-                // `ColumnDef::name` is a bare `SmartString<LazyCompact>`
-                // (schema-plane, no source span); `bindings` is keyed by
-                // `Symbol` (query-plane, span-carrying but name-only
-                // `Eq`/`Ord`) — compare by string content.
-                let fields: BTreeSet<&str> = metadata
+                // `ColumnDef::name` is a `Symbol` (schema-plane, span at
+                // mint); `bindings` is keyed by `Symbol` (query-plane,
+                // span-carrying but name-only `Eq`/`Ord`) — compare by name.
+                let fields: BTreeSet<&Symbol> = metadata
                     .keys
                     .iter()
                     .chain(metadata.non_keys.iter())
-                    .map(|col| col.name.as_str())
+                    .map(|col| &col.name)
                     .collect();
                 for k in bindings.keys() {
                     ensure!(
-                        fields.contains(k.name().as_str()),
+                        fields.contains(k),
                         NamedFieldNotFound(name.clone(), k.clone(), *span,)
                     );
                 }
@@ -575,7 +575,7 @@ fn adorn_fixed_rule_apply(
                     .chain(metadata.non_keys.iter())
                     .enumerate()
                     .map(|(i, col)| {
-                        match bindings.get(&Symbol::new(col.name.clone(), *span)) {
+                        match bindings.get(&col.name) {
                             // Unbound columns get positional filler names;
                             // digit-leading names cannot collide with user
                             // bindings (not valid identifiers in the grammar).
@@ -602,7 +602,7 @@ fn adorn_fixed_rule_apply(
     // Seal options through the fixed-rule door (Constant folds Apply(OP_LIST)
     // list literals to Const List-of-Lists; other rules normalize similarly).
     let options = fixed_impl.init_options(fixed.options.clone(), fixed.span)?;
-    Ok(MagicFixedRuleApply {
+    Ok(Self {
         span: fixed.span,
         fixed_handle: fixed.fixed_handle.clone(),
         fixed_impl,
@@ -610,6 +610,7 @@ fn adorn_fixed_rule_apply(
         options,
         arity: fixed.arity,
     })
+    }
 }
 
 impl NormalFormInlineRule {
@@ -928,7 +929,7 @@ impl AdornedProgram {
         for (rule_head, ruleset) in self.prog {
             match ruleset {
                 MagicRulesOrFixed::Rules { rules: ruleset } => {
-                    magic_rewrite_ruleset(rule_head, ruleset, &mut ret_prog)?;
+                    rule_head.rewrite_ruleset(ruleset, &mut ret_prog)?;
                 }
                 MagicRulesOrFixed::Fixed { fixed } => {
                     ret_prog.prog.insert(
@@ -942,51 +943,50 @@ impl AdornedProgram {
     }
 }
 
-/// Append one rule under `key`, creating the rule set if absent. Replaces
-/// the original's `entry().or_default().mut_rules()` panic-on-miss: the key
-/// roles are disjoint by construction (`Sup`/`Input` names are minted only
-/// here, and one name is never both rules and fixed), so a collision with a
-/// fixed rule is a rewrite bug, reported as such.
-fn push_magic_rule(
-    ret_prog: &mut MagicProgram,
-    key: MagicSymbol,
-    rule: MagicInlineRule,
-) -> Result<()> {
-    match ret_prog.prog.entry(key) {
-        Entry::Vacant(e) => {
-            e.insert(MagicRulesOrFixed::Rules { rules: vec![rule] });
+impl MagicProgram {
+    /// Append one rule under `key`, creating the rule set if absent. Replaces
+    /// the original's `entry().or_default().mut_rules()` panic-on-miss: the key
+    /// roles are disjoint by construction (`Sup`/`Input` names are minted only
+    /// here, and one name is never both rules and fixed), so a collision with a
+    /// fixed rule is a rewrite bug, reported as such.
+    fn push_rule(&mut self, key: MagicSymbol, rule: MagicInlineRule) -> Result<()> {
+        match self.prog.entry(key) {
+            Entry::Vacant(e) => {
+                e.insert(MagicRulesOrFixed::Rules { rules: vec![rule] });
+            }
+            Entry::Occupied(mut o) => match o.get_mut().mut_rules() {
+                Some(rules) => rules.push(rule),
+                None => bail!(MagicInvariantError(
+                    "a rewrite-synthesized rule collided with a fixed rule"
+                )),
+            },
         }
-        Entry::Occupied(mut o) => match o.get_mut().mut_rules() {
-            Some(rules) => rules.push(rule),
-            None => bail!(MagicInvariantError(
-                "a rewrite-synthesized rule collided with a fixed rule"
-            )),
-        },
+        Ok(())
     }
-    Ok(())
 }
 
-/// Rewrite one rule set (sideways information passing): for a head with
-/// bound positions, seed the body with the input relation's demand tuples;
-/// at each application of an adorned rule inside the body, cut the atoms
-/// collected so far into a supplementary rule, and feed its projection onto
-/// the callee's bound positions into the callee's input relation.
-///
-/// `rule_head` is Muggle or Magic *by type* — the `Input` and `Sup` roles
-/// are minted only by this function, after adornment, so they cannot occur
-/// as heads of an [`AdornedProgram`].
-fn magic_rewrite_ruleset(
-    rule_head: AdornedHead,
-    ruleset: Vec<MagicInlineRule>,
-    ret_prog: &mut MagicProgram,
-) -> Result<()> {
-    let rule_name = rule_head.as_plain_symbol().clone();
-    let adornment: Adornment = rule_head.adornment().to_vec();
-    let head_span = rule_name.span();
-    let out_head = rule_head.to_magic_symbol();
+impl AdornedHead {
+    /// Rewrite one rule set (sideways information passing): for a head with
+    /// bound positions, seed the body with the input relation's demand tuples;
+    /// at each application of an adorned rule inside the body, cut the atoms
+    /// collected so far into a supplementary rule, and feed its projection onto
+    /// the callee's bound positions into the callee's input relation.
+    ///
+    /// The head is Muggle or Magic *by type* — the `Input` and `Sup` roles
+    /// are minted only by this method, after adornment, so they cannot occur
+    /// as heads of an [`AdornedProgram`].
+    fn rewrite_ruleset(
+        self,
+        ruleset: Vec<MagicInlineRule>,
+        ret_prog: &mut MagicProgram,
+    ) -> Result<()> {
+        let rule_name = self.as_plain_symbol().clone();
+        let adornment: Adornment = self.adornment().to_vec();
+        let head_span = rule_name.span();
+        let out_head = self.to_magic_symbol();
 
-    // Can only be true if the head is Magic and not all positions are free.
-    let rule_has_bound_args = rule_head.has_bound_adornment();
+        // Can only be true if the head is Magic and not all positions are free.
+        let rule_has_bound_args = self.has_bound_adornment();
 
     for (rule_idx, rule) in ruleset.into_iter().enumerate() {
         // Checked, not `as`: a silent wrap would merge distinct sup
@@ -1036,8 +1036,7 @@ fn magic_rewrite_ruleset(
                 span: head_span,
             })];
 
-            push_magic_rule(
-                ret_prog,
+            ret_prog.push_rule(
                 sup_kw.clone(),
                 MagicInlineRule {
                     head: sup_args.clone(),
@@ -1091,8 +1090,7 @@ fn magic_rewrite_ruleset(
 
                         // …add the sup rule to the program (this cleared
                         // all collected atoms)…
-                        push_magic_rule(
-                            ret_prog,
+                        ret_prog.push_rule(
                             sup_kw.clone(),
                             MagicInlineRule {
                                 head: args.clone(),
@@ -1128,8 +1126,7 @@ fn magic_rewrite_ruleset(
                             })
                             .collect();
                         let inp_aggr = (0..inp_args.len()).map(|_| HeadAggrSlot::Plain).collect();
-                        push_magic_rule(
-                            ret_prog,
+                        ret_prog.push_rule(
                             inp_kw,
                             MagicInlineRule {
                                 head: inp_args,
@@ -1146,8 +1143,7 @@ fn magic_rewrite_ruleset(
 
         // The rewritten rule itself: head and aggregations untouched (the
         // law — the rewrite may reshape bodies, never what a rule returns).
-        push_magic_rule(
-            ret_prog,
+        ret_prog.push_rule(
             out_head.clone(),
             MagicInlineRule {
                 head: rule.head,
@@ -1157,6 +1153,7 @@ fn magic_rewrite_ruleset(
         )?;
     }
     Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -1281,7 +1278,7 @@ mod tests {
 
     fn column(name: &str, coltype: ColType) -> ColumnDef {
         ColumnDef {
-            name: SmartString::from(name),
+            name: Symbol::new(name, SourceSpan::empty()),
             typing: NullableColType::required(coltype),
             default_gen: None,
         }
@@ -1800,7 +1797,7 @@ mod tests {
             trivia: Trivia::empty(),
         };
 
-        let adorned = adorn_fixed_rule_apply(&apply(&[("b", "x"), ("c", "y")]), &schema)
+        let adorned = MagicFixedRuleApply::adorn(&apply(&[("b", "x"), ("c", "y")]), &schema)
             .map_err(|e| miette!("resolves: {e}"))?;
         match &adorned.rule_args[0] {
             MagicFixedRuleRuleArg::Stored { bindings, .. } => {
@@ -1812,7 +1809,7 @@ mod tests {
             }
         }
 
-        let err = adorn_fixed_rule_apply(&apply(&[("nope", "x")]), &schema)
+        let err = MagicFixedRuleApply::adorn(&apply(&[("nope", "x")]), &schema)
             .expect_err("unknown field must be refused");
         assert!(
             err.to_string().contains("does not have field"),
@@ -1851,14 +1848,14 @@ mod tests {
             keys: vec![column("a", ColType::Int)],
             non_keys: vec![],
         });
-        adorn_fixed_rule_apply(&apply, &plain)
+        MagicFixedRuleApply::adorn(&apply, &plain)
             .map_err(|e| miette!("any facts relation time-travels: {e}"))?;
 
         let keyless = FixedSchema(StoredRelationMetadata {
             keys: vec![],
             non_keys: vec![column("a", ColType::Int)],
         });
-        adorn_fixed_rule_apply(&apply, &keyless)
+        MagicFixedRuleApply::adorn(&apply, &keyless)
             .map_err(|e| miette!("a keyless relation adorns without panicking: {e}"))?;
         Ok(())
     }

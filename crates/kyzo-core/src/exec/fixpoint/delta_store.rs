@@ -372,6 +372,22 @@ pub(crate) struct NormalLevel {
     flags: Vec<RowFlags>,
 }
 
+/// Binary-search the first index in `[0, len)` where `pred` is false.
+#[inline]
+fn partition_point_by_index(len: usize, mut pred: impl FnMut(usize) -> bool) -> usize {
+    let mut left = 0;
+    let mut right = len;
+    while left < right {
+        let mid = left + (right - left) / 2;
+        if pred(mid) {
+            left = mid + 1;
+        } else {
+            right = mid;
+        }
+    }
+    left
+}
+
 impl NormalLevel {
     /// Empty sealed level — no rows.
     pub(crate) fn empty() -> Self {
@@ -440,8 +456,9 @@ impl NormalLevel {
         self.seal_appended(flags)
     }
     fn find(&self, key_bytes: &[u8]) -> Option<usize> {
-        let idx = (0..self.len())
-            .partition_point(|i| self.row_at(i).as_bytes() < key_bytes);
+        let idx = partition_point_by_index(self.len(), |i| {
+            self.row_at(i).as_bytes() < key_bytes
+        });
         (idx < self.len() && self.row_at(idx).as_bytes() == key_bytes).then_some(idx)
     }
     /// The row range whose leading columns equal the PROJECTION of `row`
@@ -459,8 +476,9 @@ impl NormalLevel {
                 None => Ordering::Less,
             }
         };
-        let start = (0..self.len()).partition_point(|i| cmp(i) == Ordering::Less);
-        let end = (start..self.len()).partition_point(|i| cmp(i) != Ordering::Greater);
+        let start = partition_point_by_index(self.len(), |i| cmp(i) == Ordering::Less);
+        let end = start
+            + partition_point_by_index(self.len() - start, |off| cmp(start + off) != Ordering::Greater);
         (start, end.max(start))
     }
 
@@ -472,7 +490,7 @@ impl NormalLevel {
     ) -> (usize, usize) {
         let lower = lower.as_bytes();
         let upper = upper.as_bytes();
-        let start = (0..self.len()).partition_point(|i| self.row_at(i).as_bytes() < lower);
+        let start = partition_point_by_index(self.len(), |i| self.row_at(i).as_bytes() < lower);
         let below_upper = |i: usize| {
             if upper_inclusive {
                 self.row_at(i).as_bytes() <= upper
@@ -480,7 +498,7 @@ impl NormalLevel {
                 self.row_at(i).as_bytes() < upper
             }
         };
-        let end = (start..self.len()).partition_point(|i| below_upper(i));
+        let end = start + partition_point_by_index(self.len() - start, |off| below_upper(start + off));
         (start, end.max(start))
     }
 }

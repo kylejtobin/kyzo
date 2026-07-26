@@ -8,7 +8,42 @@
  */
 
 //! Re-homed domain tables from data/tests/functions.rs.
-use crate::exec::stdlib::numeric::*;
+use crate::exec::stdlib::numeric::op_abs;
+use crate::exec::stdlib::numeric::op_acos;
+use crate::exec::stdlib::numeric::op_acosh;
+use crate::exec::stdlib::numeric::op_add;
+use crate::exec::stdlib::numeric::op_asin;
+use crate::exec::stdlib::numeric::op_atan;
+use crate::exec::stdlib::numeric::op_atan2;
+use crate::exec::stdlib::numeric::op_atanh;
+use crate::exec::stdlib::numeric::op_bit_and;
+use crate::exec::stdlib::numeric::op_bit_not;
+use crate::exec::stdlib::numeric::op_bit_or;
+use crate::exec::stdlib::numeric::op_bit_xor;
+use crate::exec::stdlib::numeric::op_ceil;
+use crate::exec::stdlib::numeric::op_cos;
+use crate::exec::stdlib::numeric::op_div;
+use crate::exec::stdlib::numeric::op_exp;
+use crate::exec::stdlib::numeric::op_exp2;
+use crate::exec::stdlib::numeric::op_floor;
+use crate::exec::stdlib::numeric::op_ln;
+use crate::exec::stdlib::numeric::op_log10;
+use crate::exec::stdlib::numeric::op_log2;
+use crate::exec::stdlib::numeric::op_max;
+use crate::exec::stdlib::numeric::op_min;
+use crate::exec::stdlib::numeric::op_minus;
+use crate::exec::stdlib::numeric::op_mod;
+use crate::exec::stdlib::numeric::op_mul;
+use crate::exec::stdlib::numeric::op_negate;
+use crate::exec::stdlib::numeric::op_pack_bits;
+use crate::exec::stdlib::numeric::op_pow;
+use crate::exec::stdlib::numeric::op_round;
+use crate::exec::stdlib::numeric::op_signum;
+use crate::exec::stdlib::numeric::op_sin;
+use crate::exec::stdlib::numeric::op_sqrt;
+use crate::exec::stdlib::numeric::op_sub;
+use crate::exec::stdlib::numeric::op_tan;
+use crate::exec::stdlib::numeric::op_unpack_bits;
 use kyzo_model::value::{DataValue, Vector};
 use miette::{Result, miette};
 use std::f64::consts::{E, PI};

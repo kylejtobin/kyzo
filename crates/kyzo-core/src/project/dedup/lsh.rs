@@ -124,6 +124,7 @@ use crate::store::{ReadTx, WriteTx};
 use kyzo_model::SourceSpan;
 use kyzo_model::data_value_any;
 use kyzo_model::program::expr::Expr;
+use kyzo_model::program::symbol::Symbol;
 use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::value::{DataValue, Tuple, append_canonical};
 
@@ -209,8 +210,8 @@ impl AsRef<[u8]> for LshPermutationBytes {
 
 #[derive(Debug, Clone, PartialEq, serde_derive::Serialize, serde_derive::Deserialize)]
 pub struct MinHashLshIndexManifest {
-    pub(crate) base_relation: SmartString<LazyCompact>,
-    pub(crate) index_name: SmartString<LazyCompact>,
+    pub(crate) base_relation: Symbol,
+    pub(crate) index_name: Symbol,
     /// The row-extraction expression as a PARSED typed substance (serde
     /// round-trips it through the value plane's `Expr` codec, arity re-proven
     /// on decode); never source text re-parsed at build time.
@@ -259,7 +260,17 @@ impl MinHashLshIndexManifest {
 /// keys `[hash: Bytes, src_*…]`, no value columns.
 pub(crate) fn lsh_index_metadata(base: &StoredRelationMetadata) -> StoredRelationMetadata {
     use crate::project::projection::{index_col, index_relation_metadata};
-    index_relation_metadata([index_col("hash", ColType::Bytes)], base, vec![])
+    use kyzo_model::program::span::SourceSpan;
+    use kyzo_model::program::symbol::Symbol;
+
+    index_relation_metadata(
+        [index_col(
+            Symbol::new("hash", SourceSpan::empty()),
+            ColType::Bytes,
+        )],
+        base,
+        vec![],
+    )
 }
 
 /// Mint the inverse relation's column metadata: keyed by the base key,
@@ -272,7 +283,7 @@ pub(crate) fn lsh_inv_index_metadata(base: &StoredRelationMetadata) -> StoredRel
     StoredRelationMetadata {
         keys: base.keys.clone(),
         non_keys: vec![ColumnDef {
-            name: SmartString::from("minhash"),
+            name: Symbol::new("minhash", SourceSpan::empty()),
             typing: NullableColType::required(ColType::List {
                 eltype: Box::new(NullableColType::required(ColType::Bytes)),
                 len: None,
@@ -1443,7 +1454,7 @@ mod tests {
 
     fn col(name: &str, coltype: ColType) -> ColumnDef {
         ColumnDef {
-            name: SmartString::from(name),
+            name: Symbol::new(name, SourceSpan::empty()),
             typing: NullableColType::required(coltype),
             default_gen: None,
         }
@@ -1462,8 +1473,8 @@ mod tests {
             r: perm_seeds.len() / n_bands,
         };
         Ok(MinHashLshIndexManifest {
-            base_relation: SmartString::from("docs"),
-            index_name: SmartString::from("by_text"),
+            base_relation: Symbol::new("docs", SourceSpan::empty()),
+            index_name: Symbol::new("by_text", SourceSpan::empty()),
             extractor: crate::parse::parse_expressions("v", &std::collections::BTreeMap::new())?,
             n_gram: 3,
             tokenizer: TokenizerConfig::admit("Simple", vec![])?,
@@ -1762,5 +1773,5 @@ mod tests {
     /// The pinned wire bytes of the canonical manifest above (msgpack,
     /// struct maps). Regenerate ONLY as part of a deliberate format
     /// migration.
-    const PINNED_MANIFEST_HEX: &str = "8bad626173655f72656c6174696f6ea4646f6373aa696e6465785f6e616d65a762795f74657874a9657874726163746f7281a742696e64696e6782a376617281a46e616d65a176a97475706c655f706f73aa556e7265736f6c766564a66e5f6772616d03a9746f6b656e697a657282a46e616d65a653696d706c65a46172677390a766696c7465727390a86e756d5f7065726d04a76e5f62616e647304ae6e5f726f77735f696e5f62616e6401a97468726573686f6c64cb3fe0000000000000a57065726d73dc001001000000040302010700000008000000";
+    const PINNED_MANIFEST_HEX: &str = "8bad626173655f72656c6174696f6e81a46e616d65a4646f6373aa696e6465785f6e616d6581a46e616d65a762795f74657874a9657874726163746f7281a742696e64696e6782a376617281a46e616d65a176a97475706c655f706f73aa556e7265736f6c766564a66e5f6772616d03a9746f6b656e697a657282a46e616d65a653696d706c65a46172677390a766696c7465727390a86e756d5f7065726d04a76e5f62616e647304ae6e5f726f77735f696e5f62616e6401a97468726573686f6c64cb3fe0000000000000a57065726d73dc001001000000040302010700000008000000";
 }

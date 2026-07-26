@@ -133,7 +133,7 @@ fn boundary_budget() -> Budget {
 #[cfg(test)]
 fn col(name: &str) -> ColumnDef {
     ColumnDef {
-        name: SmartString::from(name),
+        name: sym(name).clone(),
         typing: NullableColType::required(ColType::Any),
         default_gen: None,
     }
@@ -143,7 +143,7 @@ fn col(name: &str) -> ColumnDef {
 #[cfg(test)]
 fn stored_relation(db: &FjallStorage, name: &str, arity: usize, rows: &[Tuple]) {
     let keys: Vec<ColumnDef> = (0..arity).map(|i| col(&format!("c{i}"))).collect();
-    let key_bindings = keys.iter().map(|c| sym(&c.name)).collect();
+    let key_bindings = keys.iter().map(|c| c.name.clone()).collect();
     let input = InputRelationHandle {
         name: sym(name),
         metadata: StoredRelationMetadata {
@@ -1512,8 +1512,8 @@ fn relation_with_truncated_row(
 ) {
     let keys: Vec<ColumnDef> = (0..num_keys).map(|i| col(&format!("k{i}"))).collect();
     let non_keys: Vec<ColumnDef> = (0..num_vals).map(|i| col(&format!("nk{i}"))).collect();
-    let key_bindings = keys.iter().map(|c| sym(&c.name)).collect();
-    let dep_bindings = non_keys.iter().map(|c| sym(&c.name)).collect();
+    let key_bindings = keys.iter().map(|c| c.name.clone()).collect();
+    let dep_bindings = non_keys.iter().map(|c| c.name.clone()).collect();
     let input = InputRelationHandle {
         name: sym(name),
         metadata: StoredRelationMetadata { keys, non_keys },
@@ -2020,7 +2020,7 @@ fn batched_stream_survivor_count_is_analytic() {
 fn choose_index_prefers_longest_prefix_and_survives_edges() {
     fn col(name: &str, coltype: ColType) -> ColumnDef {
         ColumnDef {
-            name: SmartString::from(name),
+            name: sym(name).clone(),
             typing: NullableColType::required(coltype),
             default_gen: None,
         }

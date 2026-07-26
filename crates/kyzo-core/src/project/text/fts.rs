@@ -165,10 +165,10 @@ pub(crate) enum FtsScoreKind {
 /// definition error surfaced at index time, typed rather than the original's
 /// ad-hoc inline error.
 #[derive(Debug, Error, Diagnostic)]
-#[error("FTS index extractor must return a string or null, got {got}")]
+#[error("FTS index extractor must return a string or null, got {got:?}")]
 #[diagnostic(code(index::fts::extractor_type))]
 pub(crate) struct FtsExtractorType {
-    pub(crate) got: String,
+    pub(crate) got: DataValue,
 }
 
 // ---------------------------------------------------------------------------
@@ -183,14 +183,21 @@ pub(crate) struct FtsExtractorType {
 /// `total_length` (the document's total token count).
 pub(crate) fn fts_index_metadata(base: &StoredRelationMetadata) -> StoredRelationMetadata {
     use crate::project::projection::{index_col, index_list_col, index_relation_metadata};
+    use kyzo_model::program::span::SourceSpan;
+    use kyzo_model::program::symbol::Symbol;
+
+    fn col(name: &str) -> Symbol {
+        Symbol::new(name, SourceSpan::empty())
+    }
+
     index_relation_metadata(
-        [index_col("word", ColType::String)],
+        [index_col(col("word"), ColType::String)],
         base,
         vec![
-            index_list_col("offset_from", ColType::Int),
-            index_list_col("offset_to", ColType::Int),
-            index_list_col("position", ColType::Int),
-            index_col("total_length", ColType::Int),
+            index_list_col(col("offset_from"), ColType::Int),
+            index_list_col(col("offset_to"), ColType::Int),
+            index_list_col(col("position"), ColType::Int),
+            index_col(col("total_length"), ColType::Int),
         ],
     )
 }
@@ -205,9 +212,7 @@ fn extract_text(extractor: &Expr, tuple: &[DataValue]) -> Result<Option<String>>
     match crate::exec::expr::eval_expr(extractor, tuple)? {
         DataValue::Null => Ok(None),
         DataValue::Str(s) => Ok(Some(s)),
-        other @ (data_value_any!()) => bail!(FtsExtractorType {
-            got: format!("{other:?}"),
-        }),
+        other @ (data_value_any!()) => bail!(FtsExtractorType { got: other }),
     }
 }
 
@@ -798,7 +803,7 @@ mod tests {
 
     fn col(name: &str, coltype: ColType) -> ColumnDef {
         ColumnDef {
-            name: SmartString::from(name),
+            name: Symbol::new(name, SourceSpan::empty()),
             typing: NullableColType::required(coltype),
             default_gen: None,
         }
@@ -844,8 +849,8 @@ mod tests {
         let idx_meta = fts_index_metadata(&meta);
         let (base, idx) = crate::project::index_fixture::seed_base_and_index(
             db,
-            "docs",
-            "docs:fts",
+            Symbol::new("docs", SourceSpan::new(0, 0)),
+            Symbol::new("docs:fts", SourceSpan::new(0, 0)),
             meta,
             idx_meta,
             |tx, base, idx| {

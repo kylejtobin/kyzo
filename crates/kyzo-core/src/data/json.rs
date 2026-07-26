@@ -18,11 +18,17 @@ use serde_json::json;
 use std::sync::LazyLock;
 use thiserror::Error;
 
+use kyzo_model::program::span::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, NonFiniteJsonNumber, Tuple};
 
 pub use kyzo_model::envelope::json::{JsonData, json_to_datavalue};
 #[cfg(test)]
 pub use kyzo_model::envelope::json::{json_from_serde, serde_from_json};
+
+fn header(name: impl AsRef<str>) -> Symbol {
+    Symbol::new(name.as_ref(), SourceSpan::empty())
+}
 
 /// Private seal: any private field blocks struct-literal minting outside
 /// this module, so header/row/next cannot be forged past [`NamedRows::try_new`]
@@ -40,7 +46,7 @@ struct NamedRowsSeal;
 /// [`Self::with_next`]. Illegal (misaligned) NamedRows are unconstructible.
 #[derive(Debug, Clone)]
 pub struct NamedRows {
-    headers: Vec<String>,
+    headers: Vec<Symbol>,
     rows: Vec<Tuple>,
     next: Option<Box<NamedRows>>,
     _seal: NamedRowsSeal,
@@ -61,7 +67,7 @@ pub struct NamedRowsArityError {
 impl NamedRows {
     /// Sole door: every row's width equals `headers.len()`.
     pub fn try_new(
-        headers: Vec<String>,
+        headers: Vec<Symbol>,
         rows: Vec<Tuple>,
     ) -> std::result::Result<Self, NamedRowsArityError> {
         let header_arity = headers.len();
@@ -86,7 +92,7 @@ impl NamedRows {
     /// One-cell `status: OK` — header/row widths match by construction (P082).
     pub(crate) fn status_ok() -> Self {
         Self {
-            headers: vec!["status".to_string()],
+            headers: vec![header("status")],
             rows: vec![Tuple::from_vec(vec![DataValue::from("OK")])],
             next: None,
             _seal: NamedRowsSeal,
@@ -100,11 +106,7 @@ impl NamedRows {
         detail: impl Into<DataValue>,
     ) -> Self {
         Self {
-            headers: vec![
-                "status".to_string(),
-                "summary".to_string(),
-                "detail".to_string(),
-            ],
+            headers: vec![header("status"), header("summary"), header("detail")],
             rows: vec![Tuple::from_vec(vec![
                 status.into(),
                 summary.into(),
@@ -116,9 +118,9 @@ impl NamedRows {
     }
 
     /// One-cell bool column — header/row widths match by construction (P082).
-    pub(crate) fn single_bool_column(name: impl Into<String>, value: bool) -> Self {
+    pub(crate) fn single_bool_column(name: impl AsRef<str>, value: bool) -> Self {
         Self {
-            headers: vec![name.into()],
+            headers: vec![header(name)],
             rows: vec![Tuple::from_vec(vec![DataValue::from(value)])],
             next: None,
             _seal: NamedRowsSeal,
@@ -127,13 +129,13 @@ impl NamedRows {
 
     /// Bool column plus a bytes column — widths match by construction (P082).
     pub(crate) fn bool_and_bytes_columns(
-        bool_name: impl Into<String>,
+        bool_name: impl AsRef<str>,
         bool_value: bool,
-        bytes_name: impl Into<String>,
+        bytes_name: impl AsRef<str>,
         bytes: Vec<u8>,
     ) -> Self {
         Self {
-            headers: vec![bool_name.into(), bytes_name.into()],
+            headers: vec![header(bool_name), header(bytes_name)],
             rows: vec![Tuple::from_vec(vec![
                 DataValue::from(bool_value),
                 DataValue::Bytes(bytes),
@@ -145,14 +147,14 @@ impl NamedRows {
 
     /// Alias of [`Self::try_new`] — typed refuse, never panic (P082).
     pub fn new(
-        headers: Vec<String>,
+        headers: Vec<Symbol>,
         rows: Vec<Tuple>,
     ) -> std::result::Result<Self, NamedRowsArityError> {
         Self::try_new(headers, rows)
     }
 
     /// Header names.
-    pub fn headers(&self) -> &[String] {
+    pub fn headers(&self) -> &[Symbol] {
         &self.headers
     }
 
@@ -167,7 +169,7 @@ impl NamedRows {
     }
 
     /// Consume into headers, rows, and optional follow-on page.
-    pub fn into_parts(self) -> (Vec<String>, Vec<Tuple>, Option<Box<NamedRows>>) {
+    pub fn into_parts(self) -> (Vec<Symbol>, Vec<Tuple>, Option<Box<NamedRows>>) {
         (self.headers, self.rows, self.next)
     }
 
@@ -191,6 +193,7 @@ impl NamedRows {
     /// value that cannot encode honestly as JSON) — never Null/Str-remaps.
     pub fn into_json(self) -> Result<JsonValue, NonFiniteJsonNumber> {
         let (headers, rows, next) = self.into_parts();
+        let header_names: Vec<&str> = headers.iter().map(|h| h.as_ref()).collect();
         let next = match next {
             None => {
                 // No further page — JSON null is the published end-of-cursor render.
@@ -208,7 +211,7 @@ impl NamedRows {
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(json!({
-            "headers": headers,
+            "headers": header_names,
             "rows": rows,
             "next": next,
         }))
@@ -222,7 +225,7 @@ impl NamedRows {
             self.headers.len(),
         )
         .map_err(|e| miette::miette!("{e}"))?;
-        let names: Vec<&str> = self.headers.iter().map(String::as_str).collect();
+        let names: Vec<&str> = self.headers.iter().map(|h| h.as_ref()).collect();
         kyzo_model::envelope::arrow::encode_stream(&batch, &names)
     }
 
@@ -235,7 +238,7 @@ impl NamedRows {
             .iter()
             .map(|h| {
                 h.as_str()
-                    .map(str::to_string)
+                    .map(header)
                     .ok_or_else(|| miette::miette!("'headers' must be an array of strings"))
             })
             .collect::<miette::Result<Vec<_>>>()?;
@@ -331,13 +334,13 @@ mod tests {
     fn named_rows_try_new_proves_arity() -> miette::Result<()> {
         assert!(
             NamedRows::try_new(
-                vec!["a".into(), "b".into()],
+                vec![header("a"), header("b")],
                 vec![Tuple::from_vec(vec![DataValue::from(1)])],
             )
             .is_err()
         );
         let ok = NamedRows::try_new(
-            vec!["a".into()],
+            vec![header("a")],
             vec![Tuple::from_vec(vec![DataValue::from(1)])],
         )?;
         assert_eq!(ok.headers().len(), 1);

@@ -495,7 +495,7 @@ mod tests {
     /// Run the rule and return the maximal cliques as a sorted set of sorted
     /// node-name lists — the canonical shape both the rule output and the
     /// brute-force oracle are compared in.
-    fn run_cliques(edges: &[(&str, &str)], max_cliques: Option<i64>) -> Result<Vec<Vec<String>>> {
+    fn run_cliques(edges: &[(&str, &str)], max_cliques: Option<i64>) -> Result<Vec<Vec<DataValue>>> {
         let rows = edges
             .iter()
             .map(|&(a, b)| Tuple::from_vec(vec![s(a), s(b)]))
@@ -517,7 +517,7 @@ mod tests {
             CancelFlag::inert(),
         )?;
         // Group rows by clique_id, collect member names.
-        let mut by_id: BTreeMap<i64, Vec<String>> = BTreeMap::new();
+        let mut by_id: BTreeMap<i64, Vec<DataValue>> = BTreeMap::new();
         for r in got {
             by_id
                 .entry(
@@ -525,13 +525,9 @@ mod tests {
                         .ok_or_else(|| miette!("test expected Some"))?,
                 )
                 .or_default()
-                .push(
-                    r[1].get_str()
-                        .ok_or_else(|| miette!("test expected Some"))?
-                        .to_string(),
-                );
+                .push(r[1].clone());
         }
-        let mut cliques: Vec<Vec<String>> = by_id
+        let mut cliques: Vec<Vec<DataValue>> = by_id
             .into_values()
             .map(|mut m| {
                 m.sort();
@@ -546,18 +542,19 @@ mod tests {
     /// a clique iff all its pairs are adjacent; it is maximal iff no outside
     /// vertex is adjacent to all of it. Feasible for ≤ ~16 nodes. Shares no
     /// logic with Bron–Kerbosch.
-    fn brute_maximal_cliques(edges: &[(&str, &str)]) -> Result<Vec<Vec<String>>> {
-        let mut names: BTreeSet<String> = BTreeSet::new();
+    fn brute_maximal_cliques(edges: &[(&str, &str)]) -> Result<Vec<Vec<DataValue>>> {
+        let mut names: BTreeSet<DataValue> = BTreeSet::new();
         for &(a, b) in edges {
-            names.insert(a.to_string());
-            names.insert(b.to_string());
+            names.insert(s(a));
+            names.insert(s(b));
         }
-        let names: Vec<String> = names.into_iter().collect();
+        let names: Vec<DataValue> = names.into_iter().collect();
         let n = names.len();
         let idx = |name: &str| -> Result<usize> {
+            let want = s(name);
             names
                 .iter()
-                .position(|x| x == name)
+                .position(|x| x == &want)
                 .ok_or_else(|| miette!("test expected Some"))
         };
         let mut adjm = vec![vec![false; n]; n];
@@ -581,7 +578,7 @@ mod tests {
                 .filter(|&ext| mask & (1 << ext) == 0)
                 .all(|ext| !members.iter().all(|&a| adjm[a][ext]));
             if maximal {
-                let mut clique: Vec<String> = members.iter().map(|&i| names[i].clone()).collect();
+                let mut clique: Vec<DataValue> = members.iter().map(|&i| names[i].clone()).collect();
                 clique.sort();
                 out.push(clique);
             }
@@ -606,9 +603,9 @@ mod tests {
         assert_eq!(
             run_cliques(&edges, None)?,
             vec![
-                vec!["a".to_string(), "b".to_string(), "c".to_string()],
-                vec!["c".to_string(), "d".to_string(), "e".to_string()],
-                vec!["e".to_string(), "f".to_string()],
+                vec![s("a"), s("b"), s("c")],
+                vec![s("c"), s("d"), s("e")],
+                vec![s("e"), s("f")],
             ]
         );
         Ok(())
@@ -700,8 +697,8 @@ mod tests {
         assert_eq!(
             got,
             vec![
-                vec!["a".to_string(), "b".to_string(), "c".to_string()],
-                vec!["c".to_string(), "d".to_string(), "e".to_string()],
+                vec![s("a"), s("b"), s("c")],
+                vec![s("c"), s("d"), s("e")],
             ]
         );
         // No reported clique is a strict subset of another (the maximality

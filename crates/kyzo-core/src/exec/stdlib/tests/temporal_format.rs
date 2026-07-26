@@ -8,7 +8,7 @@
  */
 
 //! Re-homed domain tables from data/tests/functions.rs.
-use crate::exec::stdlib::temporal_format::*;
+use crate::exec::stdlib::temporal_format::op_parse_timestamp;
 use kyzo_model::schema::{ColType, NullableColType};
 use kyzo_model::str2vld;
 use kyzo_model::value::{DataValue, ValidityTs};

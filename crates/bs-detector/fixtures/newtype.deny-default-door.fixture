@@ -1,2 +1,0 @@
-#[derive(Default)]
-struct RecordId(u64);

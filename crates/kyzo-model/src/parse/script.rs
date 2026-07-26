@@ -33,12 +33,13 @@ use crate::parse::{
     ExtractSpan, ImperativeProgram, ImperativeStmt, ImperativeStmtClause, ImperativeSysop,
     IntoChildren, Pair, QueryOrRelation, Rule, unexpected,
 };
+use crate::program::symbol::Symbol;
 use crate::value::{DataValue, ValidityTs};
 
 /// Walk an `imperative_script` / `imperative_block` into typed IR.
 pub(crate) fn parse_imperative_block(
     src: Pair<'_>,
-    param_pool: &BTreeMap<String, DataValue>,
+    param_pool: &BTreeMap<Symbol, DataValue>,
     cur_vld: ValidityTs,
 ) -> Result<ImperativeProgram> {
     let mut collected = Vec::new();
@@ -55,7 +56,7 @@ pub(crate) fn parse_imperative_block(
 
 fn parse_imperative_stmt(
     pair: Pair<'_>,
-    param_pool: &BTreeMap<String, DataValue>,
+    param_pool: &BTreeMap<Symbol, DataValue>,
     cur_vld: ValidityTs,
 ) -> Result<ImperativeStmt> {
     Ok(match pair.as_rule() {
@@ -199,7 +200,7 @@ fn parse_imperative_stmt(
 
 fn parse_stmt_children(
     block: Pair<'_>,
-    param_pool: &BTreeMap<String, DataValue>,
+    param_pool: &BTreeMap<Symbol, DataValue>,
     cur_vld: ValidityTs,
 ) -> Result<ImperativeProgram> {
     let mut out = Vec::new();

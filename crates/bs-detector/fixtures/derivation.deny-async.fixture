@@ -1,5 +1,0 @@
-impl Span {
-    async fn width(&self) -> Width {
-        Width::between(self.start, self.end)
-    }
-}

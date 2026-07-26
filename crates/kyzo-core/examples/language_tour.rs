@@ -31,8 +31,9 @@ use std::fmt::Debug;
 use std::process::ExitCode;
 
 use kyzo::{DataValue, Engine, FjallStorage, NamedRows};
+use kyzo_model::program::symbol::Symbol;
 
-fn no_params() -> BTreeMap<String, DataValue> {
+fn no_params() -> BTreeMap<Symbol, DataValue> {
     BTreeMap::new()
 }
 

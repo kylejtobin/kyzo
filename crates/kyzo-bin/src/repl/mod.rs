@@ -54,6 +54,7 @@ use std::path::PathBuf;
 
 use clap::Args;
 use kyzo::{DataValue, Engine, FjallStorage};
+use kyzo_model::program::symbol::Symbol;
 use miette::{IntoDiagnostic, Result};
 use rustyline::history::DefaultHistory;
 
@@ -140,7 +141,7 @@ fn process_line(
     line: &str,
     db: &Engine<FjallStorage>,
     storage: &FjallStorage,
-    params: &mut BTreeMap<String, DataValue>,
+    params: &mut BTreeMap<Symbol, DataValue>,
     save_next: &mut Option<String>,
 ) -> Result<()> {
     let line = line.trim();

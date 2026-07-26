@@ -47,7 +47,10 @@
 use super::*;
 
 use miette::{IntoDiagnostic, Result, bail, miette};
-use proptest::prelude::*;
+use proptest::prop_assert;
+use proptest::prop_assert_eq;
+use proptest::proptest;
+use proptest::test_runner::Config;
 use proptest::test_runner::TestCaseError;
 
 use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation, get_relation};
@@ -57,6 +60,7 @@ use kyzo_model::data_value_any;
 use kyzo_model::program::InputRelationHandle;
 use kyzo_model::program::expr::BindingPos;
 use kyzo_model::program::op::{OP_GE, OP_LT, OP_MOD};
+use kyzo_model::program::span::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 
 // ---------------------------------------------------------------------------
@@ -65,7 +69,7 @@ use kyzo_model::program::symbol::Symbol;
 
 fn col(name: &str, coltype: ColType) -> ColumnDef {
     ColumnDef {
-        name: SmartString::from(name),
+        name: Symbol::new(name, SourceSpan::empty()),
         typing: NullableColType::required(coltype),
         default_gen: None,
     }
@@ -142,8 +146,8 @@ fn hbase_metadata(dim: usize) -> StoredRelationMetadata {
 
 fn hmanifest(dim: usize, distance: HnswDistance) -> Result<HnswIndexManifest> {
     HnswIndexManifest::admit(crate::project::vector::hnsw::HnswAdmitSpec {
-        base_relation: SmartString::from("corpus"),
-        index_name: SmartString::from("by_v"),
+        base_relation: Symbol::new("corpus", SourceSpan::empty()),
+        index_name: Symbol::new("by_v", SourceSpan::empty()),
         vec_dim: dim,
         dtype: VecElementType::F32,
         vec_fields: vec![1],
@@ -1226,7 +1230,7 @@ fn min_k_matches_law_generative() -> Result<()> {
         );
     }
 
-    proptest!(ProptestConfig::with_cases(64), |(k in 1usize..=15, modulus in 2i64..=64, accept_raw in 0i64..64)| {
+    proptest!(Config::with_cases(64), |(k in 1usize..=15, modulus in 2i64..=64, accept_raw in 0i64..64)| {
         let accept = accept_raw % modulus;
         let f = FilterSpec::ModLessThan { modulus, accept };
         let matches = f

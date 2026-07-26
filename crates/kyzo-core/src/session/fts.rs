@@ -18,9 +18,10 @@ mod tests {
     use crate::session::db::Engine;
     use crate::store::Storage;
     use crate::store::sim::SimStorage;
+    use kyzo_model::program::symbol::Symbol;
     use kyzo_model::value::DataValue;
 
-    fn no_params() -> BTreeMap<String, DataValue> {
+    fn no_params() -> BTreeMap<Symbol, DataValue> {
         BTreeMap::new()
     }
 

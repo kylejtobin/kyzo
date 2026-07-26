@@ -19,9 +19,10 @@ mod tests {
     use crate::store::Storage;
     use crate::store::fjall::new_fjall_storage;
     use crate::store::sim::SimStorage;
+    use kyzo_model::program::symbol::Symbol;
     use kyzo_model::value::DataValue;
 
-    fn no_params() -> BTreeMap<String, DataValue> {
+    fn no_params() -> BTreeMap<Symbol, DataValue> {
         BTreeMap::new()
     }
 

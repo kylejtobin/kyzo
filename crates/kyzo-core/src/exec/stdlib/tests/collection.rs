@@ -8,8 +8,29 @@
  */
 
 //! Re-homed domain tables from data/tests/functions.rs.
-use crate::exec::stdlib::collection::*;
-use crate::exec::stdlib::temporal_format::*;
+use crate::exec::stdlib::collection::op_append;
+use crate::exec::stdlib::collection::op_chunks;
+use crate::exec::stdlib::collection::op_chunks_exact;
+use crate::exec::stdlib::collection::op_concat;
+use crate::exec::stdlib::collection::op_difference;
+use crate::exec::stdlib::collection::op_first;
+use crate::exec::stdlib::collection::op_get;
+use crate::exec::stdlib::collection::op_int_range;
+use crate::exec::stdlib::collection::op_intersection;
+use crate::exec::stdlib::collection::op_last;
+use crate::exec::stdlib::collection::op_length;
+use crate::exec::stdlib::collection::op_list;
+use crate::exec::stdlib::collection::op_maybe_get;
+use crate::exec::stdlib::collection::op_prepend;
+use crate::exec::stdlib::collection::op_remove_json_path;
+use crate::exec::stdlib::collection::op_reverse;
+use crate::exec::stdlib::collection::op_set_json_path;
+use crate::exec::stdlib::collection::op_slice;
+use crate::exec::stdlib::collection::op_sorted;
+use crate::exec::stdlib::collection::op_union;
+use crate::exec::stdlib::collection::op_windows;
+use crate::exec::stdlib::temporal_format::op_format_timestamp;
+use crate::exec::stdlib::temporal_format::op_parse_timestamp;
 use kyzo_model::schema::{ColType, NullableColType};
 use kyzo_model::str2vld;
 use kyzo_model::value::{DataValue, ValidityTs};

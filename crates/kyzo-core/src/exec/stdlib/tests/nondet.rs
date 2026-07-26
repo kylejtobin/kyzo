@@ -8,8 +8,13 @@
  */
 
 //! Re-homed domain tables from data/tests/functions.rs.
-use crate::exec::stdlib::nondet::*;
-use crate::exec::stdlib::temporal_format::*;
+use crate::exec::stdlib::nondet::op_now;
+use crate::exec::stdlib::nondet::op_rand_bernoulli;
+use crate::exec::stdlib::nondet::op_rand_choose;
+use crate::exec::stdlib::nondet::op_rand_float;
+use crate::exec::stdlib::nondet::op_rand_int;
+use crate::exec::stdlib::temporal_format::op_format_timestamp;
+use crate::exec::stdlib::temporal_format::op_parse_timestamp;
 use kyzo_model::value::DataValue;
 use miette::{Result, miette};
 

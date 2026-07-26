@@ -13,6 +13,7 @@ use crate::session::catalog::{KeyspaceKind, RelationHandle, create_relation};
 use crate::store::tx::Slice;
 use crate::store::{Storage, WriteTx};
 use kyzo_model::program::InputRelationHandle;
+use kyzo_model::program::symbol::Symbol;
 use kyzo_model::schema::StoredRelationMetadata;
 use kyzo_model::SourceSpan;
 use kyzo_model::value::DataValue;
@@ -22,8 +23,8 @@ use serde::de::DeserializeOwned;
 
 pub(crate) fn seed_base_and_index<S, F>(
     db: &S,
-    base_name: &str,
-    idx_name: &str,
+    base_name: Symbol,
+    idx_name: Symbol,
     meta: StoredRelationMetadata,
     idx_meta: StoredRelationMetadata,
     mut seed: F,
@@ -35,12 +36,12 @@ where
     let mut tx = db.write_tx()?;
     let base = create_relation(
         &mut tx,
-        InputRelationHandle::from_metadata(base_name, meta),
+        InputRelationHandle::from_metadata(&base_name, meta),
         KeyspaceKind::Facts,
     )?;
     let idx = create_relation(
         &mut tx,
-        InputRelationHandle::from_metadata(idx_name, idx_meta),
+        InputRelationHandle::from_metadata(&idx_name, idx_meta),
         KeyspaceKind::AlgorithmState,
     )?;
     seed(&mut tx, &base, &idx)?;

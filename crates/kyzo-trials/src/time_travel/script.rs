@@ -156,7 +156,9 @@ use kyzo_oracle::{AsOf, Event as TemporalEvent, resolve_relation};
 
 use crate::gauntlet::Rng;
 
-fn no_params() -> std::collections::BTreeMap<String, DataValue> {
+use kyzo_model::program::symbol::Symbol;
+
+fn no_params() -> std::collections::BTreeMap<Symbol, DataValue> {
     std::collections::BTreeMap::new()
 }
 

@@ -204,7 +204,7 @@ impl CurrentRowBackfillCursor {
                     tx.apply_manifest_index(base, ctx, Some(row.as_slice()), None)?
                 }
                 (None, Some(mapper)) => {
-                    let idx_handle = tx.get_relation(&index_ref.relation_name(&base.name))?;
+                    let idx_handle = tx.get_relation(index_ref.relation_name(&base.name).as_str())?;
                     // Backfill re-mints "now" for both coordinates —
                     // it indexes the base's CURRENT rows (`as_of`
                     // above), and the scan already discards each row's
@@ -268,7 +268,7 @@ impl<T: WriteTx> SessionTx<T> {
         if let Some(ctx) = self.index_ctxs.get(idx_name.as_str()) {
             return Ok(ctx.clone());
         }
-        let idx = self.get_relation(&idx_name)?;
+        let idx = self.get_relation(idx_name.as_str())?;
         let ctx = match &index.kind {
             IndexKind::Plain { .. } | IndexKind::Temporal => {
                 bail!(IndexLifecycleError(format!(
@@ -303,7 +303,7 @@ impl<T: WriteTx> SessionTx<T> {
                 manifest: manifest.clone(),
             })),
         };
-        self.index_ctxs.insert(idx_name.into(), ctx.clone());
+        self.index_ctxs.insert(idx_name.as_str().into(), ctx.clone());
         Ok(ctx)
     }
 
@@ -451,7 +451,7 @@ impl<T: WriteTx> SessionTx<T> {
         // "now". That is a raw walk of the base's whole keyspace, not the
         // as-of skip-scan the Plain/manifest path below uses.
         if matches!(index_ref.kind, IndexKind::Temporal) {
-            let idx_handle = self.get_relation(&index_ref.relation_name(&base.name))?;
+            let idx_handle = self.get_relation(index_ref.relation_name(&base.name).as_str())?;
             let keys_len = base.metadata.keys.len();
             TemporalBackfillCursor {
                 lower: Tuple::new().encode_as_key(base.id).as_ref().to_vec(),
@@ -518,7 +518,7 @@ impl<T: WriteTx> SessionTx<T> {
         for col in cols {
             let pos = all_cols
                 .iter()
-                .position(|c| c.name.as_str() == col.name().as_str())
+                .position(|c| c.name == *col)
                 .ok_or_else(|| {
                     IndexLifecycleError(format!(
                         "relation '{rel}' has no column '{}' to index",
@@ -545,7 +545,7 @@ impl<T: WriteTx> SessionTx<T> {
             non_keys: vec![],
         };
         let index_ref = IndexRef {
-            name: SmartString::from(idx_name),
+            name: Symbol::new(idx_name, SourceSpan::empty()),
             kind: IndexKind::Plain { mapper },
         };
         let idx_rel_name = index_ref.relation_name(&base.name).to_string();
@@ -567,7 +567,10 @@ impl<T: WriteTx> SessionTx<T> {
         let base = self.get_relation(rel)?;
         let mut keys = Vec::with_capacity(1 + base.metadata.keys.len());
         keys.push(kyzo_model::schema::ColumnDef {
-            name: SmartString::from(crate::session::catalog::TEMPORAL_POSTING_LEADING_COLUMN),
+            name: Symbol::new(
+                crate::session::catalog::TEMPORAL_POSTING_LEADING_COLUMN,
+                SourceSpan::empty(),
+            ),
             typing: kyzo_model::schema::NullableColType::required(
                 kyzo_model::schema::ColType::Validity,
             ),
@@ -579,7 +582,7 @@ impl<T: WriteTx> SessionTx<T> {
             non_keys: vec![],
         };
         let index_ref = IndexRef {
-            name: SmartString::from(idx_name),
+            name: Symbol::new(idx_name, SourceSpan::empty()),
             kind: IndexKind::Temporal,
         };
         let idx_rel_name = index_ref.relation_name(&base.name).to_string();
@@ -634,7 +637,7 @@ impl<T: WriteTx> SessionTx<T> {
             kind: IndexKind::Hnsw(manifest),
         };
         let idx_rel = idx_ref.relation_name(&base.name);
-        self.attach_and_backfill(base, idx_ref, vec![(idx_rel, idx_meta)])
+        self.attach_and_backfill(base, idx_ref, vec![(idx_rel.to_string(), idx_meta)])
     }
 
     /// `::fts create`.
@@ -659,7 +662,7 @@ impl<T: WriteTx> SessionTx<T> {
             kind: IndexKind::Fts(manifest),
         };
         let idx_rel = idx_ref.relation_name(&base.name);
-        self.attach_and_backfill(base, idx_ref, vec![(idx_rel, idx_meta)])
+        self.attach_and_backfill(base, idx_ref, vec![(idx_rel.to_string(), idx_meta)])
     }
 
     /// `::lsh create` — bands/rows from the deterministic optimal-parameter
@@ -691,7 +694,7 @@ impl<T: WriteTx> SessionTx<T> {
             ))
         })?;
         let perms = HashPermutations::new(n_drawn, DEFAULT_PERM_SEED);
-        let inverse: SmartString<LazyCompact> = format!("{}:inv", cfg.index_name).into();
+        let inverse = Symbol::new(format!("{}:inv", cfg.index_name), SourceSpan::empty());
         let manifest = crate::project::dedup::lsh::MinHashLshIndexManifest {
             base_relation: cfg.base_relation.clone(),
             index_name: cfg.index_name.clone(),
@@ -716,7 +719,7 @@ impl<T: WriteTx> SessionTx<T> {
         self.attach_and_backfill(
             base,
             idx_ref,
-            vec![(idx_rel, idx_meta), (inv_rel, inv_meta)],
+            vec![(idx_rel.to_string(), idx_meta), (inv_rel, inv_meta)],
         )
     }
 
@@ -727,13 +730,13 @@ impl<T: WriteTx> SessionTx<T> {
         let pos = base
             .indices
             .iter()
-            .position(|r| r.name == idx)
+            .position(|r| &*r.name == idx)
             .ok_or_else(|| {
                 IndexLifecycleError(format!("relation '{rel}' has no index named '{idx}'"))
             })?;
         let index_ref = base.indices.remove(pos);
         let idx_rel = index_ref.relation_name(&base.name);
-        self.destroy_relation(&idx_rel)?;
+        self.destroy_relation(idx_rel.as_str())?;
         if let IndexKind::Lsh { inverse, .. } = &index_ref.kind {
             self.destroy_relation(&format!("{}:{}", base.name, inverse))?;
         }
@@ -780,7 +783,7 @@ impl<S: Storage> Engine<S> {
             }
         };
         Ok(NamedRows::try_new(
-            vec!["root".into()],
+            vec![Symbol::new("root", SourceSpan::empty())],
             vec![Tuple::from_vec(vec![DataValue::from(root.to_hex())])],
         )?)
     }
@@ -801,13 +804,16 @@ impl<S: Storage> Engine<S> {
                     IndexKind::Lsh { .. } => "lsh",
                 };
                 Tuple::from_vec(vec![
-                    DataValue::from(r.name.as_str()),
+                    DataValue::from(&*r.name),
                     DataValue::from(kind),
                 ])
             })
             .collect();
         Ok(NamedRows::try_new(
-            vec!["name".into(), "kind".into()],
+            vec![
+                Symbol::new("name", SourceSpan::empty()),
+                Symbol::new("kind", SourceSpan::empty()),
+            ],
             rows,
         )?)
     }
@@ -889,7 +895,7 @@ mod temporal_index_tests {
 
     fn col(name: &str) -> ColumnDef {
         ColumnDef {
-            name: name.into(),
+            name: Symbol::new(name, SourceSpan::empty()),
             typing: NullableColType::required(ColType::Int),
             default_gen: None,
         }
@@ -1449,9 +1455,10 @@ mod index_surface_tests {
     use crate::session::test_rows::int_rows;
     use crate::store::Storage;
     use crate::store::fjall::new_fjall_storage;
+    use kyzo_model::program::symbol::Symbol;
     use kyzo_model::value::{DataValue, Tuple};
 
-    fn no_params() -> BTreeMap<String, DataValue> {
+    fn no_params() -> BTreeMap<Symbol, DataValue> {
         BTreeMap::new()
     }
 

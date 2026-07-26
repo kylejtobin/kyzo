@@ -29,7 +29,8 @@ use std::collections::BTreeMap;
 
 use itertools::Itertools;
 use miette::Result;
-use rand::prelude::*;
+use rand::seq::IndexedRandom;
+use rand::seq::SliceRandom;
 
 use crate::rules::contract::{
     CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload, GraphAlgorithmInvariantError,

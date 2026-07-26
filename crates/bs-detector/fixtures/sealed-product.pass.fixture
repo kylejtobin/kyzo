@@ -1,7 +1,0 @@
-trait Bound: private::Sealed {
-    fn tag(self) -> Tag;
-}
-
-struct Span<T: Bound> {
-    start: T,
-}

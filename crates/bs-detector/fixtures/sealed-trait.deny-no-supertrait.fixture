@@ -1,3 +1,0 @@
-trait Encode {
-    fn encode(self, out: ByteSink) -> ByteSink;
-}

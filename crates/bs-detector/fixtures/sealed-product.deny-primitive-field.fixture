@@ -1,4 +1,0 @@
-struct Span {
-    start: u64,
-    end: Offset,
-}

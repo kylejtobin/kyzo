@@ -1,4 +1,0 @@
-struct Span {
-    pub start: Offset,
-    end: Offset,
-}

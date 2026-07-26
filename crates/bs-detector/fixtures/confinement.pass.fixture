@@ -1,6 +1,0 @@
-use std::marker::PhantomData;
-
-struct Cursor<'scope> {
-    page: &'scope PageRef,
-    guard: PhantomData<&'scope ()>,
-}

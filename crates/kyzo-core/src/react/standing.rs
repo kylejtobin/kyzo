@@ -437,7 +437,7 @@ impl<S: Storage> Engine<S> {
     pub fn register_standing(
         &self,
         query: &str,
-        params: BTreeMap<String, DataValue>,
+        params: BTreeMap<Symbol, DataValue>,
     ) -> Result<StandingQuery<S>> {
         let cur_vld = current_validity()?;
         let program = match parse_script(query, &params, cur_vld)? {
@@ -484,7 +484,7 @@ mod tests {
     fn v(i: i64) -> DataValue {
         DataValue::Num(Num::int(i))
     }
-    fn no_params() -> BTreeMap<String, DataValue> {
+    fn no_params() -> BTreeMap<Symbol, DataValue> {
         BTreeMap::new()
     }
     /// Absent relation key → empty row set (not yet touched).

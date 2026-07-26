@@ -43,11 +43,12 @@ use kyzo::oracle_harness::{
 use kyzo::{CancelFlag, Catalog, Engine, NamedRows, ScriptOptions, Storage, new_fjall_storage};
 use kyzo_model::parse::{Script, parse_script};
 use kyzo_model::value::convert::{i64_from_u64_fitting, i64_from_usize, u64_from_usize};
+use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Tuple};
 use kyzo_oracle::eval::{Program, Rel, naive_eval};
 
 #[cfg(test)]
-fn no_params() -> BTreeMap<String, DataValue> {
+fn no_params() -> BTreeMap<Symbol, DataValue> {
     BTreeMap::new()
 }
 

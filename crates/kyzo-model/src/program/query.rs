@@ -167,12 +167,12 @@ impl InputRelationHandle {
         let key_bindings = metadata
             .keys
             .iter()
-            .map(|c| Symbol::new(c.name.clone(), SourceSpan::new(0, 0)))
+            .map(|c| c.name.clone())
             .collect();
         let dep_bindings = metadata
             .non_keys
             .iter()
-            .map(|c| Symbol::new(c.name.clone(), SourceSpan::new(0, 0)))
+            .map(|c| c.name.clone())
             .collect();
         Self {
             name: Symbol::new(name, SourceSpan::new(0, 0)),

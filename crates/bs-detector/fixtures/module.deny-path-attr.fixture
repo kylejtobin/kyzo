@@ -1,2 +1,0 @@
-#[path = "elsewhere.rs"]
-mod value;

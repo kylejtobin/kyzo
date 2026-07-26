@@ -109,6 +109,7 @@ use thiserror::Error;
 use crate::project::contract::{IndexCorruptReason, IndexRowCorrupt};
 use crate::session::catalog::RelationHandle;
 use crate::store::ReadTx;
+use kyzo_model::program::symbol::Symbol;
 use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::value::DataValue;
 
@@ -145,14 +146,14 @@ impl GazetteerConfig {
 /// definition error refused at compile time (typed, like the FTS extractor's
 /// type error — the analogous "this definition cannot mean anything" case).
 #[derive(Debug, Error, Diagnostic)]
-#[error("gazetteer dictionary entity {entity} has an empty surface form")]
+#[error("gazetteer dictionary entity {entity:?} has an empty surface form")]
 #[diagnostic(code(index::gazetteer::empty_surface))]
 #[diagnostic(help(
     "every surface form must be a non-empty string; an empty form would match \
      at every position and has no truthful span"
 ))]
 pub(crate) struct GazetteerEmptySurface {
-    pub(crate) entity: String,
+    pub(crate) entity: DataValue,
 }
 
 /// The Aho-Corasick automaton could not be built from the dictionary's
@@ -175,12 +176,12 @@ pub(crate) struct GazetteerBuildFailed;
 pub(crate) fn gazetteer_dict_metadata(entity_type: ColType) -> StoredRelationMetadata {
     StoredRelationMetadata {
         keys: vec![ColumnDef {
-            name: SmartString::from("entity"),
+            name: Symbol::new("entity", kyzo_model::SourceSpan::empty()),
             typing: NullableColType::required(entity_type),
             default_gen: None,
         }],
         non_keys: vec![ColumnDef {
-            name: SmartString::from("surfaces"),
+            name: Symbol::new("surfaces", kyzo_model::SourceSpan::empty()),
             typing: NullableColType::required(ColType::List {
                 eltype: Box::new(NullableColType::required(ColType::String)),
                 len: None,
@@ -290,7 +291,7 @@ pub(crate) fn compile_dictionary(
             })?;
             if s.is_empty() {
                 bail!(GazetteerEmptySurface {
-                    entity: format!("{entity:?}"),
+                    entity: entity.clone(),
                 });
             }
             let key = if config.case_insensitive {

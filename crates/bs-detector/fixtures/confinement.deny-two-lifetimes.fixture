@@ -1,7 +1,0 @@
-use std::marker::PhantomData;
-
-struct Cursor<'a, 'b> {
-    page: &'a PageRef,
-    log: &'b LogRef,
-    brand: PhantomData<&'a ()>,
-}

@@ -14,10 +14,10 @@ use std::fmt::{Display, Formatter};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use miette::{Diagnostic, Result, bail, ensure};
-use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use crate::envelope::json_from_serde;
+use crate::program::symbol::Symbol;
 use crate::program::expr::Expr;
 use crate::value::json_convert::to_json;
 use crate::value::{DataValue, Validity, ValidityTs, Vector};
@@ -298,7 +298,7 @@ pub enum ColType {
 
 #[derive(Debug, Clone, Eq, PartialEq, serde_derive::Deserialize, serde_derive::Serialize)]
 pub struct ColumnDef {
-    pub name: SmartString<LazyCompact>,
+    pub name: Symbol,
     pub typing: NullableColType,
     pub default_gen: Option<Expr>,
 }

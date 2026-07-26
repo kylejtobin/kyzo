@@ -43,7 +43,7 @@ use super::sweep::{CommitOrdinal, Committed};
 /// `bail!(String)`.
 #[cfg(test)]
 use kyzo_model::value::Validity;
-#[derive(Debug, Error, Diagnostic)]
+#[derive(Debug, Error, Diagnostic, Clone, Copy)]
 pub enum BitemporalDecodeError {
     #[error("corrupt bitemporal value: shorter than its header and polarity byte")]
     #[diagnostic(code(bitemporal::value_truncated))]

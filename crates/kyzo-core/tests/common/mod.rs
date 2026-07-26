@@ -19,10 +19,11 @@
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 
+use kyzo_model::program::symbol::Symbol;
 use kyzo::{Catalog, DataValue, Engine, FjallStorage, NamedRows, new_fjall_storage};
 
 /// No query parameters — the common case.
-pub fn no_params() -> BTreeMap<String, DataValue> {
+pub fn no_params() -> BTreeMap<Symbol, DataValue> {
     BTreeMap::new()
 }
 

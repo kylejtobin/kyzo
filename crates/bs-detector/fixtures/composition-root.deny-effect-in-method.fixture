@@ -1,5 +1,0 @@
-impl Engine {
-    fn started(&self) -> Started {
-        Started::at(Instant::now())
-    }
-}

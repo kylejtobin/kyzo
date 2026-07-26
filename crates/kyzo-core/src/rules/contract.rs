@@ -37,7 +37,9 @@ use std::sync::{Arc, LazyLock, OnceLock};
 use itertools::Itertools;
 use miette::{Diagnostic, Result, bail, ensure};
 #[cfg(not(target_arch = "wasm32"))]
-use rayon::prelude::*;
+use rayon::iter::IntoParallelIterator;
+#[cfg(not(target_arch = "wasm32"))]
+use rayon::iter::ParallelIterator;
 use thiserror::Error;
 
 use kyzo_model::SourceSpan;
@@ -55,9 +57,32 @@ use crate::exec::plan::program::{
     FixedRuleOptionNotFoundError, MagicFixedRuleApply, MagicFixedRuleRuleArg, MagicSymbol,
     WrongFixedRuleOptionError, WrongFixedRuleOptionHelp,
 };
-use crate::rules::algo::*;
+use crate::rules::algo::BetweennessCentrality;
+use crate::rules::algo::Bfs;
+use crate::rules::algo::ClusteringCoefficients;
+use crate::rules::algo::ClosenessCentrality;
+use crate::rules::algo::CommunityDetectionLouvain;
+use crate::rules::algo::DegreeCentrality;
+use crate::rules::algo::Dfs;
+use crate::rules::algo::KCoreDecomposition;
+use crate::rules::algo::KShortestPathYen;
+use crate::rules::algo::LabelPropagation;
+use crate::rules::algo::MaxFlow;
+use crate::rules::algo::MaximalCliques;
+use crate::rules::algo::MinimumSpanningForestKruskal;
+use crate::rules::algo::MinimumSpanningTreePrim;
+use crate::rules::algo::PageRank;
+use crate::rules::algo::RandomWalk;
+use crate::rules::algo::ReorderSort;
+use crate::rules::algo::ShortestPathAStar;
+use crate::rules::algo::ShortestPathBFS;
+use crate::rules::algo::ShortestPathDijkstra;
+use crate::rules::algo::StronglyConnectedComponent;
+use crate::rules::algo::TopSort;
 use crate::rules::graph_view::{DirectedCsrGraph, as_directed_graph, as_directed_weighted_graph};
-use crate::rules::io::*;
+use crate::rules::io::Constant;
+use crate::rules::io::CsvReader;
+use crate::rules::io::JsonReader;
 
 // Model owns the name wrapper; re-export so engine call sites share one type.
 pub use kyzo_model::program::rule::FixedRuleHandle;
@@ -813,7 +838,7 @@ pub trait SimpleRuleBody: Send + Sync + 'static {
     fn apply(
         &self,
         inputs: Vec<NamedRows>,
-        options: BTreeMap<String, DataValue>,
+        options: BTreeMap<Symbol, DataValue>,
     ) -> Result<NamedRows>;
 }
 
@@ -825,7 +850,7 @@ pub trait SimpleRuleBody: Send + Sync + 'static {
 pub struct ChannelRuleBody {
     db2app: SyncSender<(
         Vec<NamedRows>,
-        BTreeMap<String, DataValue>,
+        BTreeMap<Symbol, DataValue>,
         SyncSender<Result<NamedRows>>,
     )>,
 }
@@ -834,7 +859,7 @@ impl SimpleRuleBody for ChannelRuleBody {
     fn apply(
         &self,
         inputs: Vec<NamedRows>,
-        options: BTreeMap<String, DataValue>,
+        options: BTreeMap<Symbol, DataValue>,
     ) -> Result<NamedRows> {
         let (app2db_sender, app2db_receiver) = sync_channel(0);
         self.db2app
@@ -853,7 +878,7 @@ impl SimpleRuleBody for EmptyNamedRowsBody {
     fn apply(
         &self,
         _inputs: Vec<NamedRows>,
-        _options: BTreeMap<String, DataValue>,
+        _options: BTreeMap<Symbol, DataValue>,
     ) -> Result<NamedRows> {
         Ok(NamedRows::try_new(vec![], vec![])?)
     }
@@ -866,7 +891,7 @@ impl SimpleRuleBody for IdentityNamedRowsBody {
     fn apply(
         &self,
         inputs: Vec<NamedRows>,
-        _options: BTreeMap<String, DataValue>,
+        _options: BTreeMap<Symbol, DataValue>,
     ) -> Result<NamedRows> {
         let input = inputs
             .into_iter()
@@ -885,10 +910,10 @@ impl SimpleRuleBody for MismatchedArityBody {
     fn apply(
         &self,
         _inputs: Vec<NamedRows>,
-        _options: BTreeMap<String, DataValue>,
+        _options: BTreeMap<Symbol, DataValue>,
     ) -> Result<NamedRows> {
         Ok(NamedRows::try_new(
-            vec!["a".to_string()],
+            vec![Symbol::new("a", SourceSpan::empty())],
             vec![Tuple::from_vec(vec![DataValue::from(1i64)])],
         )?)
     }
@@ -920,7 +945,7 @@ impl SimpleFixedRule<ChannelRuleBody> {
         impl FixedRule,
         Receiver<(
             Vec<NamedRows>,
-            BTreeMap<String, DataValue>,
+            BTreeMap<Symbol, DataValue>,
             SyncSender<Result<NamedRows>>,
         )>,
     ) {
@@ -964,7 +989,7 @@ impl<B: SimpleRuleBody> FixedRule for SimpleFixedRule<B> {
             .iter()
             .map(|(k, v)| -> Result<_> {
                 let val = v.clone().eval_to_const()?;
-                Ok((k.to_string(), val))
+                Ok((k.clone(), val))
             })
             .try_collect()?;
         let input_arity = payload.manifest.rule_args.len();
@@ -977,12 +1002,12 @@ impl<B: SimpleRuleBody> FixedRule for SimpleFixedRule<B> {
                     .arg_manifest
                     .bindings()
                     .iter()
-                    .map(|s| s.name().to_string())
+                    .cloned()
                     .collect_vec();
                 let l = headers.len();
                 let m = input.arity()?;
                 for i in l..m {
-                    headers.push(format!("_{i}"));
+                    headers.push(Symbol::new(format!("_{i}"), SourceSpan::empty()));
                 }
                 Ok(NamedRows::try_new(headers, rows)?)
             })
@@ -1022,117 +1047,123 @@ pub(crate) fn seal_fixed_rule(rule: impl FixedRule + 'static) -> Arc<dyn FixedRu
 
 /// The built-in fixed rules: every graph algorithm in `rules/algo` and
 /// every utility in `rules/io`.
-pub(crate) static DEFAULT_FIXED_RULES: LazyLock<BTreeMap<String, Arc<dyn FixedRule>>> =
+pub(crate) static DEFAULT_FIXED_RULES: LazyLock<BTreeMap<Symbol, Arc<dyn FixedRule>>> =
     LazyLock::new(|| {
         BTreeMap::from([
             (
-                "ClusteringCoefficients".to_string(),
+                Symbol::new("ClusteringCoefficients", SourceSpan::empty()),
                 seal_fixed_rule(ClusteringCoefficients),
             ),
             (
-                "DegreeCentrality".to_string(),
+                Symbol::new("DegreeCentrality", SourceSpan::empty()),
                 seal_fixed_rule(DegreeCentrality),
             ),
             (
-                "ClosenessCentrality".to_string(),
+                Symbol::new("ClosenessCentrality", SourceSpan::empty()),
                 seal_fixed_rule(ClosenessCentrality),
             ),
             (
-                "BetweennessCentrality".to_string(),
+                Symbol::new("BetweennessCentrality", SourceSpan::empty()),
                 seal_fixed_rule(BetweennessCentrality),
             ),
             (
-                "DepthFirstSearch".to_string(),
+                Symbol::new("DepthFirstSearch", SourceSpan::empty()),
                 seal_fixed_rule(Dfs),
             ),
-            ("DFS".to_string(), seal_fixed_rule(Dfs)),
             (
-                "BreadthFirstSearch".to_string(),
+                Symbol::new("DFS", SourceSpan::empty()),
+                seal_fixed_rule(Dfs),
+            ),
+            (
+                Symbol::new("BreadthFirstSearch", SourceSpan::empty()),
                 seal_fixed_rule(Bfs),
             ),
-            ("BFS".to_string(), seal_fixed_rule(Bfs)),
             (
-                "ShortestPathBFS".to_string(),
+                Symbol::new("BFS", SourceSpan::empty()),
+                seal_fixed_rule(Bfs),
+            ),
+            (
+                Symbol::new("ShortestPathBFS", SourceSpan::empty()),
                 seal_fixed_rule(ShortestPathBFS),
             ),
             (
-                "ShortestPathDijkstra".to_string(),
+                Symbol::new("ShortestPathDijkstra", SourceSpan::empty()),
                 seal_fixed_rule(ShortestPathDijkstra),
             ),
             (
-                "ShortestPathAStar".to_string(),
+                Symbol::new("ShortestPathAStar", SourceSpan::empty()),
                 seal_fixed_rule(ShortestPathAStar),
             ),
             (
-                "KShortestPathYen".to_string(),
+                Symbol::new("KShortestPathYen", SourceSpan::empty()),
                 seal_fixed_rule(KShortestPathYen),
             ),
             (
-                "MinimumSpanningTreePrim".to_string(),
+                Symbol::new("MinimumSpanningTreePrim", SourceSpan::empty()),
                 seal_fixed_rule(MinimumSpanningTreePrim),
             ),
             (
-                "MinimumSpanningForestKruskal".to_string(),
+                Symbol::new("MinimumSpanningForestKruskal", SourceSpan::empty()),
                 seal_fixed_rule(MinimumSpanningForestKruskal),
             ),
             (
-                "TopSort".to_string(),
+                Symbol::new("TopSort", SourceSpan::empty()),
                 seal_fixed_rule(TopSort),
             ),
             (
-                "ConnectedComponents".to_string(),
+                Symbol::new("ConnectedComponents", SourceSpan::empty()),
                 seal_fixed_rule(StronglyConnectedComponent::new(false)),
             ),
             (
-                "StronglyConnectedComponents".to_string(),
+                Symbol::new("StronglyConnectedComponents", SourceSpan::empty()),
                 seal_fixed_rule(StronglyConnectedComponent::new(true)),
             ),
             (
-                "SCC".to_string(),
+                Symbol::new("SCC", SourceSpan::empty()),
                 seal_fixed_rule(StronglyConnectedComponent::new(true)),
             ),
             (
-                "PageRank".to_string(),
+                Symbol::new("PageRank", SourceSpan::empty()),
                 seal_fixed_rule(PageRank),
             ),
             (
-                "KCoreDecomposition".to_string(),
+                Symbol::new("KCoreDecomposition", SourceSpan::empty()),
                 seal_fixed_rule(KCoreDecomposition),
             ),
             (
-                "MaxFlow".to_string(),
+                Symbol::new("MaxFlow", SourceSpan::empty()),
                 seal_fixed_rule(MaxFlow),
             ),
             (
-                "MaximalCliques".to_string(),
+                Symbol::new("MaximalCliques", SourceSpan::empty()),
                 seal_fixed_rule(MaximalCliques),
             ),
             (
-                "CommunityDetectionLouvain".to_string(),
+                Symbol::new("CommunityDetectionLouvain", SourceSpan::empty()),
                 seal_fixed_rule(CommunityDetectionLouvain),
             ),
             (
-                "LabelPropagation".to_string(),
+                Symbol::new("LabelPropagation", SourceSpan::empty()),
                 seal_fixed_rule(LabelPropagation),
             ),
             (
-                "RandomWalk".to_string(),
+                Symbol::new("RandomWalk", SourceSpan::empty()),
                 seal_fixed_rule(RandomWalk),
             ),
             (
-                "ReorderSort".to_string(),
+                Symbol::new("ReorderSort", SourceSpan::empty()),
                 seal_fixed_rule(ReorderSort),
             ),
             (
-                "JsonReader".to_string(),
+                Symbol::new("JsonReader", SourceSpan::empty()),
                 seal_fixed_rule(JsonReader),
             ),
             (
-                "CsvReader".to_string(),
+                Symbol::new("CsvReader", SourceSpan::empty()),
                 seal_fixed_rule(CsvReader),
             ),
             (
-                "Constant".to_string(),
+                Symbol::new("Constant", SourceSpan::empty()),
                 seal_fixed_rule(Constant),
             ),
         ])
@@ -1496,7 +1527,7 @@ pub(crate) mod tests_support {
     #[error("test harness has no stored relation '{name}'")]
     #[diagnostic(code(algo::harness_stored_closed))]
     struct HarnessStoredClosedError {
-        name: String,
+        name: Symbol,
         #[label]
         span: SourceSpan,
     }
@@ -1504,8 +1535,8 @@ pub(crate) mod tests_support {
     impl HarnessStoredClosed {
         fn refuse<T>(&self, name: &Symbol) -> Result<T> {
             Err(HarnessStoredClosedError {
-                name: name.to_string(),
-                span: name.span,
+                name: name.clone(),
+                span: name.span(),
             }
             .into())
         }
@@ -2010,10 +2041,13 @@ mod tests {
             "ShortestPathDijkstra",
             "SCC",
         ] {
-            assert!(DEFAULT_FIXED_RULES.contains_key(name), "{name} missing");
+            assert!(
+                DEFAULT_FIXED_RULES.contains_key(&Symbol::new(name, SourceSpan::empty())),
+                "{name} missing"
+            );
         }
         let pr = DEFAULT_FIXED_RULES
-            .get("PageRank")
+            .get(&Symbol::new("PageRank", SourceSpan::empty()))
             .ok_or_else(|| miette!("PageRank missing"))?
             .clone();
         assert_eq!(pr.arity(&empty_opts(), &[], SourceSpan::empty())?, 2);

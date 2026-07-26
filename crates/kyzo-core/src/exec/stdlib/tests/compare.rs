@@ -8,9 +8,28 @@
  */
 
 //! Re-homed domain tables from data/tests/functions.rs.
-use crate::exec::stdlib::compare::*;
-use crate::exec::stdlib::convert::*;
-use crate::exec::stdlib::nondet::*;
+use crate::exec::stdlib::compare::op_eq;
+use crate::exec::stdlib::compare::op_ge;
+use crate::exec::stdlib::compare::op_gt;
+use crate::exec::stdlib::compare::op_is_bytes;
+use crate::exec::stdlib::compare::op_is_finite;
+use crate::exec::stdlib::compare::op_is_float;
+use crate::exec::stdlib::compare::op_is_in;
+use crate::exec::stdlib::compare::op_is_infinite;
+use crate::exec::stdlib::compare::op_is_int;
+use crate::exec::stdlib::compare::op_is_list;
+use crate::exec::stdlib::compare::op_is_nan;
+use crate::exec::stdlib::compare::op_is_null;
+use crate::exec::stdlib::compare::op_is_num;
+use crate::exec::stdlib::compare::op_is_string;
+use crate::exec::stdlib::compare::op_is_uuid;
+use crate::exec::stdlib::compare::op_le;
+use crate::exec::stdlib::compare::op_lt;
+use crate::exec::stdlib::compare::op_neq;
+use crate::exec::stdlib::convert::op_to_uuid;
+use crate::exec::stdlib::convert::op_uuid_timestamp;
+use crate::exec::stdlib::nondet::op_rand_uuid_v1;
+use crate::exec::stdlib::nondet::op_rand_uuid_v4;
 use kyzo_model::value::DataValue;
 use miette::{Result, miette};
 

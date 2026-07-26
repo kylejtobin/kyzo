@@ -75,67 +75,81 @@ struct CompileInvariantError(&'static str);
 
 /// Negation normal form: push `not` down to atoms, De Morgan through
 /// conjunction/disjunction, cancel double negation. (Upstream logical.rs.)
-pub(crate) fn negation_normal_form(atom: InputAtom) -> Result<InputAtom> {
-    Ok(match atom {
-        a @ (InputAtom::Rule { .. }
-        | InputAtom::NamedFieldRelation { .. }
-        | InputAtom::Predicate { .. }
-        | InputAtom::Relation { .. }) => a,
-        InputAtom::Conjunction { inner, span } => InputAtom::Conjunction {
-            inner: inner.into_iter().map(negation_normal_form).try_collect()?,
-            span,
-        },
-        InputAtom::Disjunction { inner, span } => InputAtom::Disjunction {
-            inner: inner.into_iter().map(negation_normal_form).try_collect()?,
-            span,
-        },
-        InputAtom::Unification { inner } => InputAtom::Unification { inner },
-        a @ InputAtom::Search { .. } => a,
-        InputAtom::Negation { inner, span } => match *inner {
+pub(crate) trait InputAtomNormalize {
+    fn negation_normal_form(self) -> Result<InputAtom>;
+}
+
+impl InputAtomNormalize for InputAtom {
+    fn negation_normal_form(self) -> Result<InputAtom> {
+        Ok(match self {
             a @ (InputAtom::Rule { .. }
             | InputAtom::NamedFieldRelation { .. }
-            | InputAtom::Relation { .. }) => InputAtom::Negation {
-                inner: Box::new(a),
-                span,
-            },
-            InputAtom::Predicate { inner: p } => InputAtom::Predicate {
-                inner: p.negate(span),
-            },
-            InputAtom::Negation { inner, .. } => negation_normal_form(*inner)?,
-            InputAtom::Conjunction { inner, span } => InputAtom::Disjunction {
+            | InputAtom::Predicate { .. }
+            | InputAtom::Relation { .. }) => a,
+            InputAtom::Conjunction { inner, span } => InputAtom::Conjunction {
                 inner: inner
                     .into_iter()
-                    .map(|a| {
-                        let span = a.span();
-                        negation_normal_form(InputAtom::Negation {
-                            inner: Box::new(a),
-                            span,
-                        })
-                    })
+                    .map(|a| a.negation_normal_form())
                     .try_collect()?,
                 span,
             },
-            InputAtom::Disjunction { inner, span } => InputAtom::Conjunction {
+            InputAtom::Disjunction { inner, span } => InputAtom::Disjunction {
                 inner: inner
                     .into_iter()
-                    .map(|a| {
-                        let span = a.span();
-                        negation_normal_form(InputAtom::Negation {
-                            inner: Box::new(a),
-                            span,
-                        })
-                    })
+                    .map(|a| a.negation_normal_form())
                     .try_collect()?,
                 span,
             },
-            InputAtom::Unification { inner } => bail!(UnsafeNegation(inner.span)),
-            InputAtom::Search { inner } => {
-                bail!(crate::exec::plan::search::NegatedSearchUnsupported(
-                    inner.span
-                ))
-            }
-        },
-    })
+            InputAtom::Unification { inner } => InputAtom::Unification { inner },
+            a @ InputAtom::Search { .. } => a,
+            InputAtom::Negation { inner, span } => match *inner {
+                a @ (InputAtom::Rule { .. }
+                | InputAtom::NamedFieldRelation { .. }
+                | InputAtom::Relation { .. }) => InputAtom::Negation {
+                    inner: Box::new(a),
+                    span,
+                },
+                InputAtom::Predicate { inner: p } => InputAtom::Predicate {
+                    inner: p.negate(span),
+                },
+                InputAtom::Negation { inner, .. } => (*inner).negation_normal_form()?,
+                InputAtom::Conjunction { inner, span } => InputAtom::Disjunction {
+                    inner: inner
+                        .into_iter()
+                        .map(|a| {
+                            let span = a.span();
+                            InputAtom::Negation {
+                                inner: Box::new(a),
+                                span,
+                            }
+                            .negation_normal_form()
+                        })
+                        .try_collect()?,
+                    span,
+                },
+                InputAtom::Disjunction { inner, span } => InputAtom::Conjunction {
+                    inner: inner
+                        .into_iter()
+                        .map(|a| {
+                            let span = a.span();
+                            InputAtom::Negation {
+                                inner: Box::new(a),
+                                span,
+                            }
+                            .negation_normal_form()
+                        })
+                        .try_collect()?,
+                    span,
+                },
+                InputAtom::Unification { inner } => bail!(UnsafeNegation(inner.span)),
+                InputAtom::Search { inner } => {
+                    bail!(crate::exec::plan::search::NegatedSearchUnsupported(
+                        inner.span
+                    ))
+                }
+            },
+        })
+    }
 }
 
 pub(crate) type SchemaLookup<'f> = dyn Fn(&str) -> Result<StoredRelationMetadata> + 'f;
@@ -151,6 +165,91 @@ pub(crate) type HandleLookup<'f> =
 
 /// DNF conversion over an NNF atom. (Upstream logical.rs; the `unreachable!`
 /// dispatch arm is a typed invariant error.)
+pub(crate) trait InputAtomDisjunctiveNormalForm {
+    fn disjunctive_normal_form(
+        self,
+        symb_gen: &mut TempSymbGen,
+        schema_of: &SchemaLookup<'_>,
+        search_handle: &HandleLookup<'_>,
+        cancel: &crate::rules::contract::CancelFlag,
+    ) -> Result<Vec<Vec<NormalFormAtom>>>;
+}
+
+impl InputAtomDisjunctiveNormalForm for InputAtom {
+    fn disjunctive_normal_form(
+        self,
+        symb_gen: &mut TempSymbGen,
+        schema_of: &SchemaLookup<'_>,
+        search_handle: &HandleLookup<'_>,
+        cancel: &crate::rules::contract::CancelFlag,
+    ) -> Result<Vec<Vec<NormalFormAtom>>> {
+        Ok(match self {
+            InputAtom::Disjunction { inner, .. } => {
+                let mut ret = vec![];
+                for arg in inner {
+                    ret.extend(arg.disjunctive_normal_form(
+                        symb_gen,
+                        schema_of,
+                        search_handle,
+                        cancel,
+                    )?);
+                }
+                ret
+            }
+            InputAtom::Conjunction { inner, .. } => {
+                let mut args = inner.into_iter().map(|a| {
+                    a.disjunctive_normal_form(symb_gen, schema_of, search_handle, cancel)
+                });
+                let mut result = args.next().ok_or_else(|| miette!("empty conjunction"))??;
+                for a in args {
+                    result = conjunct_disjunctions(result, a?);
+                }
+                result
+            }
+            InputAtom::Rule { inner } => inner.normalize(false, symb_gen),
+            InputAtom::NamedFieldRelation { inner } => {
+                inner
+                    .into_positional_relation(symb_gen, schema_of)?
+                    .normalize(false, symb_gen)
+            }
+            InputAtom::Relation { inner } => inner.normalize(false, symb_gen),
+            InputAtom::Predicate { inner: mut p } => {
+                p.partial_eval()?;
+                vec![vec![NormalFormAtom::Predicate(p)]]
+            }
+            InputAtom::Negation { inner, .. } => match *inner {
+                InputAtom::Rule { inner } => inner.normalize(true, symb_gen),
+                InputAtom::Relation { inner } => inner.normalize(true, symb_gen),
+                InputAtom::NamedFieldRelation { inner } => {
+                    inner
+                        .into_positional_relation(symb_gen, schema_of)?
+                        .normalize(true, symb_gen)
+                }
+                // NNF proved negation sits only on applications.
+                InputAtom::Predicate { .. }
+                | InputAtom::Negation { .. }
+                | InputAtom::Conjunction { .. }
+                | InputAtom::Disjunction { .. }
+                | InputAtom::Unification { .. }
+                | InputAtom::Search { .. } => {
+                    bail!(CompileInvariantError("negation not in normal form"))
+                }
+            },
+            InputAtom::Unification { inner } => vec![vec![NormalFormAtom::Unification(inner)]],
+            InputAtom::Search { inner } => vec![vec![NormalFormAtom::Search(Box::new(
+                crate::exec::plan::search::resolve_search(
+                    search_handle,
+                    inner,
+                    symb_gen,
+                    cancel.clone(),
+                )?,
+            ))]],
+        })
+    }
+}
+
+/// Session entry delegates here until its seat calls
+/// [`InputAtomDisjunctiveNormalForm::disjunctive_normal_form`] directly.
 pub(crate) fn do_disjunctive_normal_form(
     atom: InputAtom,
     symb_gen: &mut TempSymbGen,
@@ -158,67 +257,7 @@ pub(crate) fn do_disjunctive_normal_form(
     search_handle: &HandleLookup<'_>,
     cancel: &crate::rules::contract::CancelFlag,
 ) -> Result<Vec<Vec<NormalFormAtom>>> {
-    Ok(match atom {
-        InputAtom::Disjunction { inner, .. } => {
-            let mut ret = vec![];
-            for arg in inner {
-                ret.extend(do_disjunctive_normal_form(
-                    arg,
-                    symb_gen,
-                    schema_of,
-                    search_handle,
-                    cancel,
-                )?);
-            }
-            ret
-        }
-        InputAtom::Conjunction { inner, .. } => {
-            let mut args = inner
-                .into_iter()
-                .map(|a| do_disjunctive_normal_form(a, symb_gen, schema_of, search_handle, cancel));
-            let mut result = args.next().ok_or_else(|| miette!("empty conjunction"))??;
-            for a in args {
-                result = conjunct_disjunctions(result, a?);
-            }
-            result
-        }
-        InputAtom::Rule { inner } => normalize_rule_apply(inner, false, symb_gen),
-        InputAtom::NamedFieldRelation { inner } => {
-            let r = convert_named_field_relation(inner, symb_gen, schema_of)?;
-            normalize_relation_apply(r, false, symb_gen)
-        }
-        InputAtom::Relation { inner } => normalize_relation_apply(inner, false, symb_gen),
-        InputAtom::Predicate { inner: mut p } => {
-            p.partial_eval()?;
-            vec![vec![NormalFormAtom::Predicate(p)]]
-        }
-        InputAtom::Negation { inner, .. } => match *inner {
-            InputAtom::Rule { inner } => normalize_rule_apply(inner, true, symb_gen),
-            InputAtom::Relation { inner } => normalize_relation_apply(inner, true, symb_gen),
-            InputAtom::NamedFieldRelation { inner } => {
-                let r = convert_named_field_relation(inner, symb_gen, schema_of)?;
-                normalize_relation_apply(r, true, symb_gen)
-            }
-            // NNF proved negation sits only on applications.
-            InputAtom::Predicate { .. }
-            | InputAtom::Negation { .. }
-            | InputAtom::Conjunction { .. }
-            | InputAtom::Disjunction { .. }
-            | InputAtom::Unification { .. }
-            | InputAtom::Search { .. } => {
-                bail!(CompileInvariantError("negation not in normal form"))
-            }
-        },
-        InputAtom::Unification { inner } => vec![vec![NormalFormAtom::Unification(inner)]],
-        InputAtom::Search { inner } => vec![vec![NormalFormAtom::Search(Box::new(
-            crate::exec::plan::search::resolve_search(
-                search_handle,
-                inner,
-                symb_gen,
-                cancel.clone(),
-            )?,
-        ))]],
-    })
+    atom.disjunctive_normal_form(symb_gen, schema_of, search_handle, cancel)
 }
 
 /// Distribute conjunction over two disjunctions (De Morgan direction that
@@ -241,166 +280,209 @@ pub(crate) fn conjunct_disjunctions(
 /// Resolve a named-field relation atom (`*rel{field: expr, …}`) to a
 /// positional one against the declared schema; unnamed columns get fresh
 /// ignored bindings. (Upstream logical.rs.)
-pub(crate) fn convert_named_field_relation(
-    InputNamedFieldRelationApplyAtom {
-        name,
-        mut args,
-        validity,
-        span,
-    }: InputNamedFieldRelationApplyAtom,
-    symb_gen: &mut TempSymbGen,
-    schema_of: &SchemaLookup<'_>,
-) -> Result<InputRelationApplyAtom> {
-    use crate::exec::plan::magic::NamedFieldNotFound;
-    let metadata = schema_of(&name.name())?;
-    let fields: std::collections::BTreeSet<_> = metadata
-        .keys
-        .iter()
-        .chain(metadata.non_keys.iter())
-        .map(|col| &col.name)
-        .collect();
-    for k in args.keys() {
-        if !fields.contains(&k.name()) {
-            bail!(NamedFieldNotFound(name.clone(), k.clone(), span));
+pub(crate) trait InputNamedFieldRelationApplyConvert {
+    fn into_positional_relation(
+        self,
+        symb_gen: &mut TempSymbGen,
+        schema_of: &SchemaLookup<'_>,
+    ) -> Result<InputRelationApplyAtom>;
+}
+
+impl InputNamedFieldRelationApplyConvert for InputNamedFieldRelationApplyAtom {
+    fn into_positional_relation(
+        self,
+        symb_gen: &mut TempSymbGen,
+        schema_of: &SchemaLookup<'_>,
+    ) -> Result<InputRelationApplyAtom> {
+        use crate::exec::plan::magic::NamedFieldNotFound;
+        let InputNamedFieldRelationApplyAtom {
+            name,
+            mut args,
+            validity,
+            span,
+        } = self;
+        let metadata = schema_of(&name.name())?;
+        let fields: std::collections::BTreeSet<_> = metadata
+            .keys
+            .iter()
+            .chain(metadata.non_keys.iter())
+            .map(|col| &col.name)
+            .collect();
+        for k in args.keys() {
+            if !fields.contains(k) {
+                bail!(NamedFieldNotFound(name.clone(), k.clone(), span));
+            }
         }
+        let mut new_args = vec![];
+        for col_def in metadata.keys.iter().chain(metadata.non_keys.iter()) {
+            let arg = match args.remove(&col_def.name) {
+                Some(arg) => arg,
+                None => Expr::Binding {
+                    var: symb_gen.next_ignored(span),
+                    tuple_pos: BindingPos::Unresolved,
+                },
+            };
+            new_args.push(arg);
+        }
+        Ok(InputRelationApplyAtom {
+            name,
+            args: new_args,
+            validity,
+            span,
+        })
     }
-    let mut new_args = vec![];
-    for col_def in metadata.keys.iter().chain(metadata.non_keys.iter()) {
-        let arg = match args.remove(&Symbol::new(col_def.name.clone(), span)) {
-            Some(arg) => arg,
-            None => Expr::Binding {
-                var: symb_gen.next_ignored(span),
-                tuple_pos: BindingPos::Unresolved,
-            },
-        };
-        new_args.push(arg);
-    }
-    Ok(InputRelationApplyAtom {
-        name,
-        args: new_args,
-        validity,
-        span,
-    })
 }
 
 /// Shared shape of upstream's two `normalize` impls: expression arguments
 /// become fresh bindings plus unifications; repeated variables become fresh
 /// bindings plus equality unifications; ignored bindings become fresh
 /// generated-ignored names.
-pub(crate) fn normalize_args(
-    args: Vec<Expr>,
-    symb_gen: &mut TempSymbGen,
-) -> (Vec<Symbol>, Vec<NormalFormAtom>) {
-    let mut unifs = Vec::new();
-    let mut out_args = Vec::with_capacity(args.len());
-    let mut seen_variables = std::collections::BTreeSet::new();
-    for arg in args {
-        match arg {
-            Expr::Binding { var, .. } => {
-                if matches!(
-                    var.kind(),
-                    SymbolKind::Ignored | SymbolKind::GeneratedIgnored
-                ) {
-                    out_args.push(symb_gen.next_ignored(var.span()));
-                } else if seen_variables.insert(var.clone()) {
-                    out_args.push(var);
-                } else {
-                    let dup = symb_gen.next(var.span());
+pub(crate) trait InputRuleApplyNormalize {
+    fn normalize_args(
+        args: Vec<Expr>,
+        symb_gen: &mut TempSymbGen,
+    ) -> (Vec<Symbol>, Vec<NormalFormAtom>);
+
+    fn normalize(
+        self,
+        is_negated: bool,
+        symb_gen: &mut TempSymbGen,
+    ) -> Vec<Vec<NormalFormAtom>>;
+}
+
+impl InputRuleApplyNormalize for InputRuleApplyAtom {
+    fn normalize_args(
+        args: Vec<Expr>,
+        symb_gen: &mut TempSymbGen,
+    ) -> (Vec<Symbol>, Vec<NormalFormAtom>) {
+        let mut unifs = Vec::new();
+        let mut out_args = Vec::with_capacity(args.len());
+        let mut seen_variables = std::collections::BTreeSet::new();
+        for arg in args {
+            match arg {
+                Expr::Binding { var, .. } => {
+                    if matches!(
+                        var.kind(),
+                        SymbolKind::Ignored | SymbolKind::GeneratedIgnored
+                    ) {
+                        out_args.push(symb_gen.next_ignored(var.span()));
+                    } else if seen_variables.insert(var.clone()) {
+                        out_args.push(var);
+                    } else {
+                        let dup = symb_gen.next(var.span());
+                        unifs.push(NormalFormAtom::Unification(Unification {
+                            binding: dup.clone(),
+                            expr: Expr::Binding {
+                                var,
+                                tuple_pos: BindingPos::Unresolved,
+                            },
+                            one_many_unif: false,
+                            span: dup.span(),
+                        }));
+                        out_args.push(dup);
+                    }
+                }
+                expr @ Expr::Const { .. }
+                | expr @ Expr::Apply { .. }
+                | expr @ Expr::UnboundApply { .. }
+                | expr @ Expr::Cond { .. }
+                | expr @ Expr::Lazy { .. } => {
+                    let span = expr.span();
+                    let kw = symb_gen.next(span);
+                    out_args.push(kw.clone());
                     unifs.push(NormalFormAtom::Unification(Unification {
-                        binding: dup.clone(),
-                        expr: Expr::Binding {
-                            var,
-                            tuple_pos: BindingPos::Unresolved,
-                        },
+                        binding: kw,
+                        expr,
                         one_many_unif: false,
-                        span: dup.span(),
+                        span,
                     }));
-                    out_args.push(dup);
                 }
             }
-            expr @ Expr::Const { .. }
-            | expr @ Expr::Apply { .. }
-            | expr @ Expr::UnboundApply { .. }
-            | expr @ Expr::Cond { .. }
-            | expr @ Expr::Lazy { .. } => {
-                let span = expr.span();
-                let kw = symb_gen.next(span);
-                out_args.push(kw.clone());
-                unifs.push(NormalFormAtom::Unification(Unification {
-                    binding: kw,
-                    expr,
-                    one_many_unif: false,
-                    span,
-                }));
-            }
         }
+        (out_args, unifs)
     }
-    (out_args, unifs)
-}
 
-/// Normalize apply args then push the positive/negated atom — ONE seat
-/// (copy_detector — rule vs relation apply).
-fn normalize_apply_body(
-    args: Vec<Expr>,
-    symb_gen: &mut TempSymbGen,
-    finish: impl FnOnce(Vec<Symbol>) -> NormalFormAtom,
-) -> Vec<Vec<NormalFormAtom>> {
-    let (args, mut ret) = normalize_args(args, symb_gen);
-    ret.push(finish(args));
-    vec![ret]
-}
-
-pub(crate) fn normalize_rule_apply(
-    atom: InputRuleApplyAtom,
-    is_negated: bool,
-    symb_gen: &mut TempSymbGen,
-) -> Vec<Vec<NormalFormAtom>> {
-    normalize_apply_body(atom.args, symb_gen, |args| {
-        let apply = NormalFormRuleApplyAtom {
-            name: atom.name,
-            args,
-            span: atom.span,
-        };
-        if is_negated {
-            NormalFormAtom::NegatedRule(apply)
+    fn normalize(
+        self,
+        is_negated: bool,
+        symb_gen: &mut TempSymbGen,
+    ) -> Vec<Vec<NormalFormAtom>> {
+        let (args, mut ret) = Self::normalize_args(self.args, symb_gen);
+        ret.push(if is_negated {
+            NormalFormAtom::NegatedRule(NormalFormRuleApplyAtom {
+                name: self.name,
+                args,
+                span: self.span,
+            })
         } else {
-            NormalFormAtom::Rule(apply)
-        }
-    })
+            NormalFormAtom::Rule(NormalFormRuleApplyAtom {
+                name: self.name,
+                args,
+                span: self.span,
+            })
+        });
+        vec![ret]
+    }
 }
 
-pub(crate) fn normalize_relation_apply(
-    atom: InputRelationApplyAtom,
-    is_negated: bool,
-    symb_gen: &mut TempSymbGen,
-) -> Vec<Vec<NormalFormAtom>> {
-    normalize_apply_body(atom.args, symb_gen, |args| {
-        let apply = NormalFormRelationApplyAtom {
-            name: atom.name,
-            args,
-            validity: atom.validity,
-            span: atom.span,
-        };
-        if is_negated {
-            NormalFormAtom::NegatedRelation(apply)
+pub(crate) trait InputRelationApplyNormalize {
+    fn normalize_args(
+        args: Vec<Expr>,
+        symb_gen: &mut TempSymbGen,
+    ) -> (Vec<Symbol>, Vec<NormalFormAtom>);
+
+    fn normalize(
+        self,
+        is_negated: bool,
+        symb_gen: &mut TempSymbGen,
+    ) -> Vec<Vec<NormalFormAtom>>;
+}
+
+impl InputRelationApplyNormalize for InputRelationApplyAtom {
+    fn normalize_args(
+        args: Vec<Expr>,
+        symb_gen: &mut TempSymbGen,
+    ) -> (Vec<Symbol>, Vec<NormalFormAtom>) {
+        <InputRuleApplyAtom as InputRuleApplyNormalize>::normalize_args(args, symb_gen)
+    }
+
+    fn normalize(
+        self,
+        is_negated: bool,
+        symb_gen: &mut TempSymbGen,
+    ) -> Vec<Vec<NormalFormAtom>> {
+        let (args, mut ret) = Self::normalize_args(self.args, symb_gen);
+        ret.push(if is_negated {
+            NormalFormAtom::NegatedRelation(NormalFormRelationApplyAtom {
+                name: self.name,
+                args,
+                validity: self.validity,
+                span: self.span,
+            })
         } else {
-            NormalFormAtom::Relation(apply)
-        }
-    })
+            NormalFormAtom::Relation(NormalFormRelationApplyAtom {
+                name: self.name,
+                args,
+                validity: self.validity,
+                span: self.span,
+            })
+        });
+        vec![ret]
+    }
 }
 
 /// Binding-safety well-ordering: positive applications bind, then pending
 /// negations/predicates/unifications are inserted as soon as their inputs
 /// are bound; anything still pending at the end is refused. Faithful port
 /// of upstream `reorder.rs` (its `unreachable!`s are typed invariants).
-pub(crate) fn convert_to_well_ordered_rule(
-    rule: NormalFormInlineRule,
-) -> Result<NormalFormInlineRule> {
-    let mut seen_variables = std::collections::BTreeSet::new();
-    let mut round_1_collected = vec![];
-    let mut pending = vec![];
+impl NormalFormInlineRule {
+    pub(crate) fn well_ordered(self) -> Result<Self> {
+        let Self { head, aggr, body } = self;
+        let mut seen_variables = std::collections::BTreeSet::new();
+        let mut round_1_collected = vec![];
+        let mut pending = vec![];
 
-    for atom in rule.body {
+        for atom in body {
         match atom {
             NormalFormAtom::Unification(u) => {
                 if u.is_const() {
@@ -555,9 +637,10 @@ pub(crate) fn convert_to_well_ordered_rule(
         }
     }
 
-    Ok(NormalFormInlineRule {
-        head: rule.head,
-        aggr: rule.aggr,
-        body: collected,
-    })
+        Ok(Self {
+            head,
+            aggr,
+            body: collected,
+        })
+    }
 }

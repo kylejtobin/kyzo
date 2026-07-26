@@ -993,6 +993,33 @@ impl OpenSkipCursor for FjallWriteTx {
     }
 }
 
+impl FjallWriteTx {
+    fn del_range_chunk(&mut self, cursor: Vec<u8>, upper: &[u8]) -> Result<()> {
+        const CHUNK: usize = 1024;
+        let keys: Vec<Slice> = {
+            let tx = self.open_tx()?;
+            raw_range(tx, &self.ks, &cursor, upper)
+                .map(materialize_key)
+                .take(CHUNK)
+                .collect::<Result<_>>()?
+        };
+        let Some(last) = keys.last().cloned() else {
+            return Ok(());
+        };
+        let full_chunk = keys.len() == CHUNK;
+        let ks = self.ks.clone();
+        for k in keys {
+            self.open_tx_mut()?.remove(&ks, k);
+        }
+        if !full_chunk {
+            return Ok(());
+        }
+        let mut succ = last.to_vec();
+        succ.push(0);
+        self.del_range_chunk(succ, upper)
+    }
+}
+
 impl WriteTx for FjallWriteTx {
     fn system_stamp(&self) -> ValidityTs {
         self.stamp
@@ -1012,31 +1039,6 @@ impl WriteTx for FjallWriteTx {
 
     fn del_range(&mut self, lower: &[u8], upper: &[u8]) -> Result<()> {
         self.del_range_chunk(lower.to_vec(), upper)
-    }
-
-    fn del_range_chunk(&mut self, cursor: Vec<u8>, upper: &[u8]) -> Result<()> {
-        const CHUNK: usize = 1024;
-        let keys: Vec<Slice> = {
-            let tx = self.open_tx()?;
-            raw_range(tx, &self.ks, &cursor, upper)
-                .map(materialize_key)
-                .take(CHUNK)
-                .collect::<Result<_>>()?
-        };
-        let Some(last) = keys.last() else {
-            return Ok(());
-        };
-        let full_chunk = keys.len() == CHUNK;
-        let ks = self.ks.clone();
-        for k in keys {
-            self.open_tx_mut()?.remove(&ks, k);
-        }
-        if !full_chunk {
-            return Ok(());
-        }
-        let mut succ = last.to_vec();
-        succ.push(0);
-        self.del_range_chunk(succ, upper)
     }
 
     fn commit(mut self) -> std::result::Result<(), CommitFailure> {

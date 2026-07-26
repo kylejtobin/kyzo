@@ -815,7 +815,7 @@ mod tests {
     }
     fn col(name: &str) -> ColumnDef {
         ColumnDef {
-            name: name.into(),
+            name: Symbol::new(name, sp()),
             typing: NullableColType::required(ColType::Any),
             default_gen: None,
         }

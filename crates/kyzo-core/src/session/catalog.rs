@@ -116,21 +116,41 @@ use thiserror::Error;
 use crate::data::json::NamedRows;
 use crate::parse::parse_script;
 use crate::parse::sys::AccessLevel as ParseAccessLevel;
-use crate::rules::contract::{DEFAULT_FIXED_RULES, FixedRule};
+use crate::rules::contract::FixedRule;
 use crate::session::access::{AccessLevel, InsufficientAccessLevel};
 use crate::session::db::{Engine, ScriptOptions, SessionTx, status_ok};
 use crate::store::time::ClaimPolarity;
 use crate::store::{ReadTx, Storage, WriteTx};
 use kyzo_model::SourceSpan;
+use kyzo_model::program::expr::Expr;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::program::{InputProgram, InputRelationHandle};
 use kyzo_model::schema::StoredRelationMetadata;
 #[cfg(test)]
 use kyzo_model::schema::{CompatibleInputSchema, RelationWriteShape};
+
+/// Catalog wire: relation identity names persist as plain strings; decode
+/// mints [`SourceSpan::empty`] at the boundary (same law as [`Symbol`]).
+mod symbol_wire {
+    use kyzo_model::program::symbol::Symbol;
+    use kyzo_model::program::span::SourceSpan;
+    use serde::{Deserialize, Deserializer, Serializer};
+    use smartstring::{LazyCompact, SmartString};
+
+    pub fn serialize<S: Serializer>(sym: &Symbol, ser: S) -> Result<S::Ok, S::Error> {
+        ser.serialize_str(sym.name().as_str())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(de: D) -> Result<Symbol, D::Error> {
+        let s: SmartString<LazyCompact> = SmartString::deserialize(de)?;
+        Ok(Symbol::new(s, SourceSpan::empty()))
+    }
+}
 use kyzo_model::value::{
     AsOf, DataValue, MAX_VALIDITY_TS, RelationId, ScanBound, StorageKey, StoredValiditySlot, Tuple,
-    TupleT, ValidityTs, decode_tuple_from_kv, encode_key_with_suffix, extend_tuple_from_v,
-    scan_key_lower, scan_key_lower_projected, scan_key_upper, scan_key_upper_projected,
+    TupleT, ValidityTs, decode_tuple_from_key, decode_tuple_from_kv, encode_key_with_suffix,
+    extend_tuple_from_v, scan_key_lower, scan_key_lower_projected, scan_key_upper,
+    scan_key_upper_projected,
 };
 
 // ---------------------------------------------------------------------------
@@ -235,19 +255,79 @@ fn next_relation_id(cur: RelationId) -> Result<RelationId> {
 /// `{base}:{index}`, its own row the single authority), and consumers
 /// resolve [`IndexRef::relation_name`] through the catalog when they need
 /// the index relation's handle.
+
+/// Catalog relation name — owned identity for name→id maps, never a bare `String`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct RelationName(Symbol);
+
+impl RelationName {
+    /// Lift from a [`RelationHandle::name`].
+    #[must_use]
+    pub fn from_handle_name(name: &Symbol) -> Self {
+        Self(name.clone())
+    }
+
+    /// The catalog name of an index's backing relation — `{base}:{index}`.
+    #[must_use]
+    pub fn index_backing(base: &Symbol, index: &Symbol) -> Self {
+        let mut name = base.name().clone();
+        name.push(':');
+        name.push_str(index.name().as_str());
+        Self(Symbol::new(name, SourceSpan::empty()))
+    }
+
+    /// Borrow as `&str`.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<&str> for RelationName {
+    fn from(s: &str) -> Self {
+        Self(Symbol::new(s, SourceSpan::empty()))
+    }
+}
+
+impl From<String> for RelationName {
+    fn from(s: String) -> Self {
+        Self(Symbol::new(s, SourceSpan::empty()))
+    }
+}
+
+impl From<Symbol> for RelationName {
+    fn from(sym: Symbol) -> Self {
+        Self(sym)
+    }
+}
+
+impl std::fmt::Display for RelationName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl AsRef<str> for RelationName {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
 // `PartialEq` only: `IndexKind` carries float-bearing manifests.
 #[derive(Debug, Clone, PartialEq, serde_derive::Serialize, serde_derive::Deserialize)]
 pub struct IndexRef {
     /// The index's short name, unique among the parent's indices.
-    pub name: SmartString<LazyCompact>,
+    #[serde(with = "symbol_wire")]
+    pub name: Symbol,
     pub kind: IndexKind,
 }
 
 impl IndexRef {
     /// The catalog name of this index's backing relation. The one place
     /// the `{base}:{index}` naming convention is spelled.
-    pub(crate) fn relation_name(&self, base: &str) -> String {
-        format!("{base}:{}", self.name)
+    pub(crate) fn relation_name(&self, base: &Symbol) -> RelationName {
+        RelationName::index_backing(base, &self.name)
     }
 }
 
@@ -299,8 +379,44 @@ pub enum IndexKind {
     /// inverse relation (`{base}:{index}:inv`) the engine maintains.
     Lsh {
         manifest: crate::project::dedup::lsh::MinHashLshIndexManifest,
-        inverse: SmartString<LazyCompact>,
+        #[serde(with = "symbol_wire")]
+        inverse: Symbol,
     },
+}
+
+impl IndexKind {
+    /// Stable digest tag for this discriminant (PartialEq-only kinds).
+    pub(crate) fn digest_tag(&self) -> &'static [u8] {
+        match self {
+            IndexKind::Plain { .. } => b"plain",
+            IndexKind::Temporal => b"temporal",
+            IndexKind::Hnsw(_) => b"hnsw",
+            IndexKind::Fts(_) => b"fts",
+            IndexKind::Lsh { .. } => b"lsh",
+        }
+    }
+
+    /// Project a base-relation row through a plain index's column mapper.
+    pub(crate) fn project_mapper_cols(
+        &self,
+        row: &[DataValue],
+        base: &RelationHandle,
+    ) -> Result<Vec<DataValue>> {
+        let IndexKind::Plain { mapper } = self else {
+            bail!("project_mapper_cols requires IndexKind::Plain");
+        };
+        mapper
+            .iter()
+            .map(|&i| {
+                row.get(i).cloned().ok_or_else(|| {
+                    miette!(
+                        "stale plain-index mapper position {i} for relation '{}' during deep-verify",
+                        base.name
+                    )
+                })
+            })
+            .collect()
+    }
 }
 
 /// The synthetic leading column of a [`IndexKind::Temporal`] posting row:
@@ -336,7 +452,8 @@ pub(crate) const TEMPORAL_POSTING_LEADING_COLUMN: &str = "_posting_valid";
 /// not call `parse_script`.
 #[derive(Clone, serde_derive::Serialize)]
 pub(crate) struct ConstraintRef {
-    name: SmartString<LazyCompact>,
+    #[serde(serialize_with = "symbol_wire::serialize")]
+    name: Symbol,
     program: InputProgram,
 }
 
@@ -344,7 +461,8 @@ impl<'de> serde::Deserialize<'de> for ConstraintRef {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         #[derive(serde_derive::Deserialize)]
         struct Wire {
-            name: SmartString<LazyCompact>,
+            #[serde(with = "symbol_wire")]
+            name: Symbol,
             program: InputProgram,
         }
         let wire = Wire::deserialize(deserializer)?;
@@ -361,19 +479,19 @@ impl ConstraintRef {
     /// it is a well-formed constraint body. A non-parsing source is refused
     /// here, so it can never be stored. Only the sealed program is retained.
     pub(crate) fn parse(
-        name: impl Into<SmartString<LazyCompact>>,
+        name: Symbol,
         source: &str,
-        _fixed_rules: &BTreeMap<String, Arc<dyn FixedRule>>,
+        _fixed_rules: &BTreeMap<Symbol, Arc<dyn FixedRule>>,
         _cur_vld: ValidityTs,
     ) -> Result<ConstraintRef> {
         let program = parse_script(source, &BTreeMap::new(), _cur_vld)?.get_single_program()?;
         Ok(ConstraintRef {
-            name: name.into(),
+            name,
             program,
         })
     }
 
-    pub(crate) fn name(&self) -> &SmartString<LazyCompact> {
+    pub(crate) fn name(&self) -> &Symbol {
         &self.name
     }
 
@@ -503,7 +621,7 @@ impl Trigger {
     /// here, so it can never be stored. Only the sealed program is retained.
     pub(crate) fn parse(
         source: &str,
-        _fixed_rules: &BTreeMap<String, Arc<dyn FixedRule>>,
+        _fixed_rules: &BTreeMap<Symbol, Arc<dyn FixedRule>>,
         _cur_vld: ValidityTs,
     ) -> Result<Trigger> {
         let program = parse_script(source, &BTreeMap::new(), _cur_vld)?.get_single_program()?;
@@ -532,7 +650,8 @@ impl Debug for Trigger {
 
 #[derive(Clone, PartialEq, serde_derive::Serialize)]
 pub struct RelationHandle {
-    pub(crate) name: SmartString<LazyCompact>,
+    #[serde(serialize_with = "symbol_wire::serialize")]
+    pub(crate) name: Symbol,
     pub(crate) id: RelationId,
     pub(crate) metadata: StoredRelationMetadata,
     /// Triggers run on put/rm/replace, held as sealed [`Trigger`] substances
@@ -579,7 +698,7 @@ impl<'de> serde::Deserialize<'de> for RelationHandle {
         // RelationId / Trigger / ConstraintRef / InputProgram each refuse on
         // their own admission doors during nested deserialize.
         Ok(RelationHandle {
-            name: wire.name,
+            name: Symbol::new(wire.name, SourceSpan::empty()),
             id: wire.id,
             metadata: wire.metadata,
             put_triggers: wire.put_triggers,
@@ -620,7 +739,7 @@ pub(crate) struct CatalogSerializeRefused;
 #[error("Arity mismatch for stored relation {name}: expect {expect_arity}, got {actual_arity}")]
 #[diagnostic(code(eval::stored_rel_arity_mismatch))]
 struct StoredRelArityMismatch {
-    name: String,
+    name: Symbol,
     expect_arity: usize,
     actual_arity: usize,
     #[label]
@@ -708,6 +827,24 @@ mod msgpack_door {
     }
 }
 
+/// One SYSTEM catalog row decoded for a storage verification walk.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum CatalogWalkEntry {
+    /// Relation handle row (`[Str name]` key).
+    Relation(RelationHandle),
+    /// Relation-id counter (`[Null]` key); value is not a handle.
+    IdCounter,
+}
+
+/// Why a SYSTEM catalog row refused walk decode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CatalogWalkEntryRefuse {
+    /// Value bytes did not deserialize as a relation handle.
+    CatalogRecordDeser,
+    /// Key shape is neither `[Str _]` nor `[Null]`.
+    UnrecognizedSystemKeyColumn(Option<DataValue>),
+}
+
 impl RelationHandle {
     /// The pure half of relation creation: shape a handle from the parsed
     /// input declaration and an allocated id. Storage writes happen in
@@ -719,7 +856,7 @@ impl RelationHandle {
         keyspace_kind: KeyspaceKind,
     ) -> Self {
         RelationHandle {
-            name: input.name.name().clone(),
+            name: input.name.clone(),
             id,
             metadata: input.metadata,
             put_triggers: vec![],
@@ -731,6 +868,36 @@ impl RelationHandle {
             constraints: vec![],
             keyspace_kind,
         }
+    }
+
+    /// Collect catalog handles keyed by relation id, plus name→id for index resolve.
+    pub(crate) fn load_catalog_handles(
+        tx: &impl ReadTx,
+    ) -> Result<(
+        BTreeMap<RelationId, RelationHandle>,
+        BTreeMap<Symbol, RelationId>,
+    )> {
+        let mut by_id = BTreeMap::new();
+        let mut by_name = BTreeMap::new();
+        let lower = Tuple::new().encode_as_key(RelationId::SYSTEM);
+        let upper = (RelationId::SYSTEM.raw() + 1).to_be_bytes();
+        for pair in tx.range_scan(&lower, &upper) {
+            let (k, v) = pair?;
+            let tup = match decode_tuple_from_key(&k, 16) {
+                Ok(t) => t,
+                Err(decode_refuse) => {
+                    let skipped = decode_refuse;
+                    core::mem::size_of_val(&skipped);
+                    continue;
+                }
+            };
+            if let Some(DataValue::Str(_)) = tup.first() {
+                let h = RelationHandle::decode(&v).map_err(|e| miette::miette!("{e}"))?;
+                by_name.insert(h.name.clone(), h.id);
+                by_id.insert(h.id, h);
+            }
+        }
+        Ok((by_id, by_name))
     }
 
     pub(crate) fn arity(&self) -> usize {
@@ -745,8 +912,14 @@ impl RelationHandle {
             .iter()
             .chain(self.metadata.non_keys.iter())
             .enumerate()
-            .map(|(i, col)| (Symbol::new(col.name.clone(), SourceSpan::empty()), i))
+            .map(|(i, col)| (col.name.clone(), i))
             .collect()
+    }
+
+    pub(crate) fn bind_extractor(&self, extractor: &Expr) -> Result<Expr> {
+        let mut expr = extractor.clone();
+        expr.fill_binding_indices(&self.base_column_frame())?;
+        Ok(expr)
     }
 
     pub(crate) fn has_no_index(&self) -> bool {
@@ -785,6 +958,26 @@ impl RelationHandle {
         Ok(msgpack_door::decode_catalog_record(data)?)
     }
 
+    /// Decode one SYSTEM catalog row and classify its key shape for a storage
+    /// verification walk. Taxonomy folding lives in [`crate::store::verify_walk`]
+    /// (store tier owns `RelKind`; importing `VerifyWalkFailure` here would
+    /// cycle `session::catalog` ↔ `store::verify_walk`).
+    pub(crate) fn verify_catalog_entry(
+        key_cols: &[DataValue],
+        val: &[u8],
+    ) -> std::result::Result<CatalogWalkEntry, CatalogWalkEntryRefuse> {
+        match key_cols.first() {
+            Some(DataValue::Str(_)) => RelationHandle::decode(val)
+                .map(CatalogWalkEntry::Relation)
+                .map_err(|_| CatalogWalkEntryRefuse::CatalogRecordDeser),
+            Some(DataValue::Null) => Ok(CatalogWalkEntry::IdCounter),
+            Some(other) => Err(CatalogWalkEntryRefuse::UnrecognizedSystemKeyColumn(Some(
+                other.clone(),
+            ))),
+            None => Err(CatalogWalkEntryRefuse::UnrecognizedSystemKeyColumn(None)),
+        }
+    }
+
     // -- key/value encoding for this relation's keyspace ------------------
 
     /// Encode the key columns of `tuple` as this relation's storage key.
@@ -797,7 +990,7 @@ impl RelationHandle {
         ensure!(
             tuple.len() >= len,
             StoredRelArityMismatch {
-                name: self.name.to_string(),
+                name: self.name.clone(),
                 expect_arity: self.arity(),
                 actual_arity: tuple.len(),
                 span
@@ -829,7 +1022,7 @@ impl RelationHandle {
         ensure!(
             tuple.len() >= len,
             StoredRelArityMismatch {
-                name: self.name.to_string(),
+                name: self.name.clone(),
                 expect_arity: self.arity(),
                 actual_arity: tuple.len(),
                 span
@@ -918,14 +1111,14 @@ impl RelationHandle {
                 let digest = SugarRelationDigest::new(
                     DigestDomain::SugarRow,
                     None,
-                    self.name.as_str(),
+                    &*self.name,
                     row,
                 )
                 .digest();
                 RelationRowAdmit::new(
                     store_id,
                     live,
-                    self.name.as_str(),
+                    &*self.name,
                     row,
                     self.metadata.keys.len(),
                     valid,
@@ -959,7 +1152,7 @@ impl RelationHandle {
             span,
             ClaimPolarity::Retract,
             |store_id, live| {
-                SugarRetractAdmit::new(store_id, live, self.name.as_str(), key_cols, valid).admit()
+                SugarRetractAdmit::new(store_id, live, &*self.name, key_cols, valid).admit()
             },
         )
     }
@@ -978,7 +1171,7 @@ impl RelationHandle {
         ensure!(
             tuple.len() >= start,
             StoredRelArityMismatch {
-                name: self.name.to_string(),
+                name: self.name.clone(),
                 expect_arity: self.arity(),
                 actual_arity: tuple.len(),
                 span
@@ -1112,7 +1305,7 @@ impl RelationHandle {
         ensure!(
             key_cols.len() >= len,
             StoredRelArityMismatch {
-                name: self.name.to_string(),
+                name: self.name.clone(),
                 expect_arity: self.arity(),
                 actual_arity: key_cols.len(),
                 span
@@ -1550,9 +1743,10 @@ pub fn set_access_level(tx: &mut impl WriteTx, name: &str, level: AccessLevel) -
 /// catalog cannot carry it. Catalog decode admits sealed programs through
 /// [`InputProgram::new`] and never re-parses these sources.
 fn parse_triggers(sources: &[String]) -> Result<Vec<Trigger>> {
+    let builtins = &BTreeMap::<Symbol, Arc<dyn FixedRule>>::new();
     sources
         .iter()
-        .map(|src| Trigger::parse(src, &DEFAULT_FIXED_RULES, trigger_decode_vld()))
+        .map(|src| Trigger::parse(src, builtins, trigger_decode_vld()))
         .collect()
 }
 
@@ -1626,7 +1820,7 @@ pub(crate) fn rename_relation(tx: &mut impl WriteTx, old: &Symbol, new: &Symbol)
             rel.access_level
         ));
     }
-    rel.name = new.name().clone();
+    rel.name = new.clone();
     tx.del(&SystemKey::Relation(&old.name()).encode())?;
     tx.put(&new_row_key, &rel.encode()?)
 }
@@ -1642,7 +1836,7 @@ impl<S: Storage> Engine<S> {
         let mut rows = vec![];
         for handle in list_relations(&tx.store)? {
             rows.push(Tuple::from_vec(vec![
-                DataValue::from(handle.name.as_str()),
+                DataValue::from(&*handle.name),
                 DataValue::from(
                     i64::try_from(handle.arity())
                         .map_err(|_| miette!("relation arity does not fit i64"))?,
@@ -1651,7 +1845,11 @@ impl<S: Storage> Engine<S> {
             ]));
         }
         Ok(NamedRows::try_new(
-            vec!["name".into(), "arity".into(), "access_level".into()],
+            vec![
+                Symbol::new("name", SourceSpan::empty()),
+                Symbol::new("arity", SourceSpan::empty()),
+                Symbol::new("access_level", SourceSpan::empty()),
+            ],
             rows,
         )?)
     }
@@ -1669,12 +1867,15 @@ impl<S: Storage> Engine<S> {
             .chain(handle.metadata.non_keys.iter().map(|c| (c, false)))
         {
             rows.push(Tuple::from_vec(vec![
-                DataValue::from(col.0.name.as_str()),
+                DataValue::from(&*col.0.name),
                 DataValue::from(col.1),
             ]));
         }
         Ok(NamedRows::try_new(
-            vec!["column".into(), "is_key".into()],
+            vec![
+                Symbol::new("column", SourceSpan::empty()),
+                Symbol::new("is_key", SourceSpan::empty()),
+            ],
             rows,
         )?)
     }
@@ -1684,9 +1885,9 @@ impl<S: Storage> Engine<S> {
         let rows = self
             .fixed_rules()?
             .keys()
-            .map(|k| Tuple::from_vec(vec![DataValue::from(k.as_str())]))
+            .map(|k| Tuple::from_vec(vec![DataValue::from(k.name().as_str())]))
             .collect();
-        Ok(NamedRows::try_new(vec!["name".into()], rows)?)
+        Ok(NamedRows::try_new(vec![Symbol::new("name", SourceSpan::empty())], rows)?)
     }
 
     /// `::show_triggers` — put/rm/replace trigger sources on a relation.
@@ -1707,7 +1908,10 @@ impl<S: Storage> Engine<S> {
             ]));
         }
         Ok(NamedRows::try_new(
-            vec!["kind".into(), "source".into()],
+            vec![
+                Symbol::new("kind", SourceSpan::empty()),
+                Symbol::new("source", SourceSpan::empty()),
+            ],
             rows,
         )?)
     }
@@ -1787,9 +1991,12 @@ mod tests {
     use kyzo_model::value::ValidityTs;
     use kyzo_model::value::decode_tuple_from_key;
 
+    use kyzo_model::program::span::SourceSpan;
+    use kyzo_model::program::symbol::Symbol;
+
     fn col(name: &str, coltype: ColType) -> ColumnDef {
         ColumnDef {
-            name: SmartString::from(name),
+            name: Symbol::new(name, SourceSpan::empty()),
             typing: NullableColType::required(coltype),
             default_gen: None,
         }
@@ -1866,7 +2073,7 @@ mod tests {
         );
         let listed = list_relations(&rtx)?;
         assert_eq!(
-            listed.iter().map(|h| h.name.as_str()).collect::<Vec<_>>(),
+            listed.iter().map(|h| &*h.name).collect::<Vec<_>>(),
             vec!["alpha", "beta"]
         );
 
@@ -1899,7 +2106,7 @@ mod tests {
         assert_eq!(a.scan_all(&rtx).count(), 0, "destroy deletes the keyspace");
         let listed = list_relations(&rtx)?;
         assert_eq!(
-            listed.iter().map(|h| h.name.as_str()).collect::<Vec<_>>(),
+            listed.iter().map(|h| &*h.name).collect::<Vec<_>>(),
             vec!["beta"]
         );
         Ok(())
@@ -1935,7 +2142,7 @@ mod tests {
         }
 
         let shadow = ShadowHandle {
-            name: handle.name.clone(),
+            name: handle.name.name().clone(),
             id: kyzo_model::value::RelationId::CAP + 1, // out of the allocatable range
             metadata: handle.metadata.clone(),
             put_triggers: handle.put_triggers.clone(),
@@ -2322,19 +2529,19 @@ mod tests {
         );
         handle.put_triggers = vec![Trigger::parse(
             "?[k, v] := *pin[k, v]",
-            &DEFAULT_FIXED_RULES,
+            &BTreeMap::new(),
             trigger_decode_vld(),
         )?];
         handle.access_level = AccessLevel::ReadOnly;
         handle.indices = vec![IndexRef {
-            name: SmartString::from("by_v"),
+            name: Symbol::new("by_v", SourceSpan::empty()),
             kind: IndexKind::Plain { mapper: vec![1, 0] },
         }];
         handle.description = SmartString::from("pinned");
         handle.constraints = vec![ConstraintRef::parse(
-            "no_empty_v",
+            Symbol::new("no_empty_v", SourceSpan::empty()),
             "?[k] := *pin[k, v], v == ''",
-            &DEFAULT_FIXED_RULES,
+            &BTreeMap::new(),
             trigger_decode_vld(),
         )?];
 
@@ -2366,9 +2573,10 @@ mod tests {
     fn asof_clause_first_coordinate_is_system_time() -> Result<()> {
         use crate::session::db::Engine;
         use kyzo_model::SourceSpan;
+        use kyzo_model::program::symbol::Symbol;
         use std::collections::BTreeMap;
 
-        fn no_params() -> BTreeMap<String, DataValue> {
+        fn no_params() -> BTreeMap<Symbol, DataValue> {
             BTreeMap::new()
         }
         fn open_engine<S: Storage>(store: S) -> Result<Engine<S>> {
@@ -2424,9 +2632,10 @@ mod tests {
     #[test]
     fn asof_clause_parses_one_and_two_coordinates() -> Result<()> {
         use crate::session::db::Engine;
+        use kyzo_model::program::symbol::Symbol;
         use std::collections::BTreeMap;
 
-        fn no_params() -> BTreeMap<String, DataValue> {
+        fn no_params() -> BTreeMap<Symbol, DataValue> {
             BTreeMap::new()
         }
         fn open_engine<S: Storage>(store: S) -> Result<Engine<S>> {

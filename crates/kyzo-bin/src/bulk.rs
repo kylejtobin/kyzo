@@ -35,6 +35,8 @@
 use std::collections::BTreeMap;
 
 use kyzo::{DataValue, Engine, FjallStorage, NamedRows};
+use kyzo_model::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
 use miette::{Result, bail, miette};
 
 /// Is `name` safe to splice into composed KyzoScript as a bare identifier
@@ -77,9 +79,14 @@ pub fn import_relations(
         // relation name, and are spliced into the same query — the same
         // grammar-shaped validation applies.
         for col in rows.headers() {
-            validate_identifier(col)?;
+            validate_identifier(col.name())?;
         }
-        let cols_str = rows.headers().join(", ");
+        let cols_str = rows
+            .headers()
+            .iter()
+            .map(|col| col.name().as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
         let query = format!("?[{cols_str}] <- $data {op} {relation} {{{cols_str}}}");
         let data_value = DataValue::List(
             rows.into_rows()
@@ -87,7 +94,13 @@ pub fn import_relations(
                 .map(|row| DataValue::List(row.into_vec()))
                 .collect(),
         );
-        db.run_script(&query, BTreeMap::from([("data".to_string(), data_value)]))
+        db.run_script(
+            &query,
+            BTreeMap::from([(
+                Symbol::new("data", SourceSpan::empty()),
+                data_value,
+            )]),
+        )
             .map_err(|e| miette!("cannot import data for relation '{relation}': {e}"))?;
     }
     Ok(())

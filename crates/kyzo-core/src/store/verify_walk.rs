@@ -54,23 +54,27 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::session::catalog::{IndexKind, IndexRef, KeyspaceKind, RelationHandle};
+use crate::session::catalog::{
+    CatalogWalkEntry, CatalogWalkEntryRefuse, IndexKind, IndexRef, KeyspaceKind, RelationHandle,
+    RelationName,
+};
 use crate::store::failure::KeyspaceId;
-use crate::store::time::{claim_polarity_of_value, extend_tuple_from_bitemporal_v};
+use crate::store::time::{
+    BitemporalDecodeError, claim_polarity_of_value, extend_tuple_from_bitemporal_v,
+};
 use crate::store::{ReadTx, Storage};
 use fjall::Slice;
 use kyzo_model::SourceSpan;
-use kyzo_model::program::expr::Expr;
+use kyzo_model::host_text::HostText;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{
-    DataValue, RelationId, Tuple, TupleT, append_canonical, decode_tuple_from_key,
+    DataValue, DecodeError, RelationId, Tuple, TupleT, append_canonical, decode_tuple_from_key,
     encode_tuple_bare, extend_tuple_from_v,
 };
 use miette::{Result, bail};
 use sha2::{Digest, Sha256};
 
 use super::digest_domain::DigestDomain;
-use smartstring::{LazyCompact, SmartString};
 
 /// Domain-separated checksum over (keyspace, block, payload).
 ///
@@ -138,13 +142,84 @@ impl KeyspaceScopedChecksum {
 /// without itself growing unboundedly on a badly damaged store.
 const MAX_RECORDED: usize = 100;
 
+/// Why one store pair failed the catalog-aware verification walk.
+#[derive(Debug)]
+pub enum VerifyWalkFailure {
+    /// Storage key did not decode as a canonical tuple.
+    KeyDecode(DecodeError),
+    /// Key prefix did not decode as a relation id.
+    RelationIdDecode(DecodeError),
+    /// Data row references a relation id absent from the catalog.
+    DanglingData {
+        /// Relation id present in the key but missing from the taxonomy.
+        relation_id: RelationId,
+    },
+    /// Catalog relation-handle value did not deserialize.
+    CatalogRecordDeser,
+    /// `RelationId::SYSTEM` key shape is neither a Str-named handle nor the id counter.
+    UnrecognizedSystemKeyColumn(Option<DataValue>),
+    /// Bitemporal value header or polarity byte refused.
+    BitemporalDecode(BitemporalDecodeError),
+    /// Stored value payload refused canonical decode.
+    ValueDecode(DecodeError),
+}
+
+impl std::fmt::Display for VerifyWalkFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::KeyDecode(e) | Self::RelationIdDecode(e) | Self::ValueDecode(e) => {
+                write!(f, "{e}")
+            }
+            Self::DanglingData { relation_id } => write!(
+                f,
+                "dangling data: no catalog entry for relation id {}",
+                relation_id.raw()
+            ),
+            Self::CatalogRecordDeser => {
+                f.write_str("catalog record: cannot deserialize catalog row for a relation")
+            }
+            Self::UnrecognizedSystemKeyColumn(col) => {
+                write!(f, "unrecognized system key column: {col:?}")
+            }
+            Self::BitemporalDecode(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl From<miette::Report> for VerifyWalkFailure {
+    fn from(report: miette::Report) -> Self {
+        if let Some(e) = report.downcast_ref::<BitemporalDecodeError>() {
+            return Self::BitemporalDecode(*e);
+        }
+        if let Some(e) = report.downcast_ref::<DecodeError>() {
+            return Self::ValueDecode(*e);
+        }
+        unreachable!("verify walk miette failures are bitemporal or canonical decode refusals")
+    }
+}
+
 /// One corrupt pair: where and why.
 #[derive(Debug)]
 pub struct CorruptEntry {
     /// The raw key, hex-encoded, truncated to 64 bytes.
-    pub key_hex: String,
+    pub key_hex: HostText,
     /// What failed to decode.
-    pub error: String,
+    pub error: VerifyWalkFailure,
+}
+
+impl CorruptEntry {
+    /// Hex-encode `bytes` for diagnostics, truncating after 64 raw bytes.
+    fn key_hex_from(bytes: &[u8]) -> HostText {
+        let take = if bytes.len() > 64 { 64 } else { bytes.len() };
+        let mut s = String::with_capacity(take * 2 + 1);
+        for b in &bytes[..take] {
+            s.push_str(&format!("{b:02x}"));
+        }
+        if bytes.len() > 64 {
+            s.push('…');
+        }
+        HostText::new(s)
+    }
 }
 
 /// The result of a full-store verification walk.
@@ -177,18 +252,6 @@ impl VerifyReport {
     }
 }
 
-fn hex_prefix(bytes: &[u8]) -> String {
-    let take = if bytes.len() > 64 { 64 } else { bytes.len() };
-    let mut s = String::with_capacity(take * 2 + 1);
-    for b in &bytes[..take] {
-        s.push_str(&format!("{b:02x}"));
-    }
-    if bytes.len() > 64 {
-        s.push('…');
-    }
-    s
-}
-
 /// The storage kind of an entry, resolved from the catalog: the TYPE that
 /// decides which value codec verifies a row. Every stored value is one of
 /// these three formats; the verifier dispatches by `match` on this kind, never
@@ -202,35 +265,6 @@ enum RelKind {
     /// An index backing's rows: a plain canonical tuple (rebuildable current
     /// state, no bitemporal polarity).
     IndexInternal,
-}
-
-/// Verify one catalog (`SYSTEM`) entry and fold it into the typed taxonomy
-/// (`RelationId` → `RelKind`), which is the ONLY thing the per-row value
-/// dispatch consults. A relation-handle value (Str-named key) must decode as a
-/// `CatalogRecord`; doing so classifies its relation by [`KeyspaceKind`]
-/// (Facts → bitemporal, including plain/temporal index backings;
-/// AlgorithmState → plain canonical for HNSW/FTS/LSH). The id-counter
-/// (Null-named key) is an internal scalar, key-verified only.
-fn verify_catalog_entry(
-    key_cols: &[DataValue],
-    val: &[u8],
-    taxonomy: &mut BTreeMap<RelationId, RelKind>,
-) -> Option<String> {
-    match key_cols.first() {
-        Some(DataValue::Str(_)) => match RelationHandle::decode(val) {
-            Ok(h) => {
-                let kind = match h.keyspace_kind {
-                    KeyspaceKind::Facts => RelKind::BitemporalData,
-                    KeyspaceKind::AlgorithmState => RelKind::IndexInternal,
-                };
-                taxonomy.insert(h.id, kind);
-                None
-            }
-            Err(e) => Some(format!("catalog record: {e}")),
-        },
-        Some(DataValue::Null) => None,
-        other => Some(format!("unrecognized system key column: {other:?}")),
-    }
 }
 
 /// Walk every pair in the store and verify key decodability, VALUE
@@ -264,10 +298,10 @@ pub fn verify_storage<S: Storage>(db: &S) -> Result<VerifyReport> {
         // non-decoding key is unambiguous structural corruption. Resolve the
         // entry to a typed `RelKind`, then verify its value in that kind's
         // codec — the dispatch is a `match` on the type, never a string test.
-        let error: Option<String> = match decode_tuple_from_key(&k, 16) {
-            Err(e) => Some(e.to_string()),
+        let error: Option<VerifyWalkFailure> = match decode_tuple_from_key(&k, 16) {
+            Err(e) => Some(VerifyWalkFailure::KeyDecode(e)),
             Ok(mut tup) => match RelationId::raw_decode(&k) {
-                Err(e) => Some(e.to_string()),
+                Err(e) => Some(VerifyWalkFailure::RelationIdDecode(e)),
                 Ok(rel) => {
                     let kind = if rel == RelationId::SYSTEM {
                         Some(RelKind::Catalog)
@@ -275,20 +309,36 @@ pub fn verify_storage<S: Storage>(db: &S) -> Result<VerifyReport> {
                         taxonomy.get(&rel).copied()
                     };
                     match kind {
-                        None => Some(format!(
-                            "dangling data: no catalog entry for relation id {}",
-                            rel.raw()
-                        )),
+                        None => Some(VerifyWalkFailure::DanglingData { relation_id: rel }),
                         Some(RelKind::Catalog) => {
-                            verify_catalog_entry(tup.as_slice(), &v, &mut taxonomy)
+                            match RelationHandle::verify_catalog_entry(tup.as_slice(), &v) {
+                                Ok(CatalogWalkEntry::Relation(h)) => {
+                                    let kind = match h.keyspace_kind {
+                                        KeyspaceKind::Facts => RelKind::BitemporalData,
+                                        KeyspaceKind::AlgorithmState => RelKind::IndexInternal,
+                                    };
+                                    taxonomy.insert(h.id, kind);
+                                    None
+                                }
+                                Ok(CatalogWalkEntry::IdCounter) => None,
+                                Err(CatalogWalkEntryRefuse::CatalogRecordDeser) => {
+                                    Some(VerifyWalkFailure::CatalogRecordDeser)
+                                }
+                                Err(CatalogWalkEntryRefuse::UnrecognizedSystemKeyColumn(col)) => {
+                                    Some(VerifyWalkFailure::UnrecognizedSystemKeyColumn(col))
+                                }
+                            }
                         }
-                        Some(RelKind::BitemporalData) => claim_polarity_of_value(&v)
-                            .and_then(|_| extend_tuple_from_bitemporal_v(&mut tup, &v))
-                            .err()
-                            .map(|e| e.to_string()),
+                        Some(RelKind::BitemporalData) => match claim_polarity_of_value(&v) {
+                            Ok(_) => match extend_tuple_from_bitemporal_v(&mut tup, &v) {
+                                Ok(()) => None,
+                                Err(report) => Some(VerifyWalkFailure::from(report)),
+                            },
+                            Err(report) => Some(VerifyWalkFailure::from(report)),
+                        },
                         Some(RelKind::IndexInternal) => extend_tuple_from_v(&mut tup, &v)
                             .err()
-                            .map(|e| e.to_string()),
+                            .map(VerifyWalkFailure::ValueDecode),
                     }
                 }
             },
@@ -297,7 +347,7 @@ pub fn verify_storage<S: Storage>(db: &S) -> Result<VerifyReport> {
         if let Some(error) = error {
             if report.corrupt.len() < MAX_RECORDED {
                 report.corrupt.push(CorruptEntry {
-                    key_hex: hex_prefix(&k),
+                    key_hex: CorruptEntry::key_hex_from(&k),
                     error,
                 });
             } else {
@@ -313,58 +363,49 @@ pub fn verify_storage<S: Storage>(db: &S) -> Result<VerifyReport> {
 // Deep-verify (§51): re-derive each index kind from base facts, diff stored
 // ---------------------------------------------------------------------------
 
+/// Why one index's re-derived content disagreed with stored bytes.
+#[derive(Debug, Clone, PartialEq)]
+pub enum IndexMismatchReason {
+    /// Index backing relation absent from catalog while [`IndexRef`] is attached.
+    CatalogAbsent,
+    /// Index [`RelationId`] not loadable during deep-verify.
+    IdNotLoadable,
+    /// LSH inverse relation missing from catalog.
+    LshInverseMissing,
+    /// LSH inverse [`RelationId`] not loadable.
+    LshInverseNotLoadable,
+    /// Re-derived digest set disagrees with stored index row digests.
+    DigestSetDisagreement(IndexRowDigestSetDisagreement),
+    /// Re-derived LSH inverse digest set disagrees with stored inverse rows.
+    LshInverseDigestSetDisagreement(IndexRowDigestSetDisagreement),
+}
+
+impl std::fmt::Display for IndexMismatchReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::CatalogAbsent => f.write_str(
+                "index backing relation absent from catalog while IndexRef is attached",
+            ),
+            Self::IdNotLoadable => {
+                f.write_str("index RelationId not loadable during deep-verify")
+            }
+            Self::LshInverseMissing => f.write_str("lsh inverse relation missing from catalog"),
+            Self::LshInverseNotLoadable => f.write_str("lsh inverse RelationId not loadable"),
+            Self::DigestSetDisagreement(d) => d.fmt(f),
+            Self::LshInverseDigestSetDisagreement(d) => write!(f, "inverse: {d}"),
+        }
+    }
+}
+
 /// One index whose re-derived expected content disagreed with stored bytes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct IndexMismatch {
     /// Catalog name of the index backing (`{base}:{index}`).
-    pub index_name: String,
+    pub index_name: RelationName,
     /// Index kind — the catalog [`IndexKind`], never a string label.
     pub(crate) kind: IndexKind,
-    /// Human-locatable diff summary.
-    pub detail: String,
-}
-
-/// Catalog relation name — owned identity for name→id maps, never a bare `String`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[repr(transparent)]
-pub struct RelationName(SmartString<LazyCompact>);
-
-impl RelationName {
-    /// Lift from a [`RelationHandle::name`] (or any catalog SmartString name).
-    #[must_use]
-    pub fn from_handle_name(name: &SmartString<LazyCompact>) -> Self {
-        Self(name.clone())
-    }
-
-    /// Borrow as `&str`.
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        self.0.as_str()
-    }
-}
-
-impl From<&str> for RelationName {
-    fn from(s: &str) -> Self {
-        Self(SmartString::from(s))
-    }
-}
-
-impl From<String> for RelationName {
-    fn from(s: String) -> Self {
-        Self(SmartString::from(s))
-    }
-}
-
-impl std::fmt::Display for RelationName {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl AsRef<str> for RelationName {
-    fn as_ref(&self) -> &str {
-        self.as_str()
-    }
+    /// Closed reason — never free-form prose.
+    pub reason: IndexMismatchReason,
 }
 
 /// Domain-separated digest of a [`DeepVerifyReport`].
@@ -398,14 +439,16 @@ pub struct IndexRowDigest([u8; 32]);
 const _: [u8; std::mem::size_of::<IndexRowDigest>()] = [0u8; std::mem::size_of::<[u8; 32]>()];
 const _: [u8; std::mem::align_of::<IndexRowDigest>()] = [0u8; std::mem::align_of::<[u8; 32]>()];
 
-/// Stable digest tag for an [`IndexKind`] discriminant (PartialEq-only kinds).
-fn index_kind_digest_tag(kind: &IndexKind) -> &'static [u8] {
-    match kind {
-        IndexKind::Plain { .. } => b"plain",
-        IndexKind::Temporal => b"temporal",
-        IndexKind::Hnsw(_) => b"hnsw",
-        IndexKind::Fts(_) => b"fts",
-        IndexKind::Lsh { .. } => b"lsh",
+impl IndexRowDigest {
+    fn digest_bytes(payload: &[u8]) -> Self {
+        let mut h = Sha256::new();
+        DigestDomain::IndexRowDigest.absorb(&mut h);
+        h.update(payload);
+        Self(h.finalize().into())
+    }
+
+    fn digest_tuple_cols(cols: &[DataValue]) -> Self {
+        Self::digest_bytes(&encode_tuple_bare(cols))
     }
 }
 
@@ -421,6 +464,15 @@ pub struct DeepVerifyReport {
 }
 
 impl DeepVerifyReport {
+    /// Lossless `usize` → `u64` via little-endian assemble (pointer width ≤ 64).
+    #[inline]
+    fn u64_from_usize(n: usize) -> u64 {
+        let src = n.to_le_bytes();
+        let mut buf = [0u8; 8];
+        buf[..src.len()].copy_from_slice(&src);
+        u64::from_le_bytes(buf)
+    }
+
     /// Empty deep-verify report.
     pub fn empty() -> Self {
         Self {
@@ -438,152 +490,104 @@ impl DeepVerifyReport {
     /// Stable digest of this report for operator last-result persistence.
     pub fn digest(&self) -> DeepVerifyDigest {
         // Cardinality prefixes are `u64`; on every supported target `usize`
-        // widens into `u64` losslessly (see [`u64_from_usize`]).
+        // widens into `u64` losslessly (see [`Self::u64_from_usize`]).
         let mut h = Sha256::new();
         DigestDomain::DeepVerifyReport.absorb(&mut h);
         h.update(u64::to_be_bytes(self.walk.checked));
         h.update(u64::to_be_bytes(self.walk.ordering_violations));
         h.update([u8::from(self.walk.truncated)]);
-        h.update(u64::to_be_bytes(u64_from_usize(self.walk.corrupt.len())));
+        h.update(u64::to_be_bytes(Self::u64_from_usize(self.walk.corrupt.len())));
         for c in &self.walk.corrupt {
-            h.update(c.key_hex.as_bytes());
-            h.update(c.error.as_bytes());
+            h.update(c.key_hex.as_str().as_bytes());
+            h.update(c.error.to_string().as_bytes());
         }
         h.update(u64::to_be_bytes(self.indices_checked));
-        h.update(u64::to_be_bytes(u64_from_usize(self.index_mismatches.len())));
+        h.update(u64::to_be_bytes(Self::u64_from_usize(self.index_mismatches.len())));
         for m in &self.index_mismatches {
-            h.update(m.index_name.as_bytes());
-            h.update(index_kind_digest_tag(&m.kind));
-            h.update(m.detail.as_bytes());
+            h.update(m.index_name.as_str().as_bytes());
+            h.update(m.kind.digest_tag());
+            h.update(m.reason.to_string().as_bytes());
         }
         DeepVerifyDigest(h.finalize().into())
     }
 }
 
-/// Lossless `usize` → `u64` via little-endian assemble (pointer width ≤ 64).
-#[inline]
-fn u64_from_usize(n: usize) -> u64 {
-    let src = n.to_le_bytes();
-    let mut buf = [0u8; 8];
-    buf[..src.len()].copy_from_slice(&src);
-    u64::from_le_bytes(buf)
+/// Counts where re-derived index row digests disagree with stored digests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IndexRowDigestSetDisagreement {
+    only_expected: usize,
+    only_stored: usize,
+    expected_len: usize,
+    stored_len: usize,
 }
 
-fn digest_bytes(payload: &[u8]) -> IndexRowDigest {
-    let mut h = Sha256::new();
-    DigestDomain::IndexRowDigest.absorb(&mut h);
-    h.update(payload);
-    IndexRowDigest(h.finalize().into())
-}
-
-fn digest_tuple_cols(cols: &[DataValue]) -> IndexRowDigest {
-    digest_bytes(&encode_tuple_bare(cols))
-}
-
-fn set_diff_detail(
-    expected: &BTreeSet<IndexRowDigest>,
-    stored: &BTreeSet<IndexRowDigest>,
-) -> Option<String> {
-    let only_expected = expected.difference(stored).count();
-    let only_stored = stored.difference(expected).count();
-    if only_expected == 0 && only_stored == 0 {
-        return None;
-    }
-    Some(format!(
-        "re-derived from base facts disagrees with stored index bytes: \
-         {only_expected} only-expected digests, {only_stored} only-stored digests \
-         (expected={}, stored={})",
-        expected.len(),
-        stored.len()
-    ))
-}
-
-fn bind_extractor(base: &RelationHandle, extractor: &Expr) -> Result<Expr> {
-    let mut expr = extractor.clone();
-    expr.fill_binding_indices(&base.base_column_frame())?;
-    Ok(expr)
-}
-
-fn project_mapper_cols(
-    mapper: &[usize],
-    row: &[DataValue],
-    base_name: &str,
-) -> Result<Vec<DataValue>> {
-    mapper
-        .iter()
-        .map(|&i| {
-            row.get(i).cloned().ok_or_else(|| {
-                miette::miette!(
-                    "stale plain-index mapper position {i} for relation '{base_name}' during deep-verify"
-                )
-            })
-        })
-        .collect()
-}
-
-/// Collect catalog handles keyed by relation id, plus name→id for index resolve.
-fn load_catalog_handles(
-    tx: &impl ReadTx,
-) -> Result<(
-    BTreeMap<RelationId, RelationHandle>,
-    BTreeMap<RelationName, RelationId>,
-)> {
-    let mut by_id = BTreeMap::new();
-    let mut by_name = BTreeMap::new();
-    let lower = Tuple::new().encode_as_key(RelationId::SYSTEM);
-    let upper = (RelationId::SYSTEM.raw() + 1).to_be_bytes();
-    for pair in tx.range_scan(&lower, &upper) {
-        let (k, v) = pair?;
-        let tup = match decode_tuple_from_key(&k, 16) {
-            Ok(t) => t,
-            Err(decode_refuse) => {
-                let skipped = decode_refuse;
-                core::mem::size_of_val(&skipped);
-                continue;
-            }
-        };
-        if let Some(DataValue::Str(_)) = tup.first() {
-            let h = RelationHandle::decode(&v).map_err(|e| miette::miette!("{e}"))?;
-            by_name.insert(RelationName::from_handle_name(&h.name), h.id);
-            by_id.insert(h.id, h);
+impl IndexRowDigestSetDisagreement {
+    fn between(
+        expected: &BTreeSet<IndexRowDigest>,
+        stored: &BTreeSet<IndexRowDigest>,
+    ) -> Option<Self> {
+        let only_expected = expected.difference(stored).count();
+        let only_stored = stored.difference(expected).count();
+        if only_expected == 0 && only_stored == 0 {
+            return None;
         }
+        Some(Self {
+            only_expected,
+            only_stored,
+            expected_len: expected.len(),
+            stored_len: stored.len(),
+        })
     }
-    Ok((by_id, by_name))
 }
 
-fn rederive_plain(
-    tx: &impl ReadTx,
-    base: &RelationHandle,
-    idx: &RelationHandle,
-    mapper: &[usize],
-    kind: IndexKind,
-) -> Result<Option<IndexMismatch>> {
-    let mut expected = BTreeSet::new();
-    for row in base.scan_all(tx) {
-        let row = row?;
-        let projected = project_mapper_cols(mapper, row.as_slice(), &base.name)?;
-        expected.insert(digest_tuple_cols(&projected));
+impl std::fmt::Display for IndexRowDigestSetDisagreement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "re-derived from base facts disagrees with stored index bytes: \
+             {} only-expected digests, {} only-stored digests \
+             (expected={}, stored={})",
+            self.only_expected,
+            self.only_stored,
+            self.expected_len,
+            self.stored_len
+        )
     }
-    let mut stored = BTreeSet::new();
-    for row in idx.scan_all(tx) {
-        let row = row?;
-        stored.insert(digest_tuple_cols(row.as_slice()));
-    }
-    Ok(
-        set_diff_detail(&expected, &stored).map(|detail| IndexMismatch {
-            index_name: idx.name.to_string(),
-            kind,
-            detail,
-        }),
-    )
 }
 
-fn rederive_temporal(
-    tx: &impl ReadTx,
-    base: &RelationHandle,
-    idx: &RelationHandle,
-    kind: IndexKind,
-) -> Result<Option<IndexMismatch>> {
+impl IndexKind {
+    fn rederive_plain(
+        &self,
+        tx: &impl ReadTx,
+        base: &RelationHandle,
+        idx: &RelationHandle,
+    ) -> Result<Option<IndexMismatch>> {
+        let mut expected = BTreeSet::new();
+        for row in base.scan_all(tx) {
+            let row = row?;
+            let projected = self.project_mapper_cols(row.as_slice(), base)?;
+            expected.insert(IndexRowDigest::digest_tuple_cols(&projected));
+        }
+        let mut stored = BTreeSet::new();
+        for row in idx.scan_all(tx) {
+            let row = row?;
+            stored.insert(IndexRowDigest::digest_tuple_cols(row.as_slice()));
+        }
+        Ok(IndexRowDigestSetDisagreement::between(&expected, &stored).map(
+            |disagreement| IndexMismatch {
+                index_name: RelationName::from_handle_name(&idx.name),
+                kind: self.clone(),
+                reason: IndexMismatchReason::DigestSetDisagreement(disagreement),
+            },
+        ))
+    }
+
+    fn rederive_temporal(
+        &self,
+        tx: &impl ReadTx,
+        base: &RelationHandle,
+        idx: &RelationHandle,
+    ) -> Result<Option<IndexMismatch>> {
     // Re-derive every posting from every stored base VERSION (not as-of
     // current) — same rebuildability law as temporal backfill.
     let keys_len = base.metadata.keys.len();
@@ -619,7 +623,7 @@ fn rederive_temporal(
         // Polarity is part of the posting's meaning (assert/retract/erase).
         let mut payload = encode_tuple_bare(&posting);
         payload.push(polarity.encode());
-        expected.insert(digest_bytes(&payload));
+        expected.insert(IndexRowDigest::digest_bytes(&payload));
     }
 
     let mut stored = BTreeSet::new();
@@ -648,24 +652,24 @@ fn rederive_temporal(
         }
         let mut payload = encode_tuple_bare(&cols[..idx_keys]);
         payload.push(polarity.encode());
-        stored.insert(digest_bytes(&payload));
+        stored.insert(IndexRowDigest::digest_bytes(&payload));
     }
 
-    Ok(
-        set_diff_detail(&expected, &stored).map(|detail| IndexMismatch {
-            index_name: idx.name.to_string(),
-            kind,
-            detail,
-        }),
-    )
-}
+    Ok(IndexRowDigestSetDisagreement::between(&expected, &stored).map(
+        |disagreement| IndexMismatch {
+            index_name: RelationName::from_handle_name(&idx.name),
+            kind: self.clone(),
+            reason: IndexMismatchReason::DigestSetDisagreement(disagreement),
+        },
+    ))
+    }
 
-fn rederive_hnsw(
-    tx: &impl ReadTx,
-    base: &RelationHandle,
-    idx: &RelationHandle,
-    kind: IndexKind,
-) -> Result<Option<IndexMismatch>> {
+    fn rederive_hnsw(
+        &self,
+        tx: &impl ReadTx,
+        base: &RelationHandle,
+        idx: &RelationHandle,
+    ) -> Result<Option<IndexMismatch>> {
     // HNSW graph edges are not uniquely determined by base facts alone in a
     // byte-stable way without a full deterministic rebuild; deep-verify
     // re-derives the NODE MEMBERSHIP set: every current base key must appear
@@ -680,7 +684,7 @@ fn rederive_hnsw(
         if cols.len() < kl {
             continue;
         }
-        expected.insert(digest_tuple_cols(&cols[..kl]));
+        expected.insert(IndexRowDigest::digest_tuple_cols(&cols[..kl]));
     }
 
     let mut stored_nodes = BTreeSet::new();
@@ -706,26 +710,26 @@ fn rederive_hnsw(
         if fr.len() < kl {
             continue;
         }
-        stored_nodes.insert(digest_tuple_cols(&fr[..kl]));
+        stored_nodes.insert(IndexRowDigest::digest_tuple_cols(&fr[..kl]));
     }
 
-    Ok(
-        set_diff_detail(&expected, &stored_nodes).map(|detail| IndexMismatch {
-            index_name: idx.name.to_string(),
-            kind,
-            detail,
-        }),
-    )
-}
+    Ok(IndexRowDigestSetDisagreement::between(&expected, &stored_nodes).map(
+        |disagreement| IndexMismatch {
+            index_name: RelationName::from_handle_name(&idx.name),
+            kind: self.clone(),
+            reason: IndexMismatchReason::DigestSetDisagreement(disagreement),
+        },
+    ))
+    }
 
-fn rederive_fts(
-    tx: &impl ReadTx,
-    base: &RelationHandle,
-    idx: &RelationHandle,
-    manifest: &crate::project::text::FtsIndexManifest,
-    kind: IndexKind,
-) -> Result<Option<IndexMismatch>> {
-    let extractor = bind_extractor(base, &manifest.extractor)?;
+    fn rederive_fts(
+        &self,
+        tx: &impl ReadTx,
+        base: &RelationHandle,
+        idx: &RelationHandle,
+        manifest: &crate::project::text::FtsIndexManifest,
+    ) -> Result<Option<IndexMismatch>> {
+    let extractor = base.bind_extractor(&manifest.extractor)?;
     let analyzer = manifest.tokenizer.build(&manifest.filters)?;
     let kl = base.metadata.keys.len();
     let mut expected = BTreeSet::new();
@@ -753,7 +757,7 @@ fn rederive_fts(
             key.extend(src.iter().cloned());
             // Expected content is the posting KEY identity re-derived from
             // base text — value offsets are regenerable; key mismatch is the lie.
-            expected.insert(digest_tuple_cols(&key));
+            expected.insert(IndexRowDigest::digest_tuple_cols(&key));
         }
     }
 
@@ -764,29 +768,29 @@ fn rederive_fts(
         if row.len() < posting_keys {
             continue;
         }
-        stored.insert(digest_tuple_cols(&row.as_slice()[..posting_keys]));
+        stored.insert(IndexRowDigest::digest_tuple_cols(&row.as_slice()[..posting_keys]));
     }
 
-    Ok(
-        set_diff_detail(&expected, &stored).map(|detail| IndexMismatch {
-            index_name: idx.name.to_string(),
-            kind,
-            detail,
-        }),
-    )
-}
+    Ok(IndexRowDigestSetDisagreement::between(&expected, &stored).map(
+        |disagreement| IndexMismatch {
+            index_name: RelationName::from_handle_name(&idx.name),
+            kind: self.clone(),
+            reason: IndexMismatchReason::DigestSetDisagreement(disagreement),
+        },
+    ))
+    }
 
-fn rederive_lsh(
-    tx: &impl ReadTx,
-    base: &RelationHandle,
-    idx: &RelationHandle,
-    inv: &RelationHandle,
-    manifest: &crate::project::dedup::lsh::MinHashLshIndexManifest,
-    kind: IndexKind,
-) -> Result<Option<IndexMismatch>> {
+    fn rederive_lsh(
+        &self,
+        tx: &impl ReadTx,
+        base: &RelationHandle,
+        idx: &RelationHandle,
+        inv: &RelationHandle,
+        manifest: &crate::project::dedup::lsh::MinHashLshIndexManifest,
+    ) -> Result<Option<IndexMismatch>> {
     use crate::project::dedup::lsh::HashValues;
 
-    let extractor = bind_extractor(base, &manifest.extractor)?;
+    let extractor = base.bind_extractor(&manifest.extractor)?;
     let analyzer = manifest.tokenizer.build(&manifest.filters)?;
     let perms = manifest.get_hash_perms()?;
     let kl = base.metadata.keys.len();
@@ -825,12 +829,12 @@ fn rederive_lsh(
             }
         };
         let chunks = min_hash.band_chunks(manifest.n_bands, manifest.n_rows_in_band)?;
-        expected_inv.insert(digest_tuple_cols(inv_key));
+        expected_inv.insert(IndexRowDigest::digest_tuple_cols(inv_key));
         for chunk in chunks {
             let mut key = Vec::with_capacity(1 + kl);
             key.push(DataValue::Bytes(chunk));
             key.extend(inv_key.iter().cloned());
-            expected_bands.insert(digest_tuple_cols(&key));
+            expected_bands.insert(IndexRowDigest::digest_tuple_cols(&key));
         }
     }
 
@@ -841,7 +845,7 @@ fn rederive_lsh(
         if row.len() < n {
             continue;
         }
-        stored_bands.insert(digest_tuple_cols(&row.as_slice()[..n]));
+        stored_bands.insert(IndexRowDigest::digest_tuple_cols(&row.as_slice()[..n]));
     }
     let mut stored_inv = BTreeSet::new();
     for row in inv.scan_all(tx) {
@@ -850,74 +854,77 @@ fn rederive_lsh(
         if row.len() < n {
             continue;
         }
-        stored_inv.insert(digest_tuple_cols(&row.as_slice()[..n]));
+        stored_inv.insert(IndexRowDigest::digest_tuple_cols(&row.as_slice()[..n]));
     }
 
-    if let Some(detail) = set_diff_detail(&expected_bands, &stored_bands) {
+    if let Some(disagreement) =
+        IndexRowDigestSetDisagreement::between(&expected_bands, &stored_bands)
+    {
         return Ok(Some(IndexMismatch {
-            index_name: idx.name.to_string(),
-            kind,
-            detail,
+            index_name: RelationName::from_handle_name(&idx.name),
+            kind: self.clone(),
+            reason: IndexMismatchReason::DigestSetDisagreement(disagreement),
         }));
     }
-    Ok(
-        set_diff_detail(&expected_inv, &stored_inv).map(|detail| IndexMismatch {
-            index_name: inv.name.to_string(),
-            kind,
-            detail: format!("inverse: {detail}"),
-        }),
-    )
+    Ok(IndexRowDigestSetDisagreement::between(&expected_inv, &stored_inv).map(
+        |disagreement| IndexMismatch {
+            index_name: RelationName::from_handle_name(&inv.name),
+            kind: self.clone(),
+            reason: IndexMismatchReason::LshInverseDigestSetDisagreement(disagreement),
+        },
+    ))
+    }
 }
 
-fn deep_verify_one_index(
-    tx: &impl ReadTx,
-    base: &RelationHandle,
-    index_ref: &IndexRef,
-    by_name: &BTreeMap<RelationName, RelationId>,
-    by_id: &BTreeMap<RelationId, RelationHandle>,
-) -> Result<Option<IndexMismatch>> {
-    let idx_name = index_ref.relation_name(&base.name);
-    let idx_key = RelationName::from(idx_name.as_str());
-    let Some(idx_id) = by_name.get(&idx_key) else {
-        return Ok(Some(IndexMismatch {
-            index_name: idx_name,
-            kind: index_ref.kind.clone(),
-            detail: "index backing relation absent from catalog while IndexRef is attached".into(),
-        }));
-    };
-    let Some(idx) = by_id.get(idx_id) else {
-        return Ok(Some(IndexMismatch {
-            index_name: idx_name,
-            kind: index_ref.kind.clone(),
-            detail: "index RelationId not loadable during deep-verify".into(),
-        }));
-    };
+impl IndexRef {
+    fn deep_verify_one_index(
+        &self,
+        tx: &impl ReadTx,
+        base: &RelationHandle,
+        by_name: &BTreeMap<RelationName, RelationId>,
+        by_id: &BTreeMap<RelationId, RelationHandle>,
+    ) -> Result<Option<IndexMismatch>> {
+        let idx_name = self.relation_name(&base.name);
+        let idx_key = idx_name.clone();
+        let Some(idx_id) = by_name.get(&idx_key) else {
+            return Ok(Some(IndexMismatch {
+                index_name: idx_name,
+                kind: self.kind.clone(),
+                reason: IndexMismatchReason::CatalogAbsent,
+            }));
+        };
+        let Some(idx) = by_id.get(idx_id) else {
+            return Ok(Some(IndexMismatch {
+                index_name: idx_name,
+                kind: self.kind.clone(),
+                reason: IndexMismatchReason::IdNotLoadable,
+            }));
+        };
 
-    match &index_ref.kind {
-        IndexKind::Plain { mapper } => {
-            rederive_plain(tx, base, idx, mapper, index_ref.kind.clone())
-        }
-        IndexKind::Temporal => rederive_temporal(tx, base, idx, index_ref.kind.clone()),
-        IndexKind::Hnsw(_) => rederive_hnsw(tx, base, idx, index_ref.kind.clone()),
-        IndexKind::Fts(manifest) => rederive_fts(tx, base, idx, manifest, index_ref.kind.clone()),
-        IndexKind::Lsh { manifest, inverse } => {
-            let inv_name = format!("{}:{}", base.name, inverse);
-            let inv_key = RelationName::from(inv_name.as_str());
-            let Some(inv_id) = by_name.get(&inv_key) else {
-                return Ok(Some(IndexMismatch {
-                    index_name: inv_name,
-                    kind: index_ref.kind.clone(),
-                    detail: "lsh inverse relation missing from catalog".into(),
-                }));
-            };
-            let Some(inv) = by_id.get(inv_id) else {
-                return Ok(Some(IndexMismatch {
-                    index_name: inv_name,
-                    kind: index_ref.kind.clone(),
-                    detail: "lsh inverse RelationId not loadable".into(),
-                }));
-            };
-            rederive_lsh(tx, base, idx, inv, manifest, index_ref.kind.clone())
+        match &self.kind {
+            IndexKind::Plain { .. } => self.kind.rederive_plain(tx, base, idx),
+            IndexKind::Temporal => self.kind.rederive_temporal(tx, base, idx),
+            IndexKind::Hnsw(_) => self.kind.rederive_hnsw(tx, base, idx),
+            IndexKind::Fts(manifest) => self.kind.rederive_fts(tx, base, idx, manifest),
+            IndexKind::Lsh { manifest, inverse } => {
+                let inv_name = RelationName::from(format!("{}:{}", base.name, inverse));
+                let inv_key = inv_name.clone();
+                let Some(inv_id) = by_name.get(&inv_key) else {
+                    return Ok(Some(IndexMismatch {
+                        index_name: inv_name,
+                        kind: self.kind.clone(),
+                        reason: IndexMismatchReason::LshInverseMissing,
+                    }));
+                };
+                let Some(inv) = by_id.get(inv_id) else {
+                    return Ok(Some(IndexMismatch {
+                        index_name: inv_name,
+                        kind: self.kind.clone(),
+                        reason: IndexMismatchReason::LshInverseNotLoadable,
+                    }));
+                };
+                self.kind.rederive_lsh(tx, base, idx, inv, manifest)
+            }
         }
     }
 }
@@ -931,7 +938,11 @@ fn deep_verify_one_index(
 pub fn deep_verify_storage<S: Storage>(db: &S) -> Result<DeepVerifyReport> {
     let walk = verify_storage(db)?;
     let tx = db.read_tx()?;
-    let (by_id, by_name) = load_catalog_handles(&tx)?;
+    let (by_id, by_name) = RelationHandle::load_catalog_handles(&tx)?;
+    let by_name: BTreeMap<RelationName, RelationId> = by_name
+        .into_iter()
+        .map(|(name, id)| (RelationName::from(name), id))
+        .collect();
 
     let mut report = DeepVerifyReport {
         walk,
@@ -950,7 +961,7 @@ pub fn deep_verify_storage<S: Storage>(db: &S) -> Result<DeepVerifyReport> {
     for base in &bases {
         for index_ref in &base.indices {
             report.indices_checked += 1;
-            if let Some(mismatch) = deep_verify_one_index(&tx, base, index_ref, &by_name, &by_id)? {
+            if let Some(mismatch) = index_ref.deep_verify_one_index(&tx, base, &by_name, &by_id)? {
                 report.index_mismatches.push(mismatch);
             }
         }
@@ -966,7 +977,7 @@ mod tests {
     use crate::session::catalog::{Catalog, IndexKind};
     use crate::session::db::Engine;
     use crate::store::fjall::new_fjall_storage;
-    use crate::store::verify_walk::verify_storage;
+    use crate::store::verify_walk::{VerifyWalkFailure, verify_storage};
     use crate::store::{ReadTx, Storage};
     use miette::{IntoDiagnostic, Result, miette};
 
@@ -1035,7 +1046,12 @@ mod tests {
             "walk continues: {report:?}"
         );
         assert!(
-            report.corrupt[0].error.contains("BadTag"),
+            matches!(
+                report.corrupt[0].error,
+                VerifyWalkFailure::KeyDecode(DecodeError::BadTag(_))
+                    | VerifyWalkFailure::RelationIdDecode(DecodeError::BadTag(_))
+                    | VerifyWalkFailure::ValueDecode(DecodeError::BadTag(_))
+            ),
             "names BadTag: {}",
             report.corrupt[0].error
         );
@@ -1048,7 +1064,7 @@ mod tests {
     #[test]
     fn deep_verify_catches_wrong_index_that_still_decodes() -> Result<()> {
         use crate::store::verify_walk::deep_verify_storage;
-        use kyzo_model::value::{DataValue, RelationId, Tuple, TupleT};
+        use kyzo_model::value::{DecodeError, RelationId, Tuple, TupleT};
 
         let dir = tempfile::tempdir().into_diagnostic()?;
         let path = dir.path().join("db");

@@ -317,7 +317,7 @@ pub struct Engine<S> {
     pub store: S,
     pub(crate) catalog: Catalog,
     pub(crate) segments: Arc<crate::project::current::SegmentEngine>,
-    pub(crate) fixed_rules: Arc<RwLock<BTreeMap<String, Arc<dyn FixedRule>>>>,
+    pub(crate) fixed_rules: Arc<RwLock<BTreeMap<Symbol, Arc<dyn FixedRule>>>>,
     pub(crate) event_callbacks: Arc<RwLock<EventCallbackRegistry>>,
     pub(crate) callback_count: Arc<AtomicU32>,
     /// Live StoreId / WriteAuthority token / RootChain for admission mint.
@@ -360,7 +360,10 @@ impl<S: Storage> Engine<S> {
     /// mint certificates without placeholders. Opens the one live
     /// [`LiveSweepHandle`] for this Store's OperationKey ack path.
     pub fn compose(store: S, catalog: Catalog) -> Result<Self> {
-        let fixed_rules = DEFAULT_FIXED_RULES.clone();
+        let fixed_rules = DEFAULT_FIXED_RULES
+            .iter()
+            .map(|(name, rule)| (name.clone(), rule.clone()))
+            .collect();
         let admission = crate::session::admit::LiveAdmissionSeats::mint_genesis();
         // Genesis Engine composition has no retained WAL suffix yet — empty
         // slice. Reopen of an existing Store must present durable segments so
@@ -430,7 +433,7 @@ impl<S: Storage> Engine<S> {
     /// A snapshot of the fixed-rule registry: the built-ins plus every
     /// user-registered rule. Handed to the parser (which resolves fixed-rule
     /// names) and to the mutation pipeline (for trigger parsing).
-    pub fn fixed_rules(&self) -> Result<BTreeMap<String, Arc<dyn FixedRule>>> {
+    pub fn fixed_rules(&self) -> Result<BTreeMap<Symbol, Arc<dyn FixedRule>>> {
         Ok(self
             .fixed_rules
             .read()
@@ -441,20 +444,20 @@ impl<S: Storage> Engine<S> {
     /// Register a custom fixed rule under `name`. Errors if the name is taken
     /// (including by a built-in). The rule becomes usable in every session of
     /// this Engine (and its clones).
-    pub fn register_fixed_rule(&self, name: String, rule: impl FixedRule + 'static) -> Result<()> {
+    pub fn register_fixed_rule(&self, name: Symbol, rule: impl FixedRule + 'static) -> Result<()> {
         self.register_fixed_rule_arc(name, seal_fixed_rule(rule))
     }
 
     /// Register a fixed rule from an already-boxed `Arc<dyn FixedRule>` (for
     /// callers holding trait objects). Same name-conflict contract — the one
     /// registry door (copy_detector).
-    pub fn register_fixed_rule_arc(&self, name: String, rule: Arc<dyn FixedRule>) -> Result<()> {
+    pub fn register_fixed_rule_arc(&self, name: Symbol, rule: Arc<dyn FixedRule>) -> Result<()> {
         let mut registry = self
             .fixed_rules
             .write()
             .map_err(|_| EngineRefuse::FixedRulesLockPoisoned)?;
         if registry.contains_key(&name) {
-            bail!(EngineRefuse::FixedRuleNameConflict(name));
+            bail!(EngineRefuse::FixedRuleNameConflict(name.name().to_string()));
         }
         registry.insert(name, rule);
         Ok(())
@@ -462,7 +465,7 @@ impl<S: Storage> Engine<S> {
 
     /// Unregister a custom fixed rule. Returns whether it existed. Built-ins
     /// cannot be removed (they are never reported as removed).
-    pub fn unregister_fixed_rule(&self, name: &str) -> Result<bool> {
+    pub fn unregister_fixed_rule(&self, name: &Symbol) -> Result<bool> {
         if DEFAULT_FIXED_RULES.contains_key(name) {
             return Ok(false);
         }
@@ -499,7 +502,7 @@ impl<S: Storage> Engine<S> {
     pub fn run_script(
         &self,
         payload: &str,
-        params: BTreeMap<String, DataValue>,
+        params: BTreeMap<Symbol, DataValue>,
     ) -> Result<NamedRows> {
         self.run_script_with(payload, params, ScriptOptions::new())
     }
@@ -509,7 +512,7 @@ impl<S: Storage> Engine<S> {
     pub fn run_script_with(
         &self,
         payload: &str,
-        params: BTreeMap<String, DataValue>,
+        params: BTreeMap<Symbol, DataValue>,
         options: ScriptOptions,
     ) -> Result<NamedRows> {
         let options = self.bind_write_options(options);
@@ -993,7 +996,7 @@ pub(crate) fn build_budget(
 
 /// Materialize a row vector into a headered result.
 fn materialize(rows: Vec<Tuple>, head: &[Symbol]) -> Result<NamedRows> {
-    let headers = head.iter().map(|s| s.name().to_string()).collect();
+    let headers = head.to_vec();
     Ok(NamedRows::try_new(headers, rows)?)
 }
 
@@ -1047,7 +1050,7 @@ pub struct SessionTx<T> {
     /// (each relation in a constraint's read-set mirrors the identical
     /// spec). Collected by the mutation pipeline and drained by
     /// [`Engine::enforce_constraints`](crate::session::db::Engine) before commit.
-    pub(crate) pending_constraints: BTreeMap<SmartString<LazyCompact>, ConstraintRef>,
+    pub(crate) pending_constraints: BTreeMap<Symbol, ConstraintRef>,
     /// Every relation id this transaction wrote (user writes, trigger
     /// writes, index backfills alike) — drained into segment-generation
     /// bumps BEFORE the storage commit (the segments' soundness rule).
@@ -1466,7 +1469,7 @@ mod tests {
     use crate::store::sim::SimStorage;
     use miette::{Result, miette};
 
-    fn no_params() -> BTreeMap<String, DataValue> {
+    fn no_params() -> BTreeMap<Symbol, DataValue> {
         BTreeMap::new()
     }
 
@@ -2002,9 +2005,10 @@ mod db_battery {
     use crate::store::Storage;
     use crate::store::fjall::new_fjall_storage;
     use crate::store::sim::SimStorage;
+    use kyzo_model::program::symbol::Symbol;
     use kyzo_model::value::DataValue;
 
-    fn no_params() -> BTreeMap<String, DataValue> {
+    fn no_params() -> BTreeMap<Symbol, DataValue> {
         BTreeMap::new()
     }
 

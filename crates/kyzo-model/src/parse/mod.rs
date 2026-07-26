@@ -33,6 +33,7 @@ use thiserror::Error;
 
 use crate::program::InputProgram;
 use crate::program::span::SourceSpan;
+use crate::program::symbol::Symbol;
 use crate::value::{DataValue, ValidityTs};
 
 pub mod expr;
@@ -207,7 +208,7 @@ pub(crate) fn expect_root_pair<'a>(mut pairs: Pairs<'a>, expected: &'static str)
 /// hosts must pass the real stamp; there is no open-end default on this door.
 pub fn parse_script(
     src: &str,
-    param_pool: &BTreeMap<String, DataValue>,
+    param_pool: &BTreeMap<Symbol, DataValue>,
     cur_vld: ValidityTs,
 ) -> Result<Script> {
     let parsed = expect_root_pair(
@@ -234,7 +235,7 @@ pub fn parse_script(
 /// Parse a standalone expression (no program wrapper).
 pub fn parse_expressions(
     src: &str,
-    param_pool: &BTreeMap<String, DataValue>,
+    param_pool: &BTreeMap<Symbol, DataValue>,
 ) -> Result<crate::program::Expr> {
     let parsed = expect_root_pair(
         KyzoScriptParser::parse(Rule::expression_script, src).map_err(pest_to_parse_error)?,
@@ -259,7 +260,7 @@ pub fn parse_expressions(
 /// same contract as [`parse_script`]. Fixed-rule binding is exec-tier.
 pub fn parse_sys(
     src: &str,
-    param_pool: &BTreeMap<String, DataValue>,
+    param_pool: &BTreeMap<Symbol, DataValue>,
     cur_vld: ValidityTs,
 ) -> Result<sys::SysScript> {
     let parsed = expect_root_pair(

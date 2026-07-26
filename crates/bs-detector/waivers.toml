@@ -1,8 +1,0 @@
-# The live waiver ledger — written only by the kyzo-waiver agent.
-# One [[waiver]] per granted hit (check/file/line/construct/why_not_sabotage,
-# carrying the verbatim attestation). [[scope_waiver]] is the single lawful
-# narrow scope, printed on every run. Baseline is zero, forever.
-# The retired pre-cutover ledger is waivers-legacy.toml: record, not law.
-
-waiver = []
-scope_waiver = []

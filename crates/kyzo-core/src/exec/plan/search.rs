@@ -287,125 +287,153 @@ pub(crate) struct NegatedSearchUnsupported(#[label] pub(crate) SourceSpan);
 // Resolution
 // ─────────────────────────────────────────────────────────────────────────
 
-/// Extract a plain variable from a binding/parameter expression, refusing
-/// anything computed.
-fn expr_as_var(name: impl AsRef<str>, e: &Expr, span: SourceSpan) -> Result<Symbol> {
-    match e {
-        Expr::Binding { var, .. } => Ok(var.clone()),
-        Expr::Const { .. }
-        | Expr::Apply { .. }
-        | Expr::UnboundApply { .. }
-        | Expr::Cond { .. }
-        | Expr::Lazy { .. } => {
-            bail!(SearchBindingNotVariable(
-                Symbol::new(name.as_ref(), span),
-                span
-            ))
-        }
-    }
+trait ExprAsSearchBinding {
+    fn as_search_binding_var(
+        &self,
+        name: impl AsRef<str>,
+        span: SourceSpan,
+    ) -> Result<Symbol>;
 }
 
-fn take_const(
-    params: &mut BTreeMap<Symbol, Expr>,
-    name: &'static str,
-    span: SourceSpan,
-) -> Result<Option<DataValue>> {
-    match params.remove(&Symbol::new(name, span)) {
-        None => Ok(None),
-        Some(e) => {
-            let v = e.eval_to_const().map_err(|_| {
-                SearchParamInvalid(
-                    Symbol::new(name, span),
-                    SearchParamInvalidReason::MustBeConstant,
-                    span,
-                )
-            })?;
-            Ok(Some(v))
-        }
-    }
-}
-
-fn take_pos_int(
-    params: &mut BTreeMap<Symbol, Expr>,
-    name: &'static str,
-    span: SourceSpan,
-) -> Result<Option<usize>> {
-    match take_const(params, name, span)? {
-        None => Ok(None),
-        Some(DataValue::Num(n)) => {
-            let i = n.as_int().ok_or(SearchParamInvalid(
-                Symbol::new(name, span),
-                SearchParamInvalidReason::MustBePositiveInteger,
-                span,
-            ))?;
-            if i <= 0 {
-                bail!(SearchParamInvalid(
-                    Symbol::new(name, span),
-                    SearchParamInvalidReason::MustBePositiveInteger,
+impl ExprAsSearchBinding for Expr {
+    /// Extract a plain variable from a binding/parameter expression, refusing
+    /// anything computed.
+    fn as_search_binding_var(
+        &self,
+        name: impl AsRef<str>,
+        span: SourceSpan,
+    ) -> Result<Symbol> {
+        match self {
+            Expr::Binding { var, .. } => Ok(var.clone()),
+            Expr::Const { .. }
+            | Expr::Apply { .. }
+            | Expr::UnboundApply { .. }
+            | Expr::Cond { .. }
+            | Expr::Lazy { .. } => {
+                bail!(SearchBindingNotVariable(
+                    Symbol::new(name.as_ref(), span),
                     span
-                ));
+                ))
             }
-            let n = match usize::try_from(i) {
-                Ok(v) => v,
-                Err(_neg_or_overflow) => {
+        }
+    }
+}
+
+/// Ephemeral resolve context: owns the modality option bag for one
+/// [`resolve_search`] call after [`SearchInput::modality`] is lowered.
+struct SearchResolve {
+    span: SourceSpan,
+    params: BTreeMap<Symbol, Expr>,
+}
+
+impl SearchResolve {
+    fn new(params: BTreeMap<Symbol, Expr>, span: SourceSpan) -> Self {
+        Self { span, params }
+    }
+
+    fn take_const(&mut self, name: &Symbol) -> Result<Option<DataValue>> {
+        match self.params.remove(name) {
+            None => Ok(None),
+            Some(e) => {
+                let v = e.eval_to_const().map_err(|_| {
+                    SearchParamInvalid(
+                        name.clone(),
+                        SearchParamInvalidReason::MustBeConstant,
+                        self.span,
+                    )
+                })?;
+                Ok(Some(v))
+            }
+        }
+    }
+
+    fn take_pos_int(&mut self, name: &Symbol) -> Result<Option<usize>> {
+        match self.take_const(name)? {
+            None => Ok(None),
+            Some(DataValue::Num(n)) => {
+                let i = n.as_int().ok_or(SearchParamInvalid(
+                    name.clone(),
+                    SearchParamInvalidReason::MustBePositiveInteger,
+                    self.span,
+                ))?;
+                if i <= 0 {
                     bail!(SearchParamInvalid(
-                        Symbol::new(name, span),
+                        name.clone(),
                         SearchParamInvalidReason::MustBePositiveInteger,
-                        span
+                        self.span
                     ));
                 }
-            };
-            Ok(Some(n))
+                let n = match usize::try_from(i) {
+                    Ok(v) => v,
+                    Err(_neg_or_overflow) => {
+                        bail!(SearchParamInvalid(
+                            name.clone(),
+                            SearchParamInvalidReason::MustBePositiveInteger,
+                            self.span
+                        ));
+                    }
+                };
+                Ok(Some(n))
+            }
+            Some(_) => bail!(SearchParamInvalid(
+                name.clone(),
+                SearchParamInvalidReason::MustBePositiveInteger,
+                self.span,
+            )),
         }
-        Some(_) => bail!(SearchParamInvalid(
-            Symbol::new(name, span),
-            SearchParamInvalidReason::MustBePositiveInteger,
-            span
-        )),
+    }
+
+    fn take_var(&mut self, name: &Symbol) -> Result<Option<Symbol>> {
+        match self.params.remove(name) {
+            None => Ok(None),
+            Some(e) => Ok(Some(e.as_search_binding_var(&**name, self.span)?)),
+        }
+    }
+
+    fn finish(self) -> Result<()> {
+        if let Some((name, _)) = self.params.into_iter().next() {
+            bail!(SearchParamInvalid(
+                name,
+                SearchParamInvalidReason::UnknownParameter,
+                self.span,
+            ));
+        }
+        Ok(())
     }
 }
 
-fn take_var(
-    params: &mut BTreeMap<Symbol, Expr>,
-    name: &'static str,
-    span: SourceSpan,
-) -> Result<Option<Symbol>> {
-    match params.remove(&Symbol::new(name, span)) {
-        None => Ok(None),
-        Some(e) => Ok(Some(expr_as_var(name, &e, span)?)),
-    }
-}
-
-/// The base relation's output frame: one symbol per column (keys then
-/// non-keys), taking the user's variable where the column is bound and a
-/// generated ignored binding where it is not. Consumes `bindings`; a
-/// leftover key names a column that does not exist — refused.
-fn base_frame(
-    base: &RelationHandle,
-    mut bindings: BTreeMap<Symbol, Expr>,
-    symb_gen: &mut TempSymbGen,
-    span: SourceSpan,
-) -> Result<Vec<Symbol>> {
-    let mut frame = Vec::new();
-    for col in base
-        .metadata
-        .keys
-        .iter()
-        .chain(base.metadata.non_keys.iter())
-    {
-        match bindings.remove(&Symbol::new(col.name.clone(), span)) {
-            Some(e) => frame.push(expr_as_var(&col.name, &e, span)?),
-            None => frame.push(symb_gen.next_ignored(span)),
+impl RelationHandle {
+    /// The base relation's output frame: one symbol per column (keys then
+    /// non-keys), taking the user's variable where the column is bound and a
+    /// generated ignored binding where it is not. Consumes `bindings`; a
+    /// leftover key names a column that does not exist — refused.
+    fn base_frame(
+        &self,
+        mut bindings: BTreeMap<Symbol, Expr>,
+        symb_gen: &mut TempSymbGen,
+        span: SourceSpan,
+    ) -> Result<Vec<Symbol>> {
+        let mut frame = Vec::new();
+        for col in self
+            .metadata
+            .keys
+            .iter()
+            .chain(self.metadata.non_keys.iter())
+        {
+            match bindings.remove(&col.name) {
+                Some(e) => frame.push(e.as_search_binding_var(&*col.name, span)?),
+                None => frame.push(symb_gen.next_ignored(span)),
+            }
         }
+        if let Some((name, _)) = bindings.into_iter().next() {
+            bail!(SearchColumnNotFound(
+                name,
+                self.name.clone(),
+                span
+            ));
+        }
+        Ok(frame)
     }
-    if let Some((name, _)) = bindings.into_iter().next() {
-        bail!(SearchColumnNotFound(
-            name,
-            Symbol::new(base.name.clone(), span),
-            span
-        ));
-    }
-    Ok(frame)
 }
 
 /// Resolve a parsed search atom against the catalog. `handle` looks a
@@ -421,48 +449,52 @@ pub(crate) fn resolve_search(
     let idx_ref = base
         .indices
         .iter()
-        .find(|r| r.name.as_str() == inp.index.name().as_str())
+        .find(|r| r.name == inp.index)
         .ok_or_else(|| {
             SearchIndexNotFound(
-                Symbol::new(base.name.clone(), span),
+                base.name.clone(),
                 inp.index.clone(),
                 span,
             )
         })?
         .clone();
-    let idx = handle(&idx_ref.relation_name(&base.name))?;
+    let idx = handle(idx_ref.relation_name(&base.name).as_str())?;
 
     let query = inp.query;
     let filter = match inp.filter {
         SearchFilter::Unfiltered => None,
         SearchFilter::Pred(e) => Some(e),
     };
-    let mut params = inp.modality.into_map();
-    let mut own_bindings = base_frame(&base, inp.bindings, symb_gen, span)?;
+    let mut params = SearchResolve::new(inp.modality.into_map(), span);
+    let mut own_bindings = base.base_frame(inp.bindings, symb_gen, span)?;
 
     let cfg = match idx_ref.kind {
         IndexKind::Plain { .. } | IndexKind::Temporal => {
             bail!(SearchOverPlainIndex(inp.index.clone(), span))
         }
         IndexKind::Hnsw(manifest) => {
-            let k = take_pos_int(&mut params, "k", span)?.ok_or(SearchParamRequired("k", span))?;
-            let ef = match take_pos_int(&mut params, "ef", span)? {
+            let k_sym = Symbol::new("k", span);
+            let k = params
+                .take_pos_int(&k_sym)?
+                .ok_or(SearchParamRequired("k", span))?;
+            let ef = match params.take_pos_int(&Symbol::new("ef", span))? {
                 Some(v) => v,
                 None => k,
             }
             .max(k);
-            let radius = match take_const(&mut params, "radius", span)? {
+            let radius_sym = Symbol::new("radius", span);
+            let radius = match params.take_const(&radius_sym)? {
                 None => None,
                 Some(v) => Some(v.get_float().ok_or(SearchParamInvalid(
-                    Symbol::new("radius", span),
+                    radius_sym,
                     SearchParamInvalidReason::MustBeNumber,
                     span,
                 ))?),
             };
-            let bind_field = take_var(&mut params, "bind_field", span)?;
-            let bind_field_idx = take_var(&mut params, "bind_field_idx", span)?;
-            let bind_distance = take_var(&mut params, "bind_distance", span)?;
-            let bind_vector = take_var(&mut params, "bind_vector", span)?;
+            let bind_field = params.take_var(&Symbol::new("bind_field", span))?;
+            let bind_field_idx = params.take_var(&Symbol::new("bind_field_idx", span))?;
+            let bind_distance = params.take_var(&Symbol::new("bind_distance", span))?;
+            let bind_vector = params.take_var(&Symbol::new("bind_vector", span))?;
             // One bind encoding (P038): HnswBindSlot sum pack for the engine;
             // symbols for the RA frame — both from the same Option set.
             use crate::project::vector::hnsw::HnswBindSlot;
@@ -500,18 +532,22 @@ pub(crate) fn resolve_search(
             })
         }
         IndexKind::Fts(manifest) => {
-            let k = take_pos_int(&mut params, "k", span)?.ok_or(SearchParamRequired("k", span))?;
-            let score_kind = match take_const(&mut params, "score_kind", span)? {
+            let k_sym = Symbol::new("k", span);
+            let k = params
+                .take_pos_int(&k_sym)?
+                .ok_or(SearchParamRequired("k", span))?;
+            let score_kind_sym = Symbol::new("score_kind", span);
+            let score_kind = match params.take_const(&score_kind_sym)? {
                 None => FtsScoreKind::TfIdf,
                 Some(DataValue::Str(s)) if s == "tf_idf" => FtsScoreKind::TfIdf,
                 Some(DataValue::Str(s)) if s == "tf" => FtsScoreKind::Tf,
                 Some(_) => bail!(SearchParamInvalid(
-                    Symbol::new("score_kind", span),
+                    score_kind_sym,
                     SearchParamInvalidReason::MustBeTfOrTfIdf,
                     span
                 )),
             };
-            let bind_score = take_var(&mut params, "bind_score", span)?;
+            let bind_score = params.take_var(&Symbol::new("bind_score", span))?;
             let analyzer = manifest.tokenizer.build(&manifest.filters).map(Arc::new)?;
             let p = FtsSearchParams {
                 k,
@@ -531,7 +567,7 @@ pub(crate) fn resolve_search(
             })
         }
         IndexKind::Lsh { manifest, .. } => {
-            let k = take_pos_int(&mut params, "k", span)?;
+            let k = params.take_pos_int(&Symbol::new("k", span))?;
             let analyzer = manifest.tokenizer.build(&manifest.filters).map(Arc::new)?;
             let perms = Arc::new(manifest.get_hash_perms()?);
             own_bindings // LSH appends nothing beyond the base row.
@@ -547,13 +583,7 @@ pub(crate) fn resolve_search(
         }
     };
 
-    if let Some((name, _)) = params.into_iter().next() {
-        bail!(SearchParamInvalid(
-            name,
-            SearchParamInvalidReason::UnknownParameter,
-            span
-        ));
-    }
+    params.finish()?;
 
     Ok(SearchAtom {
         cfg,

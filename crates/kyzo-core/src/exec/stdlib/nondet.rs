@@ -11,8 +11,9 @@
 use std::time::Duration;
 
 use itertools::Itertools;
+use rand::Rng;
+use rand::seq::IndexedRandom;
 use miette::{Result, bail, ensure, miette};
-use rand::prelude::*;
 use uuid::v1::Timestamp;
 
 use kyzo_model::value::DataValue;

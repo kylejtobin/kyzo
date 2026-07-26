@@ -1,4 +1,0 @@
-trait Encode: private::Sealed {
-    type Out;
-    fn encode(self, out: ByteSink) -> ByteSink;
-}

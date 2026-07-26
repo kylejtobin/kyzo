@@ -11,6 +11,7 @@ keywords.workspace = true
 categories.workspace = true
 description = "KyzoDB shared vocabulary: DataValue, program atoms, envelopes, validity coerce"
 documentation = "https://docs.rs/kyzo-model"
+build = "build.rs"
 
 [package.metadata.docs.rs]
 all-features = true
@@ -31,6 +32,9 @@ smartstring = { version = "1.0.1", features = ["serde"] }
 flatbuffers = { version = "25.12.19", default-features = false, features = ["std"] }
 pest = "2"
 pest_derive = "2"
+# The canonical encoder is Verus source: `cargo build` erases the ghost code,
+# `xtask/verify-canonical.sh` discharges the order law. Pure Rust, no C.
+vstd = "=0.0.0-2026-07-12-0122"
 
 [lints]
 workspace = true

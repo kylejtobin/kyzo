@@ -85,7 +85,7 @@ pub(crate) fn fts_pratt_parser() -> &'static PrattParser<Rule> {
 pub(crate) struct InvalidExpression(#[label] pub(crate) SourceSpan);
 
 /// Lift one pest `expr` pair into an [`Expr`].
-pub(crate) fn build_expr(pair: Pair<'_>, param_pool: &BTreeMap<String, DataValue>) -> Result<Expr> {
+pub(crate) fn build_expr(pair: Pair<'_>, param_pool: &BTreeMap<Symbol, DataValue>) -> Result<Expr> {
     ensure!(
         pair.as_rule() == Rule::expr,
         InvalidExpression(pair.extract_span())
@@ -210,7 +210,7 @@ fn build_expr_infix(lhs: Result<Expr>, op: Pair<'_>, rhs: Result<Expr>) -> Resul
     })
 }
 
-fn build_term(pair: Pair<'_>, param_pool: &BTreeMap<String, DataValue>) -> Result<Expr> {
+fn build_term(pair: Pair<'_>, param_pool: &BTreeMap<Symbol, DataValue>) -> Result<Expr> {
     let span = pair.extract_span();
     let op = pair.as_rule();
     Ok(match op {
@@ -227,9 +227,10 @@ fn build_term(pair: Pair<'_>, param_pool: &BTreeMap<String, DataValue>) -> Resul
             let Some(param_str) = pair.as_str().strip_prefix('$') else {
                 bail!(UnexpectedRule(span));
             };
+            let key = Symbol::new(param_str, span);
             Expr::Const {
                 val: param_pool
-                    .get(param_str)
+                    .get(&key)
                     .ok_or_else(|| ParamNotFoundError(param_str.to_string(), span))?
                     .clone(),
                 span,

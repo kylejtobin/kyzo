@@ -8,7 +8,13 @@
  */
 
 //! Re-homed domain tables from data/tests/functions.rs.
-use crate::exec::stdlib::convert::*;
+use crate::exec::stdlib::convert::op_decode_base64;
+use crate::exec::stdlib::convert::op_encode_base64;
+use crate::exec::stdlib::convert::op_to_bool;
+use crate::exec::stdlib::convert::op_to_float;
+use crate::exec::stdlib::convert::op_to_string;
+use crate::exec::stdlib::convert::op_to_unity;
+use crate::exec::stdlib::convert::op_vec;
 use kyzo_model::value::{DataValue, Vector};
 use miette::{Result, miette};
 use serde_json::json;

@@ -69,7 +69,6 @@ use std::collections::BTreeSet;
 use std::num::NonZeroUsize;
 
 use miette::{Diagnostic, Result, WrapErr, bail};
-use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use crate::data::json::NamedRows;
@@ -114,7 +113,7 @@ const MAX_COMMIT_ATTEMPTS: NonZeroUsize = match NonZeroUsize::new(32) {
 #[diagnostic(code(tx::constraint_violation))]
 #[diagnostic(help("the transaction was aborted whole; no writes were kept"))]
 pub(crate) struct ConstraintViolation {
-    pub(crate) name: String,
+    pub(crate) name: Symbol,
     /// The number of *distinct* violating rows (witnesses are deduped; the
     /// shown `witnesses` list is further capped at [`WITNESS_CAP`]).
     pub(crate) total: usize,
@@ -135,7 +134,7 @@ pub(crate) struct ConstraintViolation {
 #[diagnostic(code(tx::constraint_rejected_on_creation))]
 #[diagnostic(help("repair the offending rows first, then create the constraint"))]
 pub(crate) struct ConstraintRejectedOnCreation {
-    pub(crate) name: String,
+    pub(crate) name: Symbol,
     pub(crate) total: usize,
     pub(crate) witnesses: Vec<Tuple>,
     #[source_code]
@@ -150,7 +149,7 @@ pub(crate) struct ConstraintRejectedOnCreation {
 #[derive(Debug, Error, Diagnostic)]
 #[error("integrity constraint '{0}' must be a pure query: {1}")]
 #[diagnostic(code(tx::constraint_not_pure))]
-pub(crate) struct ConstraintNotPure(pub(crate) String, pub(crate) &'static str);
+pub(crate) struct ConstraintNotPure(pub(crate) Symbol, pub(crate) &'static str);
 
 /// A constraint body reading no stored relation: it would never be checked
 /// (enforcement is keyed off touched relations), so it is refused rather
@@ -158,7 +157,7 @@ pub(crate) struct ConstraintNotPure(pub(crate) String, pub(crate) &'static str);
 #[derive(Debug, Error, Diagnostic)]
 #[error("integrity constraint '{0}' reads no stored relation, so it could never be checked")]
 #[diagnostic(code(tx::constraint_reads_nothing))]
-pub(crate) struct ConstraintReadsNothing(pub(crate) String);
+pub(crate) struct ConstraintReadsNothing(pub(crate) Symbol);
 
 /// A constraint body reading a session-local temp relation. Constraints
 /// are persistent; a body depending on `_`-prefixed data is unenforceable
@@ -169,40 +168,40 @@ pub(crate) struct ConstraintReadsNothing(pub(crate) String);
      persistent and cannot depend on session-local relations"
 )]
 #[diagnostic(code(tx::constraint_on_temp_relation))]
-pub(crate) struct ConstraintOnTempRelation(pub(crate) String, pub(crate) String);
+pub(crate) struct ConstraintOnTempRelation(pub(crate) Symbol, pub(crate) String);
 
 /// Constraint names are one global namespace (a constraint spans every
 /// relation its body reads).
 #[derive(Debug, Error, Diagnostic)]
 #[error("an integrity constraint named '{0}' already exists (attached to relation '{1}')")]
 #[diagnostic(code(tx::constraint_name_taken))]
-pub(crate) struct ConstraintNameTaken(pub(crate) String, pub(crate) String);
+pub(crate) struct ConstraintNameTaken(pub(crate) Symbol, pub(crate) String);
 
 /// `::constraint drop` of a name no relation carries.
 #[derive(Debug, Error, Diagnostic)]
 #[error("no integrity constraint named '{0}' exists")]
 #[diagnostic(code(tx::no_such_constraint))]
-pub(crate) struct NoSuchConstraint(pub(crate) String);
+pub(crate) struct NoSuchConstraint(pub(crate) Symbol);
 
 /// Refuse a constraint body that is not a pure query. `:put`/`:rm`/… would
 /// make the check a mutation; `:assert` would race the denial semantics;
 /// `:limit 0` would silently hide every violation — all refused, loudly.
-fn validate_constraint_purity(name: &str, opts: &QueryOutOptions) -> Result<()> {
+fn validate_constraint_purity(name: &Symbol, opts: &QueryOutOptions) -> Result<()> {
     if opts.store_relation.is_some() {
         bail!(ConstraintNotPure(
-            name.to_string(),
+            name.clone(),
             "its body mutates a stored relation (:put/:rm/:create/…)"
         ));
     }
     if opts.assertion.is_some() {
         bail!(ConstraintNotPure(
-            name.to_string(),
+            name.clone(),
             "its body uses :assert (the denial semantics already assert emptiness)"
         ));
     }
     if opts.limit.is_some() || opts.offset.is_some() {
         bail!(ConstraintNotPure(
-            name.to_string(),
+            name.clone(),
             "its body uses :limit/:offset, which would truncate violation detection"
         ));
     }
@@ -214,7 +213,7 @@ fn validate_constraint_purity(name: &str, opts: &QueryOutOptions) -> Result<()> 
         // constraint body can never carry the general-query-path panic into
         // the denial check. `:sleep` is refused for the same purity reason.
         bail!(ConstraintNotPure(
-            name.to_string(),
+            name.clone(),
             "its body uses :timeout/:sleep (a denial rule runs under the session \
              budget; a per-body deadline is meaningless and an unbounded value \
              would overflow the duration conversion)"
@@ -228,17 +227,17 @@ fn validate_constraint_purity(name: &str, opts: &QueryOutOptions) -> Result<()> 
 /// conjunction, and disjunction — index-search atoms, and fixed-rule
 /// stored-relation arguments. Rule atoms reference in-program rules, not
 /// stored relations, and contribute nothing.
-fn stored_read_set(prog: &InputProgram) -> BTreeSet<SmartString<LazyCompact>> {
-    fn collect_atom(atom: &InputAtom, out: &mut BTreeSet<SmartString<LazyCompact>>) {
+fn stored_read_set(prog: &InputProgram) -> BTreeSet<Symbol> {
+    fn collect_atom(atom: &InputAtom, out: &mut BTreeSet<Symbol>) {
         match atom {
             InputAtom::Relation { inner } => {
-                out.insert(inner.name.name().clone());
+                out.insert(inner.name.clone());
             }
             InputAtom::NamedFieldRelation { inner } => {
-                out.insert(inner.name.name().clone());
+                out.insert(inner.name.clone());
             }
             InputAtom::Search { inner } => {
-                out.insert(inner.relation.name().clone());
+                out.insert(inner.relation.clone());
             }
             InputAtom::Negation { inner, .. } => collect_atom(inner, out),
             InputAtom::Conjunction { inner, .. } | InputAtom::Disjunction { inner, .. } => {
@@ -267,7 +266,7 @@ fn stored_read_set(prog: &InputProgram) -> BTreeSet<SmartString<LazyCompact>> {
                     match arg {
                         FixedRuleArg::Stored { name, .. }
                         | FixedRuleArg::NamedStored { name, .. } => {
-                            out.insert(name.name().clone());
+                            out.insert(name.clone());
                         }
                         FixedRuleArg::InMem { .. } => {}
                     }
@@ -337,7 +336,7 @@ impl<S: Storage> Engine<S> {
                 let body = constraint.program().to_string();
                 let span = SourceSpan::new(0, body.len());
                 return Err(ConstraintViolation {
-                    name: name.to_string(),
+                    name: name.clone(),
                     total,
                     witnesses: shown,
                     body,
@@ -361,15 +360,15 @@ impl<S: Storage> Engine<S> {
         options: &ScriptOptions,
     ) -> Result<NamedRows> {
         let fixed = self.fixed_rules()?;
-        let constraint = ConstraintRef::parse(name.name().clone(), source, &fixed, cur_vld)?;
+        let constraint = ConstraintRef::parse(name.clone(), source, &fixed, cur_vld)?;
         validate_constraint_purity(constraint.name(), constraint.program().out_opts())?;
         let read_set = stored_read_set(constraint.program());
         if read_set.is_empty() {
-            bail!(ConstraintReadsNothing(name.to_string()));
+            bail!(ConstraintReadsNothing(name.clone()));
         }
         for rel in &read_set {
-            if rel.starts_with('_') {
-                bail!(ConstraintOnTempRelation(name.to_string(), rel.to_string()));
+            if rel.is_temp_relation_name() {
+                bail!(ConstraintOnTempRelation(name.clone(), rel.name().to_string()));
             }
         }
 
@@ -400,7 +399,7 @@ impl<S: Storage> Engine<S> {
         name: &Symbol,
         source: &str,
         constraint: &ConstraintRef,
-        read_set: &BTreeSet<SmartString<LazyCompact>>,
+        read_set: &BTreeSet<Symbol>,
         cur_vld: ValidityTs,
     ) -> std::result::Result<NamedRows, RetryError> {
         // Constraint names are one global namespace: scan the catalog.
@@ -408,10 +407,10 @@ impl<S: Storage> Engine<S> {
             if let Some(c) = handle
                 .constraints
                 .iter()
-                .find(|c| c.name().as_str() == name.name().as_str())
+                .find(|c| c.name() == name)
             {
                 return Err(RetryError::session(ConstraintNameTaken(
-                    c.name().to_string(),
+                    c.name().clone(),
                     handle.name.to_string(),
                 )));
             }
@@ -436,7 +435,7 @@ impl<S: Storage> Engine<S> {
             let total = witnesses.len();
             let shown: Vec<Tuple> = witnesses.into_iter().take(WITNESS_CAP).collect();
             return Err(RetryError::session(ConstraintRejectedOnCreation {
-                name: name.to_string(),
+                name: name.clone(),
                 total,
                 witnesses: shown,
                 body: source.to_string(),
@@ -448,7 +447,7 @@ impl<S: Storage> Engine<S> {
         // the body reads, kept name-sorted. Requires the trigger rung of
         // the access ladder on each.
         for rel in read_set {
-            let mut handle = get_relation(&tx.store, rel).map_err(RetryError::session_report)?;
+            let mut handle = get_relation(&tx.store, rel.name().as_str()).map_err(RetryError::session_report)?;
             if handle.access_level < AccessLevel::Protected {
                 return Err(RetryError::session(InsufficientAccessLevel::new(handle.name.to_string(),
                     "create constraint".to_string(),
@@ -501,7 +500,7 @@ impl<S: Storage> Engine<S> {
             if handle
                 .constraints
                 .iter()
-                .any(|c| c.name().as_str() == name.name().as_str())
+                .any(|c| c.name() == name)
                 && handle.access_level < AccessLevel::Protected
             {
                 return Err(RetryError::session(InsufficientAccessLevel::new(handle.name.to_string(),
@@ -511,14 +510,14 @@ impl<S: Storage> Engine<S> {
             }
             handle
                 .constraints
-                .retain(|c| c.name().as_str() != name.name().as_str());
+                .retain(|c| c.name() != name);
             if handle.constraints.len() != before {
                 found = true;
                 write_relation_row(&mut tx.store, &handle).map_err(RetryError::session_report)?;
             }
         }
         if !found {
-            return Err(RetryError::session(NoSuchConstraint(name.to_string())));
+            return Err(RetryError::session(NoSuchConstraint(name.clone())));
         }
         Ok(status_ok())
     }
@@ -532,14 +531,18 @@ impl<S: Storage> Engine<S> {
         for handle in list_relations(&tx.store)? {
             for c in &handle.constraints {
                 rows.push(Tuple::from_vec(vec![
-                    DataValue::from(c.name().as_str()),
-                    DataValue::from(handle.name.as_str()),
+                    DataValue::from(c.name().name().as_str()),
+                    DataValue::from(&*handle.name),
                     DataValue::from(c.program().to_string()),
                 ]));
             }
         }
         Ok(NamedRows::try_new(
-            vec!["name".into(), "relation".into(), "source".into()],
+            vec![
+                Symbol::new("name", SourceSpan::empty()),
+                Symbol::new("relation", SourceSpan::empty()),
+                Symbol::new("source", SourceSpan::empty()),
+            ],
             rows,
         )?)
     }
@@ -553,7 +556,7 @@ mod tests {
     use crate::store::sim::SimStorage;
     use miette::{Result, miette};
 
-    fn no_params() -> BTreeMap<String, DataValue> {
+    fn no_params() -> BTreeMap<Symbol, DataValue> {
         BTreeMap::new()
     }
 
@@ -593,7 +596,7 @@ mod tests {
             .expect_err("violating insert must be denied");
         let viol = err
             .downcast_ref::<ConstraintViolation>().ok_or_else(|| miette!("typed ConstraintViolation:"))?;
-        assert_eq!(viol.name, "nonneg");
+        assert_eq!(viol.name.name().as_str(), "nonneg");
         assert_eq!(viol.total, 1);
         let want: Vec<Tuple> = vec![Tuple::from_vec(vec![
             DataValue::from(3),
@@ -755,7 +758,7 @@ mod tests {
             .expect_err("trigger write violates b's constraint");
         let viol = err
             .downcast_ref::<ConstraintViolation>().ok_or_else(|| miette!("typed:"))?;
-        assert_eq!(viol.name, "small_b");
+        assert_eq!(viol.name.name().as_str(), "small_b");
         let want: Vec<Tuple> = vec![Tuple::from_vec(vec![DataValue::from(50)])];
         assert_eq!(viol.witnesses, want);
         assert_eq!(
@@ -846,7 +849,7 @@ mod tests {
             let viol = err
                 .downcast_ref::<ConstraintViolation>()
                 .ok_or_else(|| miette!("typed:"))?;
-            Ok((viol.name.clone(), viol.total, viol.witnesses.clone()))
+            Ok((viol.name.name().clone(), viol.total, viol.witnesses.clone()))
         }
 
         fn at_thread_count<T: Send>(

@@ -24,7 +24,7 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::fmt::{Debug, Display, Formatter};
 
-use miette::{Diagnostic, Result, bail};
+use miette::{Diagnostic, Result, bail, ensure};
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use smartstring::{LazyCompact, SmartString};
@@ -36,7 +36,7 @@ use crate::program::expr::Expr;
 use crate::program::op::{resolve_fixed_rule_option, resolve_search_modality_option};
 use crate::program::query::QueryOutOptions;
 use crate::program::symbol::Symbol;
-use crate::value::{AsOf, DataValue, ValidityTs};
+use crate::value::{AsOf, DataValue, Tuple, ValidityTs};
 
 // ─────────────────────────────────────────────────────────────────────────
 // Generated symbols
@@ -275,7 +275,7 @@ impl FixedRuleHandle {
 #[diagnostic(code(parser::unknown_fixed_rule_option))]
 #[diagnostic(help("Option names are a closed vocabulary; unknown names are unconstructible"))]
 pub struct UnknownFixedRuleOption {
-    pub name: String,
+    pub name: Symbol,
     #[label]
     pub span: SourceSpan,
 }
@@ -313,10 +313,8 @@ impl FixedRuleOptions {
         value: Expr,
     ) -> std::result::Result<(), UnknownFixedRuleOption> {
         if resolve_fixed_rule_option(&name).is_none() {
-            return Err(UnknownFixedRuleOption {
-                name: name.name().to_string(),
-                span: name.span(),
-            });
+            let span = name.span();
+            return Err(UnknownFixedRuleOption { name, span });
         }
         self.entries.insert(name, value);
         Ok(())
@@ -774,7 +772,7 @@ pub struct SearchQueryRequired {
      / #353 (engine SearchConfig Spatial/Sparse variants)."
 ))]
 pub struct UnknownSearchModalityOption {
-    pub name: String,
+    pub name: Symbol,
     #[label]
     pub span: SourceSpan,
 }
@@ -816,10 +814,8 @@ impl SearchModalityOptions {
         value: Expr,
     ) -> std::result::Result<(), UnknownSearchModalityOption> {
         if resolve_search_modality_option(&name).is_none() {
-            return Err(UnknownSearchModalityOption {
-                name: name.name().to_string(),
-                span: name.span(),
-            });
+            let span = name.span();
+            return Err(UnknownSearchModalityOption { name, span });
         }
         self.entries.insert(name, value);
         Ok(())
@@ -1297,6 +1293,122 @@ impl InputProgram {
 
     // `into_normalized_program` omitted — NormalForm types and BodyNormalizer
     // live in exec/plan; this seat is input-tier only.
+
+    /// Inject a constant rule carrying the mutation's rows into a trigger's
+    /// program, as the `Constant` fixed rule (the same shape the parser builds
+    /// for `<-` bodies). `init_constant_data_options` runs here, so the injected
+    /// options are in the proven form `Constant::run` requires.
+    pub fn make_const_rule(
+        &mut self,
+        rule_name: &str,
+        bindings: Vec<Symbol>,
+        data: &[Tuple],
+    ) -> Result<()> {
+        let rule_symbol = Symbol::new(rule_name, SourceSpan::empty());
+        let span = SourceSpan::empty();
+        let mut options = FixedRuleOptions::empty();
+        options.insert(
+            Symbol::new("data", span),
+            Expr::Const {
+                val: DataValue::List(data.iter().map(|t| DataValue::List(t.to_vec())).collect()),
+                span,
+            },
+        )?;
+        let options = init_constant_data_options(options, span)?;
+        let bindings_arity = bindings.len();
+        self.insert_rule(
+            rule_symbol,
+            InputInlineRulesOrFixed::Fixed {
+                fixed: FixedRuleApply {
+                    fixed_handle: FixedRuleHandle::new("Constant", span),
+                    rule_args: vec![],
+                    options,
+                    head: bindings,
+                    arity: bindings_arity,
+                    span,
+                    trivia: Trivia::empty(),
+                },
+            },
+        );
+        Ok(())
+    }
+}
+
+#[derive(Error, Debug, Diagnostic)]
+#[error("Wrong value for option '{name}' of '{rule_name}'")]
+#[diagnostic(code(fixed_rule::arg_wrong))]
+#[diagnostic(help("a list of lists is required"))]
+struct WrongConstantDataOption {
+    name: Symbol,
+    #[label]
+    span: SourceSpan,
+    rule_name: Symbol,
+}
+
+#[derive(Error, Debug, Diagnostic)]
+#[error("Constant head must have the same arity as the data given")]
+#[diagnostic(code(parser::const_data_arity_mismatch))]
+#[diagnostic(help("First row length: {0}; the mismatch: {1:?}"))]
+struct ConstRuleRowArityMismatch(usize, Vec<DataValue>, #[label] SourceSpan);
+
+#[derive(Error, Debug, Diagnostic)]
+#[error("Bad row for constant rule: {0:?}")]
+#[diagnostic(code(parser::bad_row_for_const))]
+#[diagnostic(help(
+    "The body of a constant rule should evaluate to a list of lists"
+))]
+struct ConstRuleRowNotList(DataValue, #[label("not a list")] SourceSpan);
+
+fn wrong_constant_data_option(span: SourceSpan) -> WrongConstantDataOption {
+    WrongConstantDataOption {
+        name: Symbol::new("data", span),
+        span,
+        rule_name: Symbol::new("Constant", span),
+    }
+}
+
+/// Normalize `Constant` fixed-rule `data` option — same proof as engine
+/// `Constant::init_options`, seated here so trigger injection needs no
+/// kyzo-core seat.
+fn init_constant_data_options(
+    options: FixedRuleOptions,
+    span: SourceSpan,
+) -> Result<FixedRuleOptions> {
+    let mut options = options;
+    let data = options
+        .get("data")
+        .ok_or_else(|| wrong_constant_data_option(span))?;
+    let data = match data.clone().eval_to_const()? {
+        DataValue::List(l) => l,
+        crate::data_value_any!() => bail!(wrong_constant_data_option(span)),
+    };
+
+    let mut tuples = vec![];
+    let mut last_len = None;
+    for row in data {
+        match row {
+            DataValue::List(tuple) => {
+                if let Some(l) = &last_len {
+                    ensure!(
+                        *l == tuple.len(),
+                        ConstRuleRowArityMismatch(*l, tuple, span)
+                    );
+                };
+                last_len = Some(tuple.len());
+                tuples.push(DataValue::List(tuple));
+            }
+            row @ (crate::data_value_any!()) => bail!(ConstRuleRowNotList(row, span)),
+        }
+    }
+
+    options.insert(
+        Symbol::new("data", span),
+        Expr::Const {
+            val: DataValue::List(tuples),
+            span,
+        },
+    )?;
+    Ok(options)
 }
 
 impl Display for InputProgram {

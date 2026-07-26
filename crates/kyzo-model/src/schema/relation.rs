@@ -122,12 +122,13 @@ impl StoredRelationMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::program::span::SourceSpan;
+    use crate::program::symbol::Symbol;
     use crate::schema::column::{ColType, ColumnDef, NullableColType};
-    use smartstring::SmartString;
 
     fn col(name: &str, ty: ColType) -> ColumnDef {
         ColumnDef {
-            name: SmartString::from(name),
+            name: Symbol::new(name, SourceSpan::empty()),
             typing: NullableColType::required(ty),
             default_gen: None,
         }

@@ -1,7 +1,0 @@
-use std::env::*;
-
-impl Boot {
-    fn home(self) -> Home {
-        Home::of(var)
-    }
-}

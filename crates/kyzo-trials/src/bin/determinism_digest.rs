@@ -38,7 +38,9 @@ use miette::{Result, miette};
 use kyzo::{DataValue, Engine, FjallStorage, NamedRows};
 use kyzo_trials::host_env;
 
-fn no_params() -> BTreeMap<String, DataValue> {
+use kyzo_model::program::symbol::Symbol;
+
+fn no_params() -> BTreeMap<Symbol, DataValue> {
     BTreeMap::new()
 }
 

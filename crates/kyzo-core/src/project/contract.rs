@@ -26,10 +26,27 @@ use std::cmp::Ordering;
 use std::fmt;
 
 use miette::Diagnostic;
-use thiserror::Error;
 
 use crate::project::dedup::lsh::LshPermutationDecodeRefused;
+use kyzo_model::{HostText, TextRef};
 use kyzo_model::value::{DataValue, DecodeError, Num, SearchHits, Tuple};
+
+/// Borrowed identity of a cataloged index or relation at projection decode
+/// boundaries. Mint only from a live catalog name — not a bare `&str`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct IndexName<'a>(TextRef<'a>);
+
+impl<'a> IndexName<'a> {
+    #[inline]
+    pub(crate) fn from_relation_name(name: &'a str) -> Self {
+        Self(TextRef::new(name))
+    }
+
+    #[inline]
+    pub(crate) fn as_str(self) -> &'a str {
+        self.0.as_str()
+    }
+}
 
 /// Score or distance used for projection candidate ranking.
 ///
@@ -75,18 +92,36 @@ impl Ord for RankScore {
 /// A stored index row (or a base row an index points at) failed to decode as
 /// what the index format says it must be. Corruption is an error, never a
 /// panic. Carries the row's key context so the failure is locatable.
-#[derive(Debug, Error, Diagnostic)]
-#[error("index '{index}' corrupt: {reason}; row {row}")]
+#[derive(Debug, Diagnostic)]
 #[diagnostic(code(index::corrupt))]
 #[diagnostic(help(
     "the stored bytes do not decode as a valid index row; the index can be \
      dropped and re-created from its base relation"
 ))]
 pub(crate) struct IndexRowCorrupt {
-    pub(crate) index: String,
-    pub(crate) row: String,
+    pub(crate) index: HostText,
+    pub(crate) row: Option<Tuple>,
     pub(crate) reason: IndexCorruptReason,
 }
+
+impl fmt::Display for IndexRowCorrupt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.row {
+            Some(row) => write!(
+                f,
+                "index '{}' corrupt: {}; row {row:?}",
+                self.index, self.reason
+            ),
+            None => write!(
+                f,
+                "index '{}' corrupt: {}; row <undecodable bytes>",
+                self.index, self.reason
+            ),
+        }
+    }
+}
+
+impl std::error::Error for IndexRowCorrupt {}
 
 /// Named reason a stored index row (or its base-row reference) is corrupt.
 /// String reasons are unrepresentable — every engine path picks a variant.
@@ -126,7 +161,7 @@ pub(crate) enum IndexCorruptReason {
     GazetteerSurfaceNotString,
 
     HnswNotInteger {
-        what: String,
+        field: HnswIntegerField,
     },
     HnswCanaryNonNullKeys,
     HnswCanaryEntryNotBytes,
@@ -172,6 +207,32 @@ pub(crate) enum IndexCorruptReason {
     HnswIndexedFieldBeyondRowArity,
     HnswIndexedListElementBeyondList,
     HnswIndexedFieldNotListOfVectors,
+}
+
+/// HNSW index column that must decode as an integer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HnswIntegerField {
+    Layer,
+    CanaryBottomLayer,
+    EndpointField {
+        side: &'static str,
+    },
+    EndpointSubIndex {
+        side: &'static str,
+    },
+    NodeDegree,
+}
+
+impl fmt::Display for HnswIntegerField {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Layer => write!(f, "layer"),
+            Self::CanaryBottomLayer => write!(f, "canary bottom layer"),
+            Self::EndpointField { side } => write!(f, "{side} field"),
+            Self::EndpointSubIndex { side } => write!(f, "{side} sub-index"),
+            Self::NodeDegree => write!(f, "node degree"),
+        }
+    }
 }
 
 impl fmt::Display for IndexCorruptReason {
@@ -228,7 +289,7 @@ impl fmt::Display for IndexCorruptReason {
             Self::GazetteerSurfaceNotString => {
                 write!(f, "gazetteer dictionary surface form is not a string")
             }
-            Self::HnswNotInteger { what } => write!(f, "{what} is not an integer"),
+            Self::HnswNotInteger { field } => write!(f, "{field} is not an integer"),
             Self::HnswCanaryNonNullKeys => write!(f, "canary row with non-Null key slots"),
             Self::HnswCanaryEntryNotBytes => write!(f, "canary entry key is not bytes"),
             Self::HnswCanaryEntryKeyTooShort { found } => write!(
@@ -341,8 +402,8 @@ pub(crate) fn search_rows(hits: SearchHits) -> miette::Result<Vec<Tuple>> {
 impl IndexRowCorrupt {
     pub(crate) fn new(index: &str, row: &[DataValue], reason: IndexCorruptReason) -> Self {
         IndexRowCorrupt {
-            index: index.to_string(),
-            row: format!("{row:?}"),
+            index: HostText::new(index),
+            row: Some(Tuple::from_vec(row.to_vec())),
             reason,
         }
     }
@@ -353,8 +414,8 @@ impl IndexRowCorrupt {
     /// a projection as the projection's contract.
     pub(crate) fn from_decode(index: &str, err: DecodeError) -> Self {
         IndexRowCorrupt {
-            index: index.to_string(),
-            row: "<undecodable bytes>".to_string(),
+            index: HostText::new(index),
+            row: None,
             reason: IndexCorruptReason::DecodeFailed(err),
         }
     }

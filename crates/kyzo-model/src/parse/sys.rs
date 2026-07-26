@@ -130,8 +130,9 @@ pub struct NegativeProcessId(pub i64);
 /// carrier that crosses the crate wall unresolved (see the module doc).
 #[derive(Debug, Clone, PartialEq)]
 pub struct TokenizerSpec {
-    /// The analyzer stage name (`Simple`, `NGram`, `Lowercase`, …).
-    pub name: SmartString<LazyCompact>,
+    /// The analyzer stage name (`Simple`, `NGram`, `Lowercase`, …) — a
+    /// closed-registry identity, not free-form host text.
+    pub name: Symbol,
     /// The stage's constant arguments, already evaluated.
     pub args: Vec<DataValue>,
     /// Where the option that named this stage was written.
@@ -143,7 +144,7 @@ impl TokenizerSpec {
     /// given (the engine admits `"Simple"` to its simple analyzer).
     fn simple(span: SourceSpan) -> Self {
         TokenizerSpec {
-            name: SmartString::from("Simple"),
+            name: Symbol::new("Simple", span),
             args: vec![],
             span,
         }
@@ -157,8 +158,8 @@ impl TokenizerSpec {
 /// builder that re-proves completeness at compile time.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HnswConfigSpec {
-    pub base_relation: SmartString<LazyCompact>,
-    pub index_name: SmartString<LazyCompact>,
+    pub base_relation: Symbol,
+    pub index_name: Symbol,
     pub vec_dim: usize,
     pub dtype: VecElementType,
     pub vec_fields: Vec<SmartString<LazyCompact>>,
@@ -176,8 +177,8 @@ pub struct HnswConfigSpec {
 /// [`TokenizerSpec`]s the engine-typed lift admits into analyzer configs.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FtsConfigSpec {
-    pub base_relation: SmartString<LazyCompact>,
-    pub index_name: SmartString<LazyCompact>,
+    pub base_relation: Symbol,
+    pub index_name: Symbol,
     pub extractor: Expr,
     pub tokenizer: TokenizerSpec,
     pub filters: Vec<TokenizerSpec>,
@@ -188,8 +189,8 @@ pub struct FtsConfigSpec {
 /// normalized to sum to one — exactly as the CozoDB original did at parse.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LshConfigSpec {
-    pub base_relation: SmartString<LazyCompact>,
-    pub index_name: SmartString<LazyCompact>,
+    pub base_relation: Symbol,
+    pub index_name: Symbol,
     pub extractor: Expr,
     pub tokenizer: TokenizerSpec,
     pub filters: Vec<TokenizerSpec>,
@@ -309,7 +310,7 @@ fn combine_extractor(
 /// Walk the pairs of a `sys_script` into pure-data [`SysScript`] syntax.
 pub(crate) fn parse_sys<'a>(
     mut src: impl Iterator<Item = Pair<'a>>,
-    param_pool: &BTreeMap<String, DataValue>,
+    param_pool: &BTreeMap<Symbol, DataValue>,
     cur_vld: ValidityTs,
 ) -> Result<SysScript> {
     #[derive(Debug, Error, Diagnostic)]
@@ -663,8 +664,8 @@ pub(crate) fn parse_sys<'a>(
                         name.extract_span(),
                     )?;
                     SysScript::CreateMinHashLshIndex(LshConfigSpec {
-                        base_relation: SmartString::from(rel.as_str()),
-                        index_name: SmartString::from(name.as_str()),
+                        base_relation: Symbol::new(rel.as_str(), rel.extract_span()),
+                        index_name: Symbol::new(name.as_str(), name.extract_span()),
                         extractor,
                         tokenizer,
                         filters,
@@ -727,8 +728,8 @@ pub(crate) fn parse_sys<'a>(
                     let extractor =
                         combine_extractor(extractor, extract_filter, "FTS", name.extract_span())?;
                     SysScript::CreateFtsIndex(FtsConfigSpec {
-                        base_relation: SmartString::from(rel.as_str()),
-                        index_name: SmartString::from(name.as_str()),
+                        base_relation: Symbol::new(rel.as_str(), rel.extract_span()),
+                        index_name: Symbol::new(name.as_str(), name.extract_span()),
                         extractor,
                         tokenizer,
                         filters,
@@ -896,8 +897,8 @@ pub(crate) fn parse_sys<'a>(
                         ));
                     };
                     SysScript::CreateVectorIndex(HnswConfigSpec {
-                        base_relation: SmartString::from(rel.as_str()),
-                        index_name: SmartString::from(name.as_str()),
+                        base_relation: Symbol::new(rel.as_str(), rel.extract_span()),
+                        index_name: Symbol::new(name.as_str(), name.extract_span()),
                         vec_dim,
                         dtype,
                         vec_fields,
@@ -974,13 +975,13 @@ fn parse_tokenizer_expr(expr: Expr) -> Result<TokenizerSpec> {
                 targs.push(arg.clone().eval_to_const()?);
             }
             Ok(TokenizerSpec {
-                name: op,
+                name: Symbol::new(op, span),
                 args: targs,
                 span,
             })
         }
         Expr::Binding { var, .. } => Ok(TokenizerSpec {
-            name: var.name().clone(),
+            name: var.clone(),
             args: vec![],
             span,
         }),
@@ -1035,7 +1036,7 @@ mod tests {
 
     use super::SysScript;
 
-    fn parse_lsh(src: &str, params: BTreeMap<String, DataValue>) -> miette::Result<SysScript> {
+    fn parse_lsh(src: &str, params: BTreeMap<Symbol, DataValue>) -> miette::Result<SysScript> {
         parse_sys(src, &params, ValidityTs::of_micros(0))
     }
 

@@ -26,6 +26,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use kyzo::{Catalog, Engine, NamedRows, ScriptOptions, Storage, new_fjall_storage};
+use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::{DataValue, Tuple};
 use kyzo_oracle::eval::{HeadAggr, Literal, Program, Rel, Rule, Term};
 
@@ -52,7 +53,7 @@ fn require_some<T>(o: Option<T>, msg: &str) -> T {
 }
 
 
-fn no_params() -> BTreeMap<String, DataValue> {
+fn no_params() -> BTreeMap<Symbol, DataValue> {
     BTreeMap::new()
 }
 

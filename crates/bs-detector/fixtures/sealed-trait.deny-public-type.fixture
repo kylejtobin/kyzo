@@ -1,3 +1,0 @@
-pub trait Encode: private::Sealed {
-    fn encode(self, out: ByteSink) -> ByteSink;
-}

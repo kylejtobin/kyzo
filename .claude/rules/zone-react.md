@@ -21,10 +21,8 @@ Standing queries, incremental maintenance, change feeds.
 - Registration, cancellation, and failure of a standing query are typed
   lifecycle states.
 
-- Every `.rs` file declares `//! AUTHORITY`, `//! SEAT`, `//! FILE_KIND` and obeys the File template in this rule.
-- Comments obey the Comment ontology in this rule.
 - Seated items carry `// CONSTRUCT: <grammar> <Ident>`.
-- A file that needs two AUTHORITY sentences is split before merge.
+- One AUTHORITY per file. A file that needs two is split before merge.
 - Ordered write log is the only feed. Delivery is fabric carriage. Incremental equals full recompute by shipped proof.
 
 ## Forbidden
@@ -34,50 +32,3 @@ Standing queries, incremental maintenance, change feeds.
 - Callbacks or triggers that can mutate state outside the one admission path.
 - Buffering that silently drops or reorders events — backpressure is typed
   and visible.
-
-## Comment ontology
-
-| kind | form | placement |
-| --- | --- | --- |
-| authority | `//! AUTHORITY: ` | file head; one Spec organ |
-| seat | `//! SEAT: ` | under AUTHORITY; `zone-<name>/<role>` |
-| file_kind | `//! FILE_KIND: ` | under SEAT; id from File template |
-| citation | `//! CITATION: ` | when FILE_KIND requires |
-| construct | `// CONSTRUCT: ` | above seated item; `<grammar> <Ident>` |
-| order_law | `// ORDER_LAW: ` | above ordered/encoded type |
-| claim | `// CLAIM: ` | `Unconstructible\|Refused\|Unexposed — <state>` |
-| engine_edit | `// ENGINE_EDIT: ` | vendor divergence only |
-| refuse_doc | `/// Refuse(` | error variants |
-| api_doc | `/// ` | public contract nouns only |
-
-This table is total; not listed = red.
-
-Comments name Spec surface only. Motive, apology, history, metacommentary, and performative language are red.
-
-## File template
-
-Path touch loads this rule. Obey FILE_KIND rows below. Markers: `// --- zone-file:<id> ---` with ids imports, types, construction, order_encode, decode, verbs, state, adapters, refusals, wiring, tests. Absent section = no marker.
-
-| FILE_KIND | section order | required | forbid |
-| --- | --- | --- | --- |
-| `react_standing` | I T C S V R X | typed lifecycle; residency≠durability CLAIM | peer dial |
-| `react_incremental` | I T S V R X | differential proof shipped | second change authority |
-
-This table is total; not listed = red.
-
-### Dominant skeleton
-
-```rust
-//! AUTHORITY: standing query lifecycle
-//! SEAT: zone-react/standing
-//! FILE_KIND: react_standing
-
-// --- zone-file:imports ---
-// --- zone-file:types ---
-// --- zone-file:construction ---
-// --- zone-file:state ---
-// --- zone-file:verbs ---
-// --- zone-file:refusals ---
-// --- zone-file:tests ---
-```
-

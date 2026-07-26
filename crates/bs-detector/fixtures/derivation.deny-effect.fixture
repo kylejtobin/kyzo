@@ -1,5 +1,0 @@
-impl Span {
-    fn width(&self) -> Width {
-        Width::between(self.start, Instant::now())
-    }
-}

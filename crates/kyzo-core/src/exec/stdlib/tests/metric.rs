@@ -8,7 +8,8 @@
  */
 
 //! Re-homed domain tables from data/tests/functions.rs.
-use crate::exec::stdlib::metric::*;
+use crate::exec::stdlib::metric::op_cos_dist;
+use crate::exec::stdlib::metric::op_l2_normalize;
 use kyzo_model::value::{DataValue, Vector};
 use miette::{Result, miette};
 

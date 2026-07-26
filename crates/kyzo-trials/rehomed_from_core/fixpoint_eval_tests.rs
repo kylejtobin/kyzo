@@ -45,8 +45,15 @@ use std::time::Duration;
 
 use itertools::Itertools;
 use miette::Result;
-use proptest::prelude::*;
-use proptest::test_runner::{Config, TestRunner};
+use proptest::arbitrary::any;
+use proptest::collection::btree_map;
+use proptest::collection::btree_set;
+use proptest::prop_oneof;
+use proptest::strategy::BoxedStrategy;
+use proptest::strategy::Just;
+use proptest::strategy::Strategy;
+use proptest::test_runner::Config;
+use proptest::test_runner::TestRunner;
 
 use kyzo::oracle_harness::{
     AtomOccurrence, Budget, BudgetDimension, EpochStore, EvalDefinition, EvalProgram, EvalRuleSet,
@@ -878,8 +885,8 @@ fn arb_case() -> BoxedStrategy<GenCase> {
                     }
                 };
                 (
-                    prop::collection::btree_set((0..n, 0..n), 0..10),
-                    prop::collection::btree_map(
+                    btree_set((0..n, 0..n), 0..10),
+                    btree_map(
                         0..n,
                         value,
                         0..=usize_from_u64_fitting(

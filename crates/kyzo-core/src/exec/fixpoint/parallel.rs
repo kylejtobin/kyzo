@@ -41,7 +41,8 @@ where
 {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        use rayon::prelude::*;
+        use rayon::iter::IntoParallelRefIterator;
+        use rayon::iter::ParallelIterator;
         defs.par_iter()
             .filter(|(name, _)| !(limiter_enabled && name.is_prog_entry()))
             .map(&execution)

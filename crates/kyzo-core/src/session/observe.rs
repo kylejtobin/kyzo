@@ -1180,9 +1180,10 @@ mod exactly_once_battery {
     use crate::session::db::Engine;
     use crate::store::fjall::new_fjall_storage;
     use crate::store::sim::{FaultConfig, SimStorage};
+    use kyzo_model::program::symbol::Symbol;
     use kyzo_model::value::DataValue;
 
-    fn no_params() -> BTreeMap<String, DataValue> {
+    fn no_params() -> BTreeMap<Symbol, DataValue> {
         BTreeMap::new()
     }
 
@@ -1293,9 +1294,10 @@ mod deep_verify_schedule {
     use crate::session::db::Engine;
     use crate::session::observe::DeepVerifyStaleness;
     use crate::store::fjall::new_fjall_storage;
+    use kyzo_model::program::symbol::Symbol;
     use kyzo_model::value::DataValue;
 
-    fn no_params() -> BTreeMap<String, DataValue> {
+    fn no_params() -> BTreeMap<Symbol, DataValue> {
         BTreeMap::new()
     }
 
@@ -1375,9 +1377,10 @@ mod tenant_blind_operator_surface {
         FailureLattice, KeyspaceId, OperatorCap, TenantBlindRefuse, mint_quarantine,
     };
     use crate::store::fjall::new_fjall_storage;
+    use kyzo_model::program::symbol::Symbol;
     use kyzo_model::value::DataValue;
 
-    fn no_params() -> BTreeMap<String, DataValue> {
+    fn no_params() -> BTreeMap<Symbol, DataValue> {
         BTreeMap::new()
     }
 

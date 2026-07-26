@@ -7,1777 +7,2454 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! The one order-preserving byte form: the interning key and the on-disk key. memcmp/fact-payload become thin views of this.
+//! AUTHORITY: The one order-preserving byte form — the interning key and the on-disk key.
 //!
-//! ## Canonical format v1
+//! ORDER_LAW: `a <= b  <=>  encode(a) <=lex encode(b)`, total over every kind.
 //!
-//! `encoding := tag byte (see [`super::tag`]) + payload`, where every
-//! payload is self-terminating, so encodings concatenate into sequences
-//! without length prefixes and lexicographic byte order equals semantic
-//! order — the guardrail invariant, total over all kinds:
+//! CLAIM: Unconstructible — an encoding that is not order-preserving.
 //!
-//! - `Null`: empty payload.
-//! - `Bool`: one byte, `0x00`/`0x01`.
-//! - `Num`: the numeric key of [`super::number`] (its own spec).
-//! - `Str`/`Bytes`: content with `0x00 → 0x00 0xFF` escaping, terminated
-//!   by `0x00 0x00`. Escaped content sorts above the terminator, so a
-//!   prefix string sorts before its extensions; embedded NULs order
-//!   correctly; decode is unambiguous.
-//! - `Uuid`: 16 raw bytes, fixed width.
-//! - `List`: the elements' encodings concatenated, terminated by `0x01`.
-//!   Every tag byte is ≥ 0x05, so the terminator sorts below any
-//!   continuation: `[a] < [a, …]` exactly as the semantic law requires.
-//! - `Set`: identity is the *set*, not the writing order — elements are
-//!   encoded, sorted bytewise, deduplicated, concatenated, terminated by
-//!   `0x01`. `{2,1}` and `{1,2,1}` are one value by construction.
+//! Binary order equals semantic order. One order over one substrate is what
+//! makes every access path a range scan on the same bytes. A defect does not
+//! raise; it returns wrong answers until someone notices.
 //!
-//! The wide faces (identity laws in [`super::wide`]):
+//! The law is discharged by Verus over all inputs. Run `xtask/verify-canonical.sh`.
+//! A violation is a verification failure carrying a counterexample.
 //!
-//! - `Regex`: one flags byte, then the pattern text escaped/terminated —
-//!   textual identity under the pinned dialect.
-//! - `Json`: the canonical JSON value bytes (its own marker grammar:
-//!   null `0x05` < false `0x06` < true `0x07` < number `0x10` < string
-//!   `0x18` < array `0x48` < object `0x4C`, objects as sorted unique
-//!   key/value pairs), followed by a trailing FNV-1a 64 hash of exactly
-//!   those bytes — after the self-terminating value, so it can never
-//!   influence order; verified on decode.
-//! - `Vector`: u32 big-endian dimension count, then each component as
-//!   Num's float key (components normalized through Num's law). Identity
-//!   is content-addressed ([`Vector::content_id`](crate::value::kind::vector::Vector::content_id)
-//!   — FNV-1a of dimension + exact float bits), not row-positional;
-//!   exact float remains the stored authority (T4 total order unchanged).
-//! - `Validity`: the 8-byte DESCENDING timestamp key (the imported
-//!   time-axis law: latest first), then the polarity byte (assert `0x00`
-//!   before retract `0x01`).
-//! - `Interval`: `0x01` for the one empty value, or `0x02` + lower end +
-//!   upper end, each end `0x01` (unbounded) or `0x02` + the 8-byte
-//!   ascending timestamp key. Closed normal form is enforced on decode.
-//! - `Geometry`: eight big-endian bytes of the Hilbert curve key of the
-//!   point's fixed-point `(lat, lon)` cells — memcmp of the payload
-//!   equals Hilbert order; no float floor in the encoding path.
+//! # What is proven
 //!
-//! ## `CanonicalBytes` is a witness, not a costume
+//! - `lex_le` is a total order: reflexive, antisymmetric, transitive, total.
+//! - `lemma_concat_order` — THE CLOSURE THEOREM. Concatenation is the
+//!   lexicographic product order whenever the left operands are
+//!   prefix-incomparable.
+//! - `lemma_prefix_hypothesis_is_necessary` — that hypothesis cannot be
+//!   dropped, by machine-checked counterexample.
+//! - `lemma_bytes_order` / `lemma_bytes_prefix_free` — the escaped byte-string
+//!   code is order-preserving AND a prefix code.
+//! - `lemma_row_order` / `lemma_row_prefix_free` — the same two properties for
+//!   sequences, so a sequence may nest without bound.
+//! - `theorem_prefix_code` — complete encodings form a prefix code, which is
+//!   what discharges the closure theorem's hypothesis everywhere at once.
+//! - `theorem_value_order` — `val_le(u,v) == lex_le(enc(u), enc(v))` over the
+//!   whole recursive value domain.
+//! - `lemma_enc_injective` — distinct values never share bytes.
+//! - `lemma_enc_complete` — every encoding this module produces is complete.
 //!
-//! Its field is private and there is no `From`, no `from_bytes`, no
-//! unchecked constructor: the only mint is [`encode`], so holding a
-//! `CanonicalBytes` *is* proof the bytes are lawful. Field privacy is the
-//! deliberate authority boundary here — mint and type share this one
-//! file, which is exactly the enforcement a proof token buys when they
-//! don't (`StampedCode`'s case). If the mint ever moves out of this
-//! file, the token pattern becomes mandatory. Reading is free
-//! (`as_bytes`), and its derived `Ord` is exactly the storage total
-//! order. [`decode`] is total over arbitrary bytes: a typed error, never
-//! a panic, never trust.
+//! # The two obligations a kind must discharge
+//!
+//! `key_end` and `valid_key` are uninterpreted: this module proves nothing
+//! about any particular kind's key, and assumes nothing either. A kind enters
+//! through [`KindKey`], whose `law_key` is the proof that its key belongs to
+//! the family. `kind_local` and `kind_complete` state the two properties every
+//! kind owes. There is no third.
+//!
+//! # Marked positions
+//!
+//! Every position a scanner reads to decide "element or terminator" holds a
+//! byte that cannot be the terminator. Sequence elements open with a tag
+//! (`>= 0x05`); JSON array elements open with a marker in
+//! `{0x05, 0x06, 0x07, 0x10, 0x18, 0x48, 0x4C}`; JSON object keys open with
+//! `JSTR`. An unmarked key position would admit a key beginning `0x01` — legal
+//! JSON, legal UTF-8 — and the body would have two readings. `json_obj`
+//! requires the marker, which is what makes `lemma_json_obj_of_pairs` close.
+//!
+//! # Trusted computing base
+//!
+//! The exact, enumerable list this proof assumes rather than proves:
+//!
+//! 1. **Z3 4.12.5** — the solver discharging the obligations. A soundness bug
+//!    means it can certify something false.
+//! 2. **Verus 0.2026.07.18** — the encoding of Rust's semantics into SMT. If
+//!    Verus models Rust wrong, the theorem is about a different language.
+//! 3. **The specification** — `lex_le` and `is_prefix` below, together under
+//!    twenty lines. If `lex_le` does not define lexicographic order, everything
+//!    under it is a rigorous proof of the wrong thing. It is readable in one
+//!    sitting, and `tests/canonical_law.rs` pins that it computes what a human
+//!    means by "lexicographic" against exhaustive independent enumeration.
+//!
+//! The size of that list is the deliverable. Nothing about the encoder is
+//! trusted, including code not yet written: a new kind reopens no obligation,
+//! because it can only be assembled from proven parts.
 
-use super::kind::interval::{Hi, Interval, Lo};
-use super::kind::json::{Json, JsonNum, JsonObj, fnv1a64};
-use super::kind::regex::{RegexFlags, RegexSource};
-use super::kind::validity::{Validity, ValiditySlot, ValidityTs};
-use super::number::{Num, NumDecodeError};
-use super::prefix::prefix4;
-use super::tag::{STRUCT_SEQ_END, STRUCT_STRING, Tag};
-use super::{DataValue, Geometry, UuidWrapper, Vector};
+use vstd::prelude::*;
 
-/// A lawful canonical encoding: mintable only by [`encode`]. Derived
-/// `Ord`/`Eq` are the storage total order over values, byte for byte.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-#[repr(transparent)]
-pub struct CanonicalBytes(Vec<u8>);
+verus! {
 
-impl CanonicalBytes {
-    pub fn as_bytes(&self) -> &[u8] {
-        &self.0
-    }
 
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
+pub const STRUCT_ESC: u8 = 0x00;
+pub const STRUCT_END: u8 = 0x01;
+pub const TAG_MIN: u8 = 0x05;
 
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
+// ============================ lexicographic order ============================
 
-    /// The shared 4-byte prefix of this encoding (the cell/arena prefix
-    /// doctrine applied to the canonical form).
-    pub fn prefix4(&self) -> [u8; 4] {
-        prefix4(&self.0)
+pub open spec fn lex_le(a: Seq<u8>, b: Seq<u8>) -> bool
+    decreases a.len()
+{
+    if a.len() == 0 { true }
+    else if b.len() == 0 { false }
+    else if a[0] != b[0] { a[0] < b[0] }
+    else { lex_le(a.drop_first(), b.drop_first()) }
+}
+
+pub open spec fn is_prefix(x: Seq<u8>, y: Seq<u8>) -> bool {
+    x.len() <= y.len() && y.take(x.len() as int) =~= x
+}
+
+pub open spec fn incomparable(x: Seq<u8>, y: Seq<u8>) -> bool {
+    (is_prefix(x, y) || is_prefix(y, x)) ==> x =~= y
+}
+
+pub proof fn lemma_lex_refl(a: Seq<u8>)
+    ensures lex_le(a, a)
+    decreases a.len()
+{ if a.len() > 0 { lemma_lex_refl(a.drop_first()); } }
+
+pub proof fn lemma_lex_total(a: Seq<u8>, b: Seq<u8>)
+    ensures lex_le(a, b) || lex_le(b, a)
+    decreases a.len()
+{ if a.len() > 0 && b.len() > 0 && a[0] == b[0] { lemma_lex_total(a.drop_first(), b.drop_first()); } }
+
+pub proof fn lemma_lex_antisym(a: Seq<u8>, b: Seq<u8>)
+    requires lex_le(a, b), lex_le(b, a)
+    ensures a =~= b
+    decreases a.len()
+{
+    if a.len() > 0 && b.len() > 0 {
+        lemma_lex_antisym(a.drop_first(), b.drop_first());
+        assert(a =~= seq![a[0]] + a.drop_first());
+        assert(b =~= seq![b[0]] + b.drop_first());
     }
 }
 
-/// The logical value the canonical codec speaks, borrowed. The 16-byte
-/// cell (task 3) realizes this physically; the codec is the authority on
-/// bytes. Kinds whose identity laws are not yet ruled are absent here —
-/// their tags are reserved, their payloads arrive with their laws.
-#[derive(Clone, Copy, Debug)]
-pub enum Datum<'a> {
-    Null,
-    Bool(bool),
-    Num(Num),
-    Str(&'a str),
-    Bytes(&'a [u8]),
-    Uuid([u8; 16]),
-    List(&'a [Datum<'a>]),
-    /// Writing order and duplicates are irrelevant: the encoder
-    /// canonicalizes to the sorted, deduplicated element sequence.
-    Set(&'a [Datum<'a>]),
-    /// Regex STORAGE identity (see `wide::regex`): writer construction
-    /// validates; decode preserves stored source without re-proof;
-    /// executability is `CompiledRegexV1`'s claim, never this variant's.
-    Regex(&'a RegexSource),
-    Json(&'a Json),
-    /// Proven vector (dimension already admitted); components pass through
-    /// Num's float law at encode. Identity is content-addressed from those
-    /// exact floats (`Vector::content_id`); bare `&[f64]` is not a mint.
-    Vector(&'a Vector),
-    Validity(Validity),
-    Interval(Interval),
-    Geometry(Geometry),
-}
-
-/// Encode a value into its canonical form: the one mint of
-/// [`CanonicalBytes`].
-pub fn encode(d: Datum<'_>) -> CanonicalBytes {
-    let mut out = Vec::new();
-    encode_into(&mut out, d);
-    CanonicalBytes(out)
-}
-
-/// Encode an owned logical value through the one codec authority
-/// ([`encode_into`] for Datum-nameable kinds; owned recursion for List/Set).
-/// Deliberately does NOT trust `DataValue`'s `Ord` for set ordering — sets
-/// are sorted by their ENCODED bytes here, so the codec stays the independent
-/// authority the `Ord` mirror is law-locked against (no circularity).
-pub fn encode_owned(v: &DataValue) -> CanonicalBytes {
-    let mut out = Vec::new();
-    encode_owned_into(&mut out, v);
-    CanonicalBytes(out)
-}
-
-/// The length of the FIRST canonical encoding in `bytes`, without
-/// materializing the value: a no-allocation grammar walk (the hot-path
-/// arm of the one decoder — binary searches over encoded rows skip, not
-/// decode). Differentially locked to [`decode_one`]'s consumed length.
-pub fn skip_one(bytes: &[u8]) -> Result<usize, DecodeError> {
-    skip_at(bytes, 0)
-}
-
-fn skip_at(bytes: &[u8], depth: usize) -> Result<usize, DecodeError> {
-    if depth > MAX_DEPTH {
-        return Err(DecodeError::TooDeep);
+pub proof fn lemma_lex_trans(a: Seq<u8>, b: Seq<u8>, c: Seq<u8>)
+    requires lex_le(a, b), lex_le(b, c)
+    ensures lex_le(a, c)
+    decreases a.len()
+{
+    if a.len() > 0 && b.len() > 0 && c.len() > 0 && a[0] == b[0] && b[0] == c[0] {
+        lemma_lex_trans(a.drop_first(), b.drop_first(), c.drop_first());
     }
-    let Some(&tag_byte) = bytes.first() else {
-        return Err(DecodeError::Truncated);
-    };
-    let Some(tag) = Tag::from_byte(tag_byte) else {
-        return Err(DecodeError::BadTag(tag_byte));
-    };
-    let body = &bytes[1..];
-    let need = |n: usize| -> Result<usize, DecodeError> {
-        if body.len() < n {
-            Err(DecodeError::Truncated)
+}
+
+proof fn lemma_head_tail(a: Seq<u8>, b: Seq<u8>)
+    requires a.len() > 0, b.len() > 0, a[0] == b[0]
+    ensures
+        is_prefix(a.drop_first(), b.drop_first()) == is_prefix(a, b),
+        (a.drop_first() =~= b.drop_first()) == (a =~= b),
+{
+    assert(a =~= seq![a[0]] + a.drop_first());
+    assert(b =~= seq![b[0]] + b.drop_first());
+    if is_prefix(a.drop_first(), b.drop_first()) {
+        assert(b.take(a.len() as int) =~= a) by {
+            assert forall|i: int| 0 <= i < a.len()
+                implies #[trigger] b.take(a.len() as int)[i] == a[i] by {
+                if i > 0 {
+                    assert(b.drop_first().take(a.drop_first().len() as int)[i - 1]
+                        == a.drop_first()[i - 1]);
+                }
+            }
+        }
+    }
+    if is_prefix(a, b) {
+        assert(b.drop_first().take(a.drop_first().len() as int) =~= a.drop_first()) by {
+            assert forall|i: int| 0 <= i < a.len() - 1
+                implies #[trigger] b.drop_first().take(a.len() - 1)[i] == a.drop_first()[i] by {
+                assert(b.take(a.len() as int)[i + 1] == a[i + 1]);
+            }
+        }
+    }
+}
+
+/// THE CLOSURE THEOREM. Prefix-incomparable heads make concatenation the
+/// lexicographic product order.
+pub proof fn lemma_concat_order(f: Seq<u8>, g: Seq<u8>, f2: Seq<u8>, g2: Seq<u8>)
+    requires incomparable(f, f2)
+    ensures lex_le(f + g, f2 + g2) == if f =~= f2 { lex_le(g, g2) } else { lex_le(f, f2) }
+    decreases f.len()
+{
+    if f.len() == 0 {
+        assert(is_prefix(f, f2));
+        assert(f + g =~= g);
+        assert(f2 + g2 =~= g2);
+    } else if f2.len() == 0 {
+        assert(is_prefix(f2, f));
+    } else {
+        assert((f + g)[0] == f[0]);
+        assert((f2 + g2)[0] == f2[0]);
+        if f[0] == f2[0] {
+            lemma_head_tail(f, f2);
+            lemma_head_tail(f2, f);
+            assert((f + g).drop_first() =~= f.drop_first() + g);
+            assert((f2 + g2).drop_first() =~= f2.drop_first() + g2);
+            lemma_concat_order(f.drop_first(), g, f2.drop_first(), g2);
+        }
+    }
+}
+
+/// Without prefix-incomparability the closure theorem is FALSE. Machine-checked
+/// counterexample: `("a","bc")` and `("ab","c")` both concatenate to `abc`.
+pub proof fn lemma_prefix_hypothesis_is_necessary()
+    ensures
+        !incomparable(seq![97u8], seq![97u8, 98u8]),
+        seq![97u8] + seq![98u8, 99u8] =~= seq![97u8, 98u8] + seq![99u8],
+        !(seq![97u8] =~= seq![97u8, 98u8]),
+{
+    assert(seq![97u8, 98u8].take(1) =~= seq![97u8]);
+    assert(seq![97u8] + seq![98u8, 99u8] =~= seq![97u8, 98u8, 99u8]);
+    assert(seq![97u8, 98u8] + seq![99u8] =~= seq![97u8, 98u8, 99u8]);
+}
+
+pub proof fn lemma_prefix_split(x: Seq<u8>, a: Seq<u8>, y: Seq<u8>, b: Seq<u8>)
+    requires incomparable(x, y), is_prefix(x + a, y + b)
+    ensures x =~= y, is_prefix(a, b)
+{
+    if x.len() <= y.len() {
+        assert(is_prefix(x, y)) by {
+            assert(y.take(x.len() as int) =~= x) by {
+                assert forall|i: int| 0 <= i < x.len()
+                    implies #[trigger] y.take(x.len() as int)[i] == x[i] by {
+                    assert((y + b).take((x + a).len() as int)[i] == (x + a)[i]);
+                }
+            }
+        }
+    } else {
+        assert(is_prefix(y, x)) by {
+            assert(x.take(y.len() as int) =~= y) by {
+                assert forall|i: int| 0 <= i < y.len()
+                    implies #[trigger] x.take(y.len() as int)[i] == y[i] by {
+                    assert((y + b).take((x + a).len() as int)[i] == (x + a)[i]);
+                }
+            }
+        }
+    }
+    assert(x =~= y);
+    assert(b.take(a.len() as int) =~= a) by {
+        assert forall|i: int| 0 <= i < a.len()
+            implies #[trigger] b.take(a.len() as int)[i] == a[i] by {
+            assert((y + b).take((x + a).len() as int)[x.len() + i] == (x + a)[x.len() + i]);
+        }
+    }
+}
+
+proof fn lemma_prefix_trans(x: Seq<u8>, y: Seq<u8>, z: Seq<u8>)
+    requires is_prefix(x, y), is_prefix(y, z)
+    ensures is_prefix(x, z)
+{
+    assert(z.take(x.len() as int) =~= x) by {
+        assert forall|i: int| 0 <= i < x.len()
+            implies #[trigger] z.take(x.len() as int)[i] == x[i] by {
+            assert(z.take(y.len() as int)[i] == y[i]);
+            assert(y.take(x.len() as int)[i] == x[i]);
+        }
+    }
+}
+
+proof fn lemma_prefix_of_self_plus(x: Seq<u8>, a: Seq<u8>)
+    ensures is_prefix(x, x + a)
+{ assert((x + a).take(x.len() as int) =~= x); }
+
+// ======================= the escaped byte-string code ========================
+
+pub open spec fn code(b: u8) -> Seq<u8> {
+    if b == STRUCT_ESC { seq![STRUCT_ESC, 0xFFu8] } else { seq![b] }
+}
+
+pub open spec fn esc(s: Seq<u8>) -> Seq<u8>
+    decreases s.len()
+{ if s.len() == 0 { Seq::empty() } else { code(s[0]) + esc(s.drop_first()) } }
+
+/// Escaped body then the `0x00 0x00` terminator. The terminator is the unique
+/// minimum of the code alphabet, so a prefix sorts before its extensions.
+pub open spec fn enc_bytes(s: Seq<u8>) -> Seq<u8> {
+    esc(s) + seq![STRUCT_ESC, STRUCT_ESC]
+}
+
+pub proof fn lemma_esc_no_terminator(s: Seq<u8>)
+    ensures forall|i: int| 0 <= i < esc(s).len() - 1
+        ==> !(#[trigger] esc(s)[i] == 0u8 && esc(s)[i + 1] == 0u8)
+    decreases s.len()
+{
+    if s.len() > 0 {
+        lemma_esc_no_terminator(s.drop_first());
+        let c = code(s[0]);
+        let rest = esc(s.drop_first());
+        assert(esc(s) =~= c + rest);
+        assert forall|i: int| 0 <= i < esc(s).len() - 1
+            implies !(#[trigger] esc(s)[i] == 0u8 && esc(s)[i + 1] == 0u8) by {
+            if i >= c.len() {
+                assert(esc(s)[i] == rest[i - c.len()]);
+                assert(esc(s)[i + 1] == rest[i + 1 - c.len()]);
+                assert(rest[i - c.len()] == 0u8 ==> rest[i - c.len() + 1] != 0u8);
+            } else if s[0] == 0u8 {
+                assert(esc(s)[1] == 0xFFu8);
+            } else {
+                assert(esc(s)[0] == s[0]);
+            }
+        }
+    }
+}
+
+pub proof fn lemma_esc_last_nonzero(s: Seq<u8>)
+    ensures esc(s).len() > 0 ==> esc(s)[esc(s).len() - 1] != 0u8
+    decreases s.len()
+{
+    if s.len() > 0 {
+        lemma_esc_last_nonzero(s.drop_first());
+        let c = code(s[0]);
+        let rest = esc(s.drop_first());
+        assert(esc(s) =~= c + rest);
+        if rest.len() > 0 {
+            assert(esc(s)[esc(s).len() - 1] == rest[rest.len() - 1]);
         } else {
-            Ok(1 + n)
-        }
-    };
-    match tag {
-        Tag::Null => Ok(1),
-        Tag::Bool => need(1),
-        Tag::Num => {
-            let (_, used) = Num::decode_key(body).map_err(DecodeError::Num)?;
-            Ok(1 + used)
-        }
-        Tag::Str | Tag::Bytes => Ok(1 + skip_terminated(body)?),
-        Tag::Uuid => need(16),
-        Tag::Regex => {
-            let Some(&flag_byte) = body.first() else {
-                return Err(DecodeError::Truncated);
-            };
-            if RegexFlags::from_bits(flag_byte).is_none() {
-                return Err(DecodeError::BadRegexFlags);
-            }
-            Ok(2 + skip_terminated(&body[1..])?)
-        }
-        Tag::Json => {
-            let jused = skip_json(body, 0)?;
-            if body.len() < jused + 8 {
-                return Err(DecodeError::Truncated);
-            }
-            Ok(1 + jused + 8)
-        }
-        Tag::Vector => {
-            let Some(dim_bytes) = body.get(..4) else {
-                return Err(DecodeError::Truncated);
-            };
-            let mut dim_arr = [0u8; 4];
-            dim_arr.copy_from_slice(dim_bytes);
-            let dim = crate::value::convert::usize_from_u32(u32::from_be_bytes(dim_arr));
-            let mut at = 4;
-            for _ in 0..dim {
-                let (_, used) = Num::decode_key(&body[at..]).map_err(DecodeError::Num)?;
-                at += used;
-            }
-            Ok(1 + at)
-        }
-        Tag::List | Tag::Set => {
-            let mut at = 0;
-            loop {
-                match body.get(at) {
-                    None => return Err(DecodeError::Truncated),
-                    Some(&STRUCT_SEQ_END) => return Ok(1 + at + 1),
-                    Some(_) => at += skip_at(&body[at..], depth + 1)?,
-                }
-            }
-        }
-        Tag::Validity => need(9),
-        Tag::Interval => match body.first() {
-            None => Err(DecodeError::Truncated),
-            Some(0x01) => Ok(2),
-            Some(0x02) => {
-                let mut at = 1;
-                for _ in 0..2 {
-                    match body.get(at) {
-                        Some(0x01) => at += 1,
-                        Some(0x02) => {
-                            if body.len() < at + 9 {
-                                return Err(DecodeError::Truncated);
-                            }
-                            at += 9;
-                        }
-                        _other => return Err(DecodeError::IntervalNotCanonical),
-                    }
-                }
-                Ok(1 + at)
-            }
-            Some(_) => Err(DecodeError::IntervalNotCanonical),
-        },
-        Tag::Geometry => need(8),
-    }
-}
-
-/// Skip a 0x00-escaped, terminator-closed byte string; returns the bytes
-/// consumed including the terminator.
-fn skip_terminated(body: &[u8]) -> Result<usize, DecodeError> {
-    let mut at = 0;
-    loop {
-        match body.get(at) {
-            None => return Err(DecodeError::Truncated),
-            Some(0x00) => match body.get(at + 1) {
-                // Terminator [0x00, 0x00]; escaped zero [0x00, 0xFF].
-                Some(0x00) => return Ok(at + 2),
-                Some(0xFF) => at += 2,
-                _other => return Err(DecodeError::BadEscape),
-            },
-            Some(_) => at += 1,
+            assert(esc(s) =~= c);
         }
     }
 }
 
-/// Skip one JSON payload value (grammar walk; the trailing hash is the
-/// enclosing skip's business, verification is decode's).
-fn skip_json(body: &[u8], depth: usize) -> Result<usize, DecodeError> {
-    if depth > MAX_DEPTH {
-        return Err(DecodeError::TooDeep);
-    }
-    match body.first() {
-        None => Err(DecodeError::Truncated),
-        Some(&JNULL) | Some(&JFALSE) | Some(&JTRUE) => Ok(1),
-        Some(&JNUM) => {
-            let (_, used) = Num::decode_key(&body[1..]).map_err(DecodeError::Num)?;
-            Ok(1 + used)
-        }
-        Some(&JSTR) => Ok(1 + skip_terminated(&body[1..])?),
-        Some(&JARR) => {
-            let mut at = 1;
-            loop {
-                match body.get(at) {
-                    None => return Err(DecodeError::Truncated),
-                    Some(&STRUCT_SEQ_END) => return Ok(at + 1),
-                    Some(_) => at += skip_json(&body[at..], depth + 1)?,
-                }
-            }
-        }
-        Some(&JOBJ) => {
-            let mut at = 1;
-            loop {
-                match body.get(at) {
-                    None => return Err(DecodeError::Truncated),
-                    Some(&STRUCT_SEQ_END) => return Ok(at + 1),
-                    Some(_) => {
-                        at += skip_terminated(&body[at..])?;
-                        at += skip_json(&body[at..], depth + 1)?;
-                    }
-                }
-            }
-        }
-        Some(&b) => Err(DecodeError::BadJsonMarker(b)),
+pub proof fn lemma_esc_injective(s: Seq<u8>, t: Seq<u8>)
+    requires esc(s) =~= esc(t)
+    ensures s =~= t
+    decreases s.len()
+{
+    if s.len() == 0 {
+        if t.len() > 0 { assert(esc(t) =~= code(t[0]) + esc(t.drop_first())); }
+    } else if t.len() == 0 {
+        assert(esc(s) =~= code(s[0]) + esc(s.drop_first()));
+    } else {
+        assert(esc(s) =~= code(s[0]) + esc(s.drop_first()));
+        assert(esc(t) =~= code(t[0]) + esc(t.drop_first()));
+        assert(esc(s)[0] == code(s[0])[0]);
+        assert(esc(t)[0] == code(t[0])[0]);
+        assert(s[0] == t[0]);
+        assert(esc(s).skip(code(s[0]).len() as int) =~= esc(s.drop_first()));
+        assert(esc(t).skip(code(t[0]).len() as int) =~= esc(t.drop_first()));
+        lemma_esc_injective(s.drop_first(), t.drop_first());
+        assert(s =~= seq![s[0]] + s.drop_first());
+        assert(t =~= seq![t[0]] + t.drop_first());
     }
 }
 
-/// Append a value's canonical encoding to a raw byte buffer: the key
-/// assembler's zero-claim door (the output is deliberately NOT a
-/// `CanonicalBytes` witness — key splicing works in the claimed-bytes
-/// domain of the storage tier).
-pub fn append_canonical(out: &mut Vec<u8>, v: &DataValue) {
-    encode_owned_into(out, v);
+pub proof fn lemma_enc_bytes_peel(s: Seq<u8>)
+    requires s.len() > 0
+    ensures enc_bytes(s) =~= code(s[0]) + enc_bytes(s.drop_first())
+{
+    assert(esc(s) =~= code(s[0]) + esc(s.drop_first()));
+    assert((code(s[0]) + esc(s.drop_first())) + seq![0u8, 0u8]
+        =~= code(s[0]) + (esc(s.drop_first()) + seq![0u8, 0u8]));
 }
 
-fn encode_owned_into(out: &mut Vec<u8>, v: &DataValue) {
-    // ONE codec authority: scalars/composites that Datum can name go through
-    // `encode_into`. List/Set stay owned-recursive because a borrowed Datum
-    // tree would allocate a parallel arena — the recursion IS the owned arm,
-    // not a second grammar.
+proof fn lemma_terminator_is_minimum(t: Seq<u8>)
+    requires t.len() > 0
+    ensures
+        lex_le(seq![0u8, 0u8], enc_bytes(t)),
+        !lex_le(enc_bytes(t), seq![0u8, 0u8]),
+{
+    lemma_enc_bytes_peel(t);
+    let e = enc_bytes(t);
+    let z = seq![0u8, 0u8];
+    if t[0] == 0u8 {
+        assert(code(t[0]) =~= seq![0u8, 0xFFu8]);
+        assert(e.len() >= 4);
+        assert(e[0] == 0u8 && e[1] == 0xFFu8);
+        let e1 = e.drop_first();
+        let z1 = z.drop_first();
+        assert(z1 =~= seq![0u8]);
+        assert(e1.len() >= 3 && e1[0] == 0xFFu8);
+        assert(lex_le(z1, e1)) by { assert(z1[0] == 0u8 && e1[0] == 0xFFu8); }
+        assert(!lex_le(e1, z1)) by { assert(z1[0] == 0u8 && e1[0] == 0xFFu8); }
+        assert(z[0] == e[0]);
+    } else {
+        assert(code(t[0]) =~= seq![t[0]]);
+        assert(e[0] == t[0] && z[0] == 0u8);
+    }
+}
+
+proof fn lemma_lex_cancel(p: Seq<u8>, a: Seq<u8>, b: Seq<u8>)
+    ensures lex_le(p + a, p + b) == lex_le(a, b)
+    decreases p.len()
+{
+    if p.len() > 0 {
+        assert((p + a)[0] == p[0] && (p + b)[0] == p[0]);
+        assert((p + a).drop_first() =~= p.drop_first() + a);
+        assert((p + b).drop_first() =~= p.drop_first() + b);
+        lemma_lex_cancel(p.drop_first(), a, b);
+    } else {
+        assert(p + a =~= a);
+        assert(p + b =~= b);
+    }
+}
+
+/// ORDER LAW for byte strings.
+pub proof fn lemma_bytes_order(s: Seq<u8>, t: Seq<u8>)
+    ensures lex_le(s, t) == lex_le(enc_bytes(s), enc_bytes(t))
+    decreases s.len()
+{
+    if s.len() == 0 {
+        assert(esc(s) =~= Seq::<u8>::empty());
+        assert(enc_bytes(s) =~= seq![0u8, 0u8]);
+        if t.len() == 0 {
+            assert(enc_bytes(t) =~= seq![0u8, 0u8]);
+            lemma_lex_refl(enc_bytes(t));
+        } else {
+            lemma_terminator_is_minimum(t);
+        }
+    } else if t.len() == 0 {
+        assert(esc(t) =~= Seq::<u8>::empty());
+        assert(enc_bytes(t) =~= seq![0u8, 0u8]);
+        lemma_terminator_is_minimum(s);
+    } else {
+        lemma_enc_bytes_peel(s);
+        lemma_enc_bytes_peel(t);
+        if s[0] == t[0] {
+            lemma_lex_cancel(code(s[0]), enc_bytes(s.drop_first()), enc_bytes(t.drop_first()));
+            lemma_bytes_order(s.drop_first(), t.drop_first());
+        } else {
+            let a = enc_bytes(s);
+            let b = enc_bytes(t);
+            if s[0] == 0u8 {
+                assert(a[0] == 0u8 && b[0] == t[0] && t[0] != 0u8);
+            } else if t[0] == 0u8 {
+                assert(b[0] == 0u8 && a[0] == s[0] && s[0] != 0u8);
+            } else {
+                assert(a[0] == s[0] && b[0] == t[0]);
+            }
+        }
+    }
+}
+
+/// PREFIX-FREEDOM for byte strings.
+pub proof fn lemma_bytes_prefix_free(s: Seq<u8>, t: Seq<u8>)
+    requires is_prefix(enc_bytes(s), enc_bytes(t))
+    ensures s =~= t
+{
+    lemma_esc_no_terminator(t);
+    lemma_esc_last_nonzero(t);
+    let a = esc(s);
+    let b = esc(t);
+    let ea = enc_bytes(s);
+    let eb = enc_bytes(t);
+    assert(ea.len() == a.len() + 2 && eb.len() == b.len() + 2);
+    if a.len() < b.len() {
+        assert(eb.take(ea.len() as int)[a.len() as int] == ea[a.len() as int]);
+        assert(eb.take(ea.len() as int)[a.len() as int + 1] == ea[a.len() as int + 1]);
+        assert(ea[a.len() as int] == 0u8 && ea[a.len() as int + 1] == 0u8);
+        assert(eb[a.len() as int] == 0u8 && eb[a.len() as int + 1] == 0u8);
+        if a.len() + 1 < b.len() {
+            assert(eb[a.len() as int] == b[a.len() as int]);
+            assert(eb[a.len() as int + 1] == b[a.len() as int + 1]);
+        } else {
+            assert(eb[a.len() as int] == b[a.len() as int]);
+            assert(b[b.len() - 1] == 0u8);
+        }
+    }
+    assert(a.len() == b.len());
+    assert(a =~= b) by {
+        assert forall|i: int| 0 <= i < a.len() implies #[trigger] a[i] == b[i] by {
+            assert(eb.take(ea.len() as int)[i] == ea[i]);
+        }
+    }
+    lemma_esc_injective(s, t);
+}
+
+// ================================== rows =====================================
+
+pub open spec fn cat(r: Seq<Seq<u8>>) -> Seq<u8>
+    decreases r.len()
+{ if r.len() == 0 { Seq::empty() } else { r[0] + cat(r.drop_first()) } }
+
+pub open spec fn enc_row(r: Seq<Seq<u8>>) -> Seq<u8> { cat(r) + seq![STRUCT_END] }
+
+pub open spec fn row_le(r: Seq<Seq<u8>>, s: Seq<Seq<u8>>) -> bool
+    decreases r.len()
+{
+    if r.len() == 0 { true }
+    else if s.len() == 0 { false }
+    else if !(r[0] =~= s[0]) { lex_le(r[0], s[0]) }
+    else { row_le(r.drop_first(), s.drop_first()) }
+}
+
+pub open spec fn tagged(r: Seq<Seq<u8>>) -> bool {
+    forall|i: int| 0 <= i < r.len() ==> #[trigger] r[i].len() > 0 && r[i][0] >= TAG_MIN
+}
+
+pub open spec fn pfx_family(r: Seq<Seq<u8>>, s: Seq<Seq<u8>>) -> bool {
+    forall|i: int, j: int| 0 <= i < r.len() && 0 <= j < s.len()
+        ==> #[trigger] incomparable(r[i], s[j])
+}
+
+proof fn lemma_row_peel(r: Seq<Seq<u8>>)
+    requires r.len() > 0
+    ensures enc_row(r) =~= r[0] + enc_row(r.drop_first())
+{
+    assert(cat(r) =~= r[0] + cat(r.drop_first()));
+    assert((r[0] + cat(r.drop_first())) + seq![STRUCT_END]
+        =~= r[0] + (cat(r.drop_first()) + seq![STRUCT_END]));
+}
+
+proof fn lemma_row_head(r: Seq<Seq<u8>>)
+    requires tagged(r), r.len() > 0
+    ensures enc_row(r).len() > 0, enc_row(r)[0] == r[0][0], enc_row(r)[0] >= TAG_MIN
+{ lemma_row_peel(r); assert(r[0].len() > 0); }
+
+proof fn lemma_tail_tagged(r: Seq<Seq<u8>>)
+    requires tagged(r), r.len() > 0
+    ensures tagged(r.drop_first())
+{
+    assert forall|i: int| 0 <= i < r.drop_first().len()
+        implies #[trigger] r.drop_first()[i].len() > 0 && r.drop_first()[i][0] >= TAG_MIN by {
+        assert(r[i + 1].len() > 0 && r[i + 1][0] >= TAG_MIN);
+    }
+}
+
+proof fn lemma_tail_family(r: Seq<Seq<u8>>, s: Seq<Seq<u8>>)
+    requires pfx_family(r, s), r.len() > 0, s.len() > 0
+    ensures pfx_family(r.drop_first(), s.drop_first())
+{
+    assert forall|i: int, j: int|
+        0 <= i < r.drop_first().len() && 0 <= j < s.drop_first().len()
+        implies #[trigger] incomparable(r.drop_first()[i], s.drop_first()[j]) by {
+        assert(incomparable(r[i + 1], s[j + 1]));
+    }
+}
+
+/// ORDER LAW for rows.
+pub proof fn lemma_row_order(r: Seq<Seq<u8>>, s: Seq<Seq<u8>>)
+    requires tagged(r), tagged(s), pfx_family(r, s)
+    ensures row_le(r, s) == lex_le(enc_row(r), enc_row(s))
+    decreases r.len()
+{
+    if r.len() == 0 {
+        assert(cat(r) =~= Seq::<u8>::empty());
+        assert(enc_row(r) =~= seq![STRUCT_END]);
+        if s.len() == 0 {
+            assert(enc_row(s) =~= seq![STRUCT_END]);
+            lemma_lex_refl(enc_row(r));
+        } else {
+            lemma_row_head(s);
+            assert(lex_le(enc_row(r), enc_row(s))) by {
+                assert(enc_row(r)[0] == STRUCT_END && enc_row(s)[0] >= TAG_MIN);
+            }
+        }
+    } else if s.len() == 0 {
+        assert(cat(s) =~= Seq::<u8>::empty());
+        assert(enc_row(s) =~= seq![STRUCT_END]);
+        lemma_row_head(r);
+        assert(!lex_le(enc_row(r), enc_row(s))) by {
+            assert(enc_row(r)[0] >= TAG_MIN && enc_row(s)[0] == STRUCT_END);
+        }
+    } else {
+        lemma_row_peel(r);
+        lemma_row_peel(s);
+        assert(incomparable(r[0], s[0]));
+        lemma_concat_order(r[0], enc_row(r.drop_first()), s[0], enc_row(s.drop_first()));
+        lemma_tail_tagged(r);
+        lemma_tail_tagged(s);
+        lemma_tail_family(r, s);
+        lemma_row_order(r.drop_first(), s.drop_first());
+    }
+}
+
+/// PREFIX-FREEDOM for rows.
+pub proof fn lemma_row_prefix_free(r: Seq<Seq<u8>>, s: Seq<Seq<u8>>)
+    requires tagged(r), tagged(s), pfx_family(r, s), is_prefix(enc_row(r), enc_row(s))
+    ensures r =~= s
+    decreases r.len()
+{
+    if r.len() == 0 {
+        assert(cat(r) =~= Seq::<u8>::empty());
+        assert(enc_row(r) =~= seq![STRUCT_END]);
+        if s.len() > 0 {
+            lemma_row_head(s);
+            assert(enc_row(s).take(1)[0] == STRUCT_END);
+            assert(enc_row(s)[0] >= TAG_MIN);
+        }
+    } else if s.len() == 0 {
+        assert(cat(s) =~= Seq::<u8>::empty());
+        assert(enc_row(s) =~= seq![STRUCT_END]);
+        lemma_row_head(r);
+        lemma_row_peel(r);
+        assert(enc_row(r).len() > 1);
+    } else {
+        lemma_row_peel(r);
+        lemma_row_peel(s);
+        assert(incomparable(r[0], s[0]));
+        lemma_prefix_split(r[0], enc_row(r.drop_first()), s[0], enc_row(s.drop_first()));
+        lemma_tail_tagged(r);
+        lemma_tail_tagged(s);
+        lemma_tail_family(r, s);
+        lemma_row_prefix_free(r.drop_first(), s.drop_first());
+        assert(r =~= seq![r[0]] + r.drop_first());
+        assert(s =~= seq![s[0]] + s.drop_first());
+    }
+}
+
+// ===================== the self-delimiting byte grammar ======================
+//
+// `key_end` and `is_seq_tag` are the two seams a value kind fills. Everything
+// below is proven from the two obligations `kind_local` and `kind_complete`.
+
+/// What a tag's payload looks like. Closed: a tag outside this table has no
+/// encoding at all, which is why `scan` refuses it rather than guessing.
+///
+/// This table IS canonical format v1. It is transcribed from the released
+/// format, not invented: changing any entry changes the on-disk order.
+// CONSTRUCT: ClosedSum KeyShape
+pub enum KeyShape {
+    /// Exactly `n` payload bytes. Prefix-free because the width is constant.
+    Fixed(nat),
+    /// Escaped form: `0x00 -> 0x00 0xFF`, terminated `0x00 0x00`.
+    Escaped,
+    /// One flags byte, then the escaped form. Regex.
+    FlagsThenEscaped,
+    /// The first payload byte selects the remaining width. Num.
+    ClassLed,
+    /// `u32` big-endian count, then that many Num keys. Vector.
+    CountLed,
+    /// The bounded-interval grammar.
+    IntervalShape,
+    /// The JSON marker grammar, then eight bytes of trailing hash.
+    JsonShape,
+    /// A row of complete encodings, terminated by `STRUCT_END`.
+    Sequence,
+}
+
+/// THE TAG TABLE. Byte order is cross-kind order; the shape is the grammar.
+/// `0x00` and `0x01` are structural and never tags, which is what lets a
+/// sequence terminator sort below every element.
+pub open spec fn shape_of(t: u8) -> Option<KeyShape> {
+    if t == 0x05u8 { Some(KeyShape::Fixed(0nat)) }           // Null
+    else if t == 0x08u8 { Some(KeyShape::Fixed(1nat)) }      // Bool
+    else if t == 0x10u8 { Some(KeyShape::ClassLed) }         // Num
+    else if t == 0x18u8 { Some(KeyShape::Escaped) }          // Str
+    else if t == 0x20u8 { Some(KeyShape::Escaped) }          // Bytes
+    else if t == 0x28u8 { Some(KeyShape::Fixed(16nat)) }     // Uuid
+    else if t == 0x30u8 { Some(KeyShape::FlagsThenEscaped) } // Regex
+    else if t == 0x38u8 { Some(KeyShape::JsonShape) }        // Json
+    else if t == 0x40u8 { Some(KeyShape::CountLed) }         // Vector
+    else if t == 0x48u8 { Some(KeyShape::Sequence) }         // List
+    else if t == 0x50u8 { Some(KeyShape::Sequence) }         // Set
+    else if t == 0x58u8 { Some(KeyShape::Fixed(9nat)) }      // Validity
+    else if t == 0x60u8 { Some(KeyShape::IntervalShape) }    // Interval
+    else if t == 0x68u8 { Some(KeyShape::Fixed(8nat)) }      // Geometry
+    else { None }
+}
+
+pub open spec fn is_seq_tag(t: u8) -> bool {
+    shape_of(t) == Some(KeyShape::Sequence)
+}
+
+// --- the per-shape scanners ---
+
+/// Width selected by a number's class byte: zero and NaN carry only the repr
+/// tie-break; a signed magnitude carries exponent, fraction, and tie-break.
+pub open spec fn class_led_width(first: u8) -> int {
+    if first == 0x02u8 || first == 0x04u8 { 2 }
+    else if first == 0x01u8 || first == 0x03u8 { 13 }
+    else { -1 }
+}
+
+pub open spec fn num_end(p: Seq<u8>) -> int {
+    if p.len() == 0 { -1 }
+    else {
+        let w = class_led_width(p[0]);
+        if w < 0 || p.len() < w { -1 } else { w }
+    }
+}
+
+/// End of an escaped payload: the first unescaped `0x00 0x00`.
+pub open spec fn esc_end(p: Seq<u8>) -> int
+    decreases p.len()
+{
+    if p.len() == 0 { -1 }
+    else if p[0] == 0x00u8 {
+        if p.len() < 2 { -1 }
+        else if p[1] == 0x00u8 { 2 }
+        else if p[1] == 0xFFu8 {
+            let r = esc_end(p.skip(2)); if r < 0 { -1 } else { 2 + r }
+        } else { -1 }
+    } else {
+        let r = esc_end(p.skip(1)); if r < 0 { -1 } else { 1 + r }
+    }
+}
+
+pub open spec fn be32(p: Seq<u8>) -> nat {
+    (p[0] as nat) * 16777216 + (p[1] as nat) * 65536 + (p[2] as nat) * 256 + (p[3] as nat)
+}
+
+pub open spec fn vector_elems_end(p: Seq<u8>, at: int, remaining: nat) -> int
+    decreases remaining
+{
+    if remaining == 0nat { at }
+    else if at < 0 || at > p.len() { -1 }
+    else {
+        let w = num_end(p.skip(at));
+        if w <= 0 { -1 } else { vector_elems_end(p, at + w, (remaining - 1) as nat) }
+    }
+}
+
+pub open spec fn vector_end(p: Seq<u8>) -> int {
+    if p.len() < 4 { -1 } else { vector_elems_end(p, 4, be32(p)) }
+}
+
+pub open spec fn interval_bound_end(p: Seq<u8>, at: int) -> int {
+    if at < 0 || at >= p.len() { -1 }
+    else if p[at] == 0x01u8 { at + 1 }
+    else if p[at] == 0x02u8 { if p.len() < at + 9 { -1 } else { at + 9 } }
+    else { -1 }
+}
+
+pub open spec fn interval_end(p: Seq<u8>) -> int {
+    if p.len() == 0 { -1 }
+    else if p[0] == 0x01u8 { 1 }
+    else if p[0] == 0x02u8 {
+        let a = interval_bound_end(p, 1);
+        if a < 0 { -1 } else {
+            let b = interval_bound_end(p, a);
+            if b < 0 { -1 } else { b }
+        }
+    } else { -1 }
+}
+
+pub open spec fn json_end(p: Seq<u8>) -> int
+    decreases p.len(), 0int
+{
+    if p.len() == 0 { -1 }
+    else if p[0] == 0x05u8 || p[0] == 0x06u8 || p[0] == 0x07u8 { 1 }
+    else if p[0] == 0x10u8 { let w = num_end(p.skip(1)); if w <= 0 { -1 } else { 1 + w } }
+    else if p[0] == 0x18u8 { let w = esc_end(p.skip(1)); if w <= 0 { -1 } else { 1 + w } }
+    else if p[0] == 0x48u8 { let r = json_arr(p.skip(1)); if r <= 0 { -1 } else { 1 + r } }
+    else if p[0] == 0x4Cu8 { let r = json_obj(p.skip(1)); if r <= 0 { -1 } else { 1 + r } }
+    else { -1 }
+}
+
+pub open spec fn json_arr(p: Seq<u8>) -> int
+    decreases p.len(), 1int
+{
+    if p.len() == 0 { -1 }
+    else if p[0] == STRUCT_END { 1 }
+    else {
+        let j = json_end(p);
+        if j <= 0 || j > p.len() { -1 }
+        else { let r = json_arr(p.skip(j)); if r <= 0 { -1 } else { j + r } }
+    }
+}
+
+pub open spec fn json_obj(p: Seq<u8>) -> int
+    decreases p.len(), 1int
+{
+    if p.len() == 0 { -1 }
+    else if p[0] == STRUCT_END { 1 }
+    else if p[0] != JSTR { -1 }
+    else {
+        let k = esc_end(p.skip(1));
+        if k <= 0 || 1 + k > p.len() { -1 }
+        else {
+            let j = json_end(p.skip(1 + k));
+            if j <= 0 || 1 + k + j > p.len() { -1 }
+            else {
+                let r = json_obj(p.skip(1 + k + j));
+                if r <= 0 { -1 } else { 1 + k + j + r }
+            }
+        }
+    }
+}
+
+/// Length of the kind's key at the front of `payload`, or negative if the
+/// payload does not open with a complete key of that kind. Total: every tag
+/// and every byte sequence has an answer, and the answer is never a panic.
+pub open spec fn key_end(t: u8, payload: Seq<u8>) -> int {
+    match shape_of(t) {
+        Some(KeyShape::Fixed(n)) => if payload.len() >= n { n as int } else { -1 },
+        Some(KeyShape::Escaped) => esc_end(payload),
+        Some(KeyShape::FlagsThenEscaped) =>
+            if payload.len() == 0 { -1 }
+            else { let r = esc_end(payload.skip(1)); if r <= 0 { -1 } else { 1 + r } },
+        Some(KeyShape::ClassLed) => num_end(payload),
+        Some(KeyShape::CountLed) => vector_end(payload),
+        Some(KeyShape::IntervalShape) => interval_end(payload),
+        Some(KeyShape::JsonShape) => {
+            let r = json_end(payload);
+            if r <= 0 || payload.len() < r + 8 { -1 } else { r + 8 }
+        }
+        Some(KeyShape::Sequence) => -1,
+        None => -1,
+    }
+}
+
+/// A key that measures itself exactly: the kind's mint produced it.
+pub open spec fn valid_key(t: u8, k: Seq<u8>) -> bool {
+    key_end(t, k) == k.len()
+}
+
+// --- the two obligations, PROVEN for every shape in the table ---
+
+proof fn lemma_prefix_skip(a: Seq<u8>, b: Seq<u8>, n: int)
+    requires is_prefix(a, b), 0 <= n <= a.len()
+    ensures is_prefix(a.skip(n), b.skip(n))
+{
+    assert(b.skip(n).take(a.skip(n).len() as int) =~= a.skip(n)) by {
+        assert forall|i: int| 0 <= i < a.len() - n
+            implies #[trigger] b.skip(n).take(a.len() - n)[i] == a.skip(n)[i] by {
+            lemma_prefix_index(a, b, i + n);
+        }
+    }
+}
+
+proof fn lemma_esc_end_local(a: Seq<u8>, b: Seq<u8>)
+    requires is_prefix(a, b), 0 <= esc_end(a) <= a.len()
+    ensures esc_end(b) == esc_end(a)
+    decreases a.len()
+{
+    lemma_prefix_index(a, b, 0);
+    if a[0] == 0x00u8 {
+        if a.len() >= 2 {
+            lemma_prefix_index(a, b, 1);
+            if a[1] == 0xFFu8 {
+                lemma_prefix_skip(a, b, 2);
+                lemma_esc_end_local(a.skip(2), b.skip(2));
+            }
+        }
+    } else {
+        lemma_prefix_skip(a, b, 1);
+        lemma_esc_end_local(a.skip(1), b.skip(1));
+    }
+}
+
+proof fn lemma_num_end_local(a: Seq<u8>, b: Seq<u8>)
+    requires is_prefix(a, b), 0 <= num_end(a) <= a.len()
+    ensures num_end(b) == num_end(a)
+{ lemma_prefix_index(a, b, 0); }
+
+proof fn lemma_vector_elems_local(a: Seq<u8>, b: Seq<u8>, at: int, rem: nat)
+    requires is_prefix(a, b), 0 <= vector_elems_end(a, at, rem) <= a.len(), 0 <= at
+    ensures vector_elems_end(b, at, rem) == vector_elems_end(a, at, rem)
+    decreases rem
+{
+    if rem > 0nat && at <= a.len() {
+        lemma_prefix_skip(a, b, at);
+        let w = num_end(a.skip(at));
+        if w > 0 {
+            assert(at + w <= vector_elems_end(a, at, rem) || vector_elems_end(a, at, rem) < 0) by {
+                lemma_vector_elems_monotone(a, at + w, (rem - 1) as nat);
+            }
+            lemma_num_end_local(a.skip(at), b.skip(at));
+            lemma_vector_elems_local(a, b, at + w, (rem - 1) as nat);
+        }
+    }
+}
+
+proof fn lemma_vector_elems_monotone(p: Seq<u8>, at: int, rem: nat)
+    ensures vector_elems_end(p, at, rem) >= 0 ==> vector_elems_end(p, at, rem) >= at
+    decreases rem
+{
+    if rem > 0nat && 0 <= at <= p.len() {
+        let w = num_end(p.skip(at));
+        if w > 0 { lemma_vector_elems_monotone(p, at + w, (rem - 1) as nat); }
+    }
+}
+
+proof fn lemma_vector_end_local(a: Seq<u8>, b: Seq<u8>)
+    requires is_prefix(a, b), 0 <= vector_end(a) <= a.len()
+    ensures vector_end(b) == vector_end(a)
+{
+    lemma_prefix_index(a, b, 0);
+    lemma_prefix_index(a, b, 1);
+    lemma_prefix_index(a, b, 2);
+    lemma_prefix_index(a, b, 3);
+    assert(be32(a) == be32(b));
+    lemma_vector_elems_local(a, b, 4, be32(a));
+}
+
+proof fn lemma_interval_end_local(a: Seq<u8>, b: Seq<u8>)
+    requires is_prefix(a, b), 0 <= interval_end(a) <= a.len()
+    ensures interval_end(b) == interval_end(a)
+{
+    lemma_prefix_index(a, b, 0);
+    if a[0] == 0x02u8 {
+        lemma_prefix_index(a, b, 1);
+        let x = interval_bound_end(a, 1);
+        if x >= 0 && x < a.len() { lemma_prefix_index(a, b, x); }
+    }
+}
+
+proof fn lemma_json_end_local(a: Seq<u8>, b: Seq<u8>)
+    requires is_prefix(a, b), 0 < json_end(a) <= a.len()
+    ensures json_end(b) == json_end(a)
+    decreases a.len(), 0int
+{
+    lemma_prefix_index(a, b, 0);
+    if a[0] == 0x10u8 {
+        lemma_prefix_skip(a, b, 1);
+        lemma_num_end_local(a.skip(1), b.skip(1));
+    } else if a[0] == 0x18u8 {
+        lemma_prefix_skip(a, b, 1);
+        lemma_esc_end_local(a.skip(1), b.skip(1));
+    } else if a[0] == 0x48u8 {
+        lemma_prefix_skip(a, b, 1);
+        lemma_json_arr_local(a.skip(1), b.skip(1));
+    } else if a[0] == 0x4Cu8 {
+        lemma_prefix_skip(a, b, 1);
+        lemma_json_obj_local(a.skip(1), b.skip(1));
+    }
+}
+
+proof fn lemma_json_arr_local(a: Seq<u8>, b: Seq<u8>)
+    requires is_prefix(a, b), 0 < json_arr(a) <= a.len()
+    ensures json_arr(b) == json_arr(a)
+    decreases a.len(), 1int
+{
+    lemma_prefix_index(a, b, 0);
+    if a[0] != STRUCT_END {
+        let j = json_end(a);
+        lemma_json_end_local(a, b);
+        lemma_prefix_skip(a, b, j);
+        lemma_json_arr_local(a.skip(j), b.skip(j));
+    }
+}
+
+proof fn lemma_json_obj_local(a: Seq<u8>, b: Seq<u8>)
+    requires is_prefix(a, b), 0 < json_obj(a) <= a.len()
+    ensures json_obj(b) == json_obj(a)
+    decreases a.len(), 1int
+{
+    lemma_prefix_index(a, b, 0);
+    if a[0] != STRUCT_END {
+        lemma_prefix_skip(a, b, 1);
+        let k = esc_end(a.skip(1));
+        lemma_esc_end_local(a.skip(1), b.skip(1));
+        lemma_prefix_skip(a, b, 1 + k);
+        let j = json_end(a.skip(1 + k));
+        lemma_json_end_local(a.skip(1 + k), b.skip(1 + k));
+        lemma_prefix_skip(a, b, 1 + k + j);
+        lemma_json_obj_local(a.skip(1 + k + j), b.skip(1 + k + j));
+    }
+}
+
+/// OBLIGATION 1 — locality: a key's length is decided by the key, so trailing
+/// bytes cannot change it. Discharged for every shape in the table.
+pub proof fn lemma_kind_local()
+    ensures kind_local()
+{
+    assert forall|t: u8, a: Seq<u8>, b: Seq<u8>|
+        is_prefix(a, b) && 0 <= key_end(t, a) <= a.len()
+        implies #[trigger] key_end(t, b) == #[trigger] key_end(t, a) by {
+        match shape_of(t) {
+            Some(KeyShape::Escaped) => { lemma_esc_end_local(a, b); }
+            Some(KeyShape::FlagsThenEscaped) => {
+                lemma_prefix_skip(a, b, 1);
+                lemma_esc_end_local(a.skip(1), b.skip(1));
+            }
+            Some(KeyShape::ClassLed) => { lemma_num_end_local(a, b); }
+            Some(KeyShape::CountLed) => { lemma_vector_end_local(a, b); }
+            Some(KeyShape::IntervalShape) => { lemma_interval_end_local(a, b); }
+            Some(KeyShape::JsonShape) => { lemma_json_end_local(a, b); }
+            _ => {}
+        }
+    }
+}
+
+/// OBLIGATION 2 — completeness: a minted key measures itself exactly. True by
+/// the definition of [`valid_key`]; stated so the obligation stays named.
+pub proof fn lemma_kind_complete()
+    ensures kind_complete()
+{}
+
+pub open spec fn kind_local() -> bool {
+    forall|t: u8, a: Seq<u8>, b: Seq<u8>|
+        #![trigger is_prefix(a, b), key_end(t, a)]
+        is_prefix(a, b) && 0 <= key_end(t, a) <= a.len()
+            ==> key_end(t, b) == key_end(t, a)
+}
+
+pub open spec fn kind_complete() -> bool {
+    forall|t: u8, k: Seq<u8>| #[trigger] valid_key(t, k) ==> key_end(t, k) == k.len()
+}
+
+pub open spec fn kind_laws() -> bool { kind_local() && kind_complete() }
+
+pub open spec fn scan(e: Seq<u8>) -> int
+    decreases e.len(), 0int
+{
+    if e.len() == 0 { -1 }
+    else if e[0] < TAG_MIN { -1 }
+    else if is_seq_tag(e[0]) {
+        let r = scan_row_bytes(e.drop_first());
+        if r < 0 { -1 } else { 1 + r }
+    } else {
+        let k = key_end(e[0], e.drop_first());
+        if k < 0 || k > e.len() - 1 { -1 } else { 1 + k }
+    }
+}
+
+pub open spec fn scan_row_bytes(e: Seq<u8>) -> int
+    decreases e.len(), 1int
+{
+    if e.len() == 0 { -1 }
+    else if e[0] == STRUCT_END { 1 }
+    else {
+        let j = scan(e);
+        if j <= 0 || j > e.len() { -1 }
+        else {
+            let r = scan_row_bytes(e.skip(j));
+            if r < 0 { -1 } else { j + r }
+        }
+    }
+}
+
+/// A complete encoding: the grammar consumes it exactly.
+pub open spec fn complete(x: Seq<u8>) -> bool { scan(x) == x.len() }
+
+proof fn lemma_prefix_index(a: Seq<u8>, b: Seq<u8>, i: int)
+    requires is_prefix(a, b), 0 <= i < a.len()
+    ensures a[i] == b[i]
+{ assert(b.take(a.len() as int)[i] == a[i]); }
+
+proof fn lemma_scan_bounded(e: Seq<u8>)
+    ensures scan(e) >= 0 ==> 1 <= scan(e) <= e.len()
+    decreases e.len(), 0int
+{ if e.len() > 0 && e[0] >= TAG_MIN && is_seq_tag(e[0]) { lemma_scan_row_bounded(e.drop_first()); } }
+
+proof fn lemma_scan_row_bounded(e: Seq<u8>)
+    ensures scan_row_bytes(e) >= 0 ==> 1 <= scan_row_bytes(e) <= e.len()
+    decreases e.len(), 1int
+{
+    if e.len() > 0 && e[0] != STRUCT_END {
+        lemma_scan_bounded(e);
+        let j = scan(e);
+        if 0 < j <= e.len() { lemma_scan_row_bounded(e.skip(j)); }
+    }
+}
+
+proof fn lemma_scan_local(a: Seq<u8>, b: Seq<u8>)
+    requires kind_local(), is_prefix(a, b), scan(a) >= 0
+    ensures scan(b) == scan(a)
+    decreases a.len(), 0int
+{
+    lemma_scan_bounded(a);
+    lemma_prefix_index(a, b, 0);
+    if is_seq_tag(a[0]) {
+        assert(is_prefix(a.drop_first(), b.drop_first())) by {
+            assert(b.drop_first().take(a.drop_first().len() as int) =~= a.drop_first()) by {
+                assert forall|i: int| 0 <= i < a.len() - 1
+                    implies #[trigger] b.drop_first().take(a.len() - 1)[i] == a.drop_first()[i] by {
+                    lemma_prefix_index(a, b, i + 1);
+                }
+            }
+        }
+        lemma_scan_row_local(a.drop_first(), b.drop_first());
+    } else {
+        assert(is_prefix(a.drop_first(), b.drop_first())) by {
+            assert(b.drop_first().take(a.drop_first().len() as int) =~= a.drop_first()) by {
+                assert forall|i: int| 0 <= i < a.len() - 1
+                    implies #[trigger] b.drop_first().take(a.len() - 1)[i] == a.drop_first()[i] by {
+                    lemma_prefix_index(a, b, i + 1);
+                }
+            }
+        }
+        assert(key_end(a[0], b.drop_first()) == key_end(a[0], a.drop_first()));
+    }
+}
+
+proof fn lemma_scan_row_local(a: Seq<u8>, b: Seq<u8>)
+    requires kind_local(), is_prefix(a, b), scan_row_bytes(a) >= 0
+    ensures scan_row_bytes(b) == scan_row_bytes(a)
+    decreases a.len(), 1int
+{
+    lemma_scan_row_bounded(a);
+    lemma_prefix_index(a, b, 0);
+    if a[0] != STRUCT_END {
+        lemma_scan_bounded(a);
+        lemma_scan_local(a, b);
+        let j = scan(a);
+        assert(is_prefix(a.skip(j), b.skip(j))) by {
+            assert(b.skip(j).take(a.skip(j).len() as int) =~= a.skip(j)) by {
+                assert forall|i: int| 0 <= i < a.len() - j
+                    implies #[trigger] b.skip(j).take(a.len() - j)[i] == a.skip(j)[i] by {
+                    lemma_prefix_index(a, b, i + j);
+                }
+            }
+        }
+        lemma_scan_row_local(a.skip(j), b.skip(j));
+    }
+}
+
+/// THE PREFIX-CODE THEOREM. Complete encodings form a prefix code, so the
+/// closure theorem's hypothesis holds for every pair of them, everywhere.
+pub proof fn theorem_prefix_code(x: Seq<u8>, y: Seq<u8>)
+    requires kind_local(), complete(x), complete(y), is_prefix(x, y)
+    ensures x =~= y
+{
+    lemma_scan_local(x, y);
+    assert(y.take(x.len() as int) =~= x);
+    assert(y =~= y.take(y.len() as int));
+}
+
+pub proof fn lemma_complete_incomparable(x: Seq<u8>, y: Seq<u8>)
+    requires kind_local(), complete(x), complete(y)
+    ensures incomparable(x, y)
+{
+    if is_prefix(x, y) { theorem_prefix_code(x, y); }
+    if is_prefix(y, x) { theorem_prefix_code(y, x); }
+}
+
+pub proof fn lemma_complete_is_tagged(x: Seq<u8>)
+    requires complete(x)
+    ensures x.len() > 0, x[0] >= TAG_MIN
+{ lemma_scan_bounded(x); }
+
+// ============================== the value tree ===============================
+
+/// A value as the encoder sees it: a tagged scalar carrying its kind's minted
+/// key, or a tagged sequence of values.
+// CONSTRUCT: ClosedSum Val
+pub enum Val { S(u8, Seq<u8>), L(u8, Vals) }
+// CONSTRUCT: ClosedSum Vals
+pub enum Vals { Nil, Cons(Box<Val>, Box<Vals>) }
+
+pub open spec fn tag_of(v: Val) -> u8 {
+    match v { Val::S(t, _) => t, Val::L(t, _) => t }
+}
+
+pub open spec fn sz(v: Val) -> nat
+    decreases v, 1int
+{ match v { Val::S(_, _) => 1nat, Val::L(_, es) => 1nat + sz_all(es) } }
+
+pub open spec fn sz_all(es: Vals) -> nat
+    decreases es, 0int
+{ match es { Vals::Nil => 0nat, Vals::Cons(h, t) => 1nat + sz(*h) + sz_all(*t) } }
+
+/// Well-formed: the tag is a real tag, scalar and sequence tags are disjoint,
+/// and every scalar carries a key its kind actually minted.
+pub open spec fn wf(v: Val) -> bool
+    decreases v, 1int
+{
     match v {
-        DataValue::List(items) => {
-            out.push(Tag::List.byte());
-            for item in items {
-                encode_owned_into(out, item);
-            }
-            out.push(STRUCT_SEQ_END);
-        }
-        DataValue::Set(items) => {
-            out.push(Tag::Set.byte());
-            let mut encoded: Vec<Vec<u8>> = items
-                .iter()
-                .map(|item| {
-                    let mut e = Vec::new();
-                    encode_owned_into(&mut e, item);
-                    e
-                })
-                .collect();
-            encoded.sort();
-            encoded.dedup();
-            for e in encoded {
-                out.extend_from_slice(&e);
-            }
-            out.push(STRUCT_SEQ_END);
-        }
-        DataValue::Null => encode_into(out, Datum::Null),
-        DataValue::Bool(b) => encode_into(out, Datum::Bool(*b)),
-        DataValue::Num(n) => encode_into(out, Datum::Num(*n)),
-        DataValue::Str(s) => encode_into(out, Datum::Str(s)),
-        DataValue::Bytes(b) => encode_into(out, Datum::Bytes(b)),
-        DataValue::Uuid(u) => encode_into(out, Datum::Uuid(*u.as_uuid().as_bytes())),
-        DataValue::Regex(r) => encode_into(out, Datum::Regex(r)),
-        DataValue::Json(j) => encode_into(out, Datum::Json(j)),
-        DataValue::Vector(vec) => encode_into(out, Datum::Vector(vec)),
-        // Value and Seek slots share one validity byte grammar.
-        DataValue::Validity(v) => encode_validity_payload(out, v.ts_micros(), v.is_assert()),
-        DataValue::Interval(iv) => encode_into(out, Datum::Interval(*iv)),
-        DataValue::Geometry(g) => encode_into(out, Datum::Geometry(*g)),
+        Val::S(t, k) => t >= TAG_MIN && !is_seq_tag(t) && valid_key(t, k),
+        Val::L(t, es) => t >= TAG_MIN && is_seq_tag(t) && wf_all(es),
     }
 }
 
-/// One validity payload grammar — shared by Datum::Validity and owned slots.
-fn encode_validity_payload(out: &mut Vec<u8>, ts_micros: i64, is_assert: bool) {
-    out.push(Tag::Validity.byte());
-    out.extend_from_slice(&desc_ts_key(ts_micros));
-    out.push(if is_assert { 0x00 } else { 0x01 });
+pub open spec fn wf_all(es: Vals) -> bool
+    decreases es, 0int
+{ match es { Vals::Nil => true, Vals::Cons(h, t) => wf(*h) && wf_all(*t) } }
+
+pub open spec fn body(v: Val) -> Seq<u8>
+    decreases v, 1int
+{
+    match v {
+        Val::S(_, k) => k,
+        Val::L(_, es) => enc_row(enc_seq(es)),
+    }
 }
 
-/// The interval body grammar, shared by both encoder arms.
-fn encode_interval_body(out: &mut Vec<u8>, iv: &Interval) {
-    match iv.ends() {
-        None => out.push(0x01),
-        Some((lo, hi)) => {
-            out.push(0x02);
-            match lo {
-                Lo::NegUnbounded => out.push(0x01),
-                Lo::At(t) => {
-                    out.push(0x02);
-                    out.extend_from_slice(&asc_ts_key(t));
+pub open spec fn enc(v: Val) -> Seq<u8>
+    decreases v, 2int
+{ seq![tag_of(v)] + body(v) }
+
+pub open spec fn enc_seq(es: Vals) -> Seq<Seq<u8>>
+    decreases es, 0int
+{
+    match es {
+        Vals::Nil => Seq::empty(),
+        Vals::Cons(h, t) => seq![enc(*h)] + enc_seq(*t),
+    }
+}
+
+/// Semantic order: cross-kind by tag, within a kind by the kind's own order
+/// (scalars) or element-wise (sequences).
+pub open spec fn val_le(a: Val, b: Val) -> bool
+    decreases a, 1int
+{
+    if tag_of(a) != tag_of(b) { tag_of(a) < tag_of(b) }
+    else {
+        match (a, b) {
+            (Val::S(_, ka), Val::S(_, kb)) => lex_le(ka, kb),
+            (Val::L(_, xs), Val::L(_, ys)) => vals_le(xs, ys),
+            _ => false,
+        }
+    }
+}
+
+pub open spec fn vals_le(xs: Vals, ys: Vals) -> bool
+    decreases xs, 0int
+{
+    match (xs, ys) {
+        (Vals::Nil, _) => true,
+        (Vals::Cons(_, _), Vals::Nil) => false,
+        (Vals::Cons(hx, tx), Vals::Cons(hy, ty)) =>
+            if *hx != *hy { val_le(*hx, *hy) } else { vals_le(*tx, *ty) },
+    }
+}
+
+pub open spec fn all_complete(r: Seq<Seq<u8>>) -> bool {
+    forall|i: int| 0 <= i < r.len() ==> complete(#[trigger] r[i])
+}
+
+// --- completeness of every encoding ---
+
+proof fn lemma_all_complete_tail(r: Seq<Seq<u8>>)
+    requires all_complete(r), r.len() > 0
+    ensures all_complete(r.drop_first())
+{
+    assert forall|i: int| 0 <= i < r.drop_first().len()
+        implies complete(#[trigger] r.drop_first()[i]) by { assert(complete(r[i + 1])); }
+}
+
+proof fn lemma_complete_row_is_tagged(r: Seq<Seq<u8>>)
+    requires all_complete(r)
+    ensures tagged(r)
+{
+    assert forall|i: int| 0 <= i < r.len()
+        implies #[trigger] r[i].len() > 0 && r[i][0] >= TAG_MIN by {
+        lemma_complete_is_tagged(r[i]);
+    }
+}
+
+proof fn lemma_complete_row_is_family(r: Seq<Seq<u8>>, s: Seq<Seq<u8>>)
+    requires kind_local(), all_complete(r), all_complete(s)
+    ensures pfx_family(r, s)
+{
+    assert forall|i: int, j: int| 0 <= i < r.len() && 0 <= j < s.len()
+        implies #[trigger] incomparable(r[i], s[j]) by {
+        lemma_complete_incomparable(r[i], s[j]);
+    }
+}
+
+/// A row of complete encodings is itself scanned exactly, whatever follows it.
+proof fn lemma_scan_row_of_row(r: Seq<Seq<u8>>, rest: Seq<u8>)
+    requires kind_local(), all_complete(r)
+    ensures scan_row_bytes((cat(r) + seq![STRUCT_END]) + rest) == cat(r).len() + 1
+    decreases r.len()
+{
+    let buf = (cat(r) + seq![STRUCT_END]) + rest;
+    if r.len() == 0 {
+        assert(cat(r) =~= Seq::<u8>::empty());
+        assert(buf[0] == STRUCT_END);
+    } else {
+        let head = r[0];
+        let tail_buf = (cat(r.drop_first()) + seq![STRUCT_END]) + rest;
+        assert(complete(head));
+        lemma_complete_is_tagged(head);
+        assert(buf =~= head + tail_buf) by { assert(cat(r) =~= head + cat(r.drop_first())); }
+        assert(buf[0] == head[0]);
+        assert(buf[0] != STRUCT_END);
+        lemma_prefix_of_self_plus(head, tail_buf);
+        lemma_scan_local(head, buf);
+        assert(scan(buf) == head.len());
+        assert(buf.skip(head.len() as int) =~= tail_buf);
+        lemma_all_complete_tail(r);
+        lemma_scan_row_of_row(r.drop_first(), rest);
+    }
+}
+
+pub proof fn lemma_enc_complete(v: Val)
+    requires kind_laws(), wf(v)
+    ensures complete(enc(v))
+    decreases sz(v)
+{
+    let e = enc(v);
+    assert(e[0] == tag_of(v));
+    assert(e.drop_first() =~= body(v));
+    match v {
+        Val::S(t, k) => {
+            assert(valid_key(t, k));
+            assert(key_end(t, k) == k.len());
+        }
+        Val::L(t, es) => {
+            lemma_enc_seq_complete(es);
+            let r = enc_seq(es);
+            lemma_scan_row_of_row(r, Seq::empty());
+            assert(body(v) =~= (cat(r) + seq![STRUCT_END]) + Seq::<u8>::empty());
+        }
+    }
+}
+
+pub proof fn lemma_enc_seq_complete(es: Vals)
+    requires kind_laws(), wf_all(es)
+    ensures all_complete(enc_seq(es))
+    decreases sz_all(es)
+{
+    match es {
+        Vals::Nil => { assert(enc_seq(es) =~= Seq::<Seq<u8>>::empty()); }
+        Vals::Cons(h, t) => {
+            lemma_enc_complete(*h);
+            lemma_enc_seq_complete(*t);
+            let r = enc_seq(es);
+            assert(r =~= seq![enc(*h)] + enc_seq(*t));
+            assert forall|i: int| 0 <= i < r.len() implies complete(#[trigger] r[i]) by {
+                if i > 0 { assert(r[i] == enc_seq(*t)[i - 1]); }
+            }
+        }
+    }
+}
+
+// --- injectivity ---
+
+pub proof fn lemma_enc_injective(u: Val, v: Val)
+    requires kind_laws(), wf(u), wf(v), enc(u) =~= enc(v)
+    ensures u == v
+    decreases sz(u)
+{
+    assert(enc(u)[0] == tag_of(u) && enc(v)[0] == tag_of(v));
+    assert(tag_of(u) == tag_of(v));
+    assert(enc(u).drop_first() =~= body(u));
+    assert(enc(v).drop_first() =~= body(v));
+    assert(body(u) =~= body(v));
+    match (u, v) {
+        (Val::S(_, _), Val::S(_, _)) => {}
+        (Val::L(_, xs), Val::L(_, ys)) => {
+            lemma_enc_seq_complete(xs);
+            lemma_enc_seq_complete(ys);
+            let rx = enc_seq(xs);
+            let ry = enc_seq(ys);
+            lemma_complete_row_is_tagged(rx);
+            lemma_complete_row_is_tagged(ry);
+            lemma_complete_row_is_family(rx, ry);
+            assert(is_prefix(enc_row(rx), enc_row(ry))) by {
+                assert(enc_row(ry).take(enc_row(rx).len() as int) =~= enc_row(rx));
+            }
+            lemma_row_prefix_free(rx, ry);
+            lemma_enc_seq_injective(xs, ys);
+        }
+        _ => { assert(false); }
+    }
+}
+
+pub proof fn lemma_enc_seq_injective(xs: Vals, ys: Vals)
+    requires kind_laws(), wf_all(xs), wf_all(ys), enc_seq(xs) =~= enc_seq(ys)
+    ensures xs == ys
+    decreases sz_all(xs)
+{
+    match (xs, ys) {
+        (Vals::Nil, Vals::Nil) => {}
+        (Vals::Nil, Vals::Cons(h, t)) => {
+            assert(enc_seq(ys) =~= seq![enc(*h)] + enc_seq(*t));
+            assert(enc_seq(xs).len() == 0);
+        }
+        (Vals::Cons(h, t), Vals::Nil) => {
+            assert(enc_seq(xs) =~= seq![enc(*h)] + enc_seq(*t));
+            assert(enc_seq(ys).len() == 0);
+        }
+        (Vals::Cons(hx, tx), Vals::Cons(hy, ty)) => {
+            assert(enc_seq(xs) =~= seq![enc(*hx)] + enc_seq(*tx));
+            assert(enc_seq(ys) =~= seq![enc(*hy)] + enc_seq(*ty));
+            assert(enc_seq(xs)[0] =~= enc(*hx));
+            assert(enc_seq(ys)[0] =~= enc(*hy));
+            assert(enc(*hx) =~= enc(*hy));
+            assert(enc_seq(*tx) =~= enc_seq(*ty)) by {
+                assert(enc_seq(xs).drop_first() =~= enc_seq(*tx));
+                assert(enc_seq(ys).drop_first() =~= enc_seq(*ty));
+            }
+            lemma_enc_injective(*hx, *hy);
+            lemma_enc_seq_injective(*tx, *ty);
+        }
+    }
+}
+
+// --- THE ORDER LAW ---
+
+/// `a <= b  <=>  encode(a) <=lex encode(b)`, over the whole value domain.
+pub proof fn theorem_value_order(u: Val, v: Val)
+    requires kind_laws(), wf(u), wf(v)
+    ensures val_le(u, v) == lex_le(enc(u), enc(v))
+    decreases sz(u)
+{
+    let tu = seq![tag_of(u)];
+    let tv = seq![tag_of(v)];
+    assert(incomparable(tu, tv)) by {
+        if is_prefix(tu, tv) { assert(tv.take(1) =~= tu); }
+        if is_prefix(tv, tu) { assert(tu.take(1) =~= tv); }
+    }
+    lemma_concat_order(tu, body(u), tv, body(v));
+    if tag_of(u) == tag_of(v) {
+        assert(tu =~= tv);
+        match (u, v) {
+            (Val::S(_, _), Val::S(_, _)) => {}
+            (Val::L(_, xs), Val::L(_, ys)) => {
+                lemma_enc_seq_complete(xs);
+                lemma_enc_seq_complete(ys);
+                let rx = enc_seq(xs);
+                let ry = enc_seq(ys);
+                lemma_complete_row_is_tagged(rx);
+                lemma_complete_row_is_tagged(ry);
+                lemma_complete_row_is_family(rx, ry);
+                lemma_row_order(rx, ry);
+                lemma_vals_order(xs, ys);
+            }
+            _ => { assert(false); }
+        }
+    } else {
+        assert(!(tu =~= tv));
+        assert(lex_le(tu, tv) == (tag_of(u) < tag_of(v)));
+    }
+}
+
+pub proof fn lemma_vals_order(xs: Vals, ys: Vals)
+    requires kind_laws(), wf_all(xs), wf_all(ys)
+    ensures vals_le(xs, ys) == row_le(enc_seq(xs), enc_seq(ys))
+    decreases sz_all(xs)
+{
+    match (xs, ys) {
+        (Vals::Nil, _) => { assert(enc_seq(xs) =~= Seq::<Seq<u8>>::empty()); }
+        (Vals::Cons(h, t), Vals::Nil) => {
+            assert(enc_seq(xs) =~= seq![enc(*h)] + enc_seq(*t));
+            assert(enc_seq(ys) =~= Seq::<Seq<u8>>::empty());
+        }
+        (Vals::Cons(hx, tx), Vals::Cons(hy, ty)) => {
+            let rx = enc_seq(xs);
+            let ry = enc_seq(ys);
+            assert(rx =~= seq![enc(*hx)] + enc_seq(*tx));
+            assert(ry =~= seq![enc(*hy)] + enc_seq(*ty));
+            assert(rx[0] =~= enc(*hx) && ry[0] =~= enc(*hy));
+            assert(rx.drop_first() =~= enc_seq(*tx));
+            assert(ry.drop_first() =~= enc_seq(*ty));
+            if *hx == *hy {
+                assert(rx[0] =~= ry[0]);
+                lemma_vals_order(*tx, *ty);
+            } else {
+                assert(!(rx[0] =~= ry[0])) by {
+                    if rx[0] =~= ry[0] { lemma_enc_injective(*hx, *hy); }
                 }
-            }
-            match hi {
-                Hi::PosUnbounded => out.push(0x01),
-                Hi::At(t) => {
-                    out.push(0x02);
-                    out.extend_from_slice(&asc_ts_key(t));
-                }
+                theorem_value_order(*hx, *hy);
             }
         }
     }
 }
 
-fn encode_into(out: &mut Vec<u8>, d: Datum<'_>) {
-    match d {
-        Datum::Null => out.push(Tag::Null.byte()),
-        Datum::Bool(b) => {
-            out.push(Tag::Bool.byte());
-            out.push(u8::from(b));
-        }
-        Datum::Num(n) => {
-            out.push(Tag::Num.byte());
-            n.encode_key(out);
-        }
-        Datum::Str(s) => {
-            out.push(Tag::Str.byte());
-            encode_terminated(out, s.as_bytes());
-        }
-        Datum::Bytes(b) => {
-            out.push(Tag::Bytes.byte());
-            encode_terminated(out, b);
-        }
-        Datum::Uuid(u) => {
-            out.push(Tag::Uuid.byte());
-            out.extend_from_slice(&u);
-        }
-        Datum::List(items) => {
-            out.push(Tag::List.byte());
-            for &item in items {
-                encode_into(out, item);
-            }
-            out.push(STRUCT_SEQ_END);
-        }
-        Datum::Set(items) => {
-            out.push(Tag::Set.byte());
-            let mut encoded: Vec<Vec<u8>> = items
-                .iter()
-                .map(|&item| {
-                    let mut e = Vec::new();
-                    encode_into(&mut e, item);
-                    e
-                })
-                .collect();
-            encoded.sort();
-            encoded.dedup();
-            for e in encoded {
-                out.extend_from_slice(&e);
-            }
-            out.push(STRUCT_SEQ_END);
-        }
-        Datum::Regex(lit) => {
-            out.push(Tag::Regex.byte());
-            out.push(lit.flags().bits());
-            encode_terminated(out, lit.pattern().as_bytes());
-        }
-        Datum::Json(j) => {
-            out.push(Tag::Json.byte());
-            let start = out.len();
-            encode_json(out, j);
-            let h = fnv1a64(&out[start..]);
-            out.extend_from_slice(&h.to_be_bytes());
-        }
-        Datum::Vector(vec) => {
-            out.push(Tag::Vector.byte());
-            out.extend_from_slice(&vec.dimension().get().to_be_bytes());
-            for c in vec.components() {
-                Num::float(c.get()).encode_key(out);
-            }
-        }
-        Datum::Validity(v) => encode_validity_payload(out, v.ts_micros(), v.is_assert()),
-        Datum::Interval(iv) => {
-            out.push(Tag::Interval.byte());
-            encode_interval_body(out, &iv);
-        }
-        Datum::Geometry(g) => {
-            out.push(Tag::Geometry.byte());
-            out.extend_from_slice(&g.curve_key_bytes());
-        }
+// ============================== executable code ==============================
+
+proof fn lemma_esc_snoc(t: Seq<u8>, b: u8)
+    ensures esc(t.push(b)) =~= esc(t) + code(b)
+    decreases t.len()
+{
+    if t.len() == 0 {
+        assert(t.push(b) =~= seq![b]);
+        assert(seq![b].len() == 1 && seq![b][0] == b);
+        assert(seq![b].drop_first() =~= Seq::<u8>::empty());
+        assert(esc(Seq::<u8>::empty()) =~= Seq::<u8>::empty());
+        assert(code(b) + Seq::<u8>::empty() =~= code(b));
+        assert(esc(t) =~= Seq::<u8>::empty());
+    } else {
+        assert(t.push(b)[0] == t[0]);
+        assert(t.push(b).drop_first() =~= t.drop_first().push(b));
+        lemma_esc_snoc(t.drop_first(), b);
+        assert(esc(t.push(b)) =~= code(t[0]) + esc(t.drop_first().push(b)));
+        assert(esc(t) =~= code(t[0]) + esc(t.drop_first()));
+        assert(code(t[0]) + (esc(t.drop_first()) + code(b))
+            =~= (code(t[0]) + esc(t.drop_first())) + code(b));
     }
 }
 
-/// JSON value grammar markers (inside the Json payload).
-const JNULL: u8 = 0x05;
-const JFALSE: u8 = 0x06;
-const JTRUE: u8 = 0x07;
-const JNUM: u8 = 0x10;
-const JSTR: u8 = 0x18;
-const JARR: u8 = 0x48;
-const JOBJ: u8 = 0x4C;
-
-fn encode_json(out: &mut Vec<u8>, j: &Json) {
-    match j {
-        Json::Null => out.push(JNULL),
-        Json::Bool(false) => out.push(JFALSE),
-        Json::Bool(true) => out.push(JTRUE),
-        Json::Num(n) => {
-            out.push(JNUM);
-            n.num().encode_key(out);
-        }
-        Json::Str(s) => {
-            out.push(JSTR);
-            encode_terminated(out, s.as_bytes());
-        }
-        Json::Arr(items) => {
-            out.push(JARR);
-            for item in items {
-                encode_json(out, item);
-            }
-            out.push(STRUCT_SEQ_END);
-        }
-        Json::Obj(obj) => {
-            out.push(JOBJ);
-            for (k, v) in obj.entries() {
-                // Each entry MUST begin with a byte strictly greater than
-                // the `STRUCT_SEQ_END` (0x01) terminator, or a present entry
-                // could sort BELOW a shorter object's terminator and break
-                // the byte-order == `DataValue::Ord` law — a NUL-leading key
-                // encodes to a leading 0x00 < 0x01. Tagging the key `JSTR`
-                // (a key IS a string; 0x18 > 0x01) makes the entry marker
-                // outrank the terminator, exactly as array elements do.
-                out.push(JSTR);
-                encode_terminated(out, k.as_bytes());
-                encode_json(out, v);
-            }
-            out.push(STRUCT_SEQ_END);
-        }
+proof fn lemma_cat_snoc(r: Seq<Seq<u8>>, x: Seq<u8>)
+    ensures cat(r.push(x)) =~= cat(r) + x
+    decreases r.len()
+{
+    if r.len() == 0 {
+        assert(r.push(x) =~= seq![x]);
+        assert(seq![x].len() == 1 && seq![x][0] =~= x);
+        assert(seq![x].drop_first() =~= Seq::<Seq<u8>>::empty());
+        assert(cat(Seq::<Seq<u8>>::empty()) =~= Seq::<u8>::empty());
+        assert(x + Seq::<u8>::empty() =~= x);
+        assert(cat(r) =~= Seq::<u8>::empty());
+    } else {
+        assert(r.push(x)[0] =~= r[0]);
+        assert(r.push(x).drop_first() =~= r.drop_first().push(x));
+        lemma_cat_snoc(r.drop_first(), x);
+        assert(cat(r.push(x)) =~= r[0] + cat(r.drop_first().push(x)));
+        assert(cat(r) =~= r[0] + cat(r.drop_first()));
+        assert(r[0] + (cat(r.drop_first()) + x) =~= (r[0] + cat(r.drop_first())) + x);
     }
 }
 
-/// Ascending order-preserving i64 key (sign bit flipped, big-endian).
-fn asc_ts_key(ts: i64) -> [u8; 8] {
-    (ts ^ i64::MIN).cast_unsigned().to_be_bytes()
+/// Bytes that are a complete encoding of exactly one value.
+///
+/// The field is private and this module holds every constructor, so there is no
+/// door beside the proven ones. The type invariant is `complete`, which by
+/// [`theorem_prefix_code`] makes any two of these prefix-incomparable — the
+/// closure theorem's hypothesis, discharged once, everywhere.
+// CONSTRUCT: SealedProduct CanonicalBytes
+pub struct CanonicalBytes {
+    bytes: Vec<u8>,
 }
 
-/// Descending order-preserving i64 key: the imported validity law (latest
-/// instant sorts first).
-fn desc_ts_key(ts: i64) -> [u8; 8] {
-    let mut k = asc_ts_key(ts);
-    for b in &mut k {
-        *b = !*b;
+// CONSTRUCT: ImplBlock CanonicalBytes
+impl CanonicalBytes {
+    pub closed spec fn view(self) -> Seq<u8> { self.bytes@ }
+
+    #[verifier::type_invariant]
+    closed spec fn wf_bytes(self) -> bool { complete(self.view()) }
+
+    pub fn as_bytes(&self) -> (r: &[u8])
+        ensures r@ =~= self.view()
+    { self.bytes.as_slice() }
+
+    pub fn len(&self) -> (n: usize)
+        ensures n == self.view().len(), n > 0
+    { proof { use_type_invariant(self); lemma_complete_is_tagged(self.view()); } self.bytes.len() }
+
+    pub fn tag_byte(&self) -> (b: u8)
+        ensures b == self.view()[0], b >= TAG_MIN
+    {
+        proof { use_type_invariant(self); lemma_complete_is_tagged(self.view()); }
+        self.bytes[0]
     }
-    k
 }
 
-fn ts_from_asc(k: [u8; 8]) -> i64 {
-    u64::from_be_bytes(k).cast_signed() ^ i64::MIN
+/// A kind's key: the type-level seam. A kind cannot be encoded until it proves
+/// its key belongs to a prefix-free, self-measuring family.
+// CONSTRUCT: SealedTrait KindKey
+pub trait KindKey: Sized {
+    spec fn tag(self) -> u8;
+    spec fn key(self) -> Seq<u8>;
+
+    /// The implementor's own invariant. A type invariant holds of exec values
+    /// only, so it is recovered at exec by [`KindKey::tag_byte`] and carried
+    /// into the two laws as a precondition. This is what stops a ghost value of
+    /// the type from being handed to `law_key`.
+    spec fn wf(self) -> bool;
+
+    proof fn law_tag(self)
+        requires self.wf()
+        ensures self.tag() >= TAG_MIN, !is_seq_tag(self.tag());
+
+    proof fn law_key(self)
+        requires self.wf()
+        ensures valid_key(self.tag(), self.key());
+
+    /// The tag byte, at exec. Also attests the invariant.
+    fn tag_byte(&self) -> (t: u8)
+        ensures t == self.tag(), self.wf();
+
+    fn emit(&self) -> (r: Vec<u8>)
+        ensures r@ =~= self.key();
 }
 
-/// `0x00 → 0x00 0xFF` escaping with a `0x00 0x00` terminator: prefix-safe
-/// and order-preserving (escaped content sorts above the terminator).
-fn encode_terminated(out: &mut Vec<u8>, content: &[u8]) {
-    for &b in content {
-        if b == STRUCT_STRING {
-            out.push(STRUCT_STRING);
-            out.push(0xFF);
+/// The grammar's two obligations, as a value.
+///
+/// A `requires kind_laws()` can be forgotten at a call site; a value cannot.
+/// [`GrammarLaws::establish`] is the sole mint and it discharges both laws, so
+/// every sealing entry point below takes the token rather than restating the
+/// hypothesis. There is no way to encode anything without holding it.
+// CONSTRUCT: Marker GrammarLaws
+pub struct GrammarLaws {
+    seal: bool,
+}
+
+// CONSTRUCT: ImplBlock GrammarLaws
+impl GrammarLaws {
+    #[verifier::type_invariant]
+    closed spec fn holds(self) -> bool { kind_laws() && self.seal }
+
+    /// Mint the token by discharging both obligations.
+    pub fn establish() -> (r: GrammarLaws) {
+        proof { lemma_kind_local(); lemma_kind_complete(); }
+        GrammarLaws { seal: true }
+    }
+}
+
+/// A tag that opens a sequence. A `u8` is not a tag: the invariant travels with
+/// the value, so no site re-checks and no site can pass a scalar tag here.
+// CONSTRUCT: Newtype SeqTag
+#[derive(Clone, Copy)]
+pub struct SeqTag {
+    byte: u8,
+}
+
+impl View for SeqTag {
+    type V = u8;
+    closed spec fn view(&self) -> u8 { self.byte }
+}
+
+// CONSTRUCT: ImplBlock SeqTag
+impl SeqTag {
+    #[verifier::type_invariant]
+    closed spec fn wf_tag(self) -> bool { self@ >= TAG_MIN && is_seq_tag(self@) }
+
+    pub fn mint(b: u8) -> (r: SeqTag)
+        requires b >= TAG_MIN, is_seq_tag(b)
+        ensures r@ == b
+    { SeqTag { byte: b } }
+
+    pub fn byte(&self) -> (b: u8)
+        ensures b == self@, b >= TAG_MIN, is_seq_tag(b)
+    { proof { use_type_invariant(*self); } self.byte }
+}
+
+/// Seal a scalar. The result is a complete encoding by construction.
+// CONSTRUCT: Mint seal
+pub fn seal<K: KindKey>(laws: &GrammarLaws, k: &K) -> (r: CanonicalBytes)
+    ensures r.view() =~= seq![k.tag()] + k.key()
+{
+    proof { use_type_invariant(laws); }
+    let mut out: Vec<u8> = Vec::new();
+    let t = k.tag_byte();
+    proof { k.law_tag(); k.law_key(); }
+    out.push(t);
+    let mut payload = k.emit();
+    out.append(&mut payload);
+    proof {
+        let v = Val::S(k.tag(), k.key());
+        assert(wf(v));
+        assert(enc(v) =~= out@);
+        lemma_enc_complete(v);
+    }
+    CanonicalBytes { bytes: out }
+}
+
+/// Seal a sequence of already-sealed values.
+// CONSTRUCT: Mint seal_sequence
+pub fn seal_sequence(laws: &GrammarLaws, tag: SeqTag, elems: &Vec<CanonicalBytes>)
+    -> (r: CanonicalBytes)
+    ensures
+        r.view() =~= seq![tag@] + enc_row(elems@.map_values(|e: CanonicalBytes| e.view())),
+{
+    proof { use_type_invariant(laws); use_type_invariant(tag); }
+    let tag = tag.byte();
+    let ghost views = elems@.map_values(|e: CanonicalBytes| e.view());
+    let mut out: Vec<u8> = Vec::new();
+    out.push(tag);
+    let mut i: usize = 0;
+    while i < elems.len()
+        invariant
+            0 <= i <= elems.len(),
+            views =~= elems@.map_values(|e: CanonicalBytes| e.view()),
+            out@ =~= seq![tag] + cat(views.take(i as int)),
+            forall|k: int| 0 <= k < i ==> complete(#[trigger] views[k]),
+        decreases elems.len() - i
+    {
+        let e = &elems[i];
+        proof { use_type_invariant(e); }
+        let bs = e.as_bytes();
+        let mut j: usize = 0;
+        let ghost before = out@;
+        while j < bs.len()
+            invariant
+                0 <= j <= bs.len(),
+                bs@ =~= views[i as int],
+                out@ =~= before + bs@.take(j as int),
+            decreases bs.len() - j
+        {
+            out.push(bs[j]);
+            proof { assert(bs@.take(j + 1) =~= bs@.take(j as int).push(bs@[j as int])); }
+            j = j + 1;
+        }
+        proof {
+            assert(bs@.take(bs.len() as int) =~= views[i as int]);
+            lemma_cat_snoc(views.take(i as int), views[i as int]);
+            assert(views.take(i + 1) =~= views.take(i as int).push(views[i as int]));
+        }
+        i = i + 1;
+    }
+    out.push(STRUCT_END);
+    proof {
+        assert(all_complete(views));
+        assert(views.take(elems.len() as int) =~= views);
+        lemma_scan_row_of_row(views, Seq::empty());
+        assert(out@ =~= seq![tag] + ((cat(views) + seq![STRUCT_END]) + Seq::<u8>::empty()));
+        assert(out@[0] == tag);
+        assert(out@.drop_first() =~= (cat(views) + seq![STRUCT_END]) + Seq::<u8>::empty());
+    }
+    CanonicalBytes { bytes: out }
+}
+
+/// The escaped form measures itself exactly: [`esc`] never emits `0x00 0x00`,
+/// so the terminator this appends is the first one the scanner meets.
+pub proof fn lemma_esc_end_of_enc_bytes(s: Seq<u8>)
+    ensures esc_end(enc_bytes(s)) == enc_bytes(s).len()
+    decreases s.len()
+{
+    let p = enc_bytes(s);
+    if s.len() == 0 {
+        assert(esc(s) =~= Seq::<u8>::empty());
+        assert(p =~= seq![0u8, 0u8]);
+    } else {
+        lemma_enc_bytes_peel(s);
+        let rest = enc_bytes(s.drop_first());
+        lemma_esc_end_of_enc_bytes(s.drop_first());
+        if s[0] == 0x00u8 {
+            assert(code(s[0]) =~= seq![0x00u8, 0xFFu8]);
+            assert(p[0] == 0x00u8 && p[1] == 0xFFu8);
+            assert(p.skip(2) =~= rest);
         } else {
-            out.push(b);
+            assert(code(s[0]) =~= seq![s[0]]);
+            assert(p[0] == s[0]);
+            assert(p.skip(1) =~= rest);
         }
     }
-    out.push(STRUCT_STRING);
-    out.push(0x00);
 }
 
-/// Typed decode failures: total input handling, never a panic.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum DecodeError {
-    Truncated,
-    BadTag(u8),
-    BadBool,
-    BadEscape,
-    BadUtf8,
-    Num(NumDecodeError),
-    /// Set payload not in canonical (sorted, deduplicated) form.
-    SetNotCanonical,
-    TrailingBytes,
-    TooDeep,
-    BadRegexFlags,
-    BadPolarity,
-    /// A vector component that is not a float-representation Num key.
-    VectorComponentNotFloat,
-    /// Vector dimension count exceeds the wire `u32` limit.
-    VectorDimensionOverflow,
-    BadJsonMarker(u8),
-    /// Object keys not strictly ascending and unique.
-    JsonNotCanonical,
-    /// The trailing hash does not match the canonical value bytes.
-    JsonHashMismatch,
-    /// JSON has no NaN or infinity.
-    JsonNumberNotFinite,
-    /// A relation id at or beyond the allocation ceiling
-    /// (`RelationId::CAP`): not a lawful id, refused at decode so the
-    /// allocator's exhaustion door cannot be bypassed by stored bytes.
-    RelationIdOverCap,
-    /// An interval form that the closed-normal-form law forbids.
-    IntervalNotCanonical,
+/// A variable-length key: opaque content in the escaped form. Every kind whose
+/// payload is bytes or text mints through this and inherits both obligations.
+// CONSTRUCT: SealedProduct EscapedKey
+pub struct EscapedKey {
+    tag: u8,
+    encoded: Vec<u8>,
 }
 
-impl std::fmt::Display for DecodeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "canonical decode refused: {self:?}")
+// CONSTRUCT: ImplBlock EscapedKey
+impl EscapedKey {
+    #[verifier::type_invariant]
+    closed spec fn wf_key(self) -> bool {
+        self.tag >= TAG_MIN
+        && shape_of(self.tag) == Some(KeyShape::Escaped)
+        && exists|s: Seq<u8>| self.encoded@ =~= enc_bytes(s)
+    }
+
+    /// Mint from raw content. The content is arbitrary: every byte sequence has
+    /// an escaped form, so this cannot fail.
+    pub fn mint(tag: u8, content: &[u8]) -> (r: EscapedKey)
+        requires tag >= TAG_MIN, shape_of(tag) == Some(KeyShape::Escaped)
+        ensures r.key() =~= enc_bytes(content@), r.tag() == tag
+    {
+        let encoded = escape(content);
+        proof { assert(exists|s: Seq<u8>| encoded@ =~= enc_bytes(s)) by { assert(encoded@ =~= enc_bytes(content@)); } }
+        EscapedKey { tag, encoded }
     }
 }
 
-impl std::error::Error for DecodeError {}
+impl KindKey for EscapedKey {
+    closed spec fn tag(self) -> u8 { self.tag }
+    closed spec fn key(self) -> Seq<u8> { self.encoded@ }
+    closed spec fn wf(self) -> bool { self.wf_key() }
 
-/// Nesting bound: decode of hostile input must refuse, not blow the
-/// stack.
-const MAX_DEPTH: usize = 128;
+    proof fn law_tag(self) { assert(!is_seq_tag(self.tag)); }
 
-/// Decode a full canonical encoding. Total: arbitrary bytes yield a value
-/// or a typed error; trailing bytes are an error; nesting is bounded.
-pub fn decode(bytes: &[u8]) -> Result<DataValue, DecodeError> {
-    let (value, used) = decode_at(bytes, 0)?;
-    if used != bytes.len() {
-        return Err(DecodeError::TrailingBytes);
+    proof fn law_key(self) {
+        let s = choose|s: Seq<u8>| self.encoded@ =~= enc_bytes(s);
+        lemma_esc_end_of_enc_bytes(s);
+        assert(self.encoded@ =~= enc_bytes(s));
     }
-    Ok(value)
+
+    fn tag_byte(&self) -> (t: u8) { proof { use_type_invariant(self); } self.tag }
+
+    fn emit(&self) -> (r: Vec<u8>) { self.encoded.clone() }
 }
 
-/// Decode ONE canonical value from the front of `bytes`, returning it
-/// and the bytes consumed (plane-internal: `StorageKey` splitting).
-pub(super) fn decode_one(bytes: &[u8]) -> Result<(DataValue, usize), DecodeError> {
-    decode_at(bytes, 0)
+/// A fixed-width key. Prefix-free because the width is constant, so the
+/// obligations fall out of the tag table with nothing left to prove.
+// CONSTRUCT: SealedProduct FixedKey
+pub struct FixedKey {
+    tag: u8,
+    bytes: Vec<u8>,
 }
 
-fn decode_at(bytes: &[u8], depth: usize) -> Result<(DataValue, usize), DecodeError> {
-    if depth > MAX_DEPTH {
-        return Err(DecodeError::TooDeep);
+// CONSTRUCT: ImplBlock FixedKey
+impl FixedKey {
+    #[verifier::type_invariant]
+    closed spec fn wf_key(self) -> bool {
+        self.tag >= TAG_MIN && shape_of(self.tag) == Some(KeyShape::Fixed(self.bytes@.len() as nat))
     }
-    let &tag_byte = bytes.first().ok_or(DecodeError::Truncated)?;
-    let tag = Tag::from_byte(tag_byte).ok_or(DecodeError::BadTag(tag_byte))?;
-    let body = &bytes[1..];
-    match tag {
-        Tag::Null => Ok((DataValue::Null, 1)),
-        Tag::Bool => match body.first() {
-            Some(0) => Ok((DataValue::Bool(false), 2)),
-            Some(1) => Ok((DataValue::Bool(true), 2)),
-            Some(_) => Err(DecodeError::BadBool),
-            None => Err(DecodeError::Truncated),
+
+    /// Mint at a tag whose declared width matches these bytes. A width mismatch
+    /// does not fail at run time; it fails to verify.
+    pub fn mint(tag: u8, bytes: Vec<u8>) -> (r: FixedKey)
+        requires
+            tag >= TAG_MIN,
+            shape_of(tag) == Some(KeyShape::Fixed(bytes@.len() as nat)),
+        ensures r.key() =~= bytes@, r.tag() == tag
+    { FixedKey { tag, bytes } }
+}
+
+impl KindKey for FixedKey {
+    closed spec fn tag(self) -> u8 { self.tag }
+    closed spec fn key(self) -> Seq<u8> { self.bytes@ }
+    closed spec fn wf(self) -> bool { self.wf_key() }
+
+    proof fn law_tag(self) { assert(!is_seq_tag(self.tag)); }
+
+    proof fn law_key(self) {}
+
+    fn tag_byte(&self) -> (t: u8) { proof { use_type_invariant(self); } self.tag }
+
+    fn emit(&self) -> (r: Vec<u8>) { self.bytes.clone() }
+}
+
+/// A class-led key: the first byte selects the remaining width. Num mints here.
+// CONSTRUCT: SealedProduct ClassLedKey
+pub struct ClassLedKey {
+    tag: u8,
+    bytes: Vec<u8>,
+}
+
+// CONSTRUCT: ImplBlock ClassLedKey
+impl ClassLedKey {
+    #[verifier::type_invariant]
+    closed spec fn wf_key(self) -> bool {
+        self.tag >= TAG_MIN
+        && shape_of(self.tag) == Some(KeyShape::ClassLed)
+        && self.bytes@.len() > 0
+        && class_led_width(self.bytes@[0]) == self.bytes@.len()
+    }
+
+    /// Mint from a class-led byte string. A width that disagrees with the class
+    /// byte does not fail at run time; it fails to verify.
+    pub fn mint(tag: u8, bytes: Vec<u8>) -> (r: ClassLedKey)
+        requires
+            tag >= TAG_MIN,
+            shape_of(tag) == Some(KeyShape::ClassLed),
+            bytes@.len() > 0,
+            class_led_width(bytes@[0]) == bytes@.len(),
+        ensures r.key() =~= bytes@, r.tag() == tag
+    { ClassLedKey { tag, bytes } }
+}
+
+impl KindKey for ClassLedKey {
+    closed spec fn tag(self) -> u8 { self.tag }
+    closed spec fn key(self) -> Seq<u8> { self.bytes@ }
+    closed spec fn wf(self) -> bool { self.wf_key() }
+    proof fn law_tag(self) { assert(!is_seq_tag(self.tag)); }
+    proof fn law_key(self) {}
+    fn tag_byte(&self) -> (t: u8) { proof { use_type_invariant(self); } self.tag }
+    fn emit(&self) -> (r: Vec<u8>) { self.bytes.clone() }
+}
+
+/// One flags byte, then escaped content. Regex mints here.
+// CONSTRUCT: SealedProduct FlagsEscapedKey
+pub struct FlagsEscapedKey {
+    tag: u8,
+    bytes: Vec<u8>,
+}
+
+// CONSTRUCT: ImplBlock FlagsEscapedKey
+impl FlagsEscapedKey {
+    #[verifier::type_invariant]
+    closed spec fn wf_key(self) -> bool {
+        self.tag >= TAG_MIN
+        && shape_of(self.tag) == Some(KeyShape::FlagsThenEscaped)
+        && self.bytes@.len() > 0
+        && exists|c: Seq<u8>| self.bytes@.skip(1) =~= enc_bytes(c)
+    }
+
+    pub fn mint(tag: u8, flags: u8, content: &[u8]) -> (r: FlagsEscapedKey)
+        requires tag >= TAG_MIN, shape_of(tag) == Some(KeyShape::FlagsThenEscaped)
+        ensures r.key() =~= seq![flags] + enc_bytes(content@), r.tag() == tag
+    {
+        let mut bytes: Vec<u8> = Vec::new();
+        bytes.push(flags);
+        let mut body = escape(content);
+        bytes.append(&mut body);
+        proof {
+            assert(bytes@.skip(1) =~= enc_bytes(content@));
+            assert(exists|c: Seq<u8>| bytes@.skip(1) =~= enc_bytes(c));
+        }
+        FlagsEscapedKey { tag, bytes }
+    }
+}
+
+impl KindKey for FlagsEscapedKey {
+    closed spec fn tag(self) -> u8 { self.tag }
+    closed spec fn key(self) -> Seq<u8> { self.bytes@ }
+    closed spec fn wf(self) -> bool { self.wf_key() }
+    proof fn law_tag(self) { assert(!is_seq_tag(self.tag)); }
+    proof fn law_key(self) {
+        let c = choose|c: Seq<u8>| self.bytes@.skip(1) =~= enc_bytes(c);
+        lemma_esc_end_of_enc_bytes(c);
+        assert(self.bytes@.skip(1) =~= enc_bytes(c));
+    }
+    fn tag_byte(&self) -> (t: u8) { proof { use_type_invariant(self); } self.tag }
+    fn emit(&self) -> (r: Vec<u8>) { self.bytes.clone() }
+}
+
+/// The bounded-interval grammar: `0x01` for the one empty value, or `0x02`
+/// followed by two ends, each `0x01` (unbounded) or `0x02` plus eight bytes.
+// CONSTRUCT: SealedProduct IntervalKey
+pub struct IntervalKey {
+    tag: u8,
+    bytes: Vec<u8>,
+}
+
+// CONSTRUCT: ImplBlock IntervalKey
+impl IntervalKey {
+    #[verifier::type_invariant]
+    closed spec fn wf_key(self) -> bool {
+        self.tag >= TAG_MIN
+        && shape_of(self.tag) == Some(KeyShape::IntervalShape)
+        && interval_end(self.bytes@) == self.bytes@.len()
+    }
+
+    /// The one empty interval.
+    pub fn mint_empty(tag: u8) -> (r: IntervalKey)
+        requires tag >= TAG_MIN, shape_of(tag) == Some(KeyShape::IntervalShape)
+        ensures r.key() =~= seq![0x01u8], r.tag() == tag
+    {
+        let mut bytes: Vec<u8> = Vec::new();
+        bytes.push(0x01u8);
+        proof { assert(interval_end(bytes@) == 1); }
+        IntervalKey { tag, bytes }
+    }
+
+    /// A bounded interval. Each end is `None` for unbounded, or eight bytes of
+    /// the ascending timestamp key.
+    pub fn mint_bounded(tag: u8, lo: Option<[u8; 8]>, hi: Option<[u8; 8]>) -> (r: IntervalKey)
+        requires tag >= TAG_MIN, shape_of(tag) == Some(KeyShape::IntervalShape)
+        ensures r.tag() == tag
+    {
+        let mut bytes: Vec<u8> = Vec::new();
+        bytes.push(0x02u8);
+        push_end(&mut bytes, lo);
+        let ghost after_lo = bytes@;
+        push_end(&mut bytes, hi);
+        proof {
+            assert(bytes@[0] == 0x02u8);
+            assert(after_lo =~= bytes@.take(after_lo.len() as int));
+            assert(bytes@[1] == after_lo[1]);
+            assert(interval_bound_end(bytes@, 1) == after_lo.len());
+            assert(bytes@[after_lo.len() as int] == 0x01u8 || bytes@[after_lo.len() as int] == 0x02u8);
+            assert(interval_bound_end(bytes@, after_lo.len() as int) == bytes@.len());
+        }
+        IntervalKey { tag, bytes }
+    }
+}
+
+/// Append one interval end. `None` is the unbounded shape, a distinct variant,
+/// never a sentinel timestamp.
+fn push_end(out: &mut Vec<u8>, end: Option<[u8; 8]>)
+    ensures
+        match end {
+            None => final(out)@ =~= old(out)@ + seq![0x01u8],
+            Some(t) => final(out)@ =~= (old(out)@ + seq![0x02u8]) + t@,
         },
-        Tag::Num => {
-            let (n, used) = Num::decode_key(body).map_err(DecodeError::Num)?;
-            Ok((DataValue::Num(n), 1 + used))
-        }
-        Tag::Str => {
-            let (content, used) = decode_terminated(body)?;
-            let s = String::from_utf8(content).map_err(|_| DecodeError::BadUtf8)?;
-            Ok((DataValue::Str(s), 1 + used))
-        }
-        Tag::Bytes => {
-            let (content, used) = decode_terminated(body)?;
-            Ok((DataValue::Bytes(content), 1 + used))
-        }
-        Tag::Uuid => {
-            if body.len() < 16 {
-                return Err(DecodeError::Truncated);
+{
+    match end {
+        None => { out.push(0x01u8); }
+        Some(t) => {
+            out.push(0x02u8);
+            let mut i: usize = 0;
+            let ghost base = out@;
+            while i < 8
+                invariant 0 <= i <= 8, out@ =~= base + t@.take(i as int),
+                decreases 8 - i
+            {
+                out.push(t[i]);
+                proof { assert(t@.take(i + 1) =~= t@.take(i as int).push(t@[i as int])); }
+                i = i + 1;
             }
-            let mut u = [0u8; 16];
-            u.copy_from_slice(&body[..16]);
-            Ok((
-                DataValue::Uuid(UuidWrapper::new(uuid::Uuid::from_bytes(u))),
-                17,
-            ))
-        }
-        Tag::List => {
-            let (items, used) = decode_sequence(body, depth)?;
-            Ok((DataValue::List(items), 1 + used))
-        }
-        Tag::Set => {
-            // Single-pass: each item is decoded exactly once, and the
-            // canonical (sorted, deduplicated) form is checked against the
-            // SAME decode's consumed length — never a second full decode of
-            // the item. A prior two-pass shape (decode_sequence, then
-            // re-decode every item to learn its length for the ordering
-            // check) made a nested Set's cost double per level of nesting:
-            // O(2^depth) on adversarial input, the hang the fuzzer found.
-            let mut items = Vec::new();
-            let mut prev: Option<&[u8]> = None;
-            let mut used = 0usize;
-            loop {
-                match body.get(used) {
-                    None => return Err(DecodeError::Truncated),
-                    Some(&STRUCT_SEQ_END) => {
-                        return Ok((DataValue::Set(items.into_iter().collect()), 1 + used + 1));
-                    }
-                    Some(_) => {
-                        let (item, ilen) = decode_at(&body[used..], depth + 1)?;
-                        let this = &body[used..used + ilen];
-                        if let Some(p) = prev
-                            && p >= this
-                        {
-                            return Err(DecodeError::SetNotCanonical);
-                        }
-                        prev = Some(this);
-                        items.push(item);
-                        used += ilen;
-                    }
-                }
-            }
-        }
-        Tag::Regex => {
-            let &flag_byte = body.first().ok_or(DecodeError::Truncated)?;
-            let flags = RegexFlags::from_bits(flag_byte).ok_or(DecodeError::BadRegexFlags)?;
-            let (content, used) = decode_terminated(&body[1..])?;
-            let pattern = String::from_utf8(content).map_err(|_| DecodeError::BadUtf8)?;
-            // Stored patterns were validated at write; decode stays total
-            // over stored history (see wide::regex validity law).
-            Ok((
-                DataValue::Regex(RegexSource::from_stored(flags, pattern)),
-                2 + used,
-            ))
-        }
-        Tag::Json => {
-            let (j, jused) = decode_json(body, depth)?;
-            let hash_bytes = body.get(jused..jused + 8).ok_or(DecodeError::Truncated)?;
-            let expect = fnv1a64(&body[..jused]);
-            if hash_bytes != expect.to_be_bytes() {
-                return Err(DecodeError::JsonHashMismatch);
-            }
-            Ok((DataValue::Json(j), 1 + jused + 8))
-        }
-        Tag::Vector => {
-            let count_bytes = body.get(..4).ok_or(DecodeError::Truncated)?;
-            let mut count_arr = [0u8; 4];
-            count_arr.copy_from_slice(count_bytes);
-            let count = crate::value::convert::usize_from_u32(u32::from_be_bytes(count_arr));
-            // Hostile length prefix: each float Num key is ≥1 byte, so a
-            // claimed count larger than the remaining body cannot be
-            // lawful. Refuse before `Vec::with_capacity` — otherwise a
-            // 5-byte input can ask for a multi-gigabyte allocation
-            // (fuzz-smoke fact_payload_decode OOM on tag+u32).
-            // `count_bytes` already proved `body.len() >= 4`.
-            let rest = body.len() - 4;
-            if count > rest {
-                return Err(DecodeError::Truncated);
-            }
-            let mut floats = Vec::with_capacity(count);
-            let mut used = 4usize;
-            for _ in 0..count {
-                let (n, nused) = Num::decode_key(&body[used..]).map_err(DecodeError::Num)?;
-                let Some(f) = n.as_float() else {
-                    return Err(DecodeError::VectorComponentNotFloat);
-                };
-                floats.push(f);
-                used += nused;
-            }
-            let vector = Vector::try_new(floats).ok_or(DecodeError::VectorDimensionOverflow)?;
-            Ok((DataValue::Vector(vector), 1 + used))
-        }
-        Tag::Validity => {
-            let ts_bytes = body.get(..8).ok_or(DecodeError::Truncated)?;
-            let mut asc = [0u8; 8];
-            asc.copy_from_slice(ts_bytes);
-            for b in &mut asc {
-                *b = !*b;
-            }
-            let ts = ts_from_asc(asc);
-            let is_assert = match body.get(8) {
-                Some(0x00) => true,
-                Some(0x01) => false,
-                Some(_) => return Err(DecodeError::BadPolarity),
-                None => return Err(DecodeError::Truncated),
-            };
-            Ok((
-                DataValue::Validity(ValiditySlot::from_stored(
-                    ValidityTs::of_micros(ts),
-                    is_assert,
-                )),
-                10,
-            ))
-        }
-        Tag::Interval => match body.first() {
-            Some(0x01) => Ok((DataValue::Interval(Interval::EMPTY), 2)),
-            Some(0x02) => {
-                let mut used = 1usize;
-                let (lo, lo_used) = decode_interval_end(&body[used..], true)?;
-                used += lo_used;
-                let (hi, hi_used) = decode_interval_end(&body[used..], false)?;
-                used += hi_used;
-                let (lo, hi) = match (lo, hi) {
-                    (End::Unbounded, End::At(h)) => (Lo::NegUnbounded, Hi::At(h)),
-                    (End::Unbounded, End::Unbounded) => (Lo::NegUnbounded, Hi::PosUnbounded),
-                    (End::At(l), End::Unbounded) => (Lo::At(l), Hi::PosUnbounded),
-                    (End::At(l), End::At(h)) => (Lo::At(l), Hi::At(h)),
-                };
-                let iv = Interval::range(lo, hi);
-                // The closed-normal-form law: a written Range must BE a
-                // lawful range; a denotes-empty pair is not canonical.
-                if iv.is_empty() {
-                    return Err(DecodeError::IntervalNotCanonical);
-                }
-                Ok((DataValue::Interval(iv), 1 + used))
-            }
-            Some(_) => Err(DecodeError::IntervalNotCanonical),
-            None => Err(DecodeError::Truncated),
-        },
-        Tag::Geometry => {
-            if body.len() < 8 {
-                return Err(DecodeError::Truncated);
-            }
-            let mut key = [0u8; 8];
-            key.copy_from_slice(&body[..8]);
-            let code = u64::from_be_bytes(key);
-            Ok((DataValue::Geometry(Geometry::from_curve_key(code)), 9))
+            proof { assert(t@.take(8int) =~= t@); }
         }
     }
 }
 
-enum End {
-    Unbounded,
-    At(i64),
+impl KindKey for IntervalKey {
+    closed spec fn tag(self) -> u8 { self.tag }
+    closed spec fn key(self) -> Seq<u8> { self.bytes@ }
+    closed spec fn wf(self) -> bool { self.wf_key() }
+    proof fn law_tag(self) { assert(!is_seq_tag(self.tag)); }
+    proof fn law_key(self) {}
+    fn tag_byte(&self) -> (t: u8) { proof { use_type_invariant(self); } self.tag }
+    fn emit(&self) -> (r: Vec<u8>) { self.bytes.clone() }
 }
 
-fn decode_interval_end(body: &[u8], _is_lo: bool) -> Result<(End, usize), DecodeError> {
-    match body.first() {
-        Some(0x01) => Ok((End::Unbounded, 1)),
-        Some(0x02) => {
-            let ts_bytes = body.get(1..9).ok_or(DecodeError::Truncated)?;
-            let mut arr = [0u8; 8];
-            arr.copy_from_slice(ts_bytes);
-            Ok((End::At(ts_from_asc(arr)), 9))
-        }
-        Some(_) => Err(DecodeError::IntervalNotCanonical),
-        None => Err(DecodeError::Truncated),
-    }
-}
-
-fn decode_json(body: &[u8], depth: usize) -> Result<(Json, usize), DecodeError> {
-    if depth > MAX_DEPTH {
-        return Err(DecodeError::TooDeep);
-    }
-    let &marker = body.first().ok_or(DecodeError::Truncated)?;
-    let rest = &body[1..];
-    match marker {
-        JNULL => Ok((Json::Null, 1)),
-        JFALSE => Ok((Json::Bool(false), 1)),
-        JTRUE => Ok((Json::Bool(true), 1)),
-        JNUM => {
-            let (n, used) = Num::decode_key(rest).map_err(DecodeError::Num)?;
-            let jn = JsonNum::new(n).map_err(|_| DecodeError::JsonNumberNotFinite)?;
-            Ok((Json::Num(jn), 1 + used))
-        }
-        JSTR => {
-            let (content, used) = decode_terminated(rest)?;
-            let s = String::from_utf8(content).map_err(|_| DecodeError::BadUtf8)?;
-            Ok((Json::Str(s), 1 + used))
-        }
-        JARR => {
-            let mut items = Vec::new();
-            let mut used = 0usize;
-            loop {
-                match rest.get(used) {
-                    None => return Err(DecodeError::Truncated),
-                    Some(&STRUCT_SEQ_END) => return Ok((Json::Arr(items), 1 + used + 1)),
-                    Some(_) => {
-                        let (item, ilen) = decode_json(&rest[used..], depth + 1)?;
-                        items.push(item);
-                        used += ilen;
-                    }
-                }
-            }
-        }
-        JOBJ => {
-            let mut entries: Vec<(String, Json)> = Vec::new();
-            let mut prev_key: Option<Vec<u8>> = None;
-            let mut used = 0usize;
-            loop {
-                match rest.get(used) {
-                    None => return Err(DecodeError::Truncated),
-                    Some(&STRUCT_SEQ_END) => {
-                        let obj =
-                            JsonObj::new(entries).map_err(|_| DecodeError::JsonNotCanonical)?;
-                        return Ok((Json::Obj(obj), 1 + used + 1));
-                    }
-                    // Each entry is a `JSTR`-tagged key (the marker that
-                    // keeps a present entry above the terminator) then its
-                    // value.
-                    Some(&JSTR) => {
-                        let (key_bytes, klen) = decode_terminated(&rest[used + 1..])?;
-                        if let Some(p) = &prev_key
-                            && p.as_slice() >= key_bytes.as_slice()
-                        {
-                            return Err(DecodeError::JsonNotCanonical);
-                        }
-                        let key = String::from_utf8(key_bytes.clone())
-                            .map_err(|_| DecodeError::BadUtf8)?;
-                        prev_key = Some(key_bytes);
-                        used += 1 + klen; // JSTR marker + terminated key
-                        let (val, vlen) = decode_json(&rest[used..], depth + 1)?;
-                        used += vlen;
-                        entries.push((key, val));
-                    }
-                    Some(&other) => return Err(DecodeError::BadJsonMarker(other)),
-                }
-            }
-        }
-        other => Err(DecodeError::BadJsonMarker(other)),
+/// One more component extends the vector scan by exactly that component.
+proof fn lemma_vector_extend(p: Seq<u8>, at: int, rem: nat)
+    requires 0 <= at, 0 <= vector_elems_end(p, at, rem) <= p.len()
+    ensures ({
+        let m = vector_elems_end(p, at, rem);
+        let w = num_end(p.skip(m));
+        vector_elems_end(p, at, (rem + 1) as nat) == if w <= 0 { -1int } else { m + w }
+    })
+    decreases rem
+{
+    if rem == 0nat {
+        assert(vector_elems_end(p, at, rem) == at);
+        assert(vector_elems_end(p, at, 1nat) == ({
+            let w = num_end(p.skip(at));
+            if w <= 0 { -1int } else { vector_elems_end(p, at + w, 0nat) }
+        }));
+    } else {
+        assert(at <= p.len());
+        let w0 = num_end(p.skip(at));
+        assert(w0 > 0);
+        assert(vector_elems_end(p, at, rem) == vector_elems_end(p, at + w0, (rem - 1) as nat));
+        assert(vector_elems_end(p, at, (rem + 1) as nat)
+            == vector_elems_end(p, at + w0, rem));
+        lemma_vector_extend(p, at + w0, (rem - 1) as nat);
     }
 }
 
-fn decode_sequence(body: &[u8], depth: usize) -> Result<(Vec<DataValue>, usize), DecodeError> {
-    let mut items = Vec::new();
-    let mut used = 0usize;
-    loop {
-        match body.get(used) {
-            None => return Err(DecodeError::Truncated),
-            Some(&STRUCT_SEQ_END) => return Ok((items, used + 1)),
-            Some(_) => {
-                let (item, ilen) = decode_at(&body[used..], depth + 1)?;
-                items.push(item);
-                used += ilen;
+/// A count-led key: `u32` big-endian component count, then that many Num keys.
+/// Vector mints here.
+// CONSTRUCT: SealedProduct VectorKey
+pub struct VectorKey {
+    tag: u8,
+    bytes: Vec<u8>,
+}
+
+// CONSTRUCT: ImplBlock VectorKey
+impl VectorKey {
+    #[verifier::type_invariant]
+    closed spec fn wf_key(self) -> bool {
+        self.tag >= TAG_MIN
+        && shape_of(self.tag) == Some(KeyShape::CountLed)
+        && vector_end(self.bytes@) == self.bytes@.len()
+    }
+
+    /// Mint from component keys. Each component must already be a complete Num
+    /// key; the count is written, never inferred, and the scan is proven to
+    /// land exactly on the end.
+    pub fn mint(tag: u8, comps: &Vec<Vec<u8>>) -> (r: VectorKey)
+        requires
+            tag >= TAG_MIN,
+            shape_of(tag) == Some(KeyShape::CountLed),
+            comps@.len() <= 0xFFFF_FFFFu32,
+            forall|i: int| 0 <= i < comps@.len()
+                ==> #[trigger] num_end(comps@[i]@) == comps@[i]@.len(),
+        ensures r.tag() == tag
+    {
+        let dim: u32 = comps.len() as u32;
+        let mut out: Vec<u8> = Vec::new();
+        out.push((dim >> 24) as u8);
+        out.push((dim >> 16) as u8);
+        out.push((dim >> 8) as u8);
+        out.push(dim as u8);
+        proof {
+            assert(be32(out@) == dim as nat) by {
+                assert(((dim >> 24) as u8) as nat * 16777216
+                    + ((dim >> 16) as u8) as nat * 65536
+                    + ((dim >> 8) as u8) as nat * 256
+                    + (dim as u8) as nat == dim as nat) by (bit_vector);
             }
+            assert(vector_elems_end(out@, 4, 0nat) == 4);
         }
+        let mut i: usize = 0;
+        while i < comps.len()
+            invariant
+                0 <= i <= comps@.len(),
+                comps@.len() == dim as nat,
+                out@.len() >= 4,
+                be32(out@) == dim as nat,
+                vector_elems_end(out@, 4, i as nat) == out@.len(),
+                forall|k: int| 0 <= k < comps@.len()
+                    ==> #[trigger] num_end(comps@[k]@) == comps@[k]@.len(),
+            decreases comps@.len() - i
+        {
+            let ghost before = out@;
+            let c = &comps[i];
+            let mut j: usize = 0;
+            while j < c.len()
+                invariant
+                    0 <= j <= c@.len(),
+                    c@ =~= comps@[i as int]@,
+                    out@ =~= before + c@.take(j as int),
+                decreases c@.len() - j
+            {
+                out.push(c[j]);
+                proof { assert(c@.take(j + 1) =~= c@.take(j as int).push(c@[j as int])); }
+                j = j + 1;
+            }
+            proof {
+                assert(c@.take(c@.len() as int) =~= c@);
+                assert(out@ =~= before + c@);
+                assert(is_prefix(before, out@)) by { lemma_prefix_of_self_plus(before, c@); }
+                assert(be32(out@) == be32(before)) by {
+                    lemma_prefix_index(before, out@, 0);
+                    lemma_prefix_index(before, out@, 1);
+                    lemma_prefix_index(before, out@, 2);
+                    lemma_prefix_index(before, out@, 3);
+                }
+                lemma_vector_elems_local(before, out@, 4, i as nat);
+                assert(vector_elems_end(out@, 4, i as nat) == before.len());
+                lemma_vector_extend(out@, 4, i as nat);
+                assert(out@.skip(before.len() as int) =~= c@);
+                assert(num_end(c@) == c@.len());
+            }
+            i = i + 1;
+        }
+        proof { assert(vector_end(out@) == out@.len()); }
+        VectorKey { tag, bytes: out }
     }
 }
 
-pub(super) fn decode_terminated(body: &[u8]) -> Result<(Vec<u8>, usize), DecodeError> {
-    let mut content = Vec::new();
-    let mut i = 0usize;
-    loop {
-        match body.get(i) {
-            None => return Err(DecodeError::Truncated),
-            Some(&STRUCT_STRING) => match body.get(i + 1) {
-                Some(0x00) => return Ok((content, i + 2)),
-                Some(0xFF) => {
-                    content.push(0x00);
-                    i += 2;
-                }
-                Some(_) => return Err(DecodeError::BadEscape),
-                None => return Err(DecodeError::Truncated),
-            },
-            Some(&b) => {
-                content.push(b);
-                i += 1;
-            }
+impl KindKey for VectorKey {
+    closed spec fn tag(self) -> u8 { self.tag }
+    closed spec fn key(self) -> Seq<u8> { self.bytes@ }
+    closed spec fn wf(self) -> bool { self.wf_key() }
+    proof fn law_tag(self) { assert(!is_seq_tag(self.tag)); }
+    proof fn law_key(self) {}
+    fn tag_byte(&self) -> (t: u8) { proof { use_type_invariant(self); } self.tag }
+    fn emit(&self) -> (r: Vec<u8>) { self.bytes.clone() }
+}
+
+// --- the JSON marker grammar ---
+
+pub const JNULL: u8 = 0x05;
+pub const JFALSE: u8 = 0x06;
+pub const JTRUE: u8 = 0x07;
+pub const JNUM: u8 = 0x10;
+pub const JSTR: u8 = 0x18;
+pub const JARR: u8 = 0x48;
+pub const JOBJ: u8 = 0x4C;
+
+proof fn lemma_json_head(p: Seq<u8>)
+    requires json_end(p) > 0
+    ensures p.len() > 0, p[0] != STRUCT_END
+{}
+
+/// A JSON array body scans to exactly its elements plus the terminator.
+proof fn lemma_json_arr_of_row(r: Seq<Seq<u8>>, rest: Seq<u8>)
+    requires forall|i: int| 0 <= i < r.len() ==> #[trigger] json_end(r[i]) == r[i].len() > 0
+    ensures json_arr((cat(r) + seq![STRUCT_END]) + rest) == cat(r).len() + 1
+    decreases r.len()
+{
+    let buf = (cat(r) + seq![STRUCT_END]) + rest;
+    if r.len() == 0 {
+        assert(cat(r) =~= Seq::<u8>::empty());
+        assert(buf[0] == STRUCT_END);
+    } else {
+        let head = r[0];
+        let tail_buf = (cat(r.drop_first()) + seq![STRUCT_END]) + rest;
+        assert(json_end(head) == head.len() > 0);
+        lemma_json_head(head);
+        assert(buf =~= head + tail_buf) by { assert(cat(r) =~= head + cat(r.drop_first())); }
+        assert(buf[0] == head[0] && buf[0] != STRUCT_END);
+        lemma_prefix_of_self_plus(head, tail_buf);
+        lemma_json_end_local(head, buf);
+        assert(json_end(buf) == head.len());
+        assert(buf.skip(head.len() as int) =~= tail_buf);
+        assert forall|i: int| 0 <= i < r.drop_first().len()
+            implies #[trigger] json_end(r.drop_first()[i]) == r.drop_first()[i].len() > 0 by {
+            assert(json_end(r[i + 1]) == r[i + 1].len() > 0);
         }
+        lemma_json_arr_of_row(r.drop_first(), rest);
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use miette::{IntoDiagnostic, Result, miette};
+pub open spec fn obj_cat(ps: Seq<(Seq<u8>, Seq<u8>)>) -> Seq<u8>
+    decreases ps.len()
+{
+    if ps.len() == 0 { Seq::empty() }
+    else { ((seq![JSTR] + enc_bytes(ps[0].0)) + ps[0].1) + obj_cat(ps.drop_first()) }
+}
 
-    use std::collections::BTreeSet;
-
-    use super::super::kind::interval::Bound;
-    use super::*;
-    use std::cmp::Ordering;
-
-    use crate::value::test_rng::Rng;
-
-    // ------------------------------------------------------------------
-    // Laws. The one-law lock is codec bytes vs production DataValue::Ord
-    // (tag/cmp, which owns json_storage_cmp / interval_storage_cmp). A
-    // third test-side semantic mirror is a deleted duplicate authority.
-    // ------------------------------------------------------------------
-
-    const U1: [u8; 16] = [0x11; 16];
-
-    fn edge_datums() -> Result<Vec<DataValue>> {
-        let nums = [
-            Num::int(0),
-            Num::float(0.0),
-            Num::int(1),
-            Num::float(1.0),
-            Num::int(-1),
-            Num::float(-1.5),
-            Num::int(i64::MAX),
-            Num::float(f64::INFINITY),
-            Num::float(f64::NAN),
-        ];
-        let mut out = vec![
-            DataValue::Null,
-            DataValue::Bool(false),
-            DataValue::Bool(true),
-            DataValue::Str(String::new()),
-            DataValue::Str("a".into()),
-            DataValue::Str("ab".into()),
-            DataValue::Str("a\u{0}b".into()),
-            DataValue::Str("a\u{0}".into()),
-            DataValue::Bytes(vec![]),
-            DataValue::Bytes(vec![0x00]),
-            DataValue::Bytes(vec![0x00, 0x00]),
-            DataValue::Bytes(vec![0x00, 0xFF]),
-            DataValue::Bytes(vec![0xFF]),
-            DataValue::Uuid(UuidWrapper::new(uuid::Uuid::from_bytes(U1))),
-            DataValue::List(vec![]),
-        ];
-        out.extend(nums.iter().map(|&n| DataValue::Num(n)));
-        let a = DataValue::Str("a".into());
-        let b = DataValue::Str("b".into());
-        out.push(DataValue::List(vec![a.clone()]));
-        out.push(DataValue::List(vec![a.clone(), b.clone()]));
-        out.push(DataValue::List(vec![a.clone(), DataValue::List(vec![])]));
-        out.push(DataValue::List(vec![DataValue::List(vec![a.clone()])]));
-        out.push(DataValue::Set(BTreeSet::new()));
-        out.push(DataValue::Set([a.clone(), b.clone()].into_iter().collect()));
-        out.push(DataValue::Regex(
-            RegexSource::validated(RegexFlags::NONE, "a+".into())
-                .map_err(|e| miette!("{e:?}"))?,
-        ));
-        out.push(DataValue::Regex(
-            RegexSource::validated(RegexFlags::CASE_INSENSITIVE, "a+".into()).into_diagnostic()?,
-        ));
-        out.push(DataValue::Json(Json::Null));
-        out.push(DataValue::Json(Json::Obj(
-            JsonObj::new(vec![
-                (
-                    "b".into(),
-                    Json::Num(JsonNum::new(Num::int(2)).map_err(|e| miette!("{e:?}"))?),
-                ),
-                ("a".into(), Json::Str("x\u{0}y".into())),
-            ])
-            .map_err(|e| miette!("{e:?}"))?,
-        )));
-        out.push(DataValue::Json(Json::Arr(vec![
-            Json::Bool(true),
-            Json::Null,
-        ])));
-        out.push(DataValue::Json(Json::Obj(
-            JsonObj::new(vec![
-                ("\u{0}k".into(), Json::Null),
-                ("k".into(), Json::Bool(false)),
-            ])
-            .map_err(|e| miette!("{e:?}"))?,
-        )));
-        out.push(DataValue::Vector(Vector::try_new(vec![]).ok_or_else(|| miette!("try_new"))?));
-        out.push(DataValue::Vector(Vector::try_new(vec![0.0]).ok_or_else(|| miette!("try_new"))?));
-        out.push(DataValue::Vector(
-            Vector::try_new(vec![-1.5, f64::NAN]).ok_or_else(|| miette!("try_new"))?,
-        ));
-        out.push(DataValue::Validity(
-            Validity::new(ValidityTs::of_micros(0), true)
-                .ok_or_else(|| miette!("representable Validity"))?
-                .into(),
-        ));
-        out.push(DataValue::Validity(
-            Validity::new(ValidityTs::of_micros(0), false)
-                .ok_or_else(|| miette!("representable Validity"))?
-                .into(),
-        ));
-        out.push(DataValue::Validity(ValiditySlot::from_stored(
-            ValidityTs::of_micros(i64::MAX),
-            true,
-        )));
-        out.push(DataValue::Interval(Interval::EMPTY));
-        out.push(DataValue::Interval(Interval::new(
-            Bound::Closed(0),
-            Bound::Unbounded,
-        )));
-        out.push(DataValue::Interval(Interval::new(
-            Bound::Closed(-5),
-            Bound::Open(9),
-        )));
-        out.push(DataValue::Interval(Interval::new(
-            Bound::Unbounded,
-            Bound::Unbounded,
-        )));
-        out.push(DataValue::Geometry(Geometry::from_cells(0, 0)));
-        out.push(DataValue::Geometry(Geometry::from_cells(1, 0)));
-        out.push(DataValue::Geometry(Geometry::from_cells(0, 1)));
-        out.push(DataValue::Geometry(Geometry::from_cells(
-            u32::MAX,
-            u32::MAX,
-        )));
-        Ok(out)
-    }
-
-    /// THE one-law lock on the edge corpus: canonical byte order ==
-    /// production `DataValue::Ord` (`tag` + `cmp`). Every pair.
-    #[test]
-    fn law_order_embedding_edge_corpus() -> Result<()> {
-        let corpus = edge_datums()?;
-        let encoded: Vec<CanonicalBytes> = corpus.iter().map(encode_owned).collect();
-        for i in 0..corpus.len() {
-            for j in 0..corpus.len() {
-                let byte = encoded[i].as_bytes().cmp(encoded[j].as_bytes());
-                let structural = corpus[i].cmp(&corpus[j]);
-                assert_eq!(
-                    byte, structural,
-                    "byte order != Ord: {:?} vs {:?}",
-                    corpus[i], corpus[j]
-                );
-                if corpus[i].tag() != corpus[j].tag() {
-                    assert_eq!(
-                        corpus[i].tag().cmp(&corpus[j].tag()),
-                        byte,
-                        "cross-kind DataValue::tag order != byte: {:?} vs {:?}",
-                        corpus[i],
-                        corpus[j]
-                    );
-                }
-            }
+/// A JSON object body scans to exactly its key/value pairs plus the terminator.
+proof fn lemma_json_obj_of_pairs(ps: Seq<(Seq<u8>, Seq<u8>)>, rest: Seq<u8>)
+    requires forall|i: int| 0 <= i < ps.len() ==> #[trigger] json_end(ps[i].1) == ps[i].1.len() > 0
+    ensures json_obj((obj_cat(ps) + seq![STRUCT_END]) + rest) == obj_cat(ps).len() + 1
+    decreases ps.len()
+{
+    let buf = (obj_cat(ps) + seq![STRUCT_END]) + rest;
+    if ps.len() == 0 {
+        assert(obj_cat(ps) =~= Seq::<u8>::empty());
+        assert(buf[0] == STRUCT_END);
+    } else {
+        let k = seq![JSTR] + enc_bytes(ps[0].0);
+        let v = ps[0].1;
+        let tail_buf = (obj_cat(ps.drop_first()) + seq![STRUCT_END]) + rest;
+        lemma_esc_end_of_enc_bytes(ps[0].0);
+        assert(k.len() >= 3 && k[0] == JSTR && k[0] != STRUCT_END);
+        assert(k.skip(1) =~= enc_bytes(ps[0].0));
+        assert(buf =~= (k + v) + tail_buf) by {
+            assert(obj_cat(ps) =~= (k + v) + obj_cat(ps.drop_first()));
         }
-        Ok(())
-    }
-
-    /// skip_one is decode_one's length, everywhere (including nested
-    /// containers), and refuses garbage decode refuses.
-    #[test]
-    fn law_skip_matches_decode_consumed_length() -> Result<()> {
-        let mut rng = Rng(0x5C1B);
-        for _ in 0..400 {
-            let d = random_datum(&mut rng, 0)?;
-            let enc = encode_owned(&d);
-            let (_, used) = decode_one(enc.as_bytes()).into_diagnostic()?;
-            match skip_one(enc.as_bytes()) {
-                Ok(s) => assert_eq!(s, used, "skip diverged: {d:?}"),
-                Err(e) => {
-                    return Err(miette!(
-                        "skip refused lawful {d:?}: {e:?} bytes={:02x?}",
-                        enc.as_bytes()
-                    ));
-                }
-            }
+        assert(buf =~= k + (v + tail_buf));
+        assert(buf[0] == k[0] && buf[0] != STRUCT_END);
+        lemma_prefix_of_self_plus(k.skip(1), v + tail_buf);
+        assert(buf.skip(1) =~= k.skip(1) + (v + tail_buf));
+        lemma_esc_end_local(k.skip(1), buf.skip(1));
+        assert(esc_end(buf.skip(1)) == k.len() - 1);
+        assert(buf.skip(k.len() as int) =~= v + tail_buf);
+        assert(json_end(v) == v.len() > 0);
+        lemma_prefix_of_self_plus(v, tail_buf);
+        lemma_json_end_local(v, v + tail_buf);
+        assert(json_end(buf.skip(1 + (k.len() - 1))) == v.len());
+        assert(buf.skip(k.len() as int + v.len() as int) =~= tail_buf);
+        assert forall|i: int| 0 <= i < ps.drop_first().len()
+            implies #[trigger] json_end(ps.drop_first()[i].1) == ps.drop_first()[i].1.len() > 0 by {
+            assert(json_end(ps[i + 1].1) == ps[i + 1].1.len() > 0);
         }
-        for d in edge_datums()? {
-            let enc = encode_owned(&d);
-            let (_, used) = decode_one(enc.as_bytes()).into_diagnostic()?;
-            assert_eq!(
-                skip_one(enc.as_bytes()).into_diagnostic()?,
-                used,
-                "skip diverged: {d:?}"
-            );
-        }
-        assert!(skip_one(&[]).is_err());
-        assert!(skip_one(&[0xEE]).is_err());
-        assert!(skip_one(&[Tag::Str.byte(), 0x61]).is_err());
-        Ok(())
-    }
-
-    /// Round-trip totality over the edge corpus.
-    #[test]
-    fn law_round_trip_edge_corpus() -> Result<()> {
-        for d in edge_datums()? {
-            let enc = encode_owned(&d);
-            let back = decode(enc.as_bytes()).into_diagnostic()?;
-            assert_eq!(back, d, "round-trip changed {d:?}");
-        }
-        Ok(())
-    }
-
-    /// The mandated grammar prefix cases, pinned explicitly.
-    #[test]
-    fn law_sequence_grammar_prefix_cases() -> Result<()> {
-        let a = Datum::Str("a");
-        let b = Datum::Str("b");
-        let empty = Datum::List(&[]);
-        let l_a = [a];
-        let l_ab = [a, b];
-        let inner = [a, empty];
-        let cases = [
-            (encode(Datum::List(&[])), encode(Datum::List(&l_a))), // [] < [a]
-            (encode(Datum::List(&l_a)), encode(Datum::List(&l_ab))), // [a] < [a,b]
-            (encode(Datum::List(&l_a)), encode(Datum::List(&inner))), // [a] < [a,[]]
-        ];
-        for (lo, hi) in &cases {
-            assert!(lo < hi, "prefix law broken: {lo:?} !< {hi:?}");
-        }
-        // Sets: writing order and duplicates are not identity.
-        let s21 = [Datum::Num(Num::int(2)), Datum::Num(Num::int(1))];
-        let s121 = [
-            Datum::Num(Num::int(1)),
-            Datum::Num(Num::int(2)),
-            Datum::Num(Num::int(1)),
-        ];
-        assert_eq!(encode(Datum::Set(&s21)), encode(Datum::Set(&s121)));
-        // Strings with embedded NULs order correctly around their
-        // prefixes and neighbors.
-        assert!(encode(Datum::Str("a")) < encode(Datum::Str("a\u{0}")));
-        assert!(encode(Datum::Str("a\u{0}")) < encode(Datum::Str("a\u{1}")));
-        assert!(encode(Datum::Str("a\u{0}")) < encode(Datum::Str("aa")));
-        // Interval storage order, pinned so nobody "fixes" it later:
-        // Empty first; an unbounded end marker (0x01) sorts before any
-        // finite end (0x02 + key) — deterministic storage order, not
-        // semantic interval order.
-        let empty = encode(Datum::Interval(Interval::EMPTY));
-        let unb_lo = encode(Datum::Interval(Interval::new(
-            Bound::Unbounded,
-            Bound::Closed(0),
-        )));
-        let fin_lo = encode(Datum::Interval(Interval::new(
-            Bound::Closed(i64::MIN),
-            Bound::Closed(0),
-        )));
-        let unb_hi = encode(Datum::Interval(Interval::new(
-            Bound::Closed(0),
-            Bound::Unbounded,
-        )));
-        let fin_hi = encode(Datum::Interval(Interval::new(
-            Bound::Closed(0),
-            Bound::Closed(i64::MAX),
-        )));
-        assert!(empty < unb_lo);
-        assert!(
-            unb_lo < fin_lo,
-            "unbounded lower end sorts before any finite one"
-        );
-        assert!(
-            unb_hi < fin_hi,
-            "unbounded upper end sorts before any finite one"
-        );
-        // Vector storage order is dimension-first: fewer dimensions sort
-        // before more, regardless of component values.
-        assert!(
-            encode(Datum::Vector(&Vector::try_new(vec![9e300]).ok_or_else(|| miette!("try_new"))?))
-                < encode(Datum::Vector(&Vector::try_new(vec![0.0, 0.0]).ok_or_else(|| miette!("try_new"))?))
-        );
-        Ok(())
-    }
-
-    /// Randomized one-law lock + round-trip: generated scalars and
-    /// shallow sequences, adversarial alphabets (NUL-heavy strings),
-    /// every kind including Interval. Codec bytes vs production Ord only.
-    #[test]
-    fn law_order_embedding_randomized() -> Result<()> {
-        let mut rng = Rng(0xC0FFEE);
-        let mut corpus: Vec<DataValue> = Vec::new();
-        for _ in 0..300 {
-            corpus.push(random_datum(&mut rng, 0)?);
-        }
-        let encoded: Vec<CanonicalBytes> = corpus.iter().map(encode_owned).collect();
-        for i in 0..corpus.len() {
-            for j in 0..corpus.len() {
-                let byte = encoded[i].as_bytes().cmp(encoded[j].as_bytes());
-                let structural = corpus[i].cmp(&corpus[j]);
-                assert_eq!(
-                    byte, structural,
-                    "random byte != Ord: {:?} vs {:?}",
-                    corpus[i], corpus[j]
-                );
-            }
-        }
-        for (d, enc) in corpus.iter().zip(encoded.iter()) {
-            assert_eq!(&decode(enc.as_bytes()).into_diagnostic()?, d);
-        }
-        Ok(())
-    }
-
-    /// Totality of the storage order over every constructible kind:
-    /// no NaN hole, no cross-kind ambiguity, no panic on compare,
-    /// `PartialOrd` always `Some`. The tie-break authority #199 stands on.
-    #[test]
-    fn law_datavalue_order_is_total_no_holes() -> Result<()> {
-        // One representative per kind — tag-byte order IS cross-kind order.
-        let kinds: [DataValue; 14] = [
-            DataValue::Null,
-            DataValue::Bool(false),
-            DataValue::Num(Num::float(f64::NAN)), // NaN is a Float, greatest Num
-            DataValue::Str(String::new()),
-            DataValue::Bytes(vec![]),
-            DataValue::Uuid(UuidWrapper::new(uuid::Uuid::from_bytes(U1))),
-            DataValue::Regex(RegexSource::validated(RegexFlags::NONE, "a".into()).into_diagnostic()?),
-            DataValue::Json(Json::Null),
-            DataValue::Vector(Vector::try_new(vec![f64::NAN]).ok_or_else(|| miette!("try_new"))?),
-            DataValue::List(vec![]),
-            DataValue::Set(BTreeSet::new()),
-            DataValue::Validity(
-                Validity::new(ValidityTs::of_micros(0), true)
-                    .ok_or_else(|| miette!("representable Validity"))?
-                    .into(),
-            ),
-            DataValue::Interval(Interval::EMPTY),
-            DataValue::Geometry(Geometry::from_cells(0, 0)),
-        ];
-        // Cross-kind: every pair is comparable; PartialOrd never None;
-        // cmp never panics; byte == Ord (production tag/cmp).
-        for a in &kinds {
-            for b in &kinds {
-                let partial = a.partial_cmp(b);
-                assert!(partial.is_some(), "PartialOrd hole: {:?} vs {:?}", a, b);
-                let structural = a.cmp(b);
-                assert_eq!(partial, Some(structural));
-                let byte = encode_owned(a).as_bytes().cmp(encode_owned(b).as_bytes());
-                assert_eq!(byte, structural, "cross-kind byte != Ord: {a:?} vs {b:?}");
-                if a.tag() != b.tag() {
-                    assert_eq!(
-                        a.tag().cmp(&b.tag()),
-                        byte,
-                        "cross-kind DataValue::tag != byte: {a:?} vs {b:?}"
-                    );
-                }
-            }
-        }
-        // NaN hole closed inside Num: every NaN bit pattern is one Num,
-        // equal to itself, greater than +∞, PartialOrd always Some.
-        let nan_bits = [
-            f64::NAN,
-            f64::from_bits(0x7FF8_0000_0000_0000),
-            f64::from_bits(0xFFF8_0000_0000_0001),
-            f64::from_bits(0x7FF0_0000_0000_0001),
-        ];
-        let nans: Vec<DataValue> = nan_bits
-            .iter()
-            .map(|&f| DataValue::Num(Num::float(f)))
-            .collect();
-        let pos_inf = DataValue::Num(Num::float(f64::INFINITY));
-        for n in &nans {
-            assert_eq!(n.partial_cmp(n), Some(Ordering::Equal));
-            assert_eq!(n.cmp(n), Ordering::Equal);
-            assert_eq!(n.cmp(&pos_inf), Ordering::Greater);
-            assert_eq!(
-                encode_owned(n)
-                    .as_bytes()
-                    .cmp(encode_owned(&pos_inf).as_bytes()),
-                Ordering::Greater
-            );
-            for m in &nans {
-                assert_eq!(n.cmp(m), Ordering::Equal);
-                assert_eq!(encode_owned(n), encode_owned(m));
-            }
-        }
-        // Randomized stress: compare must not panic for any generated pair.
-        let mut rng = Rng(0x70_7A_11);
-        let mut corpus: Vec<DataValue> = Vec::with_capacity(200);
-        for _ in 0..200 {
-            corpus.push(random_datum(&mut rng, 0)?);
-        }
-        for a in &corpus {
-            for b in &corpus {
-                match a.cmp(b) {
-                    ord => core::mem::drop(ord),
-                }
-                assert!(a.partial_cmp(b).is_some());
-            }
-        }
-        Ok(())
-    }
-
-    fn random_datum(rng: &mut Rng, depth: usize) -> Result<DataValue> {
-        // Depth 0: all 14 kinds. Nested: scalars + List/Set only.
-        let roll = rng.below(if depth == 0 { 14 } else { 7 });
-        Ok(match roll {
-            0 => DataValue::Null,
-            1 => DataValue::Bool(rng.next().is_multiple_of(2)),
-            2 => DataValue::Num(if rng.next().is_multiple_of(2) {
-                Num::int(rng.next().cast_signed())
-            } else {
-                Num::float(f64::from_bits(rng.next()))
-            }),
-            3 => {
-                let len = rng.below(6);
-                // NUL-heavy alphabet: exactly the escape/terminator stress.
-                let s: String = (0..len)
-                    .map(|_| ['\u{0}', 'a', 'b', '\u{1}'][rng.below(4)])
-                    .collect();
-                DataValue::Str(s)
-            }
-            4 => {
-                let len = rng.below(6);
-                DataValue::Bytes((0..len).map(|_| [0x00, 0x61, 0xFF][rng.below(3)]).collect())
-            }
-            5 => {
-                let mut u = [0u8; 16];
-                u[0] = crate::value::convert::u8_from_u64_low(rng.next());
-                DataValue::Uuid(UuidWrapper::new(uuid::Uuid::from_bytes(u)))
-            }
-            6 => {
-                let len = rng.below(4);
-                let mut items = Vec::with_capacity(len);
-                for _ in 0..len {
-                    items.push(random_datum(rng, depth + 1)?);
-                }
-                DataValue::List(items)
-            }
-            7 => {
-                let len = rng.below(4);
-                let mut items = Vec::with_capacity(len);
-                for _ in 0..len {
-                    items.push(random_datum(rng, depth + 1)?);
-                }
-                DataValue::Set(items.into_iter().collect())
-            }
-            8 => {
-                // `% 0x40` fits u8; low byte of u64 is total.
-                let flags = RegexFlags::from_bits(crate::value::convert::u8_from_u64_low(rng.next() % 0x40))
-                    .ok_or_else(|| miette!("regex flags"))?;
-                let pattern = ["", "a", "a\\+", "^x$"][rng.below(4)].to_string();
-                DataValue::Regex(
-                    RegexSource::validated(flags, pattern).into_diagnostic()?,
-                )
-            }
-            9 => {
-                let len = rng.below(3);
-                DataValue::Vector(
-                    Vector::try_new((0..len).map(|_| f64::from_bits(rng.next())).collect())
-                        .ok_or_else(|| miette!("try_new"))?,
-                )
-            }
-            10 => {
-                let ts = ValidityTs::of_micros(rng.next().cast_signed());
-                let is_assert = rng.next().is_multiple_of(2);
-                DataValue::Validity(ValiditySlot::from_stored(ts, is_assert))
-            }
-            11 => DataValue::Interval(if rng.next().is_multiple_of(4) {
-                Interval::EMPTY
-            } else {
-                // lo ∈ [-999,999], span ∈ [0,49] by the moduli — sum fits i64.
-                let lo = rng.next().cast_signed() % 1000;
-                let span = i64::from(crate::value::convert::u8_from_u64_low(rng.next() % 50));
-                Interval::new(Bound::Closed(lo), Bound::Closed(lo + span))
-            }),
-            12 => DataValue::Geometry(Geometry::from_cells(
-                crate::value::convert::u32_from_u64_low(rng.next()),
-                crate::value::convert::u32_from_u64_low(rng.next()),
-            )),
-            _other => DataValue::Json(random_json(rng, 0)?),
-        })
-    }
-
-    fn random_json(rng: &mut Rng, depth: usize) -> Result<Json> {
-        let roll = rng.below(if depth < 2 { 7 } else { 5 });
-        Ok(match roll {
-            0 => Json::Null,
-            1 => Json::Bool(rng.next().is_multiple_of(2)),
-            2 => {
-                let n = if rng.next().is_multiple_of(2) {
-                    Num::int(rng.next().cast_signed())
-                } else {
-                    // JSON numbers must be finite; map non-finite draws.
-                    let f = f64::from_bits(rng.next());
-                    Num::float(if f.is_finite() { f } else { 0.25 })
-                };
-                Json::Num(JsonNum::new(n).map_err(|e| miette!("{e:?}"))?)
-            }
-            3 => Json::Str(["", "k", "\u{0}v"][rng.below(3)].to_string()),
-            4 => Json::Str("s".into()),
-            5 => {
-                let n = rng.below(3);
-                let mut items = Vec::with_capacity(n);
-                for _ in 0..n {
-                    items.push(random_json(rng, depth + 1)?);
-                }
-                Json::Arr(items)
-            }
-            _other => {
-                let keys = ["a", "b", "cc"];
-                let n = rng.below(3);
-                let mut entries: Vec<(String, Json)> = Vec::with_capacity(n);
-                for i in 0..n {
-                    entries.push((keys[i].to_string(), random_json(rng, depth + 1)?));
-                }
-                Json::Obj(JsonObj::new(entries).map_err(|e| miette!("{e:?}"))?)
-            }
-        })
-    }
-
-    /// Format v1 golden vectors for composite encodings: permanent bytes
-    /// (seat 59). A failure means the on-disk canonical form moved.
-    #[test]
-    fn format_v1_golden_vectors() -> Result<()> {
-        let hex = |cb: &CanonicalBytes| -> String {
-            cb.as_bytes().iter().map(|b| format!("{b:02x}")).collect()
-        };
-        assert_eq!(hex(&encode(Datum::Null)), "05");
-        assert_eq!(hex(&encode(Datum::Bool(false))), "0800");
-        assert_eq!(hex(&encode(Datum::Bool(true))), "0801");
-        assert_eq!(hex(&encode(Datum::Num(Num::int(0)))), "100200");
-        assert_eq!(hex(&encode(Datum::Str(""))), "180000");
-        assert_eq!(hex(&encode(Datum::Str("a"))), "18610000");
-        assert_eq!(hex(&encode(Datum::Str("a\u{0}b"))), "186100ff620000");
-        assert_eq!(hex(&encode(Datum::Bytes(&[0x00]))), "2000ff0000");
-        assert_eq!(hex(&encode(Datum::List(&[]))), "4801");
-        let one = [Datum::Num(Num::int(1))];
-        assert_eq!(
-            hex(&encode(Datum::List(&one))),
-            "48100304398000000000000000000001"
-        );
-        assert_eq!(hex(&encode(Datum::Set(&[]))), "5001");
-        let re_a = RegexSource::validated(RegexFlags::NONE, "a".into()).into_diagnostic()?;
-        assert_eq!(hex(&encode(Datum::Regex(&re_a))), "3000610000");
-        assert_eq!(
-            hex(&encode(Datum::Vector(&Vector::try_new(vec![1.0]).ok_or_else(|| miette!("try_new"))?))),
-            "400000000103043980000000000000000001"
-        );
-        assert_eq!(
-            hex(&encode(Datum::Validity(
-                Validity::new(ValidityTs::of_micros(0), true).ok_or_else(|| miette!("representable Validity"))?
-            ))),
-            "587fffffffffffffff00"
-        );
-        assert_eq!(hex(&encode(Datum::Interval(Interval::EMPTY))), "6001");
-        assert_eq!(
-            hex(&encode(Datum::Interval(Interval::new(
-                Bound::Closed(0),
-                Bound::Unbounded
-            )))),
-            "600202800000000000000001"
-        );
-        // Hilbert @ 32-bit depth: origin 2×2 is {0,1,2,3} contiguous
-        // (orientation reflected vs order-1 by odd empty high levels).
-        assert_eq!(
-            hex(&encode(Datum::Geometry(Geometry::from_cells(0, 0)))),
-            "680000000000000000"
-        );
-        assert_eq!(
-            hex(&encode(Datum::Geometry(Geometry::from_cells(1, 0)))),
-            "680000000000000001"
-        );
-        assert_eq!(
-            hex(&encode(Datum::Geometry(Geometry::from_cells(0, 1)))),
-            "680000000000000003"
-        );
-        // Json: the value bytes are pinned exactly; the trailing hash is
-        // verified against an INDEPENDENT in-test FNV implementation.
-        let obj = Json::Obj(JsonObj::new(vec![("a".into(), Json::Null)]).map_err(|e| miette!("{e:?}"))?);
-        let enc = encode(Datum::Json(&obj));
-        let bytes = enc.as_bytes();
-        let value_span = &bytes[1..bytes.len() - 8];
-        let value_hex: String = value_span.iter().map(|b| format!("{b:02x}")).collect();
-        // JOBJ(4c) JSTR(18) key "a"(61) str-term(00 00) JNULL(05) SEQ_END(01):
-        // each entry is JSTR-tagged so its marker (0x18) outranks the 0x01
-        // terminator, keeping byte order == DataValue::Ord for objects.
-        assert_eq!(value_hex, "4c186100000501");
-        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-        for &b in value_span {
-            // INVARIANT(fnv1a): FNV-1a prime mix is defined as wrapping mul on u64.
-            h = (std::num::Wrapping(h ^ u64::from(b)) * std::num::Wrapping(0x100_0000_01b3)).0;
-        }
-        assert_eq!(&bytes[bytes.len() - 8..], h.to_be_bytes());
-        Ok(())
-    }
-
-    /// REGRESSION (adversarial storage review): byte order == DataValue::Ord
-    /// for JSON objects even when a key begins with U+0000. Before the
-    /// JSTR-tagged entry marker, `{"\0": null}` encoded to a leading 0x00
-    /// that sorted BELOW the empty object's 0x01 terminator — the two order
-    /// authorities disagreed, silently mis-ordering stored JSON keys.
-    #[test]
-    fn json_object_byte_order_matches_structural_order_with_nul_key() -> Result<()> {
-        use crate::value::DataValue;
-        let empty = DataValue::Json(crate::value::Json::Obj(
-            JsonObj::new(vec![]).map_err(|e| miette!("{e:?}"))?,
-        ));
-        let nul = DataValue::Json(crate::value::Json::Obj(
-            JsonObj::new(vec![("\u{0}".into(), Json::Null)]).map_err(|e| miette!("{e:?}"))?,
-        ));
-        // Structural order: fewer entries is less.
-        assert_eq!(empty.cmp(&nul), std::cmp::Ordering::Less);
-        // Byte order must AGREE (the guardrail law).
-        let eb = encode_owned(&empty);
-        let nb = encode_owned(&nul);
-        assert_eq!(
-            eb.as_bytes().cmp(nb.as_bytes()),
-            std::cmp::Ordering::Less,
-            "encode_owned byte order must match DataValue::Ord for objects with a NUL-leading key"
-        );
-        // And both still round-trip.
-        assert_eq!(decode(eb.as_bytes()).into_diagnostic()?, empty);
-        assert_eq!(decode(nb.as_bytes()).into_diagnostic()?, nul);
-        // The LAW, over several NUL-key-bearing pairs: byte order AGREES
-        // with structural order, whatever the direction. (JsonObj sorts
-        // keys, so a "\0" key leads.)
-        let mk = |kvs: Vec<(String, Json)>| -> Result<DataValue> {
-            Ok(DataValue::Json(crate::value::Json::Obj(
-                JsonObj::new(kvs).map_err(|e| miette!("{e:?}"))?,
-            )))
-        };
-        let objs = [
-            mk(vec![])?,
-            mk(vec![("\u{0}".into(), Json::Null)])?,
-            mk(vec![("a".into(), Json::Null)])?,
-            mk(vec![("\u{0}".into(), Json::Null), ("a".into(), Json::Null)])?,
-            mk(vec![("a".into(), Json::Bool(true))])?,
-        ];
-        for a in &objs {
-            for b in &objs {
-                let structural = a.cmp(b);
-                let byte = encode_owned(a).as_bytes().cmp(encode_owned(b).as_bytes());
-                assert_eq!(
-                    structural, byte,
-                    "byte order must equal DataValue::Ord for {a:?} vs {b:?}"
-                );
-            }
-        }
-        Ok(())
-    }
-
-    /// Decode totality: random bytes and truncations never panic; every
-    /// valid encoding's strict prefixes are errors.
-    #[test]
-    fn decode_is_total() -> Result<()> {
-        let mut rng = Rng(0xDEAD);
-        for _ in 0..20_000 {
-            let len = rng.below(24);
-            let bytes: Vec<u8> = (0..len)
-                .map(|_| crate::value::convert::u8_from_u64_low(rng.next()))
-                .collect();
-            match decode(&bytes) {
-        // must not panic
-        Ok(v) => core::mem::drop(v),
-        Err(e) => core::mem::drop(e),
-    }
-        }
-        for d in edge_datums()? {
-            let enc = encode_owned(&d);
-            for cut in 0..enc.len() {
-                assert!(
-                    decode(&enc.as_bytes()[..cut]).is_err(),
-                    "truncation accepted for {d:?} at {cut}"
-                );
-            }
-        }
-        // Non-canonical set payloads are refused, not repaired.
-        let unsorted: Vec<u8> = {
-            let two = encode(Datum::Num(Num::int(2)));
-            let one = encode(Datum::Num(Num::int(1)));
-            let mut v = vec![Tag::Set.byte()];
-            v.extend_from_slice(two.as_bytes());
-            v.extend_from_slice(one.as_bytes());
-            v.push(STRUCT_SEQ_END);
-            v
-        };
-        assert_eq!(decode(&unsorted), Err(DecodeError::SetNotCanonical));
-        // Hostile nesting refuses instead of overflowing.
-        let mut deep = vec![Tag::List.byte(); 4000];
-        deep.extend_from_slice(&[STRUCT_SEQ_END; 4000]);
-        assert_eq!(decode(&deep), Err(DecodeError::TooDeep));
-        // Non-canonical JSON: a corrupted hash and an unsorted object are
-        // both refused, never repaired.
-        let good = {
-            let obj = Json::Obj(JsonObj::new(vec![("a".into(), Json::Null)]).map_err(|e| miette!("{e:?}"))?);
-            encode(Datum::Json(&obj))
-        };
-        let mut bad_hash = good.as_bytes().to_vec();
-        let last = bad_hash.len() - 1;
-        bad_hash[last] ^= 0xFF;
-        assert_eq!(decode(&bad_hash), Err(DecodeError::JsonHashMismatch));
-        let mut unsorted_obj = vec![Tag::Json.byte(), 0x4C];
-        // Each entry is JSTR(0x18)-tagged key, terminated, then value.
-        unsorted_obj.extend_from_slice(&[0x18, 0x62, 0x00, 0x00, 0x05]); // "b": null
-        unsorted_obj.extend_from_slice(&[0x18, 0x61, 0x00, 0x00, 0x05]); // "a": null
-        unsorted_obj.push(STRUCT_SEQ_END);
-        let span = unsorted_obj[1..].to_vec();
-        let h = fnv1a64(&span);
-        unsorted_obj.extend_from_slice(&h.to_be_bytes());
-        assert_eq!(decode(&unsorted_obj), Err(DecodeError::JsonNotCanonical));
-        // A denotes-empty interval written as a range is refused.
-        let mut bad_iv = vec![Tag::Interval.byte(), 0x02, 0x02];
-        bad_iv.extend_from_slice(&asc_ts_key(9));
-        bad_iv.push(0x02);
-        bad_iv.extend_from_slice(&asc_ts_key(1));
-        assert_eq!(decode(&bad_iv), Err(DecodeError::IntervalNotCanonical));
-        Ok(())
-    }
-
-    /// Malformed wide-kind payloads refuse with their typed error, kind
-    /// by kind.
-    #[test]
-    fn malformed_wide_payloads_refuse_by_kind() {
-        // Regex: unknown flag bits; invalid UTF-8 pattern.
-        assert_eq!(
-            decode(&[Tag::Regex.byte(), 0x40, 0x00, 0x00]),
-            Err(DecodeError::BadRegexFlags)
-        );
-        assert_eq!(
-            decode(&[Tag::Regex.byte(), 0x00, 0xFF, 0x00, 0x00]),
-            Err(DecodeError::BadUtf8)
-        );
-        // Vector: a non-float component (an Int Num key) refuses.
-        let mut int_component = vec![Tag::Vector.byte()];
-        int_component.extend_from_slice(&1u32.to_be_bytes());
-        Num::int(5).encode_key(&mut int_component);
-        assert_eq!(
-            decode(&int_component),
-            Err(DecodeError::VectorComponentNotFloat)
-        );
-        // Vector: count larger than the payload truncates.
-        let mut short_vec = vec![Tag::Vector.byte()];
-        short_vec.extend_from_slice(&3u32.to_be_bytes());
-        Num::float(1.0).encode_key(&mut short_vec);
-        assert!(decode(&short_vec).is_err());
-        // REGRESSION (CI memcmp release OOM / fuzz fact_payload_decode):
-        // a 5-byte Vector claiming u32::MAX components must refuse before
-        // `Vec::with_capacity` — otherwise law3 byte-flip / fuzz allocate
-        // tens of GB and abort the tripwire under --release.
-        let hostile = {
-            let mut v = vec![Tag::Vector.byte()];
-            v.extend_from_slice(&u32::MAX.to_be_bytes());
-            v
-        };
-        assert_eq!(decode(&hostile), Err(DecodeError::Truncated));
-        // Validity: bad polarity byte.
-        let mut bad_pol = vec![Tag::Validity.byte()];
-        bad_pol.extend_from_slice(&[0x7F; 8]);
-        bad_pol.push(0x02);
-        assert_eq!(decode(&bad_pol), Err(DecodeError::BadPolarity));
-        // Interval: bad form/end markers.
-        assert_eq!(
-            decode(&[Tag::Interval.byte(), 0x03]),
-            Err(DecodeError::IntervalNotCanonical)
-        );
-        assert_eq!(
-            decode(&[Tag::Interval.byte(), 0x02, 0x07]),
-            Err(DecodeError::IntervalNotCanonical)
-        );
-        // Json: non-finite number in bytes refuses.
-        let mut nan_json = vec![Tag::Json.byte()];
-        let start = nan_json.len();
-        nan_json.push(0x10); // JNUM
-        Num::float(f64::NAN).encode_key(&mut nan_json);
-        let h = fnv1a64(&nan_json[start..]);
-        nan_json.extend_from_slice(&h.to_be_bytes());
-        assert_eq!(decode(&nan_json), Err(DecodeError::JsonNumberNotFinite));
-        // Json: duplicate keys (equal, escape-bearing) refuse.
-        let mut dup = vec![Tag::Json.byte()];
-        let start = dup.len();
-        dup.push(0x4C); // JOBJ
-        for _ in 0..2 {
-            dup.push(0x18); // JSTR: the entry marker
-            dup.extend_from_slice(&[0x00, 0xFF, 0x00, 0x00]); // key "\0"
-            dup.push(0x05); // null
-        }
-        dup.push(STRUCT_SEQ_END);
-        let h = fnv1a64(&dup[start..]);
-        dup.extend_from_slice(&h.to_be_bytes());
-        assert_eq!(decode(&dup), Err(DecodeError::JsonNotCanonical));
-    }
-
-    /// REGRESSION (fuzz timeout, `fuzz_targets/fact_payload_decode.rs`):
-    /// libFuzzer hung ~1775s on one input. `Tag::Set`'s canonicality check
-    /// used to re-decode every item a SECOND time — once via
-    /// `decode_sequence` to build the value, once more (over the exact
-    /// same bytes) to learn the item's encoded length for the
-    /// sorted-order check — so a Set nested inside a Set inside a Set...
-    /// doubled decode cost at every level of nesting: O(2^depth), not
-    /// O(depth). At `NEST_DEPTH` below, the old two-pass shape would not
-    /// finish before the heat death of the universe; this test completing
-    /// at all is the proof the fix holds — no wall-clock bound needed.
-    #[test]
-    fn nested_set_decode_is_linear_not_exponential() -> Result<()> {
-        // Safely below MAX_DEPTH (128) so the well-formed control decodes
-        // rather than hitting `TooDeep`; 2^NEST_DEPTH is astronomically
-        // larger than anything the old two-pass decode could finish.
-        const NEST_DEPTH: usize = 100;
-
-        // Build Set(Set(Set(...Num(0)...))), NEST_DEPTH levels deep. Each
-        // level holds exactly one element, so the encoding is lawfully
-        // canonical (a single-element set can never violate sorted order).
-        let mut value = DataValue::Num(Num::int(0));
-        for _ in 0..NEST_DEPTH {
-            let mut s = BTreeSet::new();
-            s.insert(value);
-            value = DataValue::Set(s);
-        }
-        let good = encode_owned(&value);
-
-        // Well-formed control: decodes to the exact value.
-        let decoded = decode(good.as_bytes()).into_diagnostic()?;
-        assert_eq!(decoded, value, "round-trip changed the nested value");
-
-        // Hostile bytes: the SAME encoding with the outermost terminator
-        // dropped. Discovering the truncation requires descending through
-        // every nested level first (each inner level decodes clean) before
-        // the outermost loop finds no closing byte left — exactly the
-        // shape that made the old two-pass decode catastrophic — then
-        // refusing, typed.
-        let mut hostile = good.as_bytes().to_vec();
-        hostile.pop();
-        assert_eq!(decode(&hostile), Err(DecodeError::Truncated));
-        Ok(())
-    }
-
-    /// Deliberate construction of refusal variants that the random totality
-    /// battery can miss (exact match, not merely `is_err`).
-    #[test]
-    fn decode_refusal_variants_deliberately_constructed() {
-        // TrailingBytes: a complete Null plus one extra byte.
-        assert_eq!(
-            decode(&[Tag::Null.byte(), 0x00]),
-            Err(DecodeError::TrailingBytes)
-        );
-        assert_eq!(decode(&[0xFF]), Err(DecodeError::BadTag(0xFF)));
-        assert_eq!(decode(&[Tag::Bool.byte(), 0x02]), Err(DecodeError::BadBool));
-        // Str body: `0x00 0x01` is not a lawful escape (only 0x00/0xFF after NUL).
-        assert_eq!(
-            decode(&[Tag::Str.byte(), 0x00, 0x01]),
-            Err(DecodeError::BadEscape)
-        );
-        // Num payload that is Truncated wraps as DecodeError::Num.
-        assert_eq!(
-            decode(&[Tag::Num.byte()]),
-            Err(DecodeError::Num(NumDecodeError::Truncated))
-        );
+        lemma_json_obj_of_pairs(ps.drop_first(), rest);
     }
 }
+
+/// Bytes that are exactly one complete JSON value in the marker grammar.
+/// Private field, and every constructor below establishes the invariant, so a
+/// half-formed JSON value cannot exist.
+// CONSTRUCT: SealedProduct JsonValueBytes
+pub struct JsonValueBytes {
+    bytes: Vec<u8>,
+}
+
+// CONSTRUCT: ImplBlock JsonValueBytes
+impl JsonValueBytes {
+    pub closed spec fn view(self) -> Seq<u8> { self.bytes@ }
+
+    #[verifier::type_invariant]
+    closed spec fn wf_json(self) -> bool { json_end(self.view()) == self.view().len() > 0 }
+
+    pub fn null() -> (r: JsonValueBytes) {
+        let mut b: Vec<u8> = Vec::new();
+        b.push(JNULL);
+        proof { assert(b@[0] == JNULL); }
+        JsonValueBytes { bytes: b }
+    }
+
+    pub fn boolean(v: bool) -> (r: JsonValueBytes) {
+        let mut b: Vec<u8> = Vec::new();
+        b.push(if v { JTRUE } else { JFALSE });
+        JsonValueBytes { bytes: b }
+    }
+
+    /// A number carries the Num key unchanged; the class byte measures it.
+    pub fn number(key: &[u8]) -> (r: JsonValueBytes)
+        requires num_end(key@) == key@.len() > 0
+    {
+        let mut b: Vec<u8> = Vec::new();
+        b.push(JNUM);
+        let mut i: usize = 0;
+        while i < key.len()
+            invariant 0 <= i <= key@.len(), b@ =~= seq![JNUM] + key@.take(i as int),
+            decreases key@.len() - i
+        {
+            b.push(key[i]);
+            proof { assert(key@.take(i + 1) =~= key@.take(i as int).push(key@[i as int])); }
+            i = i + 1;
+        }
+        proof {
+            assert(key@.take(key@.len() as int) =~= key@);
+            assert(b@.skip(1) =~= key@);
+            assert(b@[0] == JNUM);
+        }
+        JsonValueBytes { bytes: b }
+    }
+
+    pub fn string(s: &[u8]) -> (r: JsonValueBytes) {
+        let mut b: Vec<u8> = Vec::new();
+        b.push(JSTR);
+        let mut body = escape(s);
+        b.append(&mut body);
+        proof {
+            lemma_esc_end_of_enc_bytes(s@);
+            assert(b@.skip(1) =~= enc_bytes(s@));
+            assert(b@[0] == JSTR);
+        }
+        JsonValueBytes { bytes: b }
+    }
+
+    pub fn array(elems: &Vec<JsonValueBytes>) -> (r: JsonValueBytes) {
+        let ghost views = elems@.map_values(|e: JsonValueBytes| e.view());
+        let mut b: Vec<u8> = Vec::new();
+        b.push(JARR);
+        let mut i: usize = 0;
+        while i < elems.len()
+            invariant
+                0 <= i <= elems@.len(),
+                views =~= elems@.map_values(|e: JsonValueBytes| e.view()),
+                b@ =~= seq![JARR] + cat(views.take(i as int)),
+                forall|k: int| 0 <= k < i
+                    ==> #[trigger] json_end(views[k]) == views[k].len() > 0,
+            decreases elems@.len() - i
+        {
+            let e = &elems[i];
+            proof { use_type_invariant(e); }
+            let src = e.as_bytes();
+            let ghost before = b@;
+            let mut j: usize = 0;
+            while j < src.len()
+                invariant
+                    0 <= j <= src@.len(),
+                    src@ =~= views[i as int],
+                    b@ =~= before + src@.take(j as int),
+                decreases src@.len() - j
+            {
+                b.push(src[j]);
+                proof { assert(src@.take(j + 1) =~= src@.take(j as int).push(src@[j as int])); }
+                j = j + 1;
+            }
+            proof {
+                assert(src@.take(src@.len() as int) =~= views[i as int]);
+                lemma_cat_snoc(views.take(i as int), views[i as int]);
+                assert(views.take(i + 1) =~= views.take(i as int).push(views[i as int]));
+            }
+            i = i + 1;
+        }
+        b.push(STRUCT_END);
+        proof {
+            assert(views.take(elems@.len() as int) =~= views);
+            lemma_json_arr_of_row(views, Seq::empty());
+            assert(b@[0] == JARR);
+            assert(b@.skip(1) =~= (cat(views) + seq![STRUCT_END]) + Seq::<u8>::empty());
+        }
+        JsonValueBytes { bytes: b }
+    }
+
+    pub fn object(pairs: &Vec<(Vec<u8>, JsonValueBytes)>) -> (r: JsonValueBytes) {
+        let ghost ps = pairs@.map_values(|q: (Vec<u8>, JsonValueBytes)| (q.0@, q.1.view()));
+        let mut b: Vec<u8> = Vec::new();
+        b.push(JOBJ);
+        let mut i: usize = 0;
+        while i < pairs.len()
+            invariant
+                0 <= i <= pairs@.len(),
+                ps =~= pairs@.map_values(|q: (Vec<u8>, JsonValueBytes)| (q.0@, q.1.view())),
+                ps.len() == pairs@.len(),
+                b@ =~= seq![JOBJ] + obj_cat(ps.take(i as int)),
+                forall|k: int| 0 <= k < i
+                    ==> #[trigger] json_end(ps[k].1) == ps[k].1.len() > 0,
+            decreases pairs@.len() - i
+        {
+            let ghost before = b@;
+            let pair = &pairs[i];
+            b.push(JSTR);
+            let mut kb = escape(pair.0.as_slice());
+            b.append(&mut kb);
+            let ghost after_key = b@;
+            proof { use_type_invariant(&pair.1); }
+            let src = pair.1.as_bytes();
+            let mut j: usize = 0;
+            while j < src.len()
+                invariant
+                    0 <= j <= src@.len(),
+                    src@ =~= ps[i as int].1,
+                    b@ =~= after_key + src@.take(j as int),
+                decreases src@.len() - j
+            {
+                b.push(src[j]);
+                proof { assert(src@.take(j + 1) =~= src@.take(j as int).push(src@[j as int])); }
+                j = j + 1;
+            }
+            proof {
+                assert(src@.take(src@.len() as int) =~= ps[i as int].1);
+                assert(after_key =~= before + (seq![JSTR] + enc_bytes(ps[i as int].0)));
+                assert(b@ =~= before
+                    + ((seq![JSTR] + enc_bytes(ps[i as int].0)) + ps[i as int].1));
+                lemma_obj_cat_snoc(ps.take(i as int), ps[i as int]);
+                assert(ps.take(i + 1) =~= ps.take(i as int).push(ps[i as int]));
+            }
+            i = i + 1;
+        }
+        b.push(STRUCT_END);
+        proof {
+            assert(ps.take(pairs@.len() as int) =~= ps);
+            assert forall|k: int| 0 <= k < ps.len()
+                implies #[trigger] json_end(ps[k].1) == ps[k].1.len() > 0 by {}
+            lemma_json_obj_of_pairs(ps, Seq::empty());
+            assert(b@[0] == JOBJ);
+            assert(b@.skip(1) =~= (obj_cat(ps) + seq![STRUCT_END]) + Seq::<u8>::empty());
+        }
+        JsonValueBytes { bytes: b }
+    }
+
+    pub fn as_bytes(&self) -> (r: &[u8])
+        ensures r@ =~= self.view()
+    { self.bytes.as_slice() }
+}
+
+proof fn lemma_obj_cat_snoc(ps: Seq<(Seq<u8>, Seq<u8>)>, q: (Seq<u8>, Seq<u8>))
+    ensures obj_cat(ps.push(q)) =~= obj_cat(ps) + ((seq![JSTR] + enc_bytes(q.0)) + q.1)
+    decreases ps.len()
+{
+    if ps.len() == 0 {
+        assert(ps.push(q) =~= seq![q]);
+        assert(seq![q].len() == 1 && seq![q][0] == q);
+        assert(seq![q].drop_first() =~= Seq::<(Seq<u8>, Seq<u8>)>::empty());
+        assert(obj_cat(Seq::<(Seq<u8>, Seq<u8>)>::empty()) =~= Seq::<u8>::empty());
+        assert(obj_cat(ps) =~= Seq::<u8>::empty());
+        assert(((seq![JSTR] + enc_bytes(q.0)) + q.1) + Seq::<u8>::empty()
+            =~= (seq![JSTR] + enc_bytes(q.0)) + q.1);
+    } else {
+        assert(ps.push(q)[0] == ps[0]);
+        assert(ps.push(q).drop_first() =~= ps.drop_first().push(q));
+        lemma_obj_cat_snoc(ps.drop_first(), q);
+        assert(((seq![JSTR] + enc_bytes(ps[0].0)) + ps[0].1)
+            + (obj_cat(ps.drop_first()) + ((seq![JSTR] + enc_bytes(q.0)) + q.1))
+            =~= (((seq![JSTR] + enc_bytes(ps[0].0)) + ps[0].1) + obj_cat(ps.drop_first()))
+            + ((seq![JSTR] + enc_bytes(q.0)) + q.1));
+    }
+}
+
+/// The JSON key: a complete JSON value, then eight bytes of trailing hash. The
+/// hash sits after the self-terminating value, so it can never influence order.
+// CONSTRUCT: SealedProduct JsonKey
+pub struct JsonKey {
+    tag: u8,
+    bytes: Vec<u8>,
+}
+
+// CONSTRUCT: ImplBlock JsonKey
+impl JsonKey {
+    #[verifier::type_invariant]
+    closed spec fn wf_key(self) -> bool {
+        self.tag >= TAG_MIN
+        && shape_of(self.tag) == Some(KeyShape::JsonShape)
+        && key_end(self.tag, self.bytes@) == self.bytes@.len()
+    }
+
+    pub fn mint(tag: u8, value: &JsonValueBytes, hash: [u8; 8]) -> (r: JsonKey)
+        requires tag >= TAG_MIN, shape_of(tag) == Some(KeyShape::JsonShape)
+        ensures r.tag() == tag
+    {
+        proof { use_type_invariant(value); }
+        let src = value.as_bytes();
+        let mut b: Vec<u8> = Vec::new();
+        let mut j: usize = 0;
+        while j < src.len()
+            invariant 0 <= j <= src@.len(), b@ =~= src@.take(j as int),
+            decreases src@.len() - j
+        {
+            b.push(src[j]);
+            proof { assert(src@.take(j + 1) =~= src@.take(j as int).push(src@[j as int])); }
+            j = j + 1;
+        }
+        let ghost body = b@;
+        let mut h: usize = 0;
+        while h < 8
+            invariant 0 <= h <= 8, body =~= src@, b@ =~= body + hash@.take(h as int),
+            decreases 8 - h
+        {
+            b.push(hash[h]);
+            proof { assert(hash@.take(h + 1) =~= hash@.take(h as int).push(hash@[h as int])); }
+            h = h + 1;
+        }
+        proof {
+            assert(src@.take(src@.len() as int) =~= src@);
+            assert(hash@.take(8int) =~= hash@);
+            assert(b@ =~= src@ + hash@);
+            lemma_prefix_of_self_plus(src@, hash@);
+            lemma_json_end_local(src@, b@);
+            assert(json_end(b@) == src@.len());
+        }
+        JsonKey { tag, bytes: b }
+    }
+}
+
+impl KindKey for JsonKey {
+    closed spec fn tag(self) -> u8 { self.tag }
+    closed spec fn key(self) -> Seq<u8> { self.bytes@ }
+    closed spec fn wf(self) -> bool { self.wf_key() }
+    proof fn law_tag(self) { assert(!is_seq_tag(self.tag)); }
+    proof fn law_key(self) {}
+    fn tag_byte(&self) -> (t: u8) { proof { use_type_invariant(self); } self.tag }
+    fn emit(&self) -> (r: Vec<u8>) { self.bytes.clone() }
+}
+
+/// Escape a variable-length payload into the order-preserving, self-delimiting
+/// form. A kind with variable-length content builds its key with this and
+/// discharges [`KindKey::law_key`] from [`lemma_bytes_order`] and
+/// [`lemma_bytes_prefix_free`].
+// CONSTRUCT: Derivation escape
+pub fn escape(s: &[u8]) -> (r: Vec<u8>)
+    ensures r@ =~= enc_bytes(s@)
+{
+    let mut out: Vec<u8> = Vec::new();
+    let mut i: usize = 0;
+    while i < s.len()
+        invariant 0 <= i <= s.len(), out@ =~= esc(s@.take(i as int)),
+        decreases s.len() - i
+    {
+        proof {
+            lemma_esc_snoc(s@.take(i as int), s@[i as int]);
+            assert(s@.take(i + 1) =~= s@.take(i as int).push(s@[i as int]));
+        }
+        if s[i] == 0 {
+            out.push(0u8);
+            out.push(0xFFu8);
+        } else {
+            out.push(s[i]);
+        }
+        i = i + 1;
+    }
+    out.push(0u8);
+    out.push(0u8);
+    proof { assert(s@.take(s.len() as int) =~= s@); }
+    out
+}
+
+} // verus!

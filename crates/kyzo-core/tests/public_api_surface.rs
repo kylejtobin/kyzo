@@ -24,8 +24,9 @@ use kyzo::{
     Catalog, DataValue, Engine, FjallStorage, dump_storage, new_fjall_storage, restore_storage,
     verify_storage,
 };
+use kyzo_model::program::symbol::Symbol;
 
-fn np() -> BTreeMap<String, DataValue> {
+fn np() -> BTreeMap<Symbol, DataValue> {
     BTreeMap::new()
 }
 

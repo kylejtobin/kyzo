@@ -1,7 +1,0 @@
-struct Ledger(u64);
-
-impl Ledger {
-    fn advance(&self) -> Ledger {
-        Ledger::from(File::open("x"))
-    }
-}

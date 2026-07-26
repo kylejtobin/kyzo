@@ -8,7 +8,11 @@
  */
 
 //! Interval kernel domain tables — six boundary primitives + intersects; EMPTY lawful.
-use crate::exec::stdlib::interval::*;
+use crate::exec::stdlib::interval::op_interval_has_end;
+use crate::exec::stdlib::interval::op_interval_has_start;
+use crate::exec::stdlib::interval::op_interval_intersects;
+use crate::exec::stdlib::interval::op_interval_is_end_unbounded;
+use crate::exec::stdlib::interval::op_interval_is_start_unbounded;
 use crate::exec::stdlib::resolve_op;
 use kyzo_model::value::{Bound, DataValue, Interval};
 use miette::{Result, miette};

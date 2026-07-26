@@ -23,6 +23,8 @@ pub mod temporal;
 
 use std::sync::Arc;
 
+use kyzo_model::program::span::SourceSpan;
+use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::convert::i128_approx_f64;
 use kyzo_model::value::{DataValue, Num, NumRepr};
 
@@ -114,7 +116,7 @@ pub(crate) fn fold_named(name: &str) -> Arc<dyn AggrFold> {
     match builtin_fold(name) {
         Some(fold) => fold,
         None => Arc::new(UnknownBuiltin {
-            name: name.to_string(),
+            name: Symbol::new(name, SourceSpan::empty()),
         }),
     }
 }
@@ -123,7 +125,7 @@ pub(crate) fn fold_named(name: &str) -> Arc<dyn AggrFold> {
 /// given an unknown aggregation so construction stays panic-free and
 /// evaluation returns a typed aggr error.
 struct UnknownBuiltin {
-    name: String,
+    name: Symbol,
 }
 impl AggrFold for UnknownBuiltin {
     fn name(&self) -> &str {

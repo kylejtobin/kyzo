@@ -222,12 +222,12 @@ mod tests {
     /// no bucket trickery — a different implementation from the one under
     /// test. Keyed by node name so it is independent of interning order.
     fn naive_coreness(
-        nodes: &BTreeSet<String>,
-        adj: &BTreeMap<String, BTreeSet<String>>,
-    ) -> Result<BTreeMap<String, u32>> {
+        nodes: &BTreeSet<DataValue>,
+        adj: &BTreeMap<DataValue, BTreeSet<DataValue>>,
+    ) -> Result<BTreeMap<DataValue, u32>> {
         use crate::rules::contract::GraphAlgorithmInvariantError;
 
-        let mut deg: BTreeMap<String, i64> = nodes
+        let mut deg: BTreeMap<DataValue, i64> = nodes
             .iter()
             .map(|v| -> Result<_> {
                 Ok((
@@ -242,8 +242,8 @@ mod tests {
                 ))
             })
             .collect::<Result<BTreeMap<_, _>>>()?;
-        let mut removed: BTreeSet<String> = BTreeSet::new();
-        let mut core: BTreeMap<String, u32> = BTreeMap::new();
+        let mut removed: BTreeSet<DataValue> = BTreeSet::new();
+        let mut core: BTreeMap<DataValue, u32> = BTreeMap::new();
         let mut k = 0u32;
         while removed.len() < nodes.len() {
             let v = nodes
@@ -279,21 +279,26 @@ mod tests {
     /// Build the undirected simple adjacency (keyed by node name) from an
     /// edge list, matching the rule's interpretation: undirected, distinct
     /// neighbors, no self-loops.
-    fn adjacency(edges: &[(&str, &str)]) -> (BTreeSet<String>, BTreeMap<String, BTreeSet<String>>) {
+    fn adjacency(
+        edges: &[(&str, &str)],
+    ) -> (
+        BTreeSet<DataValue>,
+        BTreeMap<DataValue, BTreeSet<DataValue>>,
+    ) {
         let mut nodes = BTreeSet::new();
-        let mut adj: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut adj: BTreeMap<DataValue, BTreeSet<DataValue>> = BTreeMap::new();
         for &(a, b) in edges {
-            nodes.insert(a.to_string());
-            nodes.insert(b.to_string());
+            nodes.insert(s(a));
+            nodes.insert(s(b));
             if a != b {
-                adj.entry(a.to_string()).or_default().insert(b.to_string());
-                adj.entry(b.to_string()).or_default().insert(a.to_string());
+                adj.entry(s(a)).or_default().insert(s(b));
+                adj.entry(s(b)).or_default().insert(s(a));
             }
         }
         (nodes, adj)
     }
 
-    fn run(edges: &[(&str, &str)]) -> Result<BTreeMap<String, u32>> {
+    fn run(edges: &[(&str, &str)]) -> Result<BTreeMap<DataValue, u32>> {
         let rows = edges
             .iter()
             .map(|&(a, b)| Tuple::from_vec(vec![s(a), s(b)]))
@@ -312,12 +317,7 @@ mod tests {
                     }
                     None => return Err(miette!("test core column must be int")),
                 };
-                Ok((
-                    r[0].get_str()
-                        .ok_or_else(|| miette!("test expected Some"))?
-                        .to_string(),
-                    core,
-                ))
+                Ok((r[0].clone(), core))
             })
             .collect()
     }
@@ -329,10 +329,10 @@ mod tests {
     #[test]
     fn coreness_differs_from_degree() -> Result<()> {
         let got = run(&[("a", "b"), ("b", "c"), ("a", "c"), ("a", "d")])?;
-        assert_eq!(got[&"a".to_string()], 2);
-        assert_eq!(got[&"b".to_string()], 2);
-        assert_eq!(got[&"c".to_string()], 2);
-        assert_eq!(got[&"d".to_string()], 1);
+        assert_eq!(got[&s("a")], 2);
+        assert_eq!(got[&s("b")], 2);
+        assert_eq!(got[&s("c")], 2);
+        assert_eq!(got[&s("d")], 1);
         Ok(())
     }
 
@@ -375,7 +375,7 @@ mod tests {
         assert_eq!(clean, noisy);
         // The clean triangle is a 2-core throughout.
         for v in ["a", "b", "c"] {
-            assert_eq!(clean[&v.to_string()], 2);
+            assert_eq!(clean[&s(v)], 2);
         }
         Ok(())
     }

@@ -16,7 +16,6 @@
 use std::collections::BTreeSet;
 
 use miette::{Diagnostic, Result, bail, ensure};
-use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use crate::program::span::SourceSpan;
@@ -78,7 +77,6 @@ pub(crate) fn parse_schema(
 fn parse_col(pair: Pair<'_>) -> Result<(ColumnDef, Symbol)> {
     let mut src = pair.children();
     let name_p = src.need("the column name")?;
-    let name = SmartString::<LazyCompact>::from(name_p.as_str());
     let mut typing = NullableColType::optional(ColType::Any);
     let mut default_gen = None;
     let mut binding_candidate = None;
@@ -92,18 +90,17 @@ fn parse_col(pair: Pair<'_>) -> Result<(ColumnDef, Symbol)> {
             _other => bail!(UnexpectedRule(nxt.extract_span())),
         }
     }
-    let binding =
-        match binding_candidate {
+    let name = match binding_candidate {
         Some(b) => b,
-        None => Symbol::new(name.as_str(), name_p.extract_span()),
+        None => Symbol::new(name_p.as_str(), name_p.extract_span()),
     };
     Ok((
         ColumnDef {
-            name,
+            name: name.clone(),
             typing,
             default_gen,
         },
-        binding,
+        name,
     ))
 }
 

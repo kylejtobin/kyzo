@@ -294,13 +294,14 @@ use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use crate::parse::sys::HnswDistance;
-use crate::project::contract::{IndexCorruptReason, IndexRowCorrupt};
+use crate::project::contract::{HnswIntegerField, IndexCorruptReason, IndexName, IndexRowCorrupt};
 use crate::project::projection::{ProjectionKind, RelationIndexSearch};
 use crate::session::catalog::RelationHandle;
 use crate::store::{ReadTx, WriteTx};
 use kyzo_model::SourceSpan;
 use kyzo_model::data_value_any;
 use kyzo_model::program::expr::Expr;
+use kyzo_model::program::symbol::Symbol;
 use kyzo_model::schema::VecElementType;
 use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::value::Tuple;
@@ -420,8 +421,8 @@ pub(crate) enum HnswManifestRefused {
 /// normalizes (see [`IndexVec`]); `InnerProduct` is `1 - a·b`.
 #[derive(Debug, Clone, PartialEq, serde_derive::Serialize)]
 pub struct HnswIndexManifest {
-    base_relation: SmartString<LazyCompact>,
-    index_name: SmartString<LazyCompact>,
+    base_relation: Symbol,
+    index_name: Symbol,
     vec_dim: usize,
     dtype: VecElementType,
     /// Positions (into the base relation's full tuple, keys then non-keys)
@@ -479,8 +480,8 @@ fn seed_from_vec_content(hash: &VecContentHash) -> u64 {
 /// silent ignore.
 #[derive(serde_derive::Deserialize)]
 struct HnswIndexManifestDe {
-    base_relation: SmartString<LazyCompact>,
-    index_name: SmartString<LazyCompact>,
+    base_relation: Symbol,
+    index_name: Symbol,
     vec_dim: usize,
     dtype: VecElementType,
     vec_fields: Vec<usize>,
@@ -526,8 +527,8 @@ impl<'de> Deserialize<'de> for HnswIndexManifest {
 
 /// Inputs for [`HnswIndexManifest::admit`].
 pub(crate) struct HnswAdmitSpec {
-    pub(crate) base_relation: SmartString<LazyCompact>,
-    pub(crate) index_name: SmartString<LazyCompact>,
+    pub(crate) base_relation: Symbol,
+    pub(crate) index_name: Symbol,
     pub(crate) vec_dim: usize,
     pub(crate) dtype: VecElementType,
     pub(crate) vec_fields: Vec<usize>,
@@ -658,23 +659,23 @@ fn random_level_from_content_hash(level_multiplier: f64, hash: &VecContentHash) 
 /// canary rows), `hash` (vector content hash on node rows), `ignore_link`.
 pub(crate) fn hnsw_index_metadata(base: &StoredRelationMetadata) -> StoredRelationMetadata {
     let mut keys: Vec<ColumnDef> = vec![ColumnDef {
-        name: SmartString::from("layer"),
+        name: Symbol::new("layer", SourceSpan::empty()),
         typing: NullableColType::required(ColType::Int),
         default_gen: None,
     }];
     for prefix in ["fr", "to"] {
         for col in base.keys.iter() {
             let mut col = col.clone();
-            col.name = SmartString::from(format!("{}_{}", prefix, col.name));
+            col.name = Symbol::new(format!("{}_{}", prefix, col.name), SourceSpan::empty());
             keys.push(col);
         }
         keys.push(ColumnDef {
-            name: SmartString::from(format!("{prefix}__field")),
+            name: Symbol::new(format!("{prefix}__field"), SourceSpan::empty()),
             typing: NullableColType::required(ColType::Int),
             default_gen: None,
         });
         keys.push(ColumnDef {
-            name: SmartString::from(format!("{prefix}__sub_idx")),
+            name: Symbol::new(format!("{prefix}__sub_idx"), SourceSpan::empty()),
             typing: NullableColType::required(ColType::Int),
             default_gen: None,
         });
@@ -684,17 +685,17 @@ pub(crate) fn hnsw_index_metadata(base: &StoredRelationMetadata) -> StoredRelati
             // Sum-typed: Int degree (node), Float distance (edge), Int
             // bottom-layer (canary). Declared Any so the metadata matches
             // reality; HnswRow is the real schema of this column.
-            name: SmartString::from("dist"),
+            name: Symbol::new("dist", SourceSpan::empty()),
             typing: NullableColType::required(ColType::Any),
             default_gen: None,
         },
         ColumnDef {
-            name: SmartString::from("hash"),
+            name: Symbol::new("hash", SourceSpan::empty()),
             typing: NullableColType::optional(ColType::Bytes),
             default_gen: None,
         },
         ColumnDef {
-            name: SmartString::from("ignore_link"),
+            name: Symbol::new("ignore_link", SourceSpan::empty()),
             typing: NullableColType::required(ColType::Bool),
             default_gen: None,
         },
@@ -830,10 +831,10 @@ impl VecContentHash {
 
     /// Stored node-row hash: length must be exactly 32, then mint only via
     /// [`Self::from_sha256_digest`] (length alone is not a parallel forge).
-    fn from_stored(bytes: Vec<u8>, index_name: &str, tuple: &[DataValue]) -> Result<Self> {
+    fn from_stored(bytes: Vec<u8>, index_name: IndexName<'_>, tuple: &[DataValue]) -> Result<Self> {
         if bytes.len() != SHA256_DIGEST_LEN {
             bail!(IndexRowCorrupt::new(
-                index_name,
+                index_name.as_str(),
                 tuple,
                 IndexCorruptReason::HnswNodeHashWrongLength { found: bytes.len() },
             ));
@@ -873,32 +874,32 @@ impl HnswEntryKey {
     /// raw-bytes constructor (by design: only `TupleT::encode_as_key` /
     /// `encode_key_with_suffix` may mint one), so the decode direction never
     /// routes through it.
-    fn from_stored(bytes: Vec<u8>, index_name: &str, tuple: &[DataValue]) -> Result<Self> {
+    fn from_stored(bytes: Vec<u8>, index_name: IndexName<'_>, tuple: &[DataValue]) -> Result<Self> {
         let bytes = Self::claim_storage_key(bytes, index_name, tuple)?;
         Ok(Self(bytes))
     }
 
     /// Admit foreign bytes only when they decode as a lawful storage key.
-    fn claim_storage_key(bytes: Vec<u8>, index_name: &str, tuple: &[DataValue]) -> Result<Vec<u8>> {
+    fn claim_storage_key(bytes: Vec<u8>, index_name: IndexName<'_>, tuple: &[DataValue]) -> Result<Vec<u8>> {
         match RelationId::raw_decode(&bytes) {
             Ok(_) => {}
             Err(DecodeError::Truncated) => {
                 bail!(IndexRowCorrupt::new(
-                    index_name,
+                    index_name.as_str(),
                     tuple,
                     IndexCorruptReason::HnswCanaryEntryKeyTooShort { found: bytes.len() },
                 ));
             }
             Err(err) => {
                 bail!(IndexRowCorrupt::new(
-                    index_name,
+                    index_name.as_str(),
                     tuple,
                     IndexCorruptReason::DecodeFailed(err),
                 ));
             }
         }
         decode_tuple_from_key(&bytes, 0).map_err(|err| {
-            IndexRowCorrupt::new(index_name, tuple, IndexCorruptReason::DecodeFailed(err))
+            IndexRowCorrupt::new(index_name.as_str(), tuple, IndexCorruptReason::DecodeFailed(err))
         })?;
         Ok(bytes)
     }
@@ -1071,12 +1072,12 @@ impl HnswRow {
     /// Decode a full index tuple (key + value columns, as a scan or get
     /// yields it). Anything that does not fit the closed row set is the
     /// typed [`IndexRowCorrupt`] with the row's context — never a panic.
-    fn decode(tuple: &[DataValue], base_key_len: usize, index_name: &str) -> Result<Self> {
+    fn decode(tuple: &[DataValue], base_key_len: usize, index_name: IndexName<'_>) -> Result<Self> {
         let kl = base_key_len;
         let expected_len = 2 * kl + 8;
         if tuple.len() != expected_len {
             bail!(IndexRowCorrupt::new(
-                index_name,
+                index_name.as_str(),
                 tuple,
                 IndexCorruptReason::WrongColumnCount {
                     found: tuple.len(),
@@ -1084,33 +1085,31 @@ impl HnswRow {
                 },
             ));
         }
-        let int_at = |i: usize, what: &str| -> Result<i64> {
+        let int_at = |i: usize, field: HnswIntegerField| -> Result<i64> {
             tuple[i].get_int().ok_or_else(|| {
                 IndexRowCorrupt::new(
-                    index_name,
+                    index_name.as_str(),
                     tuple,
-                    IndexCorruptReason::HnswNotInteger {
-                        what: what.to_string(),
-                    },
+                    IndexCorruptReason::HnswNotInteger { field },
                 )
                 .into()
             })
         };
-        let layer = int_at(0, "layer")?;
+        let layer = int_at(0, HnswIntegerField::Layer)?;
 
         if layer == CANARY_LAYER {
             // Canary: every key slot after the layer must be Null.
             if tuple[1..2 * kl + 5].iter().any(|v| *v != DataValue::Null) {
                 bail!(IndexRowCorrupt::new(
-                    index_name,
+                    index_name.as_str(),
                     tuple,
                     IndexCorruptReason::HnswCanaryNonNullKeys,
                 ));
             }
-            let bottom_layer = int_at(2 * kl + 5, "canary bottom layer")?;
+            let bottom_layer = int_at(2 * kl + 5, HnswIntegerField::CanaryBottomLayer)?;
             let DataValue::Bytes(entry_key) = &tuple[2 * kl + 6] else {
                 bail!(IndexRowCorrupt::new(
-                    index_name,
+                    index_name.as_str(),
                     tuple,
                     IndexCorruptReason::HnswCanaryEntryNotBytes,
                 ));
@@ -1122,26 +1121,32 @@ impl HnswRow {
         }
         if layer > 0 {
             bail!(IndexRowCorrupt::new(
-                index_name,
+                index_name.as_str(),
                 tuple,
                 IndexCorruptReason::HnswLayerOutOfRange { layer },
             ));
         }
 
         let vector_id_at = |start: usize, side: &'static str| -> Result<VectorId> {
-            let field = int_at(start + kl, &format!("{side} field"))?;
+            let field = int_at(
+                start + kl,
+                HnswIntegerField::EndpointField { side },
+            )?;
             if field < 0 {
                 bail!(IndexRowCorrupt::new(
-                    index_name,
+                    index_name.as_str(),
                     tuple,
                     IndexCorruptReason::HnswNegativeField { side },
                 ));
             }
-            let sub = match int_at(start + kl + 1, &format!("{side} sub-index"))? {
+            let sub = match int_at(
+                start + kl + 1,
+                HnswIntegerField::EndpointSubIndex { side },
+            )? {
                 -1 => None,
                 s if s >= 0 => Some(i64_to_usize(s)?),
                 s => bail!(IndexRowCorrupt::new(
-                    index_name,
+                    index_name.as_str(),
                     tuple,
                     IndexCorruptReason::HnswSubOutOfRange { side, sub: s },
                 )),
@@ -1157,24 +1162,24 @@ impl HnswRow {
 
         let DataValue::Bool(flag) = &tuple[2 * kl + 7] else {
             bail!(IndexRowCorrupt::new(
-                index_name,
+                index_name.as_str(),
                 tuple,
                 IndexCorruptReason::HnswIgnoreLinkNotBool,
             ));
         };
 
         if fr == to {
-            let degree = int_at(2 * kl + 5, "node degree")?;
+            let degree = int_at(2 * kl + 5, HnswIntegerField::NodeDegree)?;
             if degree < 0 {
                 bail!(IndexRowCorrupt::new(
-                    index_name,
+                    index_name.as_str(),
                     tuple,
                     IndexCorruptReason::HnswNodeDegreeNegative,
                 ));
             }
             let DataValue::Bytes(vec_hash) = &tuple[2 * kl + 6] else {
                 bail!(IndexRowCorrupt::new(
-                    index_name,
+                    index_name.as_str(),
                     tuple,
                     IndexCorruptReason::HnswNodeHashNotBytes,
                 ));
@@ -1188,14 +1193,14 @@ impl HnswRow {
         } else {
             let dist = tuple[2 * kl + 5].get_float().ok_or_else(|| {
                 miette!(IndexRowCorrupt::new(
-                    index_name,
+                    index_name.as_str(),
                     tuple,
                     IndexCorruptReason::HnswEdgeDistanceNotNumber,
                 ))
             })?;
             if tuple[2 * kl + 6] != DataValue::Null {
                 bail!(IndexRowCorrupt::new(
-                    index_name,
+                    index_name.as_str(),
                     tuple,
                     IndexCorruptReason::HnswEdgeHashNotNull,
                 ));
@@ -1797,6 +1802,7 @@ fn entry_point(
     probe::bump_entry_point();
     #[cfg(test)]
     let t0 = crate::session::host_clock::mono_nanos();
+    let index_name = IndexName::from_relation_name(&idx.name);
     let first = crate::project::contract::index_rows(
         &idx.name,
         idx.scan_bounded_prefix(
@@ -1817,7 +1823,7 @@ fn entry_point(
         None => Ok(None),
         Some(row) => {
             let row = row?;
-            match HnswRow::decode(row.as_slice(), base.metadata.keys.len(), &idx.name)? {
+            match HnswRow::decode(row.as_slice(), base.metadata.keys.len(), index_name)? {
                 HnswRow::Node { layer, at, .. } => Ok(Some((layer, at))),
                 HnswRow::Edge { layer, fr, .. } => Ok(Some((layer, fr))),
                 HnswRow::Canary { .. } => bail!(IndexRowCorrupt::new(
@@ -1847,6 +1853,7 @@ fn neighbours(
     probe::bump_neighbours_call();
     #[cfg(test)]
     let t0 = crate::session::host_clock::mono_nanos();
+    let index_name = IndexName::from_relation_name(&idx.name);
     let mut prefix = Tuple::with_capacity(of.tuple_key.len() + 3);
     prefix.push(DataValue::from(layer));
     of.push_onto(&mut prefix)?;
@@ -1855,7 +1862,7 @@ fn neighbours(
         #[cfg(test)]
         probe::bump_neighbours_row_scanned();
         let row = row?;
-        match HnswRow::decode(row.as_slice(), base.metadata.keys.len(), &idx.name)? {
+        match HnswRow::decode(row.as_slice(), base.metadata.keys.len(), index_name)? {
             // The vector's own presence row under the same prefix.
             HnswRow::Node { .. } => continue,
             HnswRow::Edge {
@@ -2101,9 +2108,10 @@ fn read_node_row(
     layer: i64,
     at: &VectorId,
 ) -> Result<Option<HnswRow>> {
+    let index_name = IndexName::from_relation_name(&idx.name);
     match idx.get(tx, node_key(layer, at)?.as_slice())? {
         None => Ok(None),
-        Some(row) => match HnswRow::decode(row.as_slice(), base.metadata.keys.len(), &idx.name)? {
+        Some(row) => match HnswRow::decode(row.as_slice(), base.metadata.keys.len(), index_name)? {
             node @ HnswRow::Node { .. } => Ok(Some(node)),
             HnswRow::Edge { .. } | HnswRow::Canary { .. } => bail!(IndexRowCorrupt::new(
                 &idx.name,
@@ -2127,13 +2135,14 @@ fn neighbours_tagged(
     of: &VectorId,
     layer: i64,
 ) -> Result<Vec<(VectorId, f64, bool)>> {
+    let index_name = IndexName::from_relation_name(&idx.name);
     let mut prefix = Tuple::with_capacity(of.tuple_key.len() + 3);
     prefix.push(DataValue::from(layer));
     of.push_onto(&mut prefix)?;
     let mut ret = vec![];
     for row in crate::project::contract::index_rows(&idx.name, idx.scan_prefix(tx, &prefix)) {
         let row = row?;
-        match HnswRow::decode(row.as_slice(), base.metadata.keys.len(), &idx.name)? {
+        match HnswRow::decode(row.as_slice(), base.metadata.keys.len(), index_name)? {
             // The vector's own presence row under the same prefix.
             HnswRow::Node { .. } => continue,
             HnswRow::Edge {
@@ -2473,12 +2482,13 @@ fn inbound_sources(
     at: &VectorId,
     layer: i64,
 ) -> Result<Vec<VectorId>> {
+    let index_name = IndexName::from_relation_name(&idx.name);
     let mut prefix = Tuple::with_capacity(1);
     prefix.push(DataValue::from(layer));
     let mut ret = Vec::new();
     for row in crate::project::contract::index_rows(&idx.name, idx.scan_prefix(tx, &prefix)) {
         let row = row?;
-        match HnswRow::decode(row.as_slice(), base.metadata.keys.len(), &idx.name)? {
+        match HnswRow::decode(row.as_slice(), base.metadata.keys.len(), index_name)? {
             HnswRow::Edge { fr, to, .. } if to.as_ref() == at => ret.push(fr),
             HnswRow::Node { .. } | HnswRow::Edge { .. } | HnswRow::Canary { .. } => {}
         }
@@ -2897,6 +2907,7 @@ pub(crate) fn hnsw_remove<T: WriteTx>(
             IndexCorruptReason::RowShorterThanKey,
         ));
     }
+    let index_name = IndexName::from_relation_name(&idx.name);
     let mut prefix = Tuple::with_capacity(key_len + 1);
     prefix.push(DataValue::from(0i64));
     prefix.extend(tuple[..key_len].iter().cloned());
@@ -2907,7 +2918,7 @@ pub(crate) fn hnsw_remove<T: WriteTx>(
         crate::project::contract::index_rows(&idx.name, idx.scan_prefix(tx, &prefix))
             .collect::<Result<Vec<_>>>()?;
     for row in rows {
-        match HnswRow::decode(row.as_slice(), key_len, &idx.name)? {
+        match HnswRow::decode(row.as_slice(), key_len, index_name)? {
             HnswRow::Node { at, .. } => {
                 candidates.insert(at);
             }
@@ -3487,6 +3498,7 @@ fn layer0_nodes<'a>(
     base: &'a RelationHandle,
     idx: &'a RelationHandle,
 ) -> impl Iterator<Item = Result<VectorId>> + 'a {
+    let index_name = IndexName::from_relation_name(&idx.name);
     crate::project::contract::index_rows(
         &idx.name,
         idx.scan_bounded_prefix(
@@ -3498,7 +3510,7 @@ fn layer0_nodes<'a>(
     )
     .filter_map(move |row| match row {
         Err(e) => Some(Err(e)),
-        Ok(row) => match HnswRow::decode(row.as_slice(), base.metadata.keys.len(), &idx.name) {
+        Ok(row) => match HnswRow::decode(row.as_slice(), base.metadata.keys.len(), index_name) {
             Err(e) => Some(Err(e)),
             Ok(HnswRow::Node { at, .. }) => Some(Ok(at)),
             Ok(_) => None,
@@ -3894,7 +3906,9 @@ fn hnsw_knn_forced(
 #[cfg(test)]
 mod tests {
 
-    use proptest::prelude::*;
+    use proptest::prop_assert;
+    use proptest::prop_assume;
+    use proptest::proptest;
 
     use super::*;
     use crate::rules::contract::CancelFlag;
@@ -3931,7 +3945,7 @@ mod tests {
 
     fn col(name: &str, coltype: ColType) -> ColumnDef {
         ColumnDef {
-            name: SmartString::from(name),
+            name: Symbol::new(name, SourceSpan::empty()),
             typing: NullableColType::required(coltype),
             default_gen: None,
         }
@@ -3956,8 +3970,8 @@ mod tests {
 
     fn manifest(distance: HnswDistance) -> Result<HnswIndexManifest> {
         HnswIndexManifest::admit(HnswAdmitSpec {
-            base_relation: SmartString::from("vecs"),
-            index_name: SmartString::from("by_v"),
+            base_relation: Symbol::new("vecs", SourceSpan::empty()),
+            index_name: Symbol::new("by_v", SourceSpan::empty()),
             vec_dim: 2,
             dtype: VecElementType::F32,
             vec_fields: vec![1],
@@ -4692,6 +4706,7 @@ mod tests {
     #[test]
     fn row_kinds_round_trip() -> Result<()> {
         let kl = 1usize;
+        let index_name = IndexName::from_relation_name(&SmartString::from("t"));
         let at = VectorId {
             tuple_key: Tuple::from_vec(vec![DataValue::from(7)]),
             field: 1,
@@ -4726,7 +4741,7 @@ mod tests {
         for row in rows {
             let mut tuple = row.key_tuple(kl)?;
             tuple.extend(row.val_tuple()?);
-            let decoded = HnswRow::decode(tuple.as_slice(), kl, "t")?;
+            let decoded = HnswRow::decode(tuple.as_slice(), kl, index_name)?;
             assert_eq!(decoded, row, "round trip");
         }
 
@@ -4767,6 +4782,7 @@ mod tests {
     /// shape.
     #[test]
     fn corrupt_rows_are_typed_errors() -> Result<()> {
+        let index_name = IndexName::from_relation_name(&SmartString::from("t"));
         // Well-formed tuple, wrong shape: node degree slot holds a string.
         let at = VectorId {
             tuple_key: Tuple::from_vec(vec![DataValue::from(7)]),
@@ -4779,13 +4795,13 @@ mod tests {
             DataValue::Bytes(vec![]),
             DataValue::from(false),
         ]);
-        let err = HnswRow::decode(tuple.as_slice(), 1, "t")
+        let err = HnswRow::decode(tuple.as_slice(), 1, index_name)
             .err()
             .ok_or_else(|| miette!("wrong-shape node must error"))?;
         assert!(err.downcast_ref::<IndexRowCorrupt>().is_some());
 
         // Truncated tuple.
-        let err = HnswRow::decode(&tuple.as_slice()[..3], 1, "t")
+        let err = HnswRow::decode(&tuple.as_slice()[..3], 1, index_name)
             .err()
             .ok_or_else(|| miette!("truncated node must error"))?;
         assert!(err.downcast_ref::<IndexRowCorrupt>().is_some());
@@ -4851,7 +4867,7 @@ mod tests {
     /// The pinned wire bytes of the canonical manifest above (msgpack,
     /// struct maps). Regenerate ONLY as part of a deliberate format
     /// migration.
-    const PINNED_MANIFEST_HEX: &str = "8ead626173655f72656c6174696f6ea476656373aa696e6465785f6e616d65a462795f76a77665635f64696d02a56474797065a3463332aa7665635f6669656c64739101a864697374616e6365a6436f73696e65af65665f636f6e737472756374696f6e10ac6d5f6e65696768626f75727308a56d5f6d617808a66d5f6d61783010b06c6576656c5f6d756c7469706c696572cb3fdec709dc3a03feac696e6465785f66696c746572c0b1657874656e645f63616e64696461746573c2b76b6565705f7072756e65645f636f6e6e656374696f6e73c2";
+    const PINNED_MANIFEST_HEX: &str = "8ead626173655f72656c6174696f6e81a46e616d65a476656373aa696e6465785f6e616d6581a46e616d65a462795f76a77665635f64696d02a56474797065a3463332aa7665635f6669656c64739101a864697374616e6365a6436f73696e65af65665f636f6e737472756374696f6e10ac6d5f6e65696768626f75727308a56d5f6d617808a66d5f6d61783010b06c6576656c5f6d756c7469706c696572cb3fdec709dc3a03feac696e6465785f66696c746572c0b1657874656e645f63616e64696461746573c2b76b6565705f7072756e65645f636f6e6e656374696f6e73c2";
 
     /// Fixture (x, y) from a key via splitmix — bit reinterpret of `i64`, no
     /// lossy `as` cast. Distinct keys ⇒ distinct streams ⇒ distinct contents.
@@ -4883,8 +4899,8 @@ mod tests {
         rows: &[Tuple],
     ) -> Result<(RelationHandle, RelationHandle, HnswIndexManifest)> {
         let m = HnswIndexManifest::admit(HnswAdmitSpec {
-            base_relation: SmartString::from("vecs"),
-            index_name: SmartString::from("by_v"),
+            base_relation: Symbol::new("vecs", SourceSpan::empty()),
+            index_name: Symbol::new("by_v", SourceSpan::empty()),
             vec_dim: 2,
             dtype: VecElementType::F32,
             vec_fields: vec![1],
@@ -4927,10 +4943,11 @@ mod tests {
     ) -> Result<usize> {
         let rtx = db.read_tx()?;
         let kl = base.metadata.keys.len();
+        let index_name = IndexName::from_relation_name(&idx.name);
         let mut n = 0usize;
         for row in crate::project::contract::index_rows(&idx.name, idx.scan_all(&rtx)) {
             let row = row?;
-            if let HnswRow::Node { layer, .. } = HnswRow::decode(row.as_slice(), kl, &idx.name)?
+            if let HnswRow::Node { layer, .. } = HnswRow::decode(row.as_slice(), kl, index_name)?
                 && layer == 0
             {
                 n += 1;
@@ -4945,8 +4962,8 @@ mod tests {
     #[test]
     fn hnsw_level_is_deterministic_and_geometric() -> Result<()> {
         let m = HnswIndexManifest::admit(HnswAdmitSpec {
-            base_relation: SmartString::from("vecs"),
-            index_name: SmartString::from("by_v"),
+            base_relation: Symbol::new("vecs", SourceSpan::empty()),
+            index_name: Symbol::new("by_v", SourceSpan::empty()),
             vec_dim: 2,
             dtype: VecElementType::F32,
             vec_fields: vec![1],
@@ -4990,8 +5007,8 @@ mod tests {
     #[test]
     fn content_addressed_vector_build_is_byte_equal_and_diverges() -> Result<()> {
         let m = HnswIndexManifest::admit(HnswAdmitSpec {
-            base_relation: SmartString::from("vecs"),
-            index_name: SmartString::from("by_v"),
+            base_relation: Symbol::new("vecs", SourceSpan::empty()),
+            index_name: Symbol::new("by_v", SourceSpan::empty()),
             vec_dim: 2,
             dtype: VecElementType::F32,
             vec_fields: vec![1],
@@ -5095,8 +5112,8 @@ mod tests {
         let dir = tempfile::tempdir().map_err(|e| miette!("{e}"))?;
         let db = new_fjall_storage(dir.path())?;
         let m = HnswIndexManifest::admit(HnswAdmitSpec {
-            base_relation: SmartString::from("vecs"),
-            index_name: SmartString::from("by_v"),
+            base_relation: Symbol::new("vecs", SourceSpan::empty()),
+            index_name: Symbol::new("by_v", SourceSpan::empty()),
             vec_dim: 2,
             dtype: VecElementType::F32,
             vec_fields: vec![1],
@@ -5144,12 +5161,13 @@ mod tests {
         tx.commit()?;
         let kl = base.metadata.keys.len();
         let rtx = db.read_tx()?;
+        let index_name = IndexName::from_relation_name(&idx.name);
         let mut live_out: FxHashMap<VectorId, usize> = FxHashMap::default();
         let mut node_degree: FxHashMap<VectorId, usize> = FxHashMap::default();
         let mut node_count = 0usize;
         for scanned in crate::project::contract::index_rows(&idx.name, idx.scan_all(&rtx)) {
             let scanned = scanned?;
-            match HnswRow::decode(scanned.as_slice(), kl, &idx.name)? {
+            match HnswRow::decode(scanned.as_slice(), kl, index_name)? {
                 HnswRow::Node {
                     layer, at, degree, ..
                 } => {

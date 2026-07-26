@@ -105,8 +105,8 @@ struct Built;
 /// different concept. Pinned by `fts_index_config_is_the_sole_spelling`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FtsIndexConfig {
-    pub(crate) base_relation: SmartString<LazyCompact>,
-    pub(crate) index_name: SmartString<LazyCompact>,
+    pub(crate) base_relation: Symbol,
+    pub(crate) index_name: Symbol,
     /// The row-extraction expression as a PARSED, partial-evaluated typed
     /// substance — never source text re-parsed at build time.
     pub(crate) extractor: Expr,
@@ -118,8 +118,8 @@ pub(crate) struct FtsIndexConfig {
 /// Payload of an FTS staged builder — moved as one unit so typestate flips
 /// (`extractor` / `build`) cannot become a second field-by-field authority.
 struct FtsConfigFields {
-    base_relation: SmartString<LazyCompact>,
-    index_name: SmartString<LazyCompact>,
+    base_relation: Symbol,
+    index_name: Symbol,
     extractor: Expr,
     tokenizer: TokenizerConfig,
     filters: Vec<TokenizerConfig>,
@@ -139,10 +139,7 @@ impl FtsConfigBuilder<Unset> {
     /// Begin an FTS config from the two always-known identity fields. The
     /// extractor starts `Unset` (its placeholder is never read in a built
     /// config); optional fields take their defaults.
-    pub(crate) fn new(
-        base_relation: SmartString<LazyCompact>,
-        index_name: SmartString<LazyCompact>,
-    ) -> Self {
+    pub(crate) fn new(base_relation: Symbol, index_name: Symbol) -> Self {
         FtsConfigBuilder {
             fields: FtsConfigFields {
                 base_relation,
@@ -219,8 +216,8 @@ impl BuildFtsConfig for FtsConfigBuilder<Set> {
 /// Configuration of a MinHash-LSH (locality-sensitive hashing) index.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MinHashLshConfig {
-    pub(crate) base_relation: SmartString<LazyCompact>,
-    pub(crate) index_name: SmartString<LazyCompact>,
+    pub(crate) base_relation: Symbol,
+    pub(crate) index_name: Symbol,
     pub(crate) extractor: Expr,
     pub(crate) tokenizer: TokenizerConfig,
     pub(crate) filters: Vec<TokenizerConfig>,
@@ -235,8 +232,8 @@ pub(crate) struct MinHashLshConfig {
 /// Payload of a MinHash-LSH staged builder — moved as one unit so typestate
 /// flips cannot become a second field-by-field authority (copy_detector).
 struct MinHashLshConfigFields {
-    base_relation: SmartString<LazyCompact>,
-    index_name: SmartString<LazyCompact>,
+    base_relation: Symbol,
+    index_name: Symbol,
     extractor: Expr,
     tokenizer: TokenizerConfig,
     filters: Vec<TokenizerConfig>,
@@ -258,10 +255,7 @@ pub(crate) struct MinHashLshConfigBuilder<Ex> {
 
 impl MinHashLshConfigBuilder<Unset> {
     /// Begin a MinHash-LSH config from the two always-known identity fields.
-    pub(crate) fn new(
-        base_relation: SmartString<LazyCompact>,
-        index_name: SmartString<LazyCompact>,
-    ) -> Self {
+    pub(crate) fn new(base_relation: Symbol, index_name: Symbol) -> Self {
         MinHashLshConfigBuilder {
             fields: MinHashLshConfigFields {
                 base_relation,
@@ -392,8 +386,8 @@ impl BuildMinHashLshConfig for MinHashLshConfigBuilder<Set> {
 /// are always present, never a sentinel checked after assembly.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct HnswIndexConfig {
-    pub(crate) base_relation: SmartString<LazyCompact>,
-    pub(crate) index_name: SmartString<LazyCompact>,
+    pub(crate) base_relation: Symbol,
+    pub(crate) index_name: Symbol,
     pub(crate) vec_dim: usize,
     pub(crate) dtype: VecElementType,
     pub(crate) vec_fields: Vec<SmartString<LazyCompact>>,
@@ -409,8 +403,8 @@ pub(crate) struct HnswIndexConfig {
 /// Payload of an HNSW staged builder — moved as one unit so typestate
 /// `remark` / `build` cannot become a second field-by-field authority.
 struct HnswConfigFields {
-    base_relation: SmartString<LazyCompact>,
-    index_name: SmartString<LazyCompact>,
+    base_relation: Symbol,
+    index_name: Symbol,
     vec_dim: usize,
     ef_construction: usize,
     m_neighbours: usize,
@@ -435,10 +429,7 @@ pub(crate) struct HnswConfigBuilder<Dim, Ef, M> {
 
 impl HnswConfigBuilder<Unset, Unset, Unset> {
     /// Begin an HNSW config from the two always-known identity fields.
-    pub(crate) fn new(
-        base_relation: SmartString<LazyCompact>,
-        index_name: SmartString<LazyCompact>,
-    ) -> Self {
+    pub(crate) fn new(base_relation: Symbol, index_name: Symbol) -> Self {
         HnswConfigBuilder {
             fields: HnswConfigFields {
                 base_relation,
@@ -765,7 +756,10 @@ mod tests {
     /// reachable only because dim, ef, and m are all supplied.
     #[test]
     fn hnsw_staged_builder_yields_a_complete_config() -> Result<()> {
-        let cfg = HnswConfigBuilder::new("docs".into(), "by_vec".into())
+        let cfg = HnswConfigBuilder::new(
+            Symbol::new("docs", SourceSpan::empty()),
+            Symbol::new("by_vec", SourceSpan::empty()),
+        )
             .dtype(VecElementType::F64)
             .distance(HnswDistance::Cosine)
             .dim(128)?
@@ -784,12 +778,18 @@ mod tests {
     #[test]
     fn hnsw_builder_refuses_illegal_dim_and_m() -> Result<()> {
         assert!(
-            HnswConfigBuilder::new("docs".into(), "by_vec".into())
+            HnswConfigBuilder::new(
+                Symbol::new("docs", SourceSpan::empty()),
+                Symbol::new("by_vec", SourceSpan::empty()),
+            )
                 .dim(0)
                 .is_err()
         );
         assert!(
-            HnswConfigBuilder::new("docs".into(), "by_vec".into())
+            HnswConfigBuilder::new(
+                Symbol::new("docs", SourceSpan::empty()),
+                Symbol::new("by_vec", SourceSpan::empty()),
+            )
                 .dim(1)?
                 .ef(8)
                 .m(1)
@@ -815,12 +815,18 @@ mod tests {
             val: DataValue::from(true),
             span: SourceSpan::new(0, 0),
         };
-        let fts = FtsConfigBuilder::new("docs".into(), "by_text".into())
+        let fts = FtsConfigBuilder::new(
+            Symbol::new("docs", SourceSpan::empty()),
+            Symbol::new("by_text", SourceSpan::empty()),
+        )
             .extractor(ex())
             .build();
         assert_eq!(fts.extractor, ex());
 
-        let lsh = MinHashLshConfigBuilder::new("docs".into(), "by_lsh".into())
+        let lsh = MinHashLshConfigBuilder::new(
+            Symbol::new("docs", SourceSpan::empty()),
+            Symbol::new("by_lsh", SourceSpan::empty()),
+        )
             .n_gram(3)
             .extractor(ex())
             .build();

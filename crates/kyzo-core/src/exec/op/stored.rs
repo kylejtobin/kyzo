@@ -213,7 +213,7 @@ impl StoredRA {
                             {
                                 let found_val = found.get(*rk).ok_or_else(|| {
                                     StoredRowTooShortError(
-                                        Symbol::new(self.storage.name.clone(), self.span),
+                                        self.storage.name.clone(),
                                         *rk,
                                         found.len(),
                                         self.span,
@@ -249,7 +249,7 @@ impl StoredRA {
                                     {
                                         let found_val = found.get(*rk).ok_or_else(|| {
                                             StoredRowTooShortError(
-                                                Symbol::new(self.storage.name.clone(), self.span),
+                                                self.storage.name.clone(),
                                                 *rk,
                                                 found.len(),
                                                 self.span,
@@ -526,7 +526,7 @@ mod segment_gate_tests {
 
     fn col(name: &str, coltype: ColType) -> ColumnDef {
         ColumnDef {
-            name: SmartString::from(name),
+            name: Symbol::new(name, sp()),
             typing: NullableColType::required(coltype),
             default_gen: None,
         }

@@ -31,10 +31,8 @@ Rebuildable speed over canonical truth. Never truth itself.
 - Manifests and per-engine metadata carry config only, never value
   authority, through the store's one ruled metadata door.
 
-- Every `.rs` file declares `//! AUTHORITY`, `//! SEAT`, `//! FILE_KIND` and obeys the File template in this rule.
-- Comments obey the Comment ontology in this rule.
 - Seated items carry `// CONSTRUCT: <grammar> <Ident>`.
-- A file that needs two AUTHORITY sentences is split before merge.
+- One AUTHORITY per file. A file that needs two is split before merge.
 - Building type exposes no search. Sealed type carries generation. Candidates only. One directory per projection kind.
 
 ## Forbidden
@@ -50,61 +48,6 @@ Rebuildable speed over canonical truth. Never truth itself.
 - In-place reinterpretation of an AcceptedReplica — LocalProjection is a
   rebuildable cache over the origin certificate, never Record meaning.
 
-## Comment ontology
-
-| kind | form | placement |
-| --- | --- | --- |
-| authority | `//! AUTHORITY: ` | file head; one Spec organ |
-| seat | `//! SEAT: ` | under AUTHORITY; `zone-<name>/<role>` |
-| file_kind | `//! FILE_KIND: ` | under SEAT; id from File template |
-| citation | `//! CITATION: ` | when FILE_KIND requires |
-| construct | `// CONSTRUCT: ` | above seated item; `<grammar> <Ident>` |
-| order_law | `// ORDER_LAW: ` | above ordered/encoded type |
-| claim | `// CLAIM: ` | `Unconstructible\|Refused\|Unexposed — <state>` |
-| engine_edit | `// ENGINE_EDIT: ` | vendor divergence only |
-| refuse_doc | `/// Refuse(` | error variants |
-| api_doc | `/// ` | public contract nouns only |
-
-This table is total; not listed = red.
-
-Comments name Spec surface only. Motive, apology, history, metacommentary, and performative language are red.
-
-## File template
-
-Path touch loads this rule. Obey FILE_KIND rows below. Markers: `// --- zone-file:<id> ---` with ids imports, types, construction, order_encode, decode, verbs, state, adapters, refusals, wiring, tests. Absent section = no marker.
-
-| FILE_KIND | section order | required | forbid |
-| --- | --- | --- | --- |
-| `projection_engine` | I T C S V R X | Building→seal→Sealed; CLAIM query-on-Building | Store write |
-| `projection_index` | I T C S V R X | candidates only; two-axis if durable | truth answers |
-| `projection_contract` | I T V R X | trait boundary | |
-| `fts_analyzer` | I T C V R X | deterministic | Store write |
-| `local_projection` | I T C S V R X | rebuildable over certificate; CLAIM reshape Unconstructible | |
-
-This table is total; not listed = red.
-
-State section order inside `projection_engine`: Building → seal door → Sealed. Reverse is red.
-
-### Dominant skeleton
-
-```rust
-//! AUTHORITY: <projection kind> build/seal lifecycle
-//! SEAT: zone-project/<kind>
-//! FILE_KIND: projection_engine
-
-// --- zone-file:imports ---
-// --- zone-file:types ---
-// Building (no search)
-// --- zone-file:construction ---
-// --- zone-file:state ---
-// --- zone-file:verbs ---
-// CONSTRUCT: consuming-verb seal
-// Sealed (search only here)
-// CLAIM: Unconstructible — query on Building
-// --- zone-file:refusals ---
-// --- zone-file:tests ---
-```
-
 ## Dual-authority debt
 
 | path | fused |
@@ -113,4 +56,3 @@ State section order inside `projection_engine`: Building → seal door → Seale
 | `text/fts.rs` | index + query |
 
 This table is total for named duals in this zone; not listed here may still be dual in `path-kinds.csv`.
-

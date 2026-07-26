@@ -33,17 +33,315 @@
 
 use std::cmp::min;
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::{Deref, DerefMut};
 
 use miette::{Diagnostic, Result, ensure, miette};
 use thiserror::Error;
 
 /// A directed graph as an adjacency map: node → successors.
-pub(crate) type Graph<T> = BTreeMap<T, Vec<T>>;
+pub(crate) struct Graph<T>(pub(crate) BTreeMap<T, Vec<T>>);
 
 /// A directed graph whose edges carry a poison flag: node → (successor →
-/// poisoned). A poisoned edge is one that [`generalized_kahn`] must not
+/// poisoned). A poisoned edge is one that [`StratifiedGraph::generalized_kahn`]
+/// must not
 /// leave inside a single stratum.
-pub(crate) type StratifiedGraph<T> = BTreeMap<T, BTreeMap<T, bool>>;
+pub(crate) struct StratifiedGraph<T>(pub(crate) BTreeMap<T, BTreeMap<T, bool>>);
+
+impl<T> Deref for Graph<T> {
+    type Target = BTreeMap<T, Vec<T>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T> DerefMut for Graph<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<T> From<BTreeMap<T, Vec<T>>> for Graph<T> {
+    fn from(map: BTreeMap<T, Vec<T>>) -> Self {
+        Self(map)
+    }
+}
+
+impl<T: Ord> FromIterator<(T, Vec<T>)> for Graph<T> {
+    fn from_iter<I: IntoIterator<Item = (T, Vec<T>)>>(iter: I) -> Self {
+        Self(iter.into_iter().collect())
+    }
+}
+
+impl<T> Default for Graph<T>
+where
+    BTreeMap<T, Vec<T>>: Default,
+{
+    fn default() -> Self {
+        Self(BTreeMap::default())
+    }
+}
+
+impl<T> IntoIterator for Graph<T> {
+    type Item = (T, Vec<T>);
+    type IntoIter = std::collections::btree_map::IntoIter<T, Vec<T>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl<'a, T> IntoIterator for &'a Graph<T> {
+    type Item = (&'a T, &'a Vec<T>);
+    type IntoIter = std::collections::btree_map::Iter<'a, T, Vec<T>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+impl<'a, T> IntoIterator for &'a mut Graph<T> {
+    type Item = (&'a T, &'a mut Vec<T>);
+    type IntoIter = std::collections::btree_map::IterMut<'a, T, Vec<T>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter_mut()
+    }
+}
+
+impl<T> Deref for StratifiedGraph<T> {
+    type Target = BTreeMap<T, BTreeMap<T, bool>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T> DerefMut for StratifiedGraph<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<T> From<BTreeMap<T, BTreeMap<T, bool>>> for StratifiedGraph<T> {
+    fn from(map: BTreeMap<T, BTreeMap<T, bool>>) -> Self {
+        Self(map)
+    }
+}
+
+impl<T: Ord> FromIterator<(T, BTreeMap<T, bool>)> for StratifiedGraph<T> {
+    fn from_iter<I: IntoIterator<Item = (T, BTreeMap<T, bool>)>>(iter: I) -> Self {
+        Self(iter.into_iter().collect())
+    }
+}
+
+impl<T> Default for StratifiedGraph<T>
+where
+    BTreeMap<T, BTreeMap<T, bool>>: Default,
+{
+    fn default() -> Self {
+        Self(BTreeMap::default())
+    }
+}
+
+impl<T> IntoIterator for StratifiedGraph<T> {
+    type Item = (T, BTreeMap<T, bool>);
+    type IntoIter = std::collections::btree_map::IntoIter<T, BTreeMap<T, bool>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl<'a, T> IntoIterator for &'a StratifiedGraph<T> {
+    type Item = (&'a T, &'a BTreeMap<T, bool>);
+    type IntoIter = std::collections::btree_map::Iter<'a, T, BTreeMap<T, bool>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+impl<'a, T> IntoIterator for &'a mut StratifiedGraph<T> {
+    type Item = (&'a T, &'a mut BTreeMap<T, bool>);
+    type IntoIter = std::collections::btree_map::IterMut<'a, T, BTreeMap<T, bool>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter_mut()
+    }
+}
+
+impl Graph<()> {
+    /// After Tarjan's DFS, each node's `low` label is its component root's
+    /// discovery id; grouping by that label yields the SCC member lists.
+    fn group_sccs_by_low(low: Vec<usize>) -> Vec<Vec<usize>> {
+        let mut low_map: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+        for (idx, grp) in low.into_iter().enumerate() {
+            low_map.entry(grp).or_default().push(idx);
+        }
+        low_map.into_values().collect()
+    }
+}
+
+impl<T: Ord + Copy> StratifiedGraph<T> {
+    /// The dependency graph with poison labels forgotten, for reachability
+    /// and SCC computation.
+    pub(crate) fn reduce_to_graph(&self) -> Graph<T> {
+        self.iter()
+            .map(|(k, s)| (*k, s.keys().copied().collect::<Vec<_>>()))
+            .collect()
+    }
+}
+
+impl<T: Ord> Graph<T> {
+    /// The strongly connected components of `self`, computed by an iterative
+    /// Tarjan's algorithm. Edges pointing outside the key set are ignored (the
+    /// stratifier's graphs mention undefined names; those resolve elsewhere).
+    ///
+    /// Components are returned keyed by their root's DFS discovery order, each
+    /// component's members in ascending node order — the same output, member
+    /// for member, as the CozoDB original's recursive formulation.
+    pub(crate) fn strongly_connected_components(&self) -> Result<Vec<Vec<&T>>> {
+        let indices: Vec<&T> = self.keys().collect();
+        let invert_indices: BTreeMap<&T, usize> = indices
+            .iter()
+            .enumerate()
+            .map(|(idx, k)| (*k, idx))
+            .collect();
+        let idx_graph: Vec<Vec<usize>> = self
+            .values()
+            .map(|vs| {
+                vs.iter()
+                    .filter_map(|v| invert_indices.get(v).copied())
+                    .collect()
+            })
+            .collect();
+        let mut ret = Vec::new();
+        for group in TarjanScc::new(&idx_graph)?.run() {
+            let mut component = Vec::with_capacity(group.len());
+            for i in group {
+                component.push(
+                    *indices
+                        .get(i)
+                        .ok_or(GraphInvariantError("SCC member index out of range"))?,
+                );
+            }
+            ret.push(component);
+        }
+        Ok(ret)
+    }
+
+    /// Every node reachable from `start` (including `start` itself), walked
+    /// iteratively on a worklist. Nodes absent from the key set contribute no
+    /// successors.
+    pub(crate) fn reachable_components<'a>(&'a self, start: &'a T) -> BTreeSet<&'a T> {
+        let mut collected = BTreeSet::from([start]);
+        let mut pending = vec![start];
+        while let Some(at) = pending.pop() {
+            if let Some(children) = self.get(at) {
+                for el in children {
+                    if collected.insert(el) {
+                        pending.push(el);
+                    }
+                }
+            }
+        }
+        collected
+    }
+}
+
+impl StratifiedGraph<usize> {
+    /// For this generalized Kahn's algorithm, graph edges can be labelled
+    /// 'poisoned', so that no stratum contains any poisoned edges within it.
+    /// The returned vector of vectors is simultaneously a topological ordering
+    /// and a stratification, which is greedy with respect to the starting node.
+    ///
+    /// Node identities must be exactly `0..num_nodes`, and every id appearing
+    /// in `self` must be below `num_nodes`; the ids and edge counts are
+    /// validated, and the in-degree bookkeeping is checked at every step and at
+    /// exit. A graph that is not a DAG (the condensation the stratifier feeds
+    /// in always is) is therefore a typed error here, never a silently
+    /// truncated result — the CozoDB original checked this only with a
+    /// `release-absent assert` that release builds compiled out.
+    pub(crate) fn generalized_kahn(&self, num_nodes: usize) -> Result<Vec<Vec<usize>>> {
+        let mut in_degree = vec![0usize; num_nodes];
+        for (fr, tos) in self {
+            ensure!(
+                *fr < num_nodes,
+                GraphInvariantError("Kahn edge source out of range")
+            );
+            for to in tos.keys() {
+                let d = in_degree
+                    .get_mut(*to)
+                    .ok_or(GraphInvariantError("Kahn edge target out of range"))?;
+                *d += 1;
+            }
+        }
+        let mut ret = vec![];
+        let mut current_stratum = vec![];
+        // Nodes with no unprocessed dependents, placeable in the current
+        // stratum; and nodes reached over a poisoned edge from the current
+        // stratum, which must wait for the next one.
+        let mut safe_pending = vec![];
+        let mut unsafe_nodes: BTreeSet<usize> = BTreeSet::new();
+
+        for (node, degree) in in_degree.iter().enumerate() {
+            if *degree == 0 {
+                safe_pending.push(node);
+            }
+        }
+
+        loop {
+            if safe_pending.is_empty() && !unsafe_nodes.is_empty() {
+                // Stratum boundary: everything placeable is placed, and only
+                // poison-blocked nodes remain. Close the stratum and release
+                // the blocked nodes whose dependents are all processed.
+                ret.push(std::mem::take(&mut current_stratum));
+                for node in &unsafe_nodes {
+                    // In range: `unsafe_nodes` only ever holds validated edge
+                    // targets.
+                    if in_degree[*node] == 0 {
+                        safe_pending.push(*node);
+                    }
+                }
+                unsafe_nodes.clear();
+            }
+            let removed = match safe_pending.pop() {
+                Some(node) => node,
+                None => {
+                    if !current_stratum.is_empty() {
+                        ret.push(current_stratum);
+                    }
+                    break;
+                }
+            };
+            current_stratum.push(removed);
+            if let Some(edges) = self.get(&removed) {
+                for (nxt, poisoned) in edges {
+                    let d = in_degree
+                        .get_mut(*nxt)
+                        .ok_or(GraphInvariantError("Kahn edge target out of range"))?;
+                    *d = d
+                        .checked_sub(1)
+                        .ok_or(GraphInvariantError("Kahn in-degree underflow"))?;
+                    if *poisoned {
+                        unsafe_nodes.insert(*nxt);
+                    }
+                    if *d == 0 && !unsafe_nodes.contains(nxt) {
+                        safe_pending.push(*nxt);
+                    }
+                }
+            }
+        }
+        // The original's graph.rs:129 `release-absent assert`, as a real invariant:
+        // every edge must have been consumed, or some node was never emitted.
+        ensure!(
+            in_degree.iter().all(|d| *d == 0),
+            GraphInvariantError("generalized Kahn did not consume every edge (cyclic input?)")
+        );
+        Ok(ret)
+    }
+}
 
 /// An invariant these algorithms maintain internally was found broken.
 /// Returned (never panicked, and never only debug-asserted) so corrupt
@@ -54,158 +352,6 @@ pub(crate) type StratifiedGraph<T> = BTreeMap<T, BTreeMap<T, bool>>;
 #[diagnostic(code(compiler::graph_invariant))]
 #[diagnostic(help("This is a bug. Please report it."))]
 struct GraphInvariantError(&'static str);
-
-/// The strongly connected components of `graph`, computed by an iterative
-/// Tarjan's algorithm. Edges pointing outside the key set are ignored (the
-/// stratifier's graphs mention undefined names; those resolve elsewhere).
-///
-/// Components are returned keyed by their root's DFS discovery order, each
-/// component's members in ascending node order — the same output, member
-/// for member, as the CozoDB original's recursive formulation.
-pub(crate) fn strongly_connected_components<T: Ord>(graph: &Graph<T>) -> Result<Vec<Vec<&T>>> {
-    let indices: Vec<&T> = graph.keys().collect();
-    let invert_indices: BTreeMap<&T, usize> = indices
-        .iter()
-        .enumerate()
-        .map(|(idx, k)| (*k, idx))
-        .collect();
-    let idx_graph: Vec<Vec<usize>> = graph
-        .values()
-        .map(|vs| {
-            vs.iter()
-                .filter_map(|v| invert_indices.get(v).copied())
-                .collect()
-        })
-        .collect();
-    let mut ret = Vec::new();
-    for group in TarjanScc::new(&idx_graph)?.run() {
-        let mut component = Vec::with_capacity(group.len());
-        for i in group {
-            component.push(
-                *indices
-                    .get(i)
-                    .ok_or(GraphInvariantError("SCC member index out of range"))?,
-            );
-        }
-        ret.push(component);
-    }
-    Ok(ret)
-}
-
-/// Every node reachable from `start` (including `start` itself), walked
-/// iteratively on a worklist. Nodes absent from the key set contribute no
-/// successors.
-pub(crate) fn reachable_components<'a, T: Ord>(
-    graph: &'a Graph<T>,
-    start: &'a T,
-) -> BTreeSet<&'a T> {
-    let mut collected = BTreeSet::from([start]);
-    let mut pending = vec![start];
-    while let Some(at) = pending.pop() {
-        if let Some(children) = graph.get(at) {
-            for el in children {
-                if collected.insert(el) {
-                    pending.push(el);
-                }
-            }
-        }
-    }
-    collected
-}
-
-/// For this generalized Kahn's algorithm, graph edges can be labelled
-/// 'poisoned', so that no stratum contains any poisoned edges within it.
-/// The returned vector of vectors is simultaneously a topological ordering
-/// and a stratification, which is greedy with respect to the starting node.
-///
-/// Node identities must be exactly `0..num_nodes`, and every id appearing
-/// in `graph` must be below `num_nodes`; the ids and edge counts are
-/// validated, and the in-degree bookkeeping is checked at every step and at
-/// exit. A graph that is not a DAG (the condensation the stratifier feeds
-/// in always is) is therefore a typed error here, never a silently
-/// truncated result — the CozoDB original checked this only with a
-/// `release-absent assert` that release builds compiled out.
-pub(crate) fn generalized_kahn(
-    graph: &StratifiedGraph<usize>,
-    num_nodes: usize,
-) -> Result<Vec<Vec<usize>>> {
-    let mut in_degree = vec![0usize; num_nodes];
-    for (fr, tos) in graph {
-        ensure!(
-            *fr < num_nodes,
-            GraphInvariantError("Kahn edge source out of range")
-        );
-        for to in tos.keys() {
-            let d = in_degree
-                .get_mut(*to)
-                .ok_or(GraphInvariantError("Kahn edge target out of range"))?;
-            *d += 1;
-        }
-    }
-    let mut ret = vec![];
-    let mut current_stratum = vec![];
-    // Nodes with no unprocessed dependents, placeable in the current
-    // stratum; and nodes reached over a poisoned edge from the current
-    // stratum, which must wait for the next one.
-    let mut safe_pending = vec![];
-    let mut unsafe_nodes: BTreeSet<usize> = BTreeSet::new();
-
-    for (node, degree) in in_degree.iter().enumerate() {
-        if *degree == 0 {
-            safe_pending.push(node);
-        }
-    }
-
-    loop {
-        if safe_pending.is_empty() && !unsafe_nodes.is_empty() {
-            // Stratum boundary: everything placeable is placed, and only
-            // poison-blocked nodes remain. Close the stratum and release
-            // the blocked nodes whose dependents are all processed.
-            ret.push(std::mem::take(&mut current_stratum));
-            for node in &unsafe_nodes {
-                // In range: `unsafe_nodes` only ever holds validated edge
-                // targets.
-                if in_degree[*node] == 0 {
-                    safe_pending.push(*node);
-                }
-            }
-            unsafe_nodes.clear();
-        }
-        let removed = match safe_pending.pop() {
-            Some(node) => node,
-            None => {
-                if !current_stratum.is_empty() {
-                    ret.push(current_stratum);
-                }
-                break;
-            }
-        };
-        current_stratum.push(removed);
-        if let Some(edges) = graph.get(&removed) {
-            for (nxt, poisoned) in edges {
-                let d = in_degree
-                    .get_mut(*nxt)
-                    .ok_or(GraphInvariantError("Kahn edge target out of range"))?;
-                *d = d
-                    .checked_sub(1)
-                    .ok_or(GraphInvariantError("Kahn in-degree underflow"))?;
-                if *poisoned {
-                    unsafe_nodes.insert(*nxt);
-                }
-                if *d == 0 && !unsafe_nodes.contains(nxt) {
-                    safe_pending.push(*nxt);
-                }
-            }
-        }
-    }
-    // The original's graph.rs:129 `release-absent assert`, as a real invariant:
-    // every edge must have been consumed, or some node was never emitted.
-    ensure!(
-        in_degree.iter().all(|d| *d == 0),
-        GraphInvariantError("generalized Kahn did not consume every edge (cyclic input?)")
-    );
-    Ok(ret)
-}
 
 /// Tarjan's strongly-connected-components state over an index graph.
 ///
@@ -222,14 +368,6 @@ struct TarjanScc<'a> {
     low: Vec<usize>,
     on_stack: Vec<bool>,
     stack: Vec<usize>,
-}
-
-fn group_sccs_by_low(low: Vec<usize>) -> Vec<Vec<usize>> {
-    let mut low_map: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
-    for (idx, grp) in low.into_iter().enumerate() {
-        low_map.entry(grp).or_default().push(idx);
-    }
-    low_map.into_values().collect()
 }
 
 impl<'a> TarjanScc<'a> {
@@ -266,7 +404,7 @@ impl<'a> TarjanScc<'a> {
 
         // After every DFS completes, `low` holds each node's component
         // label (its root's discovery id): grouping by it yields the SCCs.
-        group_sccs_by_low(self.low)
+        Graph::group_sccs_by_low(self.low)
     }
 
     /// Assign `at` its discovery id and put it on the component stack.
@@ -333,8 +471,11 @@ impl<'a> TarjanScc<'a> {
 #[cfg(test)]
 mod tests {
     use miette::{Result, miette};
-    use proptest::prelude::*;
-    use proptest::test_runner::{TestCaseError, TestRunner};
+    use proptest::arbitrary::any;
+    use proptest::prop_assert;
+    use proptest::prop_assert_eq;
+    use proptest::test_runner::TestCaseError;
+    use proptest::test_runner::TestRunner;
 
     use super::*;
 
@@ -350,7 +491,7 @@ mod tests {
 
     /// SCCs as an order-free partition, for comparing against the oracle.
     fn scc_partition(graph: &Graph<usize>) -> Result<BTreeSet<BTreeSet<usize>>> {
-        Ok(strongly_connected_components(graph)?
+        Ok(graph.strongly_connected_components()?
             .into_iter()
             .map(|c| c.into_iter().copied().collect())
             .collect())
@@ -418,7 +559,7 @@ mod tests {
                     self.dfs(i);
                 }
             }
-            super::group_sccs_by_low(self.low)
+            Graph::group_sccs_by_low(self.low)
         }
         fn dfs(&mut self, at: usize) {
             self.stack.push(at);
@@ -477,7 +618,7 @@ mod tests {
     fn scc_ignores_edges_to_undefined_nodes() -> Result<()> {
         // Node 0 points at a name that is not a key (the stratifier's
         // graphs mention undefined rules); it must simply not count.
-        let mut g: Graph<usize> = BTreeMap::from([(0, vec![7]), (1, vec![0])]);
+        let mut g = Graph(BTreeMap::from([(0, vec![7]), (1, vec![0])]));
         g.entry(1).or_default();
         let want: BTreeSet<BTreeSet<usize>> = [BTreeSet::from([0]), BTreeSet::from([1])]
             .into_iter()
@@ -561,7 +702,7 @@ mod tests {
                 ),
                 |(n, edges)| {
                     // Orient every edge low → high so the graph is a DAG.
-                    let mut g: StratifiedGraph<usize> = BTreeMap::new();
+                    let mut g = StratifiedGraph::default();
                     for (a, b, poisoned) in edges {
                         let (a, b) = (a % n, b % n);
                         if a == b {
@@ -571,7 +712,7 @@ mod tests {
                         let e = g.entry(fr).or_default().entry(to).or_insert(false);
                         *e = *e || poisoned;
                     }
-                    let strata = match generalized_kahn(&g, n) {
+                    let strata = match g.generalized_kahn(n) {
                         Ok(s) => s,
                         Err(e) => {
                             return Err(TestCaseError::fail(format!("a DAG stratifies: {e}")));
@@ -604,9 +745,11 @@ mod tests {
     #[test]
     fn kahn_poisoned_edges_split_strata() -> Result<()> {
         // 0 → 1 poisoned, 0 → 2 clean: 1 must wait a stratum, 2 need not.
-        let g: StratifiedGraph<usize> =
-            BTreeMap::from([(0, BTreeMap::from([(1, true), (2, false)]))]);
-        let strata = generalized_kahn(&g, 3).map_err(|e| miette!("stratifies: {e}"))?;
+        let g = StratifiedGraph(BTreeMap::from([(
+            0,
+            BTreeMap::from([(1, true), (2, false)]),
+        )]));
+        let strata = g.generalized_kahn(3).map_err(|e| miette!("stratifies: {e}"))?;
         assert_eq!(strata, vec![vec![0, 2], vec![1]]);
         Ok(())
     }
@@ -616,21 +759,21 @@ mod tests {
         // The condensation the stratifier feeds in is always a DAG; a cycle
         // here means corrupt bookkeeping. The original release-absent assert let a
         // release build return a truncated stratification for this input.
-        let g: StratifiedGraph<usize> = BTreeMap::from([
+        let g = StratifiedGraph(BTreeMap::from([
             (0, BTreeMap::from([(1, false)])),
             (1, BTreeMap::from([(0, false)])),
-        ]);
-        let err = generalized_kahn(&g, 2).expect_err("cycle must be refused");
+        ]));
+        let err = g.generalized_kahn(2).expect_err("cycle must be refused");
         assert!(err.to_string().contains("invariant"), "got: {err}");
         Ok(())
     }
 
     #[test]
     fn kahn_refuses_out_of_range_nodes() -> Result<()> {
-        let g: StratifiedGraph<usize> = BTreeMap::from([(0, BTreeMap::from([(9, false)]))]);
-        assert!(generalized_kahn(&g, 2).is_err());
-        let g: StratifiedGraph<usize> = BTreeMap::from([(9, BTreeMap::new())]);
-        assert!(generalized_kahn(&g, 2).is_err());
+        let g = StratifiedGraph(BTreeMap::from([(0, BTreeMap::from([(9, false)]))]));
+        assert!(g.generalized_kahn(2).is_err());
+        let g = StratifiedGraph(BTreeMap::from([(9, BTreeMap::new())]));
+        assert!(g.generalized_kahn(2).is_err());
         Ok(())
     }
 
@@ -645,9 +788,9 @@ mod tests {
                 const N: usize = 50_000;
                 let edges: Vec<(usize, usize)> = (0..N - 1).map(|i| (i, i + 1)).collect();
                 let g = graph_of(&edges, N);
-                let sccs = strongly_connected_components(&g)?;
+                let sccs = g.strongly_connected_components()?;
                 assert_eq!(sccs.len(), N, "a chain is all singletons");
-                let reached = reachable_components(&g, &0);
+                let reached = g.reachable_components(&0);
                 assert_eq!(reached.len(), N);
                 Ok(())
             })

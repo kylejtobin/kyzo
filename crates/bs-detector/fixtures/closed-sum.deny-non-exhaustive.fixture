@@ -1,4 +1,0 @@
-#[non_exhaustive]
-enum Direction {
-    Ascending,
-}

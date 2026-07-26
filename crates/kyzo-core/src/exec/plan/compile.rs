@@ -229,6 +229,44 @@ impl RelationHandle {
         }
         chosen
     }
+
+    /// Resolve the `IndexKind::Temporal` posting index for a `Valid`-axis
+    /// `@delta` clause, if this relation has one attached — story #62
+    /// chunk 4's read-side seam. `None` for every other clause shape
+    /// (`@delta_sys`, `@spans`, a plain read, or a `Valid`-axis `@delta` whose
+    /// base relation has no posting index yet): `DeltaRA::iter_batched` falls
+    /// back to the naive full-snapshot diff in every one of those cases, so
+    /// returning `None` here is never a correctness gap, only a missed
+    /// acceleration.
+    pub(crate) fn resolve_delta_posting_index(
+        &self,
+        tx: &impl ReadTx,
+        validity: &Option<ValidityClause>,
+    ) -> Result<Option<RelationHandle>> {
+        let Some(ValidityClause::Delta {
+            axis: DeltaAxis::Valid,
+            ..
+        }) = validity
+        else {
+            return Ok(None);
+        };
+        self.indices
+            .iter()
+            .find(|idx_ref| matches!(idx_ref.kind, IndexKind::Temporal))
+            .map(|idx_ref| idx_ref.resolve_relation(tx, self))
+            .transpose()
+    }
+}
+
+impl IndexRef {
+    /// Resolve this index's backing relation through the landed catalog.
+    pub(crate) fn resolve_relation(
+        &self,
+        tx: &impl ReadTx,
+        base: &RelationHandle,
+    ) -> Result<RelationHandle> {
+        get_relation(tx, self.relation_name(&base.name).as_str())
+    }
 }
 
 /// One head position's aggregation slot — the same shape carried by
@@ -325,42 +363,41 @@ pub struct CompiledRule {
     pub(crate) premise_sources: Vec<PremiseSource>,
 }
 
-/// Positive body literals' provenance sources, in body order. Negation,
-/// predicates, and unifications contribute none.
-pub(crate) fn positive_premise_sources(body: &[MagicAtom]) -> Vec<PremiseSource> {
-    body.iter()
-        .filter_map(|atom| match atom {
-            MagicAtom::Rule(r) => Some(PremiseSource::Rule(r.name.clone())),
-            MagicAtom::Relation(r) => Some(PremiseSource::Fact(r.name.clone())),
-            MagicAtom::Search(s) => Some(PremiseSource::Fact(Symbol::new(
-                s.cfg.base().name.clone(),
-                s.span,
-            ))),
-            MagicAtom::Predicate(_)
-            | MagicAtom::NegatedRule(_)
-            | MagicAtom::NegatedRelation(_)
-            | MagicAtom::Unification(_) => None,
-        })
-        .collect()
-}
-
-/// The atom-occurrence numbering shared by [`MagicInlineRule::contained_rules`]
-/// and every `TempStoreRA`-constructing call site in
-/// `compile_magic_rule_body` — both walk `body: &[MagicAtom]` left to right
-/// and must agree on which occurrence id names which atom, so the numbering
-/// itself lives in exactly one place. One id per `Rule`/`NegatedRule` atom,
-/// in body order; every other atom kind is not delta-selectable and consumes
-/// no id.
-pub(crate) fn atom_occurrences(
-    body: &[MagicAtom],
-) -> impl Iterator<Item = (AtomOccurrence, &MagicAtom)> {
-    body.iter()
-        .filter(|atom| matches!(atom, MagicAtom::Rule(_) | MagicAtom::NegatedRule(_)))
-        .enumerate()
-        .map(|(i, atom)| (AtomOccurrence(i), atom))
-}
-
 impl MagicInlineRule {
+    /// Positive body literals' provenance sources, in body order. Negation,
+    /// predicates, and unifications contribute none.
+    pub(crate) fn positive_premise_sources(&self) -> Vec<PremiseSource> {
+        self.body
+            .iter()
+            .filter_map(|atom| match atom {
+                MagicAtom::Rule(r) => Some(PremiseSource::Rule(r.name.clone())),
+                MagicAtom::Relation(r) => Some(PremiseSource::Fact(r.name.clone())),
+                MagicAtom::Search(s) => Some(PremiseSource::Fact(s.cfg.base().name.clone())),
+                MagicAtom::Predicate(_)
+                | MagicAtom::NegatedRule(_)
+                | MagicAtom::NegatedRelation(_)
+                | MagicAtom::Unification(_) => None,
+            })
+            .collect()
+    }
+
+    /// The atom-occurrence numbering shared by [`MagicInlineRule::contained_rules`]
+    /// and every `TempStoreRA`-constructing call site in
+    /// `compile_magic_rule_body` — both walk `body: &[MagicAtom]` left to right
+    /// and must agree on which occurrence id names which atom, so the numbering
+    /// itself lives in exactly one place. One id per `Rule`/`NegatedRule` atom,
+    /// in body order; every other atom kind is not delta-selectable and consumes
+    /// no id.
+    pub(crate) fn atom_occurrences(
+        &self,
+    ) -> impl Iterator<Item = (AtomOccurrence, &MagicAtom)> {
+        self.body
+            .iter()
+            .filter(|atom| matches!(atom, MagicAtom::Rule(_) | MagicAtom::NegatedRule(_)))
+            .enumerate()
+            .map(|(i, atom)| (AtomOccurrence(i), atom))
+    }
+
     /// Every in-memory rule store this body reads (positively OR
     /// negatively), keyed by occurrence — re-homed from the original's
     /// `data/program.rs` (the compile tier owns the dependency map; the
@@ -392,7 +429,7 @@ impl MagicInlineRule {
     /// fallback.
     pub fn contained_rules(&self) -> BTreeMap<AtomOccurrence, MagicSymbol> {
         let mut coll = BTreeMap::new();
-        for (occurrence, atom) in atom_occurrences(&self.body) {
+        for (occurrence, atom) in self.atom_occurrences() {
             match atom {
                 MagicAtom::Rule(rule) | MagicAtom::NegatedRule(rule) => {
                     coll.insert(occurrence, rule.name.clone());
@@ -406,299 +443,434 @@ impl MagicInlineRule {
         }
         coll
     }
-}
+    /// Compile one rule body into its operator tree. `ret_vars` is the rule's
+    /// head: the plan's output frame is proven equal to it (unbound head
+    /// symbols refused, columns reordered to match).
+    pub(crate) fn compile_body(
+            &self,
+            tx: &impl ReadTx,
+            rule_name: &MagicSymbol,
+            store_arities: &BTreeMap<MagicSymbol, usize>,
+            ret_vars: &[Symbol],
+        ) -> Result<RelAlgebra> {
+        let mut ret = RelAlgebra::unit(rule_name.as_plain_symbol().span());
+        let mut seen_variables = BTreeSet::new();
+        let mut serial_id = 0;
+        let mut gen_symb = |span| {
+            let ret = Symbol::new(format!("**{serial_id}"), span);
+            serial_id += 1;
+            ret
+        };
+        // One id per `Rule`/`NegatedRule` atom, in body order — the exact
+        // numbering `MagicInlineRule::contained_rules` (via `atom_occurrences`)
+        // assigns over this same `self.body`, so a `TempStoreRA` built here and
+        // the occurrence key `eval.rs`'s delta discipline selects it by always
+        // agree.
+        let mut occurrence_counter = 0usize;
+        let mut next_occurrence = move || {
+            let occ = AtomOccurrence(occurrence_counter);
+            occurrence_counter += 1;
+            occ
+        };
+        for atom in &self.body {
+            match atom {
+                MagicAtom::Rule(rule_app) => {
+                    let occurrence = next_occurrence();
+                    let store_arity = store_arities.get(&rule_app.name).ok_or_else(|| {
+                        RuleNotFound(rule_app.name.clone(), rule_app.name.as_plain_symbol().span())
+                    })?;
 
-#[derive(Debug, Error, Diagnostic)]
-#[error("Requested rule {0} not found")]
-#[diagnostic(code(eval::rule_not_found))]
-struct RuleNotFound(MagicSymbol, #[label] SourceSpan);
+                    ensure!(
+                        *store_arity == rule_app.args.len(),
+                        ArityMismatch(
+                            rule_app.name.as_plain_symbol().clone(),
+                            *store_arity,
+                            rule_app.args.len(),
+                            rule_app.span
+                        )
+                    );
+                    let mut prev_joiner_vars = vec![];
+                    let mut right_joiner_vars = vec![];
+                    let mut right_vars = vec![];
 
-#[derive(Debug, Error, Diagnostic)]
-#[error("Arity mismatch for rule application {0}")]
-#[diagnostic(code(eval::rule_arity_mismatch))]
-#[diagnostic(help("Required arity: {1}, number of arguments given: {2}"))]
-struct ArityMismatch(Symbol, usize, usize, #[label] SourceSpan);
-
-#[derive(Debug, Error, Diagnostic)]
-#[error("Symbol '{0}' in rule head is unbound")]
-#[diagnostic(code(eval::unbound_symb_in_head))]
-#[diagnostic(help(
-    "Note that symbols occurring only in negated positions are not considered bound"
-))]
-struct UnboundSymbolInRuleHead(Symbol, #[label] SourceSpan);
-
-/// Compile every stratum of a proven program into executable plans.
-///
-/// The input tier is execution-ordered by construction; the output `Vec`
-/// keeps that order (`compiled[0]` evaluates first).
-pub fn stratified_magic_compile(
-    tx: &impl ReadTx,
-    prog: StratifiedMagicProgram,
-) -> Result<Vec<CompiledProgram>> {
-    // Every store's arity, across ALL strata: a rule body may reference
-    // stores of earlier strata.
-    let mut store_arities: BTreeMap<MagicSymbol, usize> = Default::default();
-    for stratum in prog.strata() {
-        for (name, ruleset) in &stratum.prog {
-            store_arities.insert(name.clone(), ruleset.arity()?);
-        }
-    }
-
-    prog.into_strata()
-        .into_iter()
-        .map(|cur_prog| -> Result<CompiledProgram> {
-            cur_prog
-                .prog
-                .into_iter()
-                .map(|(k, body)| -> Result<(MagicSymbol, CompiledRuleSet)> {
-                    match body {
-                        MagicRulesOrFixed::Rules { rules: body } => {
-                            let mut collected = Vec::with_capacity(body.len());
-                            for rule in body.iter() {
-                                let header = &rule.head;
-                                let mut relation =
-                                    compile_magic_rule_body(tx, rule, &k, &store_arities, header)?;
-                                relation.fill_binding_indices_and_compile().with_context(
-                                    || {
-                                        format!(
-                                            "error encountered when filling binding indices for {relation:#?}"
-                                        )
-                                    },
-                                )?;
-                                collected.push((
-                                    rule.aggr.clone(),
-                                    CompiledRule {
-                                        relation,
-                                        contained_rules: rule.contained_rules(),
-                                        premise_sources: positive_premise_sources(&rule.body),
-                                    },
-                                ));
-                            }
-                            Ok((
-                                k.clone(),
-                                CompiledRuleSet::Rules(CompiledInlineRules::new(&k, collected)?),
-                            ))
-                        }
-                        MagicRulesOrFixed::Fixed { fixed } => {
-                            Ok((k, CompiledRuleSet::Fixed(fixed)))
-                        }
-                    }
-                })
-                .try_collect()
-        })
-        .try_collect()
-}
-
-/// Resolve the `IndexKind::Temporal` posting index for a `Valid`-axis
-/// `@delta` clause, if the base relation has one attached — story #62
-/// chunk 4's read-side seam. `None` for every other clause shape
-/// (`@delta_sys`, `@spans`, a plain read, or a `Valid`-axis `@delta` whose
-/// base relation has no posting index yet): `DeltaRA::iter_batched` falls
-/// back to the naive full-snapshot diff in every one of those cases, so
-/// returning `None` here is never a correctness gap, only a missed
-/// acceleration.
-fn resolve_delta_posting_index(
-    tx: &impl ReadTx,
-    store: &RelationHandle,
-    validity: &Option<ValidityClause>,
-) -> Result<Option<RelationHandle>> {
-    let Some(ValidityClause::Delta {
-        axis: DeltaAxis::Valid,
-        ..
-    }) = validity
-    else {
-        return Ok(None);
-    };
-    store
-        .indices
-        .iter()
-        .find(|idx_ref| matches!(idx_ref.kind, IndexKind::Temporal))
-        .map(|idx_ref| get_relation(tx, &idx_ref.relation_name(&store.name)))
-        .transpose()
-}
-
-/// Compile one rule body into its operator tree. `ret_vars` is the rule's
-/// head: the plan's output frame is proven equal to it (unbound head
-/// symbols refused, columns reordered to match).
-pub(crate) fn compile_magic_rule_body(
-    tx: &impl ReadTx,
-    rule: &MagicInlineRule,
-    rule_name: &MagicSymbol,
-    store_arities: &BTreeMap<MagicSymbol, usize>,
-    ret_vars: &[Symbol],
-) -> Result<RelAlgebra> {
-    let mut ret = RelAlgebra::unit(rule_name.as_plain_symbol().span());
-    let mut seen_variables = BTreeSet::new();
-    let mut serial_id = 0;
-    let mut gen_symb = |span| {
-        let ret = Symbol::new(format!("**{serial_id}"), span);
-        serial_id += 1;
-        ret
-    };
-    // One id per `Rule`/`NegatedRule` atom, in body order — the exact
-    // numbering `MagicInlineRule::contained_rules` (via `atom_occurrences`)
-    // assigns over this same `rule.body`, so a `TempStoreRA` built here and
-    // the occurrence key `eval.rs`'s delta discipline selects it by always
-    // agree.
-    let mut occurrence_counter = 0usize;
-    let mut next_occurrence = move || {
-        let occ = AtomOccurrence(occurrence_counter);
-        occurrence_counter += 1;
-        occ
-    };
-    for atom in &rule.body {
-        match atom {
-            MagicAtom::Rule(rule_app) => {
-                let occurrence = next_occurrence();
-                let store_arity = store_arities.get(&rule_app.name).ok_or_else(|| {
-                    RuleNotFound(rule_app.name.clone(), rule_app.name.as_plain_symbol().span())
-                })?;
-
-                ensure!(
-                    *store_arity == rule_app.args.len(),
-                    ArityMismatch(
-                        rule_app.name.as_plain_symbol().clone(),
-                        *store_arity,
-                        rule_app.args.len(),
-                        rule_app.span
-                    )
-                );
-                let mut prev_joiner_vars = vec![];
-                let mut right_joiner_vars = vec![];
-                let mut right_vars = vec![];
-
-                for var in &rule_app.args {
-                    if seen_variables.contains(var) {
-                        prev_joiner_vars.push(var.clone());
-                        let rk = gen_symb(var.span());
-                        right_vars.push(rk.clone());
-                        right_joiner_vars.push(rk);
-                    } else {
-                        seen_variables.insert(var.clone());
-                        right_vars.push(var.clone());
-                    }
-                }
-
-                let right = RelAlgebra::derived(
-                    right_vars,
-                    rule_app.name.clone(),
-                    occurrence,
-                    rule_app.span,
-                );
-                ensure!(
-                    prev_joiner_vars.len() == right_joiner_vars.len(),
-                    "join key arity mismatch between sides"
-                );
-                ret = ret.join_capturing_premise(
-                    right,
-                    prev_joiner_vars,
-                    right_joiner_vars,
-                    rule_app.span,
-                )?;
-            }
-            MagicAtom::Relation(rel_app) => {
-                let store = get_relation(tx, &rel_app.name)?;
-                if store.access_level < AccessLevel::ReadOnly {
-                    bail!(InsufficientAccessLevel::new(store.name.to_string(),
-                        "reading rows".to_string(),
-                        store.access_level
-                    ));
-                }
-                ensure!(
-                    store.arity() == rel_app.args.len(),
-                    ArityMismatch(
-                        rel_app.name.clone(),
-                        store.arity(),
-                        rel_app.args.len(),
-                        rel_app.span
-                    )
-                );
-                // already existing vars
-                let mut prev_joiner_vars = vec![];
-                // vars introduced by right and joined
-                let mut right_joiner_vars = vec![];
-                // used to find the right joiner var from the tuple position
-                let mut right_joiner_vars_pos_rev = vec![None; rel_app.args.len()];
-                // vars introduced by right, regardless of joining
-                let mut right_vars = vec![];
-                // used for choosing indices
-                let mut join_indices = vec![];
-
-                for (i, var) in rel_app.args.iter().enumerate() {
-                    if seen_variables.contains(var) {
-                        prev_joiner_vars.push(var.clone());
-                        let rk = gen_symb(var.span());
-                        right_vars.push(rk.clone());
-                        right_joiner_vars.push(rk);
-                        right_joiner_vars_pos_rev[i] = Some(right_joiner_vars.len() - 1);
-                        join_indices.push(IndexPositionUse::Join)
-                    } else {
-                        seen_variables.insert(var.clone());
-                        right_vars.push(var.clone());
-                        if var.kind() == SymbolKind::GeneratedIgnored {
-                            join_indices.push(IndexPositionUse::Ignored)
+                    for var in &rule_app.args {
+                        if seen_variables.contains(var) {
+                            prev_joiner_vars.push(var.clone());
+                            let rk = gen_symb(var.span());
+                            right_vars.push(rk.clone());
+                            right_joiner_vars.push(rk);
                         } else {
-                            join_indices.push(IndexPositionUse::BindForLater)
+                            seen_variables.insert(var.clone());
+                            right_vars.push(var.clone());
+                        }
+                    }
+
+                    let right = RelAlgebra::derived(
+                        right_vars,
+                        rule_app.name.clone(),
+                        occurrence,
+                        rule_app.span,
+                    );
+                    ensure!(
+                        prev_joiner_vars.len() == right_joiner_vars.len(),
+                        "join key arity mismatch between sides"
+                    );
+                    ret = ret.join_capturing_premise(
+                        right,
+                        prev_joiner_vars,
+                        right_joiner_vars,
+                        rule_app.span,
+                    )?;
+                }
+                MagicAtom::Relation(rel_app) => {
+                    let store = get_relation(tx, &rel_app.name)?;
+                    if store.access_level < AccessLevel::ReadOnly {
+                        bail!(InsufficientAccessLevel::new(store.name.to_string(),
+                            "reading rows".to_string(),
+                            store.access_level
+                        ));
+                    }
+                    ensure!(
+                        store.arity() == rel_app.args.len(),
+                        ArityMismatch(
+                            rel_app.name.clone(),
+                            store.arity(),
+                            rel_app.args.len(),
+                            rel_app.span
+                        )
+                    );
+                    // already existing vars
+                    let mut prev_joiner_vars = vec![];
+                    // vars introduced by right and joined
+                    let mut right_joiner_vars = vec![];
+                    // used to find the right joiner var from the tuple position
+                    let mut right_joiner_vars_pos_rev = vec![None; rel_app.args.len()];
+                    // vars introduced by right, regardless of joining
+                    let mut right_vars = vec![];
+                    // used for choosing indices
+                    let mut join_indices = vec![];
+
+                    for (i, var) in rel_app.args.iter().enumerate() {
+                        if seen_variables.contains(var) {
+                            prev_joiner_vars.push(var.clone());
+                            let rk = gen_symb(var.span());
+                            right_vars.push(rk.clone());
+                            right_joiner_vars.push(rk);
+                            right_joiner_vars_pos_rev[i] = Some(right_joiner_vars.len() - 1);
+                            join_indices.push(IndexPositionUse::Join)
+                        } else {
+                            seen_variables.insert(var.clone());
+                            right_vars.push(var.clone());
+                            if var.kind() == SymbolKind::GeneratedIgnored {
+                                join_indices.push(IndexPositionUse::Ignored)
+                            } else {
+                                join_indices.push(IndexPositionUse::BindForLater)
+                            }
+                        }
+                    }
+
+                    // `@spans`/`@delta`/`@delta_sys` always scan the base
+                    // relation directly: they need its own keyspace (the raw
+                    // multi-version history, or the plain as-of resolution
+                    // `skip_scan_all` already gives), never a plain index's
+                    // mirrored one. A `Valid`-axis `@delta` gets its OWN
+                    // acceleration below instead (story #62 chunk 4's posting
+                    // index) — a different mechanism from `choose_index`,
+                    // since a posting index has no `Plain` mapper shape.
+                    let chosen_index = match &rel_app.validity {
+                        Some(ValidityClause::Spans { .. } | ValidityClause::Delta { .. }) => None,
+                        Some(ValidityClause::At(_)) | None => {
+                            store.choose_index(&join_indices, rel_app.validity.is_some())
+                        }
+                    };
+
+                    match chosen_index {
+                        None => {
+                            // scan the base relation
+                            let delta_posting =
+                                store.resolve_delta_posting_index(tx, &rel_app.validity)?;
+                            let mut right = RelAlgebra::relation(
+                                right_vars,
+                                store,
+                                rel_app.span,
+                                rel_app.validity.clone(),
+                            )?;
+                            if let (RelAlgebra::Delta(delta), Some(idx_store)) =
+                                (&mut right, delta_posting)
+                            {
+                                delta.scan = crate::exec::op::temporal::DeltaScan::Accelerated {
+                                    posting: Box::new(idx_store),
+                                };
+                            }
+                            ensure!(
+                                prev_joiner_vars.len() == right_joiner_vars.len(),
+                                "join key arity mismatch between sides"
+                            );
+                            ret = ret.join_capturing_premise(
+                                right,
+                                prev_joiner_vars,
+                                right_joiner_vars,
+                                rel_app.span,
+                            )?;
+                        }
+                        Some((idx_ref, requires_back_join)) => {
+                            // Resolve the chosen index by reference (D1).
+                            let IndexKind::Plain { mapper } = &idx_ref.kind else {
+                                bail!(PlanInvariantError(
+                                    "choose_index picked a manifest-backed index"
+                                ));
+                            };
+                            let mapper = mapper.clone();
+                            let idx_store = get_relation(tx, idx_ref.relation_name(&store.name).as_str())?;
+
+                            if !requires_back_join {
+                                // index-only: the index covers every needed column
+                                let new_right_vars = mapper
+                                    .iter()
+                                    .map(|i| {
+                                        right_vars.get(*i).cloned().ok_or(PlanInvariantError(
+                                            "index mapper column beyond the relation's arity",
+                                        ))
+                                    })
+                                    .collect::<Result<Vec<_>, _>>()?;
+                                let right = RelAlgebra::relation(
+                                    new_right_vars,
+                                    idx_store,
+                                    rel_app.span,
+                                    rel_app.validity.clone(),
+                                )?;
+                                ensure!(
+                                    prev_joiner_vars.len() == right_joiner_vars.len(),
+                                    "join key arity mismatch between sides"
+                                );
+                                // Covering index: the scanned row *is* the
+                                // relation atom's grounding (projected).
+                                ret = ret.join_capturing_premise(
+                                    right,
+                                    prev_joiner_vars,
+                                    right_joiner_vars,
+                                    rel_app.span,
+                                )?;
+                            } else {
+                                // index-with-back-join: join the index by the
+                                // bound prefix, then join back to the base
+                                // relation by its keys, then re-check any join
+                                // columns the index could not bind.
+                                let mut not_bound = vec![true; prev_joiner_vars.len()];
+                                let mut index_vars = vec![];
+                                {
+                                    let mut left_keys = vec![];
+                                    let mut right_keys = vec![];
+                                    for &orig_idx in mapper.iter() {
+                                        let orig_var =
+                                            right_vars.get(orig_idx).ok_or(PlanInvariantError(
+                                                "index mapper column beyond the relation's arity",
+                                            ))?;
+                                        // A fresh symbol for the index column.
+                                        let tv = gen_symb(orig_var.span());
+                                        // If the column is a joiner, join the
+                                        // index on it and mark it bound.
+                                        if let Some(join_idx) = right_joiner_vars_pos_rev[orig_idx] {
+                                            not_bound[join_idx] = false;
+                                            left_keys.push(prev_joiner_vars[join_idx].clone());
+                                            right_keys.push(tv.clone());
+                                        }
+                                        index_vars.push(tv);
+                                    }
+                                    let index = RelAlgebra::relation(
+                                        index_vars.clone(),
+                                        idx_store,
+                                        rel_app.span,
+                                        rel_app.validity.clone(),
+                                    )?;
+                                    ret = ret.join(index, left_keys, right_keys, rel_app.span)?;
+                                }
+                                // Join the index back to the base relation.
+                                {
+                                    let mut left_keys = Vec::with_capacity(store.metadata.keys.len());
+                                    let mut right_keys = Vec::with_capacity(store.metadata.keys.len());
+                                    for (index_idx, &orig_idx) in mapper.iter().enumerate() {
+                                        if orig_idx < store.metadata.keys.len() {
+                                            left_keys.push(index_vars[index_idx].clone());
+                                            right_keys.push(right_vars[orig_idx].clone());
+                                        }
+                                    }
+                                    let relation = RelAlgebra::relation(
+                                        right_vars,
+                                        store,
+                                        rel_app.span,
+                                        rel_app.validity.clone(),
+                                    )?;
+                                    // Base relation row is the premise; the
+                                    // preceding index join does not capture.
+                                    ret = ret.join_capturing_premise(
+                                        relation,
+                                        left_keys,
+                                        right_keys,
+                                        rel_app.span,
+                                    )?;
+                                }
+                                // Re-check join columns not bound via the index.
+                                for (i, nb) in not_bound.into_iter().enumerate() {
+                                    if !nb {
+                                        continue;
+                                    }
+                                    let (left, right) =
+                                        (prev_joiner_vars[i].clone(), right_joiner_vars[i].clone());
+                                    ret = ret.filter(Expr::build_equate(
+                                        vec![
+                                            Expr::Binding {
+                                                var: left,
+                                                tuple_pos: BindingPos::Unresolved,
+                                            },
+                                            Expr::Binding {
+                                                var: right,
+                                                tuple_pos: BindingPos::Unresolved,
+                                            },
+                                        ],
+                                        rel_app.span,
+                                    ))?;
+                                }
+                            }
                         }
                     }
                 }
+                MagicAtom::NegatedRule(rule_app) => {
+                    // Consumes an occurrence id (keeps numbering in lockstep
+                    // with `MagicInlineRule::contained_rules`) but the id is
+                    // never selected for delta narrowing — negation always
+                    // reads totals (`NegJoin::iter_batched` never threads
+                    // `delta_from` to its own right side).
+                    let negated_occurrence = next_occurrence();
+                    let store_arity = store_arities.get(&rule_app.name).ok_or_else(|| {
+                        RuleNotFound(rule_app.name.clone(), rule_app.name.as_plain_symbol().span())
+                    })?;
+                    ensure!(
+                        *store_arity == rule_app.args.len(),
+                        ArityMismatch(
+                            rule_app.name.as_plain_symbol().clone(),
+                            *store_arity,
+                            rule_app.args.len(),
+                            rule_app.span
+                        )
+                    );
 
-                // `@spans`/`@delta`/`@delta_sys` always scan the base
-                // relation directly: they need its own keyspace (the raw
-                // multi-version history, or the plain as-of resolution
-                // `skip_scan_all` already gives), never a plain index's
-                // mirrored one. A `Valid`-axis `@delta` gets its OWN
-                // acceleration below instead (story #62 chunk 4's posting
-                // index) — a different mechanism from `choose_index`,
-                // since a posting index has no `Plain` mapper shape.
-                let chosen_index = match &rel_app.validity {
-                    Some(ValidityClause::Spans { .. } | ValidityClause::Delta { .. }) => None,
-                    Some(ValidityClause::At(_)) | None => {
-                        store.choose_index(&join_indices, rel_app.validity.is_some())
-                    }
-                };
+                    let mut prev_joiner_vars = vec![];
+                    let mut right_joiner_vars = vec![];
+                    let mut right_vars = vec![];
 
-                match chosen_index {
-                    None => {
-                        // scan the base relation
-                        let delta_posting =
-                            resolve_delta_posting_index(tx, &store, &rel_app.validity)?;
-                        let mut right = RelAlgebra::relation(
-                            right_vars,
-                            store,
-                            rel_app.span,
-                            rel_app.validity.clone(),
-                        )?;
-                        if let (RelAlgebra::Delta(delta), Some(idx_store)) =
-                            (&mut right, delta_posting)
-                        {
-                            delta.scan = crate::exec::op::temporal::DeltaScan::Accelerated {
-                                posting: Box::new(idx_store),
-                            };
+                    for var in &rule_app.args {
+                        if seen_variables.contains(var) {
+                            prev_joiner_vars.push(var.clone());
+                            let rk = gen_symb(var.span());
+                            right_vars.push(rk.clone());
+                            right_joiner_vars.push(rk);
+                        } else {
+                            right_vars.push(var.clone());
                         }
-                        ensure!(
-                            prev_joiner_vars.len() == right_joiner_vars.len(),
-                            "join key arity mismatch between sides"
-                        );
-                        ret = ret.join_capturing_premise(
-                            right,
-                            prev_joiner_vars,
-                            right_joiner_vars,
-                            rel_app.span,
-                        )?;
                     }
-                    Some((idx_ref, requires_back_join)) => {
-                        // Resolve the chosen index by reference (D1).
-                        let IndexKind::Plain { mapper } = &idx_ref.kind else {
-                            bail!(PlanInvariantError(
-                                "choose_index picked a manifest-backed index"
-                            ));
-                        };
-                        let mapper = mapper.clone();
-                        let idx_store = get_relation(tx, &idx_ref.relation_name(&store.name))?;
 
-                        if !requires_back_join {
-                            // index-only: the index covers every needed column
+                    let right = RelAlgebra::derived(
+                        right_vars,
+                        rule_app.name.clone(),
+                        negated_occurrence,
+                        rule_app.span,
+                    );
+                    ensure!(
+                        prev_joiner_vars.len() == right_joiner_vars.len(),
+                        "join key arity mismatch between sides"
+                    );
+                    ret = ret.neg_join(right, prev_joiner_vars, right_joiner_vars, rule_app.span)?;
+                }
+                MagicAtom::NegatedRelation(rel_app) => {
+                    let store = get_relation(tx, &rel_app.name)?;
+                    if store.access_level < AccessLevel::ReadOnly {
+                        bail!(InsufficientAccessLevel::new(store.name.to_string(),
+                            "reading rows".to_string(),
+                            store.access_level
+                        ));
+                    }
+                    ensure!(
+                        store.arity() == rel_app.args.len(),
+                        ArityMismatch(
+                            rel_app.name.clone(),
+                            store.arity(),
+                            rel_app.args.len(),
+                            rel_app.span
+                        )
+                    );
+
+                    let mut prev_joiner_vars = vec![];
+                    let mut right_joiner_vars = vec![];
+                    let mut right_vars = vec![];
+                    let mut join_indices = vec![];
+
+                    for var in rel_app.args.iter() {
+                        if seen_variables.contains(var) {
+                            prev_joiner_vars.push(var.clone());
+                            let rk = gen_symb(var.span());
+                            right_vars.push(rk.clone());
+                            right_joiner_vars.push(rk);
+                            join_indices.push(IndexPositionUse::Join)
+                        } else {
+                            seen_variables.insert(var.clone());
+                            right_vars.push(var.clone());
+                            if var.kind() == SymbolKind::GeneratedIgnored {
+                                join_indices.push(IndexPositionUse::Ignored)
+                            } else {
+                                join_indices.push(IndexPositionUse::BindForLater)
+                            }
+                        }
+                    }
+
+                    // Same short-circuit as the positive arm: a temporal
+                    // clause always scans the base relation directly — an
+                    // index mirrors only the current-state keyspace, never a
+                    // `Spans`/`Delta` derivation, negated or not (unrelated to
+                    // `neg_join` below, which serves all three time-travel
+                    // shapes as a negation right side since story #86).
+                    let chosen_index = match &rel_app.validity {
+                        Some(ValidityClause::Spans { .. } | ValidityClause::Delta { .. }) => None,
+                        Some(ValidityClause::At(_)) | None => {
+                            store.choose_index(&join_indices, rel_app.validity.is_some())
+                        }
+                    };
+
+                    match chosen_index {
+                        // No usable index, or one that would need a back-join
+                        // (useless under negation: the anti-join needs the
+                        // base rows themselves): scan the base relation.
+                        None | Some((_, true)) => {
+                            let delta_posting =
+                                store.resolve_delta_posting_index(tx, &rel_app.validity)?;
+                            let mut right = RelAlgebra::relation(
+                                right_vars,
+                                store,
+                                rel_app.span,
+                                rel_app.validity.clone(),
+                            )?;
+                            if let (RelAlgebra::Delta(delta), Some(idx_store)) =
+                                (&mut right, delta_posting)
+                            {
+                                delta.scan = crate::exec::op::temporal::DeltaScan::Accelerated {
+                                    posting: Box::new(idx_store),
+                                };
+                            }
+                            ensure!(
+                                prev_joiner_vars.len() == right_joiner_vars.len(),
+                                "join key arity mismatch between sides"
+                            );
+                            ret =
+                                ret.neg_join(right, prev_joiner_vars, right_joiner_vars, rel_app.span)?;
+                        }
+                        Some((idx_ref, false)) => {
+                            // index-only
+                            let IndexKind::Plain { mapper } = &idx_ref.kind else {
+                                bail!(PlanInvariantError(
+                                    "choose_index picked a manifest-backed index"
+                                ));
+                            };
+                            let idx_store = get_relation(tx, idx_ref.relation_name(&store.name).as_str())?;
                             let new_right_vars = mapper
                                 .iter()
                                 .map(|i| {
@@ -717,367 +889,122 @@ pub(crate) fn compile_magic_rule_body(
                                 prev_joiner_vars.len() == right_joiner_vars.len(),
                                 "join key arity mismatch between sides"
                             );
-                            // Covering index: the scanned row *is* the
-                            // relation atom's grounding (projected).
-                            ret = ret.join_capturing_premise(
-                                right,
-                                prev_joiner_vars,
-                                right_joiner_vars,
-                                rel_app.span,
-                            )?;
-                        } else {
-                            // index-with-back-join: join the index by the
-                            // bound prefix, then join back to the base
-                            // relation by its keys, then re-check any join
-                            // columns the index could not bind.
-                            let mut not_bound = vec![true; prev_joiner_vars.len()];
-                            let mut index_vars = vec![];
-                            {
-                                let mut left_keys = vec![];
-                                let mut right_keys = vec![];
-                                for &orig_idx in mapper.iter() {
-                                    let orig_var =
-                                        right_vars.get(orig_idx).ok_or(PlanInvariantError(
-                                            "index mapper column beyond the relation's arity",
-                                        ))?;
-                                    // A fresh symbol for the index column.
-                                    let tv = gen_symb(orig_var.span());
-                                    // If the column is a joiner, join the
-                                    // index on it and mark it bound.
-                                    if let Some(join_idx) = right_joiner_vars_pos_rev[orig_idx] {
-                                        not_bound[join_idx] = false;
-                                        left_keys.push(prev_joiner_vars[join_idx].clone());
-                                        right_keys.push(tv.clone());
-                                    }
-                                    index_vars.push(tv);
-                                }
-                                let index = RelAlgebra::relation(
-                                    index_vars.clone(),
-                                    idx_store,
-                                    rel_app.span,
-                                    rel_app.validity.clone(),
-                                )?;
-                                ret = ret.join(index, left_keys, right_keys, rel_app.span)?;
-                            }
-                            // Join the index back to the base relation.
-                            {
-                                let mut left_keys = Vec::with_capacity(store.metadata.keys.len());
-                                let mut right_keys = Vec::with_capacity(store.metadata.keys.len());
-                                for (index_idx, &orig_idx) in mapper.iter().enumerate() {
-                                    if orig_idx < store.metadata.keys.len() {
-                                        left_keys.push(index_vars[index_idx].clone());
-                                        right_keys.push(right_vars[orig_idx].clone());
-                                    }
-                                }
-                                let relation = RelAlgebra::relation(
-                                    right_vars,
-                                    store,
-                                    rel_app.span,
-                                    rel_app.validity.clone(),
-                                )?;
-                                // Base relation row is the premise; the
-                                // preceding index join does not capture.
-                                ret = ret.join_capturing_premise(
-                                    relation,
-                                    left_keys,
-                                    right_keys,
-                                    rel_app.span,
-                                )?;
-                            }
-                            // Re-check join columns not bound via the index.
-                            for (i, nb) in not_bound.into_iter().enumerate() {
-                                if !nb {
-                                    continue;
-                                }
-                                let (left, right) =
-                                    (prev_joiner_vars[i].clone(), right_joiner_vars[i].clone());
-                                ret = ret.filter(Expr::build_equate(
-                                    vec![
-                                        Expr::Binding {
-                                            var: left,
-                                            tuple_pos: BindingPos::Unresolved,
-                                        },
-                                        Expr::Binding {
-                                            var: right,
-                                            tuple_pos: BindingPos::Unresolved,
-                                        },
-                                    ],
-                                    rel_app.span,
-                                ))?;
-                            }
+                            ret =
+                                ret.neg_join(right, prev_joiner_vars, right_joiner_vars, rel_app.span)?;
                         }
                     }
                 }
-            }
-            MagicAtom::NegatedRule(rule_app) => {
-                // Consumes an occurrence id (keeps numbering in lockstep
-                // with `MagicInlineRule::contained_rules`) but the id is
-                // never selected for delta narrowing — negation always
-                // reads totals (`NegJoin::iter_batched` never threads
-                // `delta_from` to its own right side).
-                let negated_occurrence = next_occurrence();
-                let store_arity = store_arities.get(&rule_app.name).ok_or_else(|| {
-                    RuleNotFound(rule_app.name.clone(), rule_app.name.as_plain_symbol().span())
-                })?;
-                ensure!(
-                    *store_arity == rule_app.args.len(),
-                    ArityMismatch(
-                        rule_app.name.as_plain_symbol().clone(),
-                        *store_arity,
-                        rule_app.args.len(),
-                        rule_app.span
-                    )
-                );
-
-                let mut prev_joiner_vars = vec![];
-                let mut right_joiner_vars = vec![];
-                let mut right_vars = vec![];
-
-                for var in &rule_app.args {
-                    if seen_variables.contains(var) {
-                        prev_joiner_vars.push(var.clone());
-                        let rk = gen_symb(var.span());
-                        right_vars.push(rk.clone());
-                        right_joiner_vars.push(rk);
-                    } else {
-                        right_vars.push(var.clone());
-                    }
+                MagicAtom::Predicate(p) => {
+                    ret = ret.filter(p.clone())?;
                 }
-
-                let right = RelAlgebra::derived(
-                    right_vars,
-                    rule_app.name.clone(),
-                    negated_occurrence,
-                    rule_app.span,
-                );
-                ensure!(
-                    prev_joiner_vars.len() == right_joiner_vars.len(),
-                    "join key arity mismatch between sides"
-                );
-                ret = ret.neg_join(right, prev_joiner_vars, right_joiner_vars, rule_app.span)?;
-            }
-            MagicAtom::NegatedRelation(rel_app) => {
-                let store = get_relation(tx, &rel_app.name)?;
-                if store.access_level < AccessLevel::ReadOnly {
-                    bail!(InsufficientAccessLevel::new(store.name.to_string(),
-                        "reading rows".to_string(),
-                        store.access_level
-                    ));
-                }
-                ensure!(
-                    store.arity() == rel_app.args.len(),
-                    ArityMismatch(
-                        rel_app.name.clone(),
-                        store.arity(),
-                        rel_app.args.len(),
-                        rel_app.span
-                    )
-                );
-
-                let mut prev_joiner_vars = vec![];
-                let mut right_joiner_vars = vec![];
-                let mut right_vars = vec![];
-                let mut join_indices = vec![];
-
-                for var in rel_app.args.iter() {
-                    if seen_variables.contains(var) {
-                        prev_joiner_vars.push(var.clone());
-                        let rk = gen_symb(var.span());
-                        right_vars.push(rk.clone());
-                        right_joiner_vars.push(rk);
-                        join_indices.push(IndexPositionUse::Join)
-                    } else {
-                        seen_variables.insert(var.clone());
-                        right_vars.push(var.clone());
-                        if var.kind() == SymbolKind::GeneratedIgnored {
-                            join_indices.push(IndexPositionUse::Ignored)
-                        } else {
-                            join_indices.push(IndexPositionUse::BindForLater)
-                        }
-                    }
-                }
-
-                // Same short-circuit as the positive arm: a temporal
-                // clause always scans the base relation directly — an
-                // index mirrors only the current-state keyspace, never a
-                // `Spans`/`Delta` derivation, negated or not (unrelated to
-                // `neg_join` below, which serves all three time-travel
-                // shapes as a negation right side since story #86).
-                let chosen_index = match &rel_app.validity {
-                    Some(ValidityClause::Spans { .. } | ValidityClause::Delta { .. }) => None,
-                    Some(ValidityClause::At(_)) | None => {
-                        store.choose_index(&join_indices, rel_app.validity.is_some())
-                    }
-                };
-
-                match chosen_index {
-                    // No usable index, or one that would need a back-join
-                    // (useless under negation: the anti-join needs the
-                    // base rows themselves): scan the base relation.
-                    None | Some((_, true)) => {
-                        let delta_posting =
-                            resolve_delta_posting_index(tx, &store, &rel_app.validity)?;
-                        let mut right = RelAlgebra::relation(
-                            right_vars,
-                            store,
-                            rel_app.span,
-                            rel_app.validity.clone(),
-                        )?;
-                        if let (RelAlgebra::Delta(delta), Some(idx_store)) =
-                            (&mut right, delta_posting)
-                        {
-                            delta.scan = crate::exec::op::temporal::DeltaScan::Accelerated {
-                                posting: Box::new(idx_store),
-                            };
-                        }
-                        ensure!(
-                            prev_joiner_vars.len() == right_joiner_vars.len(),
-                            "join key arity mismatch between sides"
-                        );
-                        ret =
-                            ret.neg_join(right, prev_joiner_vars, right_joiner_vars, rel_app.span)?;
-                    }
-                    Some((idx_ref, false)) => {
-                        // index-only
-                        let IndexKind::Plain { mapper } = &idx_ref.kind else {
-                            bail!(PlanInvariantError(
-                                "choose_index picked a manifest-backed index"
+                MagicAtom::Search(sa) => {
+                    // Join semantics for an already-bound output column: the
+                    // search emits into a fresh variable and an equality filter
+                    // joins it to the existing binding — the same discipline as
+                    // a repeated variable in a relation application.
+                    let mut sa = sa.clone();
+                    let mut post_filters = vec![];
+                    for b in sa.own_bindings.iter_mut() {
+                        if seen_variables.contains(b) {
+                            let fresh = gen_symb(sa.span);
+                            post_filters.push(Expr::build_equate(
+                                vec![
+                                    Expr::Binding {
+                                        var: b.clone(),
+                                        tuple_pos: BindingPos::Unresolved,
+                                    },
+                                    Expr::Binding {
+                                        var: fresh.clone(),
+                                        tuple_pos: BindingPos::Unresolved,
+                                    },
+                                ],
+                                sa.span,
                             ));
-                        };
-                        let idx_store = get_relation(tx, &idx_ref.relation_name(&store.name))?;
-                        let new_right_vars = mapper
-                            .iter()
-                            .map(|i| {
-                                right_vars.get(*i).cloned().ok_or(PlanInvariantError(
-                                    "index mapper column beyond the relation's arity",
-                                ))
-                            })
-                            .collect::<Result<Vec<_>, _>>()?;
-                        let right = RelAlgebra::relation(
-                            new_right_vars,
-                            idx_store,
-                            rel_app.span,
-                            rel_app.validity.clone(),
-                        )?;
-                        ensure!(
-                            prev_joiner_vars.len() == right_joiner_vars.len(),
-                            "join key arity mismatch between sides"
-                        );
-                        ret =
-                            ret.neg_join(right, prev_joiner_vars, right_joiner_vars, rel_app.span)?;
-                    }
-                }
-            }
-            MagicAtom::Predicate(p) => {
-                ret = ret.filter(p.clone())?;
-            }
-            MagicAtom::Search(sa) => {
-                // Join semantics for an already-bound output column: the
-                // search emits into a fresh variable and an equality filter
-                // joins it to the existing binding — the same discipline as
-                // a repeated variable in a relation application.
-                let mut sa = sa.clone();
-                let mut post_filters = vec![];
-                for b in sa.own_bindings.iter_mut() {
-                    if seen_variables.contains(b) {
-                        let fresh = gen_symb(sa.span);
-                        post_filters.push(Expr::build_equate(
-                            vec![
-                                Expr::Binding {
-                                    var: b.clone(),
-                                    tuple_pos: BindingPos::Unresolved,
-                                },
-                                Expr::Binding {
-                                    var: fresh.clone(),
-                                    tuple_pos: BindingPos::Unresolved,
-                                },
-                            ],
-                            sa.span,
-                        ));
-                        *b = fresh;
-                    } else {
-                        seen_variables.insert(b.clone());
-                    }
-                }
-                ret = RelAlgebra::Search(Box::new(SearchRA {
-                    parent: Box::new(ret),
-                    atom: *sa,
-                }));
-                for f in post_filters {
-                    ret = ret.filter(f)?;
-                }
-            }
-            MagicAtom::Unification(u) => {
-                if seen_variables.contains(&u.binding) {
-                    let expr = if u.one_many_unif {
-                        Expr::build_is_in(
-                            vec![
-                                Expr::Binding {
-                                    var: u.binding.clone(),
-                                    tuple_pos: BindingPos::Unresolved,
-                                },
-                                u.expr.clone(),
-                            ],
-                            u.span,
-                        )
-                    } else {
-                        Expr::build_equate(
-                            vec![
-                                Expr::Binding {
-                                    var: u.binding.clone(),
-                                    tuple_pos: BindingPos::Unresolved,
-                                },
-                                u.expr.clone(),
-                            ],
-                            u.span,
-                        )
-                    };
-                    ret = ret.filter(expr)?;
-                } else {
-                    seen_variables.insert(u.binding.clone());
-                    ret = ret.unify(
-                        u.binding.clone(),
-                        u.expr.clone(),
-                        if u.one_many_unif {
-                            crate::exec::op::UnificationKind::Spread
+                            *b = fresh;
                         } else {
-                            crate::exec::op::UnificationKind::Single
-                        },
-                        u.span,
-                    );
+                            seen_variables.insert(b.clone());
+                        }
+                    }
+                    ret = RelAlgebra::Search(Box::new(SearchRA {
+                        parent: Box::new(ret),
+                        atom: *sa,
+                    }));
+                    for f in post_filters {
+                        ret = ret.filter(f)?;
+                    }
+                }
+                MagicAtom::Unification(u) => {
+                    if seen_variables.contains(&u.binding) {
+                        let expr = if u.one_many_unif {
+                            Expr::build_is_in(
+                                vec![
+                                    Expr::Binding {
+                                        var: u.binding.clone(),
+                                        tuple_pos: BindingPos::Unresolved,
+                                    },
+                                    u.expr.clone(),
+                                ],
+                                u.span,
+                            )
+                        } else {
+                            Expr::build_equate(
+                                vec![
+                                    Expr::Binding {
+                                        var: u.binding.clone(),
+                                        tuple_pos: BindingPos::Unresolved,
+                                    },
+                                    u.expr.clone(),
+                                ],
+                                u.span,
+                            )
+                        };
+                        ret = ret.filter(expr)?;
+                    } else {
+                        seen_variables.insert(u.binding.clone());
+                        ret = ret.unify(
+                            u.binding.clone(),
+                            u.expr.clone(),
+                            if u.one_many_unif {
+                                crate::exec::op::UnificationKind::Spread
+                            } else {
+                                crate::exec::op::UnificationKind::Single
+                            },
+                            u.span,
+                        );
+                    }
                 }
             }
         }
-    }
 
-    let ret_vars_set: BTreeSet<Symbol> = ret_vars.iter().cloned().collect();
-    ret.eliminate_temp_vars(&ret_vars_set)?;
-    let cur_ret_set: BTreeSet<_> = ret.bindings_after_eliminate().into_iter().collect();
-    if cur_ret_set != ret_vars_set {
-        let ret_span = ret.span();
-        ret = ret.cartesian_join(RelAlgebra::unit(ret_span), ret_span)?;
+        let ret_vars_set: BTreeSet<Symbol> = ret_vars.iter().cloned().collect();
         ret.eliminate_temp_vars(&ret_vars_set)?;
-    }
-
-    let cur_ret_set: BTreeSet<_> = ret.bindings_after_eliminate().into_iter().collect();
-    if cur_ret_set != ret_vars_set {
-        // The plan's frame is always a subset of the head after the
-        // eliminations above, so the difference names the unbound head
-        // symbol; an empty difference would mean the subset invariant
-        // broke (the original `unwrap`ped it away).
-        match ret_vars_set.difference(&cur_ret_set).next() {
-            Some(unbound) => bail!(UnboundSymbolInRuleHead(unbound.clone(), unbound.span())),
-            None => bail!(PlanInvariantError(
-                "plan frame disagrees with the rule head without an unbound head symbol"
-            )),
+        let cur_ret_set: BTreeSet<_> = ret.bindings_after_eliminate().into_iter().collect();
+        if cur_ret_set != ret_vars_set {
+            let ret_span = ret.span();
+            ret = ret.cartesian_join(RelAlgebra::unit(ret_span), ret_span)?;
+            ret.eliminate_temp_vars(&ret_vars_set)?;
         }
-    }
-    let cur_ret_bindings = ret.bindings_after_eliminate();
-    if ret_vars != cur_ret_bindings {
-        ret = ret.reorder(ret_vars.to_vec());
-    }
 
-    Ok(ret)
+        let cur_ret_set: BTreeSet<_> = ret.bindings_after_eliminate().into_iter().collect();
+        if cur_ret_set != ret_vars_set {
+            // The plan's frame is always a subset of the head after the
+            // eliminations above, so the difference names the unbound head
+            // symbol; an empty difference would mean the subset invariant
+            // broke (the original `unwrap`ped it away).
+            match ret_vars_set.difference(&cur_ret_set).next() {
+                Some(unbound) => bail!(UnboundSymbolInRuleHead(unbound.clone(), unbound.span())),
+                None => bail!(PlanInvariantError(
+                    "plan frame disagrees with the rule head without an unbound head symbol"
+                )),
+            }
+        }
+        let cur_ret_bindings = ret.bindings_after_eliminate();
+        if ret_vars != cur_ret_bindings {
+            ret = ret.reorder(ret_vars.to_vec());
+        }
+
+        Ok(ret)
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1175,6 +1102,88 @@ impl<T: ReadTx> RuleBody for CompiledRuleBody<'_, T> {
 /// refuses unknown fixed rules much earlier) use this as `F`.
 #[derive(Debug)]
 pub enum NoFixedRules {}
+
+
+#[derive(Debug, Error, Diagnostic)]
+#[error("Requested rule {0} not found")]
+#[diagnostic(code(eval::rule_not_found))]
+struct RuleNotFound(MagicSymbol, #[label] SourceSpan);
+
+#[derive(Debug, Error, Diagnostic)]
+#[error("Arity mismatch for rule application {0}")]
+#[diagnostic(code(eval::rule_arity_mismatch))]
+#[diagnostic(help("Required arity: {1}, number of arguments given: {2}"))]
+struct ArityMismatch(Symbol, usize, usize, #[label] SourceSpan);
+
+#[derive(Debug, Error, Diagnostic)]
+#[error("Symbol '{0}' in rule head is unbound")]
+#[diagnostic(code(eval::unbound_symb_in_head))]
+#[diagnostic(help(
+    "Note that symbols occurring only in negated positions are not considered bound"
+))]
+struct UnboundSymbolInRuleHead(Symbol, #[label] SourceSpan);
+
+/// Compile every stratum of a proven program into executable plans.
+///
+/// The input tier is execution-ordered by construction; the output `Vec`
+/// keeps that order (`compiled[0]` evaluates first).
+pub fn stratified_magic_compile(
+    tx: &impl ReadTx,
+    prog: StratifiedMagicProgram,
+) -> Result<Vec<CompiledProgram>> {
+    // Every store's arity, across ALL strata: a rule body may reference
+    // stores of earlier strata.
+    let mut store_arities: BTreeMap<MagicSymbol, usize> = Default::default();
+    for stratum in prog.strata() {
+        for (name, ruleset) in &stratum.prog {
+            store_arities.insert(name.clone(), ruleset.arity()?);
+        }
+    }
+
+    prog.into_strata()
+        .into_iter()
+        .map(|cur_prog| -> Result<CompiledProgram> {
+            cur_prog
+                .prog
+                .into_iter()
+                .map(|(k, body)| -> Result<(MagicSymbol, CompiledRuleSet)> {
+                    match body {
+                        MagicRulesOrFixed::Rules { rules: body } => {
+                            let mut collected = Vec::with_capacity(body.len());
+                            for rule in body.iter() {
+                                let header = &rule.head;
+                                let mut relation =
+                                    rule.compile_body(tx, &k, &store_arities, header)?;
+                                relation.fill_binding_indices_and_compile().with_context(
+                                    || {
+                                        format!(
+                                            "error encountered when filling binding indices for {relation:#?}"
+                                        )
+                                    },
+                                )?;
+                                collected.push((
+                                    rule.aggr.clone(),
+                                    CompiledRule {
+                                        relation,
+                                        contained_rules: rule.contained_rules(),
+                                        premise_sources: rule.positive_premise_sources(),
+                                    },
+                                ));
+                            }
+                            Ok((
+                                k.clone(),
+                                CompiledRuleSet::Rules(CompiledInlineRules::new(&k, collected)?),
+                            ))
+                        }
+                        MagicRulesOrFixed::Fixed { fixed } => {
+                            Ok((k, CompiledRuleSet::Fixed(fixed)))
+                        }
+                    }
+                })
+                .try_collect()
+        })
+        .try_collect()
+}
 
 impl FixedRuleEval for NoFixedRules {
     fn run(

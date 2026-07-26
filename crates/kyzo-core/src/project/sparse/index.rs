@@ -111,7 +111,7 @@ use rustc_hash::FxHashMap;
 use smartstring::SmartString;
 use thiserror::Error;
 
-use crate::project::contract::{IndexCorruptReason, IndexRowCorrupt};
+use crate::project::contract::{IndexCorruptReason, IndexName, IndexRowCorrupt};
 use crate::project::projection::{ProjectionKind, RelationIndexSearch};
 use crate::session::catalog::RelationHandle;
 use crate::store::{ReadTx, WriteTx};
@@ -241,10 +241,17 @@ fn admit_sparse(vector: &[(u32, f32)]) -> Result<SparseVector> {
 /// scan.
 pub(crate) fn sparse_index_metadata(base: &StoredRelationMetadata) -> StoredRelationMetadata {
     use crate::project::projection::{index_col, index_relation_metadata};
+    use kyzo_model::program::span::SourceSpan;
+    use kyzo_model::program::symbol::Symbol;
+
+    fn col(name: &str) -> Symbol {
+        Symbol::new(name, SourceSpan::empty())
+    }
+
     index_relation_metadata(
-        [index_col("dim", ColType::Int)],
+        [index_col(col("dim"), ColType::Int)],
         base,
-        vec![index_col("weight", ColType::Float)],
+        vec![index_col(col("weight"), ColType::Float)],
     )
 }
 
@@ -361,11 +368,11 @@ pub(crate) fn sparse_total_docs(tx: &impl ReadTx, base: &RelationHandle) -> Resu
 /// is the typed [`IndexRowCorrupt`]. The stored weight is re-checked against
 /// the admission invariant (finite, non-negative) so a corrupted store can
 /// never inject a NaN or a negative into a score.
-fn decode_posting(idx_name: &str, base_key_len: usize, row: &[DataValue]) -> Result<(Tuple, f32)> {
+fn decode_posting(index_name: IndexName<'_>, base_key_len: usize, row: &[DataValue]) -> Result<(Tuple, f32)> {
     let expected_len = base_key_len + 2;
     if row.len() != expected_len {
         bail!(IndexRowCorrupt::new(
-            idx_name,
+            index_name.as_str(),
             row,
             IndexCorruptReason::WrongColumnCount {
                 found: row.len(),
@@ -375,7 +382,7 @@ fn decode_posting(idx_name: &str, base_key_len: usize, row: &[DataValue]) -> Res
     }
     let weight = row[base_key_len + 1].get_float().ok_or_else(|| {
         miette!(IndexRowCorrupt::new(
-            idx_name,
+            index_name.as_str(),
             row,
             IndexCorruptReason::SparseWeightNotFloat,
         ))
@@ -383,7 +390,7 @@ fn decode_posting(idx_name: &str, base_key_len: usize, row: &[DataValue]) -> Res
     let weight = f64_to_f32(weight);
     if !weight.is_finite() || weight < 0.0 {
         bail!(IndexRowCorrupt::new(
-            idx_name,
+            index_name.as_str(),
             row,
             IndexCorruptReason::SparseWeightNotFiniteNonNeg,
         ));
@@ -504,9 +511,10 @@ fn sparse_search_body(
     let mut scores: FxHashMap<Tuple, f32> = FxHashMap::default();
     for (dim, q_weight) in query {
         let prefix = Tuple::from_vec(vec![DataValue::from(i64::from(dim))]);
-        for row in crate::project::contract::index_rows(&idx.name, idx.scan_prefix(tx, &prefix)) {
+        let index_name = IndexName::from_relation_name(&idx.name);
+        for row in crate::project::contract::index_rows(index_name.as_str(), idx.scan_prefix(tx, &prefix)) {
             let row = row?;
-            let (doc_key, d_weight) = decode_posting(&idx.name, base_key_len, row.as_slice())?;
+            let (doc_key, d_weight) = decode_posting(index_name, base_key_len, row.as_slice())?;
             *scores.entry(doc_key).or_insert(0.0f32) += q_weight * d_weight;
         }
     }
@@ -574,9 +582,10 @@ pub(super) fn setup_sparse_docs(
     db: &impl crate::store::Storage,
     docs: &[SparseDoc<'_>],
 ) -> Result<(RelationHandle, RelationHandle)> {
+    use kyzo_model::program::symbol::Symbol;
     fn col(name: &str, coltype: ColType) -> ColumnDef {
         ColumnDef {
-            name: SmartString::from(name),
+            name: Symbol::new(name, SourceSpan::empty()),
             typing: NullableColType::required(coltype),
             default_gen: None,
         }
@@ -588,8 +597,8 @@ pub(super) fn setup_sparse_docs(
     let idx_meta = sparse_index_metadata(&meta);
     crate::project::index_fixture::seed_base_and_index(
         db,
-        "docs",
-        "docs:sparse",
+        Symbol::new("docs", SourceSpan::new(0, 0)),
+        Symbol::new("docs:sparse", SourceSpan::new(0, 0)),
         meta,
         idx_meta,
         |tx, base, idx| {
@@ -706,7 +715,7 @@ mod tests {
 
     fn col(name: &str, coltype: ColType) -> ColumnDef {
         ColumnDef {
-            name: SmartString::from(name),
+            name: Symbol::new(name, SourceSpan::empty()),
             typing: NullableColType::required(coltype),
             default_gen: None,
         }

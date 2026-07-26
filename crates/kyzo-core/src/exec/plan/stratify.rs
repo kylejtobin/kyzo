@@ -70,9 +70,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use miette::{Diagnostic, Result, bail, ensure, miette};
 use thiserror::Error;
 
-use crate::exec::plan::graph::{
-    Graph, StratifiedGraph, generalized_kahn, reachable_components, strongly_connected_components,
-};
+use crate::exec::plan::graph::{Graph, StratifiedGraph};
 use crate::exec::plan::program::{
     MagicSymbol, NormalFormAtom, NormalFormInlineRule, NormalFormProgram, NormalFormRulesOrFixed,
     NormalFormStratum, StoreLifetimes, StratifiedNormalFormProgram,
@@ -152,22 +150,28 @@ impl NormalFormAtom {
 /// bug in the shared logic would silently pass both "independent" checks at
 /// once. Keep every future edit here hand-applied, never routed through the
 /// oracle's copy.
-fn aggregation_character(rules: &[NormalFormInlineRule]) -> (bool, bool) {
-    let has_aggr = rules
-        .iter()
-        .any(|rule| rule.aggr.iter().any(|a| a.is_aggregated()));
-    let is_meet = has_aggr
-        && rules.iter().all(|rule| {
-            rule.aggr.iter().all(|v| match v.as_aggregated() {
-                None => {
-                    // Plain (non-aggregated) head column — meet-compatible.
-                    let plain_head = true;
-                    plain_head
-                }
-                Some((v, _)) => v.is_meet(),
-            })
-        });
-    (has_aggr, is_meet)
+impl NormalFormRulesOrFixed {
+    fn aggregation_character(&self) -> (bool, bool) {
+        let rules = match self {
+            NormalFormRulesOrFixed::Rules { rules } => rules,
+            NormalFormRulesOrFixed::Fixed { fixed: _ } => return (false, false),
+        };
+        let has_aggr = rules
+            .iter()
+            .any(|rule| rule.aggr.iter().any(|a| a.is_aggregated()));
+        let is_meet = has_aggr
+            && rules.iter().all(|rule| {
+                rule.aggr.iter().all(|v| match v.as_aggregated() {
+                    None => {
+                        // Plain (non-aggregated) head column — meet-compatible.
+                        let plain_head = true;
+                        plain_head
+                    }
+                    Some((v, _)) => v.is_meet(),
+                })
+            });
+        (has_aggr, is_meet)
+    }
 }
 
 /// For each poisoned edge `(dependent, dependency)`, the source span of the
@@ -191,34 +195,34 @@ type PoisonSpans<'a> = BTreeMap<(&'a Symbol, &'a Symbol), SourceSpan>;
 /// - a non-aggregating rule's read is poisoned when negated, or when the
 ///   dependency is a fixed rule or a (different) meet-aggregated head;
 /// - a fixed rule poisons every in-memory rule it takes as input.
-fn convert_normal_form_program_to_graph(
-    nf_prog: &NormalFormProgram,
-) -> (StratifiedGraph<&'_ Symbol>, PoisonSpans<'_>) {
-    let meet_rules: BTreeSet<&Symbol> = nf_prog
-        .iter_all()
-        .filter_map(|(k, ruleset)| match ruleset {
+
+impl NormalFormProgram {
+    fn dependency_graph(&self) -> (StratifiedGraph<&'_ Symbol>, PoisonSpans<'_>) {
+        let meet_rules: BTreeSet<&Symbol> = self
+            .iter_all()
+            .filter_map(|(k, ruleset)| match ruleset {
+                NormalFormRulesOrFixed::Rules { rules } => {
+                    let (_, is_meet) = ruleset.aggregation_character();
+                    if is_meet { Some(k) } else { None }
+                }
+                NormalFormRulesOrFixed::Fixed { fixed: _ } => None,
+            })
+            .collect();
+        let fixed_rules: BTreeSet<&Symbol> = self
+            .iter_all()
+            .filter_map(|(k, ruleset)| match ruleset {
+                NormalFormRulesOrFixed::Rules { rules: _ } => None,
+                NormalFormRulesOrFixed::Fixed { fixed: _ } => Some(k),
+            })
+            .collect();
+        let mut graph = StratifiedGraph::default();
+        let mut poison_spans: PoisonSpans<'_> = BTreeMap::default();
+        for (k, def) in self.iter_all() {
+        match def {
             NormalFormRulesOrFixed::Rules { rules } => {
-                let (_, is_meet) = aggregation_character(rules);
-                if is_meet { Some(k) } else { None }
-            }
-            NormalFormRulesOrFixed::Fixed { fixed: _ } => None,
-        })
-        .collect();
-    let fixed_rules: BTreeSet<&Symbol> = nf_prog
-        .iter_all()
-        .filter_map(|(k, ruleset)| match ruleset {
-            NormalFormRulesOrFixed::Rules { rules: _ } => None,
-            NormalFormRulesOrFixed::Fixed { fixed: _ } => Some(k),
-        })
-        .collect();
-    let mut graph: StratifiedGraph<&Symbol> = BTreeMap::default();
-    let mut poison_spans: PoisonSpans<'_> = BTreeMap::default();
-    for (k, ruleset) in nf_prog.iter_all() {
-        match ruleset {
-            NormalFormRulesOrFixed::Rules { rules: ruleset } => {
                 let mut ret: BTreeMap<&Symbol, bool> = BTreeMap::default();
-                let (has_aggr, is_meet) = aggregation_character(ruleset);
-                for rule in ruleset {
+                let (has_aggr, is_meet) = def.aggregation_character();
+                for rule in rules {
                     for atom in &rule.body {
                         let contained = atom.contained_rules();
                         for (found_key, is_negated) in contained {
@@ -287,94 +291,89 @@ fn convert_normal_form_program_to_graph(
                 graph.insert(k, ret);
             }
         }
+        }
+        (graph, poison_spans)
     }
-    (graph, poison_spans)
 }
 
-/// The dependency graph with the poison labels forgotten, for reachability
-/// and SCC computation.
-fn reduce_to_graph<'a>(g: &StratifiedGraph<&'a Symbol>) -> Graph<&'a Symbol> {
-    g.iter()
-        .map(|(k, s)| (*k, s.keys().copied().collect::<Vec<_>>()))
-        .collect()
-}
-
-/// The refusal check: a poisoned edge whose two ends sit in the same
-/// strongly connected component means a negation, non-meet aggregation, or
-/// fixed rule inside recursion — unstratifiable. The span on the error is
-/// the atom that *established* the poison (looked up in `poison_spans`),
-/// so the diagnostic points at the negated/offending read, not at whichever
-/// read of the same rule happened to occur first in the bodies.
-fn verify_no_cycle(
-    g: &StratifiedGraph<&'_ Symbol>,
-    poison_spans: &PoisonSpans<'_>,
-    sccs: &[BTreeSet<&Symbol>],
-) -> Result<()> {
-    for (k, vs) in g {
-        for scc in sccs {
-            if scc.contains(k) {
-                for (v, negated) in vs {
-                    ensure!(
-                        !negated || !scc.contains(v),
-                        UnStratifiableProgram {
-                            name: (*v).clone(),
-                            scc: scc.iter().map(|s| (*s).clone()).collect(),
-                            span: match poison_spans.get(&(*k, *v)).copied() {
-                                Some(s) => s,
-                                None => v.span(),
-                            },
-                        }
-                    );
+impl<'a> StratifiedGraph<&'a Symbol> {
+    /// The refusal check: a poisoned edge whose two ends sit in the same
+    /// strongly connected component means a negation, non-meet aggregation, or
+    /// fixed rule inside recursion — unstratifiable. The span on the error is
+    /// the atom that *established* the poison (looked up in `poison_spans`),
+    /// so the diagnostic points at the negated/offending read, not at whichever
+    /// read of the same rule happened to occur first in the bodies.
+    fn verify_no_cycle(
+        &self,
+        poison_spans: &PoisonSpans<'_>,
+        sccs: &[BTreeSet<&Symbol>],
+    ) -> Result<()> {
+        for (k, vs) in self {
+            for scc in sccs {
+                if scc.contains(k) {
+                    for (v, negated) in vs {
+                        ensure!(
+                            !negated || !scc.contains(v),
+                            UnStratifiableProgram {
+                                name: (*v).clone(),
+                                scc: scc.iter().map(|s| (*s).clone()).collect(),
+                                span: match poison_spans.get(&(*k, *v)).copied() {
+                                    Some(s) => s,
+                                    None => v.span(),
+                                },
+                            }
+                        );
+                    }
                 }
             }
         }
+        Ok(())
     }
-    Ok(())
-}
 
-/// The condensation: collapse each SCC to one node (its index in `sccs`),
-/// keeping inter-component edges and merging their poison labels (an edge
-/// poisoned anywhere is poisoned in the condensation). Self-edges vanish —
-/// [`verify_no_cycle`] has already proven none of them poisoned.
-fn make_scc_reduced_graph(
-    sccs: &[BTreeSet<&Symbol>],
-    graph: &StratifiedGraph<&Symbol>,
-) -> Result<(BTreeMap<Symbol, usize>, StratifiedGraph<usize>)> {
-    let indices = sccs
-        .iter()
-        .enumerate()
-        .flat_map(|(idx, scc)| scc.iter().map(move |k| ((*k).clone(), idx)))
-        .collect::<BTreeMap<_, _>>();
-    let mut ret: BTreeMap<usize, BTreeMap<usize, bool>> = Default::default();
-    for (from, tos) in graph {
-        let from_idx = *indices
-            .get(*from)
-            .ok_or(StratifierInvariantError("a graph node is in no SCC"))?;
-        let cur_entry = ret.entry(from_idx).or_default();
-        for (to, poisoned) in tos {
-            let to_idx = match indices.get(*to) {
-                Some(i) => *i,
-                // A dependency on an undefined rule name: not a node,
-                // resolved (or refused) by a later tier.
-                None => {
+    /// The condensation: collapse each SCC to one node (its index in `sccs`),
+    /// keeping inter-component edges and merging their poison labels (an edge
+    /// poisoned anywhere is poisoned in the condensation). Self-edges vanish —
+    /// [`Self::verify_no_cycle`] has already proven none of them poisoned.
+    fn make_scc_reduced_graph(
+        &self,
+        sccs: &[BTreeSet<&Symbol>],
+    ) -> Result<(BTreeMap<Symbol, usize>, StratifiedGraph<usize>)> {
+        let indices = sccs
+            .iter()
+            .enumerate()
+            .flat_map(|(idx, scc)| scc.iter().map(move |k| ((*k).clone(), idx)))
+            .collect::<BTreeMap<_, _>>();
+        let mut ret: BTreeMap<usize, BTreeMap<usize, bool>> = Default::default();
+        for (from, tos) in self {
+            let from_idx = *indices
+                .get(*from)
+                .ok_or(StratifierInvariantError("a graph node is in no SCC"))?;
+            let cur_entry = ret.entry(from_idx).or_default();
+            for (to, poisoned) in tos {
+                let to_idx = match indices.get(*to) {
+                    Some(i) => *i,
+                    // A dependency on an undefined rule name: not a node,
+                    // resolved (or refused) by a later tier.
+                    None => {
+                        continue;
+                    }
+                };
+                if from_idx == to_idx {
                     continue;
                 }
-            };
-            if from_idx == to_idx {
-                continue;
-            }
-            match cur_entry.entry(to_idx) {
-                Entry::Vacant(e) => {
-                    e.insert(*poisoned);
-                }
-                Entry::Occupied(mut e) => {
-                    let old_p = *e.get();
-                    e.insert(old_p || *poisoned);
+                match cur_entry.entry(to_idx) {
+                    Entry::Vacant(e) => {
+                        e.insert(*poisoned);
+                    }
+                    Entry::Occupied(mut e) => {
+                        let old_p = *e.get();
+                        e.insert(old_p || *poisoned);
+                    }
                 }
             }
         }
+        Ok((indices, StratifiedGraph(ret)))
     }
-    Ok((indices, ret))
 }
 
 impl NormalFormProgram {
@@ -390,13 +389,13 @@ impl NormalFormProgram {
     pub fn into_stratified_program(self) -> Result<(StratifiedNormalFormProgram, StoreLifetimes)> {
         // 0. build the labelled dependency graph of the program, plus the
         // span of the atom establishing each poisoned edge (diagnostics)
-        let (stratified_graph, poison_spans) = convert_normal_form_program_to_graph(&self);
-        let graph = reduce_to_graph(&stratified_graph);
+        let (stratified_graph, poison_spans) = self.dependency_graph();
+        let graph = stratified_graph.reduce_to_graph();
 
         // 1. find reachable rules starting from the entry — the entry
         // field itself, real span and all, never a re-spelled `?` probe
         let entry = self.entry_name();
-        let reachable: BTreeSet<Symbol> = reachable_components(&graph, &entry)
+        let reachable: BTreeSet<Symbol> = graph.reachable_components(&entry)
             .into_iter()
             .map(|k| (*k).clone())
             .collect();
@@ -410,18 +409,18 @@ impl NormalFormProgram {
             .filter(|(k, _)| reachable.contains(*k))
             .collect();
         // 3. find the SCCs — the recursive families
-        let sccs: Vec<BTreeSet<&Symbol>> = strongly_connected_components(&graph)?
+        let sccs: Vec<BTreeSet<&Symbol>> = graph.strongly_connected_components()?
             .into_iter()
             .map(|scc| scc.into_iter().copied().collect())
             .collect();
         // 4. refuse if any SCC contains a poisoned edge: THE soundness gate
-        verify_no_cycle(&stratified_graph, &poison_spans, &sccs)?;
+        stratified_graph.verify_no_cycle(&poison_spans, &sccs)?;
         // 5. collapse the SCCs into the condensation DAG
-        let (invert_indices, reduced_graph) = make_scc_reduced_graph(&sccs, &stratified_graph)?;
+        let (invert_indices, reduced_graph) = stratified_graph.make_scc_reduced_graph(&sccs)?;
         // 6. topologically sort the condensation into strata. Kahn emits
         // them in REVERSE execution order (it starts from the entry's
         // component and walks toward the dependencies).
-        let sort_result = generalized_kahn(&reduced_graph, sccs.len())?;
+        let sort_result = reduced_graph.generalized_kahn(sccs.len())?;
 
         // The same sort read in each of the two index spaces, by direct
         // enumeration — no `n_strata - 1 - i` arithmetic anywhere:

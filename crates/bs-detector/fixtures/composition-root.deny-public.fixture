@@ -1,3 +1,0 @@
-pub fn main() {
-    Engine::boot().serve()
-}
