@@ -979,42 +979,41 @@ pub open spec fn grammar() -> Branches {
 
 /// A number's class byte selects its magnitude: zero carries only the
 /// representation tie-break, a signed magnitude carries exponent, fraction and
-/// tie-break. There is no NaN class — NaN is not a real, and the mint refuses
-/// it, so no ordering convention has to be invented for one.
-pub open spec fn num_shape() -> Shape {
-    Shape::Sum(Box::new(
-        alt(0x01, Shape::Fixed(12),
-        alt(0x02, Shape::Fixed(1),
-        alt(0x03, Shape::Fixed(12),
-        Branches::End)))))
+/// tie-break. There is no NaN class — NaN is not a real, and no door here takes
+/// one, so no ordering convention has to be invented for it.
+pub open spec fn num_branches() -> Branches {
+    alt(0x01, Shape::Fixed(12),
+    alt(0x02, Shape::Fixed(1),
+    alt(0x03, Shape::Fixed(12),
+    Branches::End)))
 }
+pub open spec fn num_shape() -> Shape { Shape::Sum(Box::new(num_branches())) }
 
-/// An interval is empty, or a lower end then an upper end. The two ends cannot
-/// share a marker table: unbounded below is the least element of its axis and
-/// unbounded above is the greatest, so their markers must sort opposite ways
-/// against a bounded end.
-pub open spec fn interval_shape() -> Shape {
-    Shape::Sum(Box::new(
-        alt(0x01, Shape::Fixed(0),                               // empty
-        alt(0x02, prod(lo_shape(), hi_shape()),                     // bounded
-        Branches::End))))
+/// An interval is empty, or a lower end then an upper end.
+pub open spec fn interval_branches() -> Branches {
+    alt(0x01, Shape::Fixed(0),
+    alt(0x02, prod(lo_shape(), hi_shape()),
+    Branches::End))
 }
+pub open spec fn interval_shape() -> Shape { Shape::Sum(Box::new(interval_branches())) }
 
 /// Unbounded below sorts under every instant, so its marker is the lower one.
-pub open spec fn lo_shape() -> Shape {
-    Shape::Sum(Box::new(
-        alt(0x01, Shape::Fixed(0),
-        alt(0x02, Shape::Fixed(8),
-        Branches::End))))
+pub open spec fn lo_branches() -> Branches {
+    alt(0x01, Shape::Fixed(0),
+    alt(0x02, Shape::Fixed(8),
+    Branches::End))
 }
+pub open spec fn lo_shape() -> Shape { Shape::Sum(Box::new(lo_branches())) }
 
 /// Unbounded above sorts over every instant, so its marker is the higher one.
-pub open spec fn hi_shape() -> Shape {
-    Shape::Sum(Box::new(
-        alt(0x02, Shape::Fixed(8),
-        alt(0x03, Shape::Fixed(0),
-        Branches::End))))
+/// The two ends cannot share a table: one unbounded shape is the least element
+/// of its axis and the other is the greatest.
+pub open spec fn hi_branches() -> Branches {
+    alt(0x02, Shape::Fixed(8),
+    alt(0x03, Shape::Fixed(0),
+    Branches::End))
 }
+pub open spec fn hi_shape() -> Shape { Shape::Sum(Box::new(hi_branches())) }
 
 pub open spec fn alt(k: u8, s: Shape, rest: Branches) -> Branches {
     Branches::Alt(k, Box::new(s), Box::new(rest))
@@ -1518,96 +1517,6 @@ impl CanonicalBytes {
     }
 }
 
-/// A tag whose body is a row of values. A `u8` is not a tag: the invariant
-/// travels with the value, so no site re-checks and no site can pass a scalar
-/// tag here.
-// CONSTRUCT: Newtype SeqTag
-#[derive(Clone, Copy)]
-pub struct SeqTag {
-    byte: u8,
-}
-
-impl View for SeqTag {
-    type V = u8;
-    closed spec fn view(&self) -> u8 { self.byte }
-}
-
-// CONSTRUCT: ImplBlock SeqTag
-impl SeqTag {
-    #[verifier::type_invariant]
-    closed spec fn wf_tag(self) -> bool { is_row_tag(self@) }
-
-    pub fn mint(b: u8) -> (r: SeqTag)
-        requires is_row_tag(b)
-        ensures r@ == b
-    { SeqTag { byte: b } }
-
-    pub fn byte(&self) -> (b: u8)
-        ensures b == self@, is_row_tag(b)
-    { proof { use_type_invariant(*self); } self.byte }
-}
-
-
-/// Seal a sequence of already-sealed values.
-// CONSTRUCT: Mint seal_sequence
-pub fn seal_sequence(tag: SeqTag, elems: &Vec<CanonicalBytes>)
-    -> (r: CanonicalBytes)
-    ensures
-        r.view() =~= seq![tag@] + enc_row(elems@.map_values(|e: CanonicalBytes| e.view())),
-{
-    proof { use_type_invariant(tag); }
-    let tag = tag.byte();
-    let ghost views = elems@.map_values(|e: CanonicalBytes| e.view());
-    let mut out: Vec<u8> = Vec::new();
-    out.push(tag);
-    let mut i: usize = 0;
-    while i < elems.len()
-        invariant
-            0 <= i <= elems.len(),
-            views =~= elems@.map_values(|e: CanonicalBytes| e.view()),
-            out@ =~= seq![tag] + cat(views.take(i as int)),
-            forall|k: int| 0 <= k < i ==> complete(#[trigger] views[k]),
-        decreases elems.len() - i
-    {
-        let e = &elems[i];
-        proof { use_type_invariant(e); }
-        let bs = e.as_bytes();
-        let mut j: usize = 0;
-        let ghost before = out@;
-        while j < bs.len()
-            invariant
-                0 <= j <= bs.len(),
-                bs@ =~= views[i as int],
-                out@ =~= before + bs@.take(j as int),
-            decreases bs.len() - j
-        {
-            out.push(bs[j]);
-            proof { assert(bs@.take(j + 1) =~= bs@.take(j as int).push(bs@[j as int])); }
-            j = j + 1;
-        }
-        proof {
-            assert(bs@.take(bs.len() as int) =~= views[i as int]);
-            lemma_cat_snoc(views.take(i as int), views[i as int]);
-            assert(views.take(i + 1) =~= views.take(i as int).push(views[i as int]));
-        }
-        i = i + 1;
-    }
-    out.push(STRUCT_END);
-    proof {
-        assert(all_complete(views));
-        assert(views.take(elems.len() as int) =~= views);
-        lemma_scan_row_of_row(views, Seq::empty());
-        assert(out@ =~= seq![tag] + (cat(views) + seq![STRUCT_END]));
-        lemma_scan_peel(tag, cat(views) + seq![STRUCT_END]);
-        assert((cat(views) + seq![STRUCT_END]) =~= (cat(views) + seq![STRUCT_END]) + Seq::<u8>::empty());
-    }
-    CanonicalBytes { bytes: out }
-}
-
-
-
-
-
 /// Escape a variable-length payload into the order-preserving, self-delimiting
 /// form. Its order law is [`lemma_bytes_order`] and its prefix-freedom is
 /// [`lemma_bytes_prefix_free`].
@@ -1869,88 +1778,447 @@ pub fn scan_value(p: &[u8]) -> (r: Option<usize>)
     sum_scan(&g, &g, p, 0)
 }
 
-/// A kind's body: bytes the tag's shape measures exactly.
+/// A tag's body: bytes, and the shape that reads them exactly.
 ///
-/// The one door. A kind does not get its own mint and does not get its own
-/// obligation — it names a tag, and the grammar decides whether these bytes are
-/// a body of it.
-// CONSTRUCT: SealedProduct ShapedKey
-pub struct ShapedKey {
-    tag: u8,
-    body: Vec<u8>,
+/// The shape is ghost, the bytes are private, and every constructor below
+/// ESTABLISHES the type invariant rather than checking it. There is no
+/// validating door and no fallible one — a body the grammar would refuse is not
+/// a `Body` that failed to build, it is a `Body` that cannot be written.
+// CONSTRUCT: SealedProduct Body
+pub struct Body {
+    bytes: Vec<u8>,
+    shape: Ghost<Shape>,
 }
 
-// CONSTRUCT: ImplBlock ShapedKey
-impl ShapedKey {
-    pub closed spec fn tag(self) -> u8 { self.tag }
-    pub closed spec fn body(self) -> Seq<u8> { self.body@ }
+// CONSTRUCT: ImplBlock Body
+impl Body {
+    pub closed spec fn view(self) -> Seq<u8> { self.bytes@ }
+    pub closed spec fn shape(self) -> Shape { self.shape@ }
 
     #[verifier::type_invariant]
-    closed spec fn wf_key(self) -> bool { !is_row_tag(self.tag) && valid_body(self.tag, self.body@) }
-
-    /// Refuse anything the grammar does not read exactly. A row tag is refused
-    /// here because a row is sealed by [`seal_sequence`], from elements that
-    /// are already complete.
-    pub fn mint(tag: u8, body: Vec<u8>) -> (r: Option<ShapedKey>)
-        ensures
-            match r {
-                Some(k) => k.tag() == tag && k.body() =~= body@,
-                None => true,
-            },
-    {
-        let g = grammar_exec();
-        let sh = match branch_lookup(&g, tag) {
-            Some(s) => s,
-            None => return None,
-        };
-        match sh {
-            Shape::Row(_) => return None,
-            _ => {}
-        }
-        proof { assert(!is_row_tag(tag)); }
-        let n = match shape_scan(&g, sh, body.as_slice(), 0) {
-            Some(n) => n,
-            None => return None,
-        };
-        if n != body.len() {
-            return None;
-        }
-        Some(ShapedKey { tag, body })
+    closed spec fn wf_body(self) -> bool {
+        shape_end(grammar(), self.shape@, self.bytes@) == self.bytes@.len()
     }
 
-    pub fn tag_byte(&self) -> (t: u8)
-        ensures t == self.tag(), !is_row_tag(t), valid_body(t, self.body())
-    { proof { use_type_invariant(self); } self.tag }
+    /// Exactly these bytes. The width is a fact about the vector, so a body of
+    /// the wrong width is not ill-formed — it is a different shape, and the tag
+    /// it is sealed under will not accept it.
+    pub fn fixed(bytes: Vec<u8>) -> (r: Body)
+        ensures r.view() =~= bytes@, r.shape() == Shape::Fixed(bytes@.len() as usize)
+    {
+        let n = bytes.len();
+        Body { bytes, shape: Ghost(Shape::Fixed(n)) }
+    }
+
+    /// Opaque content of any length. Every byte sequence has an escaped form,
+    /// so there is nothing here that can fail.
+    pub fn delimited(content: &[u8]) -> (r: Body)
+        ensures r.view() =~= enc_bytes(content@), r.shape() == Shape::Delimited
+    {
+        let bytes = escape(content);
+        proof { lemma_delim_end_of_enc_bytes(content@); }
+        Body { bytes, shape: Ghost(Shape::Delimited) }
+    }
+
+    /// One body then another, with no separator between them.
+    ///
+    /// The first is self-delimiting, so the second cannot reach back into it.
+    /// That is [`lemma_shape_local`] — the reason a `Product` needs no length
+    /// prefix, discharged here once for every kind that carries a tie-break.
+    pub fn product(a: Body, b: Body) -> (r: Body)
+        ensures
+            r.view() =~= a.view() + b.view(),
+            r.shape() == prod(a.shape(), b.shape()),
+    {
+        proof { use_type_invariant(&a); use_type_invariant(&b); }
+        let ghost sa = a.shape@;
+        let ghost sb = b.shape@;
+        let ghost va = a.bytes@;
+        let ghost vb = b.bytes@;
+        let mut bytes = a.bytes;
+        let mut tail = b.bytes;
+        bytes.append(&mut tail);
+        proof {
+            lemma_prefix_of_self_plus(va, vb);
+            lemma_shape_local(grammar(), sa, va, va + vb);
+            assert((va + vb).skip(va.len() as int) =~= vb);
+        }
+        Body { bytes, shape: Ghost(prod(sa, sb)) }
+    }
+
+    /// A lead byte, and the body the branch table says it selects.
+    ///
+    /// The table is the kind's own and the key must be one of its keys. That is
+    /// a precondition, discharged where the kind is defined; there is no lookup
+    /// here and nothing to refuse.
+    pub fn select(bs: Ghost<Branches>, k: u8, inner: Body) -> (r: Body)
+        requires branch_of(bs@, k) == Some(inner.shape())
+        ensures
+            r.view() =~= seq![k] + inner.view(),
+            r.shape() == Shape::Sum(Box::new(bs@)),
+    {
+        proof { use_type_invariant(&inner); }
+        let ghost vi = inner.bytes@;
+        let ghost si = inner.shape@;
+        let mut bytes: Vec<u8> = Vec::new();
+        bytes.push(k);
+        let mut tail = inner.bytes;
+        bytes.append(&mut tail);
+        proof {
+            assert(bytes@ =~= seq![k] + vi);
+            assert(bytes@.len() > 0 && bytes@[0] == k);
+            assert(bytes@.skip(1) =~= vi);
+            assert(branch_of(bs@, bytes@[0]) == Some(si));
+            assert(shape_end(grammar(), si, bytes@.skip(1)) == vi.len());
+            assert(sum_end(grammar(), bs@, bytes@) == 1 + vi.len());
+        }
+        Body { bytes, shape: Ghost(Shape::Sum(Box::new(bs@))) }
+    }
+
+    /// A row of complete values, terminated. Elements open with a tag, which
+    /// sorts above the terminator, so none can be read as the row's end.
+    pub fn row(elems: &Vec<CanonicalBytes>) -> (r: Body)
+        ensures
+            r.view() =~= enc_row(elems@.map_values(|e: CanonicalBytes| e.view())),
+            r.shape() == row(Shape::Tagged),
+    {
+        let ghost views = elems@.map_values(|e: CanonicalBytes| e.view());
+        let mut bytes: Vec<u8> = Vec::new();
+        let mut i: usize = 0;
+        while i < elems.len()
+            invariant
+                0 <= i <= elems.len(),
+                views =~= elems@.map_values(|e: CanonicalBytes| e.view()),
+                bytes@ =~= cat(views.take(i as int)),
+                forall|k: int| 0 <= k < i ==> complete(#[trigger] views[k]),
+            decreases elems.len() - i
+        {
+            let e = &elems[i];
+            proof { use_type_invariant(e); }
+            let src = e.as_bytes();
+            let ghost before = bytes@;
+            let mut j: usize = 0;
+            while j < src.len()
+                invariant
+                    0 <= j <= src.len(),
+                    src@ =~= views[i as int],
+                    bytes@ =~= before + src@.take(j as int),
+                decreases src.len() - j
+            {
+                bytes.push(src[j]);
+                proof { assert(src@.take(j + 1) =~= src@.take(j as int).push(src@[j as int])); }
+                j = j + 1;
+            }
+            proof {
+                assert(src@.take(src.len() as int) =~= views[i as int]);
+                lemma_cat_snoc(views.take(i as int), views[i as int]);
+                assert(views.take(i + 1) =~= views.take(i as int).push(views[i as int]));
+            }
+            i = i + 1;
+        }
+        bytes.push(STRUCT_END);
+        proof {
+            assert(views.take(elems.len() as int) =~= views);
+            assert(all_complete(views));
+            lemma_scan_row_of_row(views, Seq::empty());
+            assert(bytes@ =~= (cat(views) + seq![STRUCT_END]) + Seq::<u8>::empty());
+        }
+        Body { bytes, shape: Ghost(row(Shape::Tagged)) }
+    }
+
+    /// One complete value, carried as a body. This is the back-reference: a
+    /// kind whose payload is a value, not bytes of its own.
+    pub fn value(v: &CanonicalBytes) -> (r: Body)
+        ensures r.view() =~= v.view(), r.shape() == Shape::Tagged
+    {
+        proof { use_type_invariant(v); }
+        let src = v.as_bytes();
+        let mut bytes: Vec<u8> = Vec::new();
+        let mut j: usize = 0;
+        while j < src.len()
+            invariant 0 <= j <= src.len(), src@ =~= v.view(), bytes@ =~= src@.take(j as int),
+            decreases src.len() - j
+        {
+            bytes.push(src[j]);
+            proof { assert(src@.take(j + 1) =~= src@.take(j as int).push(src@[j as int])); }
+            j = j + 1;
+        }
+        proof {
+            assert(src@.take(src.len() as int) =~= v.view());
+            assert(scan(bytes@) == bytes@.len());
+        }
+        Body { bytes, shape: Ghost(Shape::Tagged) }
+    }
 }
 
-/// Seal a scalar. The result is a complete encoding by construction.
+/// Seal a body under its tag.
+///
+/// The precondition is the whole contract: the tag's shape IS the body's shape.
+/// It is discharged where the kind is defined, at verification time, against the
+/// grammar. A tag sealed over a body it does not read is not refused at run
+/// time — it fails to verify, and there is no other door.
 // CONSTRUCT: Mint seal
-pub fn seal(k: &ShapedKey) -> (r: CanonicalBytes)
-    ensures r.view() =~= seq![k.tag()] + k.body()
+pub fn seal(tag: u8, body: Body) -> (r: CanonicalBytes)
+    requires tag_shape(tag) == Some(body.shape())
+    ensures r.view() =~= seq![tag] + body.view()
 {
-    proof { use_type_invariant(k); }
+    proof { use_type_invariant(&body); }
+    let ghost vb = body.bytes@;
     let mut out: Vec<u8> = Vec::new();
-    let t = k.tag_byte();
-    out.push(t);
-    let mut i: usize = 0;
-    while i < k.body.len()
-        invariant
-            0 <= i <= k.body@.len(),
-            out@ =~= seq![t] + k.body@.take(i as int),
-        decreases k.body@.len() - i
-    {
-        out.push(k.body[i]);
-        proof { assert(k.body@.take(i + 1) =~= k.body@.take(i as int).push(k.body@[i as int])); }
-        i = i + 1;
-    }
+    out.push(tag);
+    let mut tail = body.bytes;
+    out.append(&mut tail);
     proof {
-        assert(k.body@.take(k.body@.len() as int) =~= k.body@);
-        let v = Val::S(k.tag(), k.body());
-        assert(wf(v));
-        assert(enc(v) =~= out@);
-        lemma_enc_complete(v);
+        assert(out@ =~= seq![tag] + vb);
+        lemma_scan_peel(tag, vb);
     }
     CanonicalBytes { bytes: out }
+}
+
+// ================================= the kinds =================================
+//
+// One door per kind, and every one of them total: no `Option`, no panic, no
+// width to get wrong. The obligation `tag_shape(tag) == Some(body.shape())` is
+// discharged HERE, inside the gate, by computation against the grammar. A
+// caller outside this file cannot state a wrong pairing, because the only
+// vocabulary it is given is these doors and the argument types they take.
+
+pub const TAG_NULL: u8 = 0x05;
+pub const TAG_FALSE: u8 = 0x08;
+pub const TAG_TRUE: u8 = 0x09;
+pub const TAG_NUM: u8 = 0x10;
+pub const TAG_STR: u8 = 0x18;
+pub const TAG_BYTES: u8 = 0x20;
+pub const TAG_UUID: u8 = 0x28;
+pub const TAG_REGEX: u8 = 0x30;
+pub const TAG_JSON: u8 = 0x38;
+pub const TAG_VECTOR: u8 = 0x40;
+pub const TAG_LIST: u8 = 0x48;
+pub const TAG_SET: u8 = 0x50;
+pub const TAG_VALIDITY: u8 = 0x58;
+pub const TAG_INTERVAL: u8 = 0x60;
+pub const TAG_GEOMETRY: u8 = 0x68;
+
+/// THE TAG TABLE, resolved. Every door below discharges its obligation from
+/// this one computation, so the grammar is consulted once rather than restated
+/// fifteen times.
+pub proof fn lemma_tag_shapes()
+    ensures
+        tag_shape(TAG_NULL) == Some(Shape::Fixed(0)),
+        tag_shape(TAG_FALSE) == Some(Shape::Fixed(0)),
+        tag_shape(TAG_TRUE) == Some(Shape::Fixed(0)),
+        tag_shape(TAG_NUM) == Some(num_shape()),
+        tag_shape(TAG_STR) == Some(Shape::Delimited),
+        tag_shape(TAG_BYTES) == Some(Shape::Delimited),
+        tag_shape(TAG_UUID) == Some(Shape::Fixed(16)),
+        tag_shape(TAG_REGEX) == Some(prod(Shape::Delimited, Shape::Fixed(1))),
+        tag_shape(TAG_JSON) == Some(Shape::Tagged),
+        tag_shape(TAG_VECTOR) == Some(Shape::Fixed(32)),
+        tag_shape(TAG_LIST) == Some(row(Shape::Tagged)),
+        tag_shape(TAG_SET) == Some(row(Shape::Tagged)),
+        tag_shape(TAG_VALIDITY) == Some(Shape::Fixed(9)),
+        tag_shape(TAG_INTERVAL) == Some(interval_shape()),
+        tag_shape(TAG_GEOMETRY) == Some(Shape::Fixed(8)),
+{
+    assert(tag_shape(TAG_NULL) == Some(Shape::Fixed(0))) by (compute_only);
+    assert(tag_shape(TAG_FALSE) == Some(Shape::Fixed(0))) by (compute_only);
+    assert(tag_shape(TAG_TRUE) == Some(Shape::Fixed(0))) by (compute_only);
+    assert(tag_shape(TAG_NUM) == Some(num_shape())) by (compute_only);
+    assert(tag_shape(TAG_STR) == Some(Shape::Delimited)) by (compute_only);
+    assert(tag_shape(TAG_BYTES) == Some(Shape::Delimited)) by (compute_only);
+    assert(tag_shape(TAG_UUID) == Some(Shape::Fixed(16))) by (compute_only);
+    assert(tag_shape(TAG_REGEX) == Some(prod(Shape::Delimited, Shape::Fixed(1)))) by (compute_only);
+    assert(tag_shape(TAG_JSON) == Some(Shape::Tagged)) by (compute_only);
+    assert(tag_shape(TAG_VECTOR) == Some(Shape::Fixed(32))) by (compute_only);
+    assert(tag_shape(TAG_LIST) == Some(row(Shape::Tagged))) by (compute_only);
+    assert(tag_shape(TAG_SET) == Some(row(Shape::Tagged))) by (compute_only);
+    assert(tag_shape(TAG_VALIDITY) == Some(Shape::Fixed(9))) by (compute_only);
+    assert(tag_shape(TAG_INTERVAL) == Some(interval_shape())) by (compute_only);
+    assert(tag_shape(TAG_GEOMETRY) == Some(Shape::Fixed(8))) by (compute_only);
+}
+
+/// The inner tables, resolved. `Body::select` asks which branch a key names;
+/// these are the answers, computed against the same grammar.
+pub proof fn lemma_branch_shapes()
+    ensures
+        branch_of(num_branches(), 0x01) == Some(Shape::Fixed(12)),
+        branch_of(num_branches(), 0x02) == Some(Shape::Fixed(1)),
+        branch_of(num_branches(), 0x03) == Some(Shape::Fixed(12)),
+        branch_of(interval_branches(), 0x01) == Some(Shape::Fixed(0)),
+        branch_of(interval_branches(), 0x02) == Some(prod(lo_shape(), hi_shape())),
+        branch_of(lo_branches(), 0x01) == Some(Shape::Fixed(0)),
+        branch_of(lo_branches(), 0x02) == Some(Shape::Fixed(8)),
+        branch_of(hi_branches(), 0x02) == Some(Shape::Fixed(8)),
+        branch_of(hi_branches(), 0x03) == Some(Shape::Fixed(0)),
+{
+    assert(branch_of(num_branches(), 0x01) == Some(Shape::Fixed(12))) by (compute_only);
+    assert(branch_of(num_branches(), 0x02) == Some(Shape::Fixed(1))) by (compute_only);
+    assert(branch_of(num_branches(), 0x03) == Some(Shape::Fixed(12))) by (compute_only);
+    assert(branch_of(interval_branches(), 0x01) == Some(Shape::Fixed(0))) by (compute_only);
+    assert(branch_of(interval_branches(), 0x02) == Some(prod(lo_shape(), hi_shape())))
+        by (compute_only);
+    assert(branch_of(lo_branches(), 0x01) == Some(Shape::Fixed(0))) by (compute_only);
+    assert(branch_of(lo_branches(), 0x02) == Some(Shape::Fixed(8))) by (compute_only);
+    assert(branch_of(hi_branches(), 0x02) == Some(Shape::Fixed(8))) by (compute_only);
+    assert(branch_of(hi_branches(), 0x03) == Some(Shape::Fixed(0))) by (compute_only);
+}
+
+/// Copy a slice into an owned body. The length travels with the result, which
+/// is what lets a fixed-width door prove its width.
+fn owned(a: &[u8]) -> (r: Vec<u8>)
+    ensures r@ =~= a@
+{
+    let mut out: Vec<u8> = Vec::new();
+    let mut i: usize = 0;
+    while i < a.len()
+        invariant 0 <= i <= a.len(), out@ =~= a@.take(i as int),
+        decreases a.len() - i
+    {
+        out.push(a[i]);
+        proof { assert(a@.take(i + 1) =~= a@.take(i as int).push(a@[i as int])); }
+        i = i + 1;
+    }
+    proof { assert(a@.take(a.len() as int) =~= a@); }
+    out
+}
+
+pub fn seal_null() -> (r: CanonicalBytes)
+    ensures r.view() =~= seq![TAG_NULL]
+{
+    proof { lemma_tag_shapes(); }
+    let b = Body::fixed(Vec::new());
+    seal(TAG_NULL, b)
+}
+
+/// The two booleans are two tags. There is no payload to disagree with them.
+pub fn seal_bool(v: bool) -> (r: CanonicalBytes)
+    ensures r.view() =~= seq![if v { TAG_TRUE } else { TAG_FALSE }]
+{
+    proof { lemma_tag_shapes(); }
+    let b = Body::fixed(Vec::new());
+    if v { seal(TAG_TRUE, b) } else { seal(TAG_FALSE, b) }
+}
+
+/// Zero carries only the representation tie-break: there is no magnitude to
+/// write, so there is no door that takes one.
+pub fn seal_num_zero(tie: u8) -> (r: CanonicalBytes) {
+    proof { lemma_tag_shapes(); lemma_branch_shapes(); }
+    let inner = Body::fixed(owned(&[tie]));
+    seal(TAG_NUM, Body::select(Ghost(num_branches()), 0x02, inner))
+}
+
+/// A signed magnitude: exponent, fraction and tie-break, twelve bytes of it.
+/// The class byte is not a parameter — the door the caller picks IS the class,
+/// so a magnitude cannot be filed under the wrong sign.
+pub fn seal_num_negative(mag: &[u8; 12]) -> (r: CanonicalBytes) {
+    proof { lemma_tag_shapes(); lemma_branch_shapes(); }
+    let inner = Body::fixed(owned(mag.as_slice()));
+    seal(TAG_NUM, Body::select(Ghost(num_branches()), 0x01, inner))
+}
+
+pub fn seal_num_positive(mag: &[u8; 12]) -> (r: CanonicalBytes) {
+    proof { lemma_tag_shapes(); lemma_branch_shapes(); }
+    let inner = Body::fixed(owned(mag.as_slice()));
+    seal(TAG_NUM, Body::select(Ghost(num_branches()), 0x03, inner))
+}
+
+pub fn seal_str(content: &[u8]) -> (r: CanonicalBytes)
+    ensures r.view() =~= seq![TAG_STR] + enc_bytes(content@)
+{ proof { lemma_tag_shapes(); } seal(TAG_STR, Body::delimited(content)) }
+
+pub fn seal_bytes(content: &[u8]) -> (r: CanonicalBytes)
+    ensures r.view() =~= seq![TAG_BYTES] + enc_bytes(content@)
+{ proof { lemma_tag_shapes(); } seal(TAG_BYTES, Body::delimited(content)) }
+
+pub fn seal_uuid(id: &[u8; 16]) -> (r: CanonicalBytes) {
+    proof { lemma_tag_shapes(); }
+    let b = Body::fixed(owned(id.as_slice()));
+    seal(TAG_UUID, b)
+}
+
+/// A regex is identified by its pattern, so the pattern sorts first and the
+/// flags break ties. The order of the two is the grammar's, not the caller's.
+pub fn seal_regex(pattern: &[u8], flags: u8) -> (r: CanonicalBytes) {
+    proof { lemma_tag_shapes(); }
+    let f = Body::fixed(owned(&[flags]));
+    seal(TAG_REGEX, Body::product(Body::delimited(pattern), f))
+}
+
+/// A JSON value IS a value. There is no second grammar to keep in step.
+pub fn seal_json(v: &CanonicalBytes) -> (r: CanonicalBytes)
+    ensures r.view() =~= seq![TAG_JSON] + v.view()
+{ proof { lemma_tag_shapes(); } seal(TAG_JSON, Body::value(v)) }
+
+pub fn seal_vector(components: &[u8; 32]) -> (r: CanonicalBytes) {
+    proof { lemma_tag_shapes(); }
+    let b = Body::fixed(owned(components.as_slice()));
+    seal(TAG_VECTOR, b)
+}
+
+pub fn seal_validity(v: &[u8; 9]) -> (r: CanonicalBytes) {
+    proof { lemma_tag_shapes(); }
+    let b = Body::fixed(owned(v.as_slice()));
+    seal(TAG_VALIDITY, b)
+}
+
+pub fn seal_geometry(g: &[u8; 8]) -> (r: CanonicalBytes) {
+    proof { lemma_tag_shapes(); }
+    let b = Body::fixed(owned(g.as_slice()));
+    seal(TAG_GEOMETRY, b)
+}
+
+pub fn seal_list(elems: &Vec<CanonicalBytes>) -> (r: CanonicalBytes)
+    ensures r.view() =~= seq![TAG_LIST] + enc_row(elems@.map_values(|e: CanonicalBytes| e.view()))
+{ proof { lemma_tag_shapes(); } seal(TAG_LIST, Body::row(elems)) }
+
+pub fn seal_set(elems: &Vec<CanonicalBytes>) -> (r: CanonicalBytes)
+    ensures r.view() =~= seq![TAG_SET] + enc_row(elems@.map_values(|e: CanonicalBytes| e.view()))
+{ proof { lemma_tag_shapes(); } seal(TAG_SET, Body::row(elems)) }
+
+/// An interval endpoint. Unboundedness is a variant, never a sentinel instant:
+/// there is no `[u8; 8]` that means "no bound", so no caller can pick one and
+/// no reader has to know which one was picked.
+// CONSTRUCT: ClosedSum Bound
+pub enum Bound {
+    Unbounded,
+    At([u8; 8]),
+}
+
+/// The empty interval: the one value below every inhabited one.
+pub fn seal_interval_empty() -> (r: CanonicalBytes) {
+    proof { lemma_tag_shapes(); lemma_branch_shapes(); }
+    let inner = Body::fixed(Vec::new());
+    seal(TAG_INTERVAL, Body::select(Ghost(interval_branches()), 0x01, inner))
+}
+
+/// A bounded interval. The two ends carry different marker tables because
+/// unbounded below is the least element of its axis and unbounded above is the
+/// greatest — one table would put an infinity on the wrong side of every
+/// instant. The caller names the ends; the markers are not its business.
+pub fn seal_interval(lo: &Bound, hi: &Bound) -> (r: CanonicalBytes) {
+    proof { lemma_tag_shapes(); lemma_branch_shapes(); }
+    let lo_body = match lo {
+        Bound::Unbounded => {
+            let e = Body::fixed(Vec::new());
+            Body::select(Ghost(lo_branches()), 0x01, e)
+        }
+        Bound::At(t) => {
+            let e = Body::fixed(owned(t.as_slice()));
+            Body::select(Ghost(lo_branches()), 0x02, e)
+        }
+    };
+    let hi_body = match hi {
+        Bound::At(t) => {
+            let e = Body::fixed(owned(t.as_slice()));
+            Body::select(Ghost(hi_branches()), 0x02, e)
+        }
+        Bound::Unbounded => {
+            let e = Body::fixed(Vec::new());
+            Body::select(Ghost(hi_branches()), 0x03, e)
+        }
+    };
+    seal(TAG_INTERVAL, Body::select(Ghost(interval_branches()), 0x02,
+        Body::product(lo_body, hi_body)))
 }
 
 } // verus!

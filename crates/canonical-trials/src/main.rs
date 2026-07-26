@@ -28,13 +28,14 @@
 mod canonical;
 
 use canonical::{
-    Branches, CanonicalBytes, SeqTag, Shape, ShapedKey, escape, grammar_exec, scan_value,
-    seal, seal_sequence, shape_scan,
+    Bound, Branches, grammar_exec, CanonicalBytes, Shape, escape, scan_value, seal_bool, seal_bytes,
+    seal_geometry, seal_interval, seal_interval_empty, seal_json, seal_list, seal_null,
+    seal_num_negative, seal_num_positive, seal_num_zero, seal_regex, seal_set, seal_str,
+    seal_uuid, seal_validity, seal_vector, shape_scan,
 };
 
 const TAG_NULL: u8 = 0x05;
 const TAG_FALSE: u8 = 0x08;
-const TAG_BOOL: u8 = 0x08;
 const TAG_TRUE: u8 = 0x09;
 const TAG_NUM: u8 = 0x10;
 const TAG_STR: u8 = 0x18;
@@ -237,14 +238,10 @@ fn attack_concatenation_collision(t: &mut Trials) {
 /// terminates sequences; neither may survive into a position where it is read
 /// as structure.
 fn attack_structural_smuggling(t: &mut Trials) {
-    let seq_tag = SeqTag::mint(TAG_LIST);
 
     // An element whose content starts with the sequence terminator.
-    let one = seal_sequence(seq_tag, &vec![str_val(&[0x01, 0x41])]);
-    let two = seal_sequence(
-        seq_tag,
-        &vec![str_val(&[0x01, 0x41]), str_val(&[0x41])],
-    );
+    let one = seal_list(&vec![str_val(&[0x01, 0x41])]);
+    let two = seal_list(&vec![str_val(&[0x01, 0x41]), str_val(&[0x41])]);
 
     // Every element opens with its tag byte, which is >= 0x05, so the smuggled
     // 0x01 sits inside a payload and can never be read as the terminator.
@@ -262,10 +259,9 @@ fn attack_structural_smuggling(t: &mut Trials) {
 /// ATTACK: empty versus containing-empty. A sequence with no elements and a
 /// sequence holding one empty string must be distinct and correctly ordered.
 fn attack_empty_confusion(t: &mut Trials) {
-    let seq_tag = SeqTag::mint(TAG_LIST);
 
-    let empty_seq = seal_sequence(seq_tag, &Vec::new());
-    let seq_of_empty = seal_sequence(seq_tag, &vec![str_val(&[])]);
+    let empty_seq = seal_list(&Vec::new());
+    let seq_of_empty = seal_list(&vec![str_val(&[])]);
 
     t.check("empty seq != seq of empty", empty_seq.as_bytes() != seq_of_empty.as_bytes());
     t.check(
@@ -282,17 +278,17 @@ fn attack_empty_confusion(t: &mut Trials) {
 /// A Null with no payload must sort below a Bool with payload 0xFF, and a Bool
 /// below any Str — the payload must never reach across a tag boundary.
 fn attack_cross_type_order(t: &mut Trials) {
-    let null = scalar(TAG_NULL, Vec::new());
-    let bool_hi = scalar(TAG_BOOL, Vec::new());
-    let str_lo = scalar(TAG_STR, escape(&[]));
-    let bytes_lo = scalar(TAG_BYTES, escape(&[]));
+    let null = seal_null();
+    let bool_hi = seal_bool(false);
+    let str_lo = seal_str(&[]);
+    let bytes_lo = seal_bytes(&[]);
 
     t.check("null < bool", lex_le_independent(null.as_bytes(), bool_hi.as_bytes()));
     t.check("bool < str", lex_le_independent(bool_hi.as_bytes(), str_lo.as_bytes()));
     t.check("str < bytes", lex_le_independent(str_lo.as_bytes(), bytes_lo.as_bytes()));
     // A Str whose content is all 0xFF still sorts under Bytes: the tag decides,
     // and no payload reaches across it.
-    let str_hi = scalar(TAG_STR, escape(&[0xFF; 8]));
+    let str_hi = seal_str(&[0xFF; 8]);
     t.check(
         "max payload cannot cross a tag",
         lex_le_independent(str_hi.as_bytes(), bytes_lo.as_bytes()),
@@ -302,14 +298,10 @@ fn attack_cross_type_order(t: &mut Trials) {
 /// ATTACK: prefix sequences. `[a]` must sort before `[a, x]` for EVERY x,
 /// including an x whose first payload byte is `0x00`.
 fn attack_prefix_sequence_exhaustive(t: &mut Trials) {
-    let seq_tag = SeqTag::mint(TAG_LIST);
     for x in 0u16..=255 {
         let byte = x as u8;
-        let short = seal_sequence(seq_tag, &vec![str_val(b"a")]);
-        let long = seal_sequence(
-            seq_tag,
-            &vec![str_val(b"a"), str_val(&[byte])],
-        );
+        let short = seal_list(&vec![str_val(b"a")]);
+        let long = seal_list(&vec![str_val(b"a"), str_val(&[byte])]);
         t.check(
             "prefix sequence sorts first, all 256 extensions",
             lex_le_independent(short.as_bytes(), long.as_bytes())
@@ -321,10 +313,9 @@ fn attack_prefix_sequence_exhaustive(t: &mut Trials) {
 /// ATTACK: nesting. Sequences nest without a length prefix, so a deeply nested
 /// value must still be exactly self-delimiting.
 fn attack_deep_nesting(t: &mut Trials) {
-    let seq_tag = SeqTag::mint(TAG_LIST);
     let mut inner = str_val(b"leaf");
     for _ in 0..512 {
-        inner = seal_sequence(seq_tag, &vec![inner]);
+        inner = seal_list(&vec![inner]);
     }
     let bytes = inner.as_bytes();
     // 512 opening tags, 512 terminators, plus the leaf.
@@ -376,49 +367,63 @@ fn attack_unmarked_row_element(t: &mut Trials) {
 }
 
 /// THE GRAMMAR TABLE. Cross-kind order is lead-byte order and each body width
-/// is the released format, so both are pinned here against the encoder rather
-/// than left to the proof — a proof of an invented grammar proves nothing about
-/// the bytes on disk.
+/// is the released format. The proof cannot know either — it proves the reader
+/// agrees with the grammar, not that the grammar is the format on disk. So the
+/// bytes each door writes are pinned here, and only here.
 fn trial_grammar_table(t: &mut Trials) {
-    // (tag, a body the shape must read exactly)
-    let table: Vec<(u8, Vec<u8>, &str)> = vec![
-        (TAG_NULL, vec![], "Null: no payload"),
-        (TAG_FALSE, vec![], "False: no payload"),
-        (TAG_TRUE, vec![], "True: no payload"),
-        (TAG_NUM, vec![0x02, 0x00], "Num zero: class byte, repr tie-break"),
-        (TAG_NUM, vec![0x01; 13], "Num negative: class byte, 12 of magnitude"),
-        (TAG_NUM, vec![0x03; 13], "Num positive: class byte, 12 of magnitude"),
-        (TAG_STR, escape(b"hello"), "Str: delimited"),
-        (TAG_BYTES, escape(&[0x00, 0xFF]), "Bytes: delimited"),
-        (TAG_UUID, vec![0x00; 16], "Uuid: 16"),
-        (TAG_REGEX, [escape(b"ab"), vec![0x07]].concat(), "Regex: pattern then flags"),
-        (TAG_JSON, vec![TAG_NULL], "Json: a value"),
-        (TAG_VECTOR, vec![0x00; 32], "Vector: 32"),
-        (TAG_LIST, vec![0x01], "List: empty row"),
-        (TAG_SET, vec![0x01], "Set: empty row"),
-        (TAG_VALIDITY, vec![0x00; 9], "Validity: 9"),
-        (TAG_INTERVAL, vec![0x01], "Interval: empty"),
-        (TAG_INTERVAL, vec![0x02, 0x01, 0x03], "Interval: unbounded both ends"),
-        (TAG_INTERVAL, [vec![0x02, 0x02], vec![0x00; 8], vec![0x03]].concat(), "Interval: lo at"),
-        (TAG_GEOMETRY, vec![0x00; 8], "Geometry: 8"),
+    let cases: Vec<(CanonicalBytes, usize, &str)> = vec![
+        (seal_null(), 1, "Null: tag only"),
+        (seal_bool(false), 1, "False: tag only"),
+        (seal_bool(true), 1, "True: tag only"),
+        (seal_num_zero(0x00), 3, "Num zero: tag, class, repr tie-break"),
+        (seal_num_negative(&[0x00; 12]), 14, "Num negative: tag, class, 12"),
+        (seal_num_positive(&[0x00; 12]), 14, "Num positive: tag, class, 12"),
+        (seal_str(b"hello"), 8, "Str: tag, content, terminator"),
+        (seal_bytes(&[0x00, 0xFF]), 6, "Bytes: tag, escaped content, terminator"),
+        (seal_uuid(&[0x00; 16]), 17, "Uuid: tag, 16"),
+        (seal_regex(b"ab", 0x07), 6, "Regex: tag, pattern, terminator, flags"),
+        (seal_json(&seal_null()), 2, "Json: tag, a value"),
+        (seal_vector(&[0x00; 32]), 33, "Vector: tag, 32"),
+        (seal_list(&Vec::new()), 2, "List: tag, terminator"),
+        (seal_set(&Vec::new()), 2, "Set: tag, terminator"),
+        (seal_validity(&[0x00; 9]), 10, "Validity: tag, 9"),
+        (seal_interval_empty(), 2, "Interval empty: tag, marker"),
+        (seal_interval(&Bound::Unbounded, &Bound::Unbounded), 4, "Interval: tag, marker, two ends"),
+        (seal_interval(&Bound::At([0x00; 8]), &Bound::Unbounded), 12, "Interval: lo at"),
+        (seal_geometry(&[0x00; 8]), 9, "Geometry: tag, 8"),
     ];
     let g = grammar_exec();
-    for (tag, body, label) in &table {
-        // A row tag is sealed by seal_sequence, not by the scalar door.
-        let is_row = *tag == TAG_LIST || *tag == TAG_SET;
-        let minted = ShapedKey::mint(*tag, body.clone());
-        t.check(label, minted.is_some() != is_row);
-
-        // Whatever the door accepts, the reader measures exactly.
-        let mut whole = vec![*tag];
-        whole.extend_from_slice(body);
-        t.check(label, scan_value(&whole) == Some(whole.len()));
-
-        // And one byte short of it is refused, never guessed at.
-        if !body.is_empty() {
-            let short = &whole[..whole.len() - 1];
+    for (v, want, label) in &cases {
+        let bytes = v.as_bytes();
+        t.check(label, bytes.len() == *want);
+        t.check(label, scan_value(bytes) == Some(bytes.len()));
+        // One byte short is refused, never guessed at.
+        if bytes.len() > 1 {
+            let short = &bytes[..bytes.len() - 1];
             t.check(label, shape_scan(&g, &Shape::Tagged, short, 0) != Some(short.len()));
         }
+    }
+
+    // The lead byte each door writes IS the released tag.
+    let leads: Vec<(CanonicalBytes, u8, &str)> = vec![
+        (seal_null(), TAG_NULL, "Null tag"),
+        (seal_bool(false), TAG_FALSE, "False tag"),
+        (seal_bool(true), TAG_TRUE, "True tag"),
+        (seal_num_zero(0), TAG_NUM, "Num tag"),
+        (seal_str(b""), TAG_STR, "Str tag"),
+        (seal_bytes(b""), TAG_BYTES, "Bytes tag"),
+        (seal_uuid(&[0; 16]), TAG_UUID, "Uuid tag"),
+        (seal_regex(b"", 0), TAG_REGEX, "Regex tag"),
+        (seal_json(&seal_null()), TAG_JSON, "Json tag"),
+        (seal_vector(&[0; 32]), TAG_VECTOR, "Vector tag"),
+        (seal_list(&Vec::new()), TAG_LIST, "List tag"),
+        (seal_set(&Vec::new()), TAG_SET, "Set tag"),
+        (seal_validity(&[0; 9]), TAG_VALIDITY, "Validity tag"),
+        (seal_interval_empty(), TAG_INTERVAL, "Interval tag"),
+        (seal_geometry(&[0; 8]), TAG_GEOMETRY, "Geometry tag"),
+    ];
+    for (v, tag, label) in &leads {
+        t.check(label, v.as_bytes()[0] == *tag);
     }
 
     // Cross-kind order is exactly tag order.
@@ -431,35 +436,64 @@ fn trial_grammar_table(t: &mut Trials) {
             t.check("tag order is cross-kind order", (tags[i] <= tags[j]) == (i <= j));
         }
     }
+    for i in 0..leads.len() {
+        for j in 0..leads.len() {
+            t.check(
+                "encodings sort by tag across every pair of kinds",
+                lex_le_independent(leads[i].0.as_bytes(), leads[j].0.as_bytes()) == (i <= j),
+            );
+        }
+    }
 }
 
 /// ATTACK: the interval ends. Unbounded below is the LEAST element of its axis
 /// and unbounded above is the GREATEST, so the two ends cannot share a marker
-/// table. A single table would put one of the two infinities on the wrong side
-/// of every finite instant.
+/// table. A single table would put one infinity on the wrong side of every
+/// finite instant.
+///
+/// `Bound` is why no trial here can smuggle a sentinel: there is no `[u8; 8]`
+/// that means "no bound", so "unbounded" is a variant the caller names and the
+/// markers are chosen by position, inside the gate.
 fn attack_interval_infinities(t: &mut Trials) {
-    let lo_unbounded = scalar(TAG_INTERVAL, [vec![0x02, 0x01], vec![0x02], vec![0x00; 8]].concat());
-    let lo_at_min = scalar(
-        TAG_INTERVAL,
-        [vec![0x02, 0x02], vec![0x00; 8], vec![0x02], vec![0x00; 8]].concat(),
-    );
+    let lo_unbounded = seal_interval(&Bound::Unbounded, &Bound::At([0x00; 8]));
+    let lo_at_min = seal_interval(&Bound::At([0x00; 8]), &Bound::At([0x00; 8]));
     t.check(
         "unbounded below sorts under every instant",
-        lex_le_independent(lo_unbounded.as_bytes(), lo_at_min.as_bytes()),
+        lex_le_independent(lo_unbounded.as_bytes(), lo_at_min.as_bytes())
+            && lo_unbounded.as_bytes() != lo_at_min.as_bytes(),
     );
 
-    let hi_at_max = scalar(
-        TAG_INTERVAL,
-        [vec![0x02, 0x01], vec![0x02], vec![0xFF; 8]].concat(),
-    );
-    let hi_unbounded = scalar(TAG_INTERVAL, vec![0x02, 0x01, 0x03]);
+    let hi_at_max = seal_interval(&Bound::Unbounded, &Bound::At([0xFF; 8]));
+    let hi_unbounded = seal_interval(&Bound::Unbounded, &Bound::Unbounded);
     t.check(
         "unbounded above sorts over every instant",
-        lex_le_independent(hi_at_max.as_bytes(), hi_unbounded.as_bytes()),
+        lex_le_independent(hi_at_max.as_bytes(), hi_unbounded.as_bytes())
+            && hi_at_max.as_bytes() != hi_unbounded.as_bytes(),
     );
 
-    // The empty interval is the one value below every inhabited one.
-    let empty = scalar(TAG_INTERVAL, vec![0x01]);
+    // Exhaustive over each end, holding the other fixed so the comparison is
+    // about the end under test and nothing else.
+    let lo_unb = seal_interval(&Bound::Unbounded, &Bound::Unbounded);
+    for x in 0u16..=255 {
+        let mut at = [0x00; 8];
+        at[0] = x as u8;
+
+        let lo_bounded = seal_interval(&Bound::At(at), &Bound::Unbounded);
+        t.check(
+            "unbounded below is strictly under every one of 256 lower ends",
+            lex_le_independent(lo_unb.as_bytes(), lo_bounded.as_bytes())
+                && lo_unb.as_bytes() != lo_bounded.as_bytes(),
+        );
+
+        let hi_bounded = seal_interval(&Bound::Unbounded, &Bound::At(at));
+        t.check(
+            "unbounded above is strictly over every one of 256 upper ends",
+            lex_le_independent(hi_bounded.as_bytes(), hi_unbounded.as_bytes())
+                && hi_bounded.as_bytes() != hi_unbounded.as_bytes(),
+        );
+    }
+
+    let empty = seal_interval_empty();
     t.check(
         "empty interval sorts below every inhabited one",
         lex_le_independent(empty.as_bytes(), lo_unbounded.as_bytes())
@@ -471,16 +505,15 @@ fn attack_interval_infinities(t: &mut Trials) {
 /// itself exactly, and must keep measuring the same however many bytes follow —
 /// locality, at exec.
 fn attack_reader_agrees_with_writer(t: &mut Trials) {
-    let seq_tag = SeqTag::mint(TAG_LIST);
     let values: Vec<CanonicalBytes> = vec![
-        scalar(TAG_NULL, Vec::new()),
-        scalar(TAG_STR, escape(&[])),
-        scalar(TAG_STR, escape(&[0x00, 0x01, 0xFF])),
-        scalar(TAG_NUM, vec![0x02, 0x00]),
-        scalar(TAG_JSON, vec![TAG_TRUE]),
-        seal_sequence(seq_tag, &Vec::new()),
-        seal_sequence(seq_tag, &vec![str_val(&[0x01]), str_val(&[0x00])]),
-        seal_sequence(seq_tag, &vec![seal_sequence(seq_tag, &vec![str_val(b"x")])]),
+        seal_null(),
+        seal_str(&[]),
+        seal_str(&[0x00, 0x01, 0xFF]),
+        seal_num_zero(0x00),
+        seal_json(&seal_bool(true)),
+        seal_list(&Vec::new()),
+        seal_list(&vec![str_val(&[0x01]), str_val(&[0x00])]),
+        seal_list(&vec![seal_list(&vec![str_val(b"x")])]),
     ];
     for v in &values {
         let bytes = v.as_bytes();
@@ -535,14 +568,13 @@ fn attack_reader_totality(t: &mut Trials) {
     }
 
     // Nesting past the bound is refused, never followed.
-    let seq_tag = SeqTag::mint(TAG_LIST);
     let mut deep = str_val(b"leaf");
     for _ in 0..40 {
-        deep = seal_sequence(seq_tag, &vec![deep]);
+        deep = seal_list(&vec![deep]);
     }
     t.check("nesting within the bound is read", scan_value(deep.as_bytes()).is_some());
     for _ in 0..512 {
-        deep = seal_sequence(seq_tag, &vec![deep]);
+        deep = seal_list(&vec![deep]);
     }
     t.check("nesting past the bound is refused", scan_value(deep.as_bytes()).is_none());
 }
@@ -550,13 +582,12 @@ fn attack_reader_totality(t: &mut Trials) {
 /// ATTACK: JSON is not a second grammar. A JSON value is a value, so the same
 /// bytes read the same way whether or not a Json tag sits in front of them.
 fn attack_json_is_the_value_grammar(t: &mut Trials) {
-    let seq_tag = SeqTag::mint(TAG_LIST);
     let inner: Vec<CanonicalBytes> = vec![
-        scalar(TAG_NULL, Vec::new()),
-        scalar(TAG_TRUE, Vec::new()),
-        scalar(TAG_NUM, vec![0x02, 0x00]),
-        scalar(TAG_STR, escape(b"k")),
-        seal_sequence(seq_tag, &Vec::new()),
+        seal_null(),
+        seal_bool(true),
+        seal_num_zero(0x00),
+        seal_str(b"k"),
+        seal_list(&Vec::new()),
     ];
     for v in &inner {
         let bare = v.as_bytes().to_vec();
@@ -607,12 +638,7 @@ fn trial_all_single_bytes(t: &mut Trials) {
 /// Mint a fresh string value. The witness has no `Clone` by design, so the
 /// trials rebuild each value through the public door rather than fabricate one.
 fn str_val(s: &[u8]) -> CanonicalBytes {
-    seal(&ShapedKey::mint(TAG_STR, escape(s)).expect("Str body"))
-}
-
-/// Mint through the one door, and refuse to continue if the grammar refuses.
-fn scalar(tag: u8, body: Vec<u8>) -> CanonicalBytes {
-    seal(&ShapedKey::mint(tag, body).expect("body the tag's shape reads exactly"))
+    seal_str(s)
 }
 
 fn main() {
