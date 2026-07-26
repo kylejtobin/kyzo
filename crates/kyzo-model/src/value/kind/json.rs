@@ -30,15 +30,23 @@
 //! - Object keys sort by their RAW UTF-8 bytes; the grammar's escaping
 //!   is order-preserving over raw bytes, so the escaped payload order and
 //!   the raw key order are one order (law-tested with NUL-bearing keys).
-//! - The canonical payload carries a trailing FNV-1a 64 hash of the
-//!   canonical value bytes. The algorithm is pinned as format v1; the hash
-//!   rides AFTER the self-terminating value bytes, so it can never
-//!   influence order.
-//!   **The hash is an accelerator and a filter, never equality
-//!   authority**: FNV collides, so equality and join correctness always
-//!   confirm the canonical value bytes; decode verifies the hash and
-//!   refuses mismatches (identical values with different trailing bytes
-//!   cannot exist).
+//!
+//! ORDER_LAW: identity, `Eq` and `Hash` are the canonical byte form. Two
+//! values are the same value exactly when `canonical` seals them to the same
+//! bytes, and the derived `Hash` agrees because every constituent hashes by
+//! its own identity law (`JsonNum` through `Num`, keys by raw UTF-8). No total
+//! order is derived here on purpose: ordering JSON is the byte order of the
+//! sealed value, and a second `Ord` beside it could disagree.
+//!
+//! There is no trailing hash. An earlier encoding appended an FNV-1a 64 of the
+//! value bytes and this doc claimed decode verified it — no such code ever
+//! existed, which made the claim stronger than the mechanism. It could not
+//! have earned its bytes in any case: the hash is a function of the value
+//! bytes, so identical values already have identical trailing bytes and it
+//! prevented nothing; the value grammar is self-delimiting, so no encoding is
+//! a prefix of another and those eight bytes could never decide a comparison;
+//! and corruption is the storage layer's authority, held by block checksums,
+//! the hash-chained WAL and state roots. One fact, one authority.
 
 use super::super::number::Num;
 
@@ -101,7 +109,16 @@ pub struct JsonObj(Vec<(String, Json)>);
 
 /// The typed refusal for ambiguous documents.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct DuplicateKey(pub String);
+pub struct DuplicateKey(String);
+
+impl DuplicateKey {
+    /// The key that appeared twice. Read-only: a refusal is a finding about a
+    /// document that was actually examined, so the only thing that mints one
+    /// is the constructor that found the duplicate.
+    pub fn key(&self) -> &str {
+        &self.0
+    }
+}
 
 impl JsonObj {
     /// Sort entries by key bytes; refuse duplicates.
@@ -125,10 +142,19 @@ impl JsonObj {
     }
 }
 
-/// FNV-1a 64: the pinned v1 hash for JSON canonical bytes. Chosen for
-/// being dependency-free, byte-exact, and trivially reimplementable by
-/// any reader of the spec (which is also how the tests verify it:
-/// against an independent second implementation).
+/// FNV-1a 64: the pinned v1 hash behind [`VectorContentId`], its one caller.
+/// Chosen for being dependency-free, byte-exact, and trivially reimplementable
+/// by any reader of the spec (which is also how the tests verify it: against
+/// an independent second implementation).
+///
+/// It is NOT part of any canonical encoding. An earlier JSON encoding appended
+/// it to the value's bytes; nothing ever read it back. A canonical encoding
+/// already is the identity, so a hash beside it is a second authority over one
+/// fact — and because the value grammar is self-delimiting, no canonical
+/// encoding is a prefix of another, so those eight bytes could not decide a
+/// comparison either. Write-only weight, now removed.
+///
+/// [`VectorContentId`]: super::vector::VectorContentId
 pub fn fnv1a64(bytes: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for &b in bytes {
@@ -173,7 +199,7 @@ mod tests {
             ("k".into(), Json::Null),
             ("k".into(), Json::Bool(false)),
         ]);
-        assert_eq!(dup, Err(DuplicateKey("k".into())));
+        assert_eq!(dup.as_ref().err().map(DuplicateKey::key), Some("k"));
         Ok(())
     }
 
