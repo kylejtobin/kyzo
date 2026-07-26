@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Stop hook: block stopping while the combined gate (bs-detector + fast lib tests)
-# is dirty or mid-run.
+# Stop hook: block stopping while the detector gate is dirty or mid-run.
+# Only bs-detector writes gate.log; the test verbs run under `cargo xtask gate`
+# (`just seal`) and are not read here.
 #
 # OPERATOR CONTROL: crates/bs-detector/pester-hook.txt owns this hook.
 # Comment (#) and blank lines there are documentation; the first remaining
