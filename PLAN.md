@@ -23,8 +23,11 @@ tells you exactly why not, and "why not" is usually the design answer.
 
 1. **Put the work where it fails loudly and early.** Structural, not motivational.
    Never in the scratchpad. Never behind a summary.
-2. **Delete first.** If the old thing survives the round, you will build on it.
-   Callers breaking is correct; they were eating a door that shouldn't exist.
+2. **Delete first, and let the gate go red.** Nothing is built beside the thing it
+   replaces — if both exist at once there is a moment where it verifies with the old
+   one present, and that moment is where the old one survives. Red is the forcing
+   function, not a problem to route around. Callers breaking is correct; they were
+   eating a door that shouldn't exist.
 3. **The oracle exists before the work starts.** If you cannot state what would
    prove you wrong, you are about to layer on.
 4. **Transcribe nothing.** The spec is TCB. A proof of a copied spec launders the
@@ -234,18 +237,34 @@ A `Shape` is a self-delimiting, order-preserving binary grammar. The program lay
 
 And it closes the circularity: with one `Shape` and one reader, `DataValue::cmp` is *defined* as comparing encodings, and the hand-written 60-line mirror — the thing that hid the Interval bug — deletes.
 
-## Order, by leverage
+## Order: demolition first
 
-1. `Shape` + `wf` + `shape_end` + the one locality lemma + one prefix-code theorem.
-2. The value grammar as one `Shape` constant; delete `shape_of` and the seven mints.
-3. JSON as a restriction; delete the whole JSON layer. **Biggest single deletion, and it kills the flipping.**
-4. `ListTag`/`SetTag` split.
-5. `DataValue::cmp` defined from bytes; delete the mirror.
-6. Outward: store key layout, WAL framing, transcript.
+Nothing is built beside something it replaces. If both grammars are in the file at
+once there is a moment where it verifies with the old one still present, and that
+moment is where the old one survives. The gate goes red and stays red until the
+replacement lands. Red is the forcing function; it is not a problem to route around.
 
-Steps 1–3 are where the demolition is. Step 5 is where the second authority dies.
+1. **Delete the JSON layer.** `json_end`, `json_arr`, `json_obj`, their three
+   locality lemmas, `lemma_json_arr_of_row`, `lemma_json_obj_of_pairs`,
+   `JsonValueBytes` and its six builders, `scan_json`/`_arr`/`_obj`, the `JSTR`
+   key marker, `JsonKey`. This needs no `Shape` — an object is a `Row` of
+   (Str, value) and the existing `scan_row_bytes` already reads that. Biggest
+   single deletion, kills every proof that flipped.
+2. **Delete the format layer.** `shape_of`, the eight-arm `key_end`,
+   `lemma_kind_local`'s eight arms, `esc_end`/`num_end`/`interval_end`/
+   `lo_bound_end`/`hi_bound_end`, `class_led_width`, the per-shape locality lemmas,
+   all seven `KindKey` mints, `scan_num`/`scan_interval`/`lo_end`/`hi_end`/
+   `scan_escaped`. The file is now red and holds only the proof machinery:
+   `lex_le`, `lemma_concat_order`, `theorem_prefix_code`, the escape layer, the
+   row layer, `theorem_value_order`.
+3. **Build `Shape` + `wf` + `shape_end` + one locality lemma + one prefix-code
+   theorem.** If the `Product` case does not fall straight out of
+   `lemma_concat_order`, the algebra is wrong, not the proof.
+4. **The grammar as one `Shape` constant**, JSON a restriction of it, one
+   `ShapedKey`, one `shape_scan`. Gate returns to green.
+5. `ListTag`/`SetTag` split.
+6. `DataValue::cmp` defined from bytes; delete the 60-line mirror. This is where
+   the second authority dies.
+7. Outward: store key layout, WAL framing, transcript.
 
-Start at 1. Build `Shape` and its one locality lemma before touching anything that
-consumes it — the lemma is the thing that makes every later deletion free. If the
-`Product` case does not fall straight out of `lemma_concat_order`, the shape algebra
-is wrong, not the proof.
+Start at 1. Do not ask first, and do not build anything until 1 and 2 are done.
