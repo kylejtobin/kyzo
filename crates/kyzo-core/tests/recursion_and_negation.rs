@@ -14,17 +14,16 @@
 //! `Db::run_script`.
 
 mod common;
-use common::*;
 
 /// A rule that calls itself is a fixpoint: every airport reachable from
 /// FRA, any number of hops.
 #[test]
 fn transitive_closure() {
-    let db = fresh_db();
+    let db = common::fresh_db();
     db.run_script(
         "?[fr, to] <- [['FRA', 'JFK'], ['JFK', 'LAX'], ['LAX', 'YPO'], ['FRA', 'CDG'], \
          ['CDG', 'SIN']] :create route {fr, to}",
-        no_params(),
+        common::no_params(),
     )
     .expect("create route");
 
@@ -33,10 +32,10 @@ fn transitive_closure() {
             "reachable[to] := *route{fr: 'FRA', to}; \
              reachable[to] := reachable[stop], *route{fr: stop, to}; \
              ?[to] := reachable[to]",
-            no_params(),
+            common::no_params(),
         )
         .expect("transitive closure");
-    let mut dests = strs(&out, 0);
+    let mut dests = common::strs(&out, 0);
     dests.sort();
     assert_eq!(dests, vec!["CDG", "JFK", "LAX", "SIN", "YPO"]);
 }
@@ -51,13 +50,13 @@ fn transitive_closure() {
 /// through a shared ancestor at the same depth.
 #[test]
 fn same_generation() {
-    let db = fresh_db();
+    let db = common::fresh_db();
     // parent[child, parent]
     db.run_script(
         "?[child, parent] <- [['alice', 'carol'], ['bob', 'carol'], \
          ['carol', 'eve'], ['dave', 'eve'], ['carol2', 'eve2'], ['dave2', 'eve2']] \
          :create parent {child, parent}",
-        no_params(),
+        common::no_params(),
     )
     .expect("create parent");
     // The base case's reflexive set must include the ROOT ancestors too
@@ -67,7 +66,7 @@ fn same_generation() {
     db.run_script(
         "?[p] <- [['alice'], ['bob'], ['carol'], ['dave'], ['eve'], ['carol2'], ['dave2'], \
          ['eve2']] :create person {p}",
-        no_params(),
+        common::no_params(),
     )
     .expect("create person");
 
@@ -77,7 +76,7 @@ fn same_generation() {
                  sg[a, b] := *parent{child: a, parent: pa}, *parent{child: b, parent: pb}, \
                              sg[pa, pb], a != b; \
                  ?[a, b] := sg[a, b], a != b";
-    let out = db.run_script(query, no_params()).expect("same generation");
+    let out = db.run_script(query, common::no_params()).expect("same generation");
     let mut got: Vec<(String, String)> = out
         .rows()
         .iter()
@@ -112,11 +111,11 @@ fn same_generation() {
 /// cheapest one here).
 #[test]
 fn shortest_path_dijkstra() {
-    let db = fresh_db();
+    let db = common::fresh_db();
     db.run_script(
         "?[a, b, dist] <- [['FRA', 'JFK', 5000.0], ['JFK', 'LAX', 4000.0], \
          ['FRA', 'CDG', 900.0], ['CDG', 'LAX', 3000.0]] :create route {a, b => dist}",
-        no_params(),
+        common::no_params(),
     )
     .expect("create route");
 
@@ -125,7 +124,7 @@ fn shortest_path_dijkstra() {
             "start[] <- [['FRA']]; \
              end[] <- [['LAX']]; \
              ?[src, dst, cost, path] <~ ShortestPathDijkstra(*route[], start[], end[])",
-            no_params(),
+            common::no_params(),
         )
         .expect("shortest path");
     assert_eq!(out.rows().len(), 1);
@@ -141,16 +140,16 @@ fn shortest_path_dijkstra() {
 /// one isolated pair form three components.
 #[test]
 fn connected_components() {
-    let db = fresh_db();
+    let db = common::fresh_db();
     db.run_script(
         "?[a, b] <- [[1, 2], [2, 3], [3, 1], [4, 5], [5, 6], [6, 4], [7, 8]] \
          :create edge {a, b}",
-        no_params(),
+        common::no_params(),
     )
     .expect("create edge");
 
     let out = db
-        .run_script("?[node, grp] <~ ConnectedComponents(*edge[])", no_params())
+        .run_script("?[node, grp] <~ ConnectedComponents(*edge[])", common::no_params())
         .expect("connected components");
     let mut by_group: std::collections::BTreeMap<i64, Vec<i64>> = Default::default();
     for r in out.rows() {
@@ -170,25 +169,25 @@ fn connected_components() {
 /// who never submitted an assignment for it.
 #[test]
 fn stratified_negation() {
-    let db = fresh_db();
+    let db = common::fresh_db();
     db.run_script(
         "?[student, course] <- [['ada', 'algebra'], ['bob', 'algebra'], ['cid', 'algebra']] \
          :create enrolled {student, course}",
-        no_params(),
+        common::no_params(),
     )
     .expect("create enrolled");
     db.run_script(
         "?[student, course] <- [['ada', 'algebra'], ['bob', 'algebra']] \
          :create submitted {student, course}",
-        no_params(),
+        common::no_params(),
     )
     .expect("create submitted");
 
     let out = db
         .run_script(
             "?[student] := *enrolled{student, course}, not *submitted{student, course}",
-            no_params(),
+            common::no_params(),
         )
         .expect("negation");
-    assert_eq!(strs(&out, 0), vec!["cid"], "only cid never submitted");
+    assert_eq!(common::strs(&out, 0), vec!["cid"], "only cid never submitted");
 }

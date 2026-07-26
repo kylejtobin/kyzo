@@ -18,20 +18,19 @@
 //! external embedder sits at.
 
 mod common;
-use common::*;
 
 use kyzo::{DataValue, UuidWrapper, ValiditySlot, ValidityTs};
 
 #[test]
 fn every_data_type_round_trips_through_a_stored_relation() {
-    let db = fresh_db();
+    let db = common::fresh_db();
     db.run_script(
         "?[id, i, f, s, b, by, l, u, j, val, iv] <- [[1, 42, 3.5, 'hello', true, \
          'aGk=', [1, 2, 3], '550e8400-e29b-41d4-a716-446655440000', \
          parse_json('{\"a\": 1}'), validity(100, true), make_interval(10, 20)]] \
          :create allt {id => i: Int, f: Float, s: String, b: Bool, by: Bytes, \
          l: [Int], u: Uuid, j: Json, val: Validity, iv}",
-        no_params(),
+        common::no_params(),
     )
     .expect("create allt");
 
@@ -40,7 +39,7 @@ fn every_data_type_round_trips_through_a_stored_relation() {
             "?[i, f, s, b, by, l, u, j, val, istart, iend] := \
              *allt{id, i, f, s, b, by, l, u, j, val, iv}, \
              istart = interval_start(iv), iend = interval_end(iv)",
-            no_params(),
+            common::no_params(),
         )
         .expect("scan allt");
     assert_eq!(out.rows().len(), 1);
@@ -81,16 +80,16 @@ fn every_data_type_round_trips_through_a_stored_relation() {
 /// timestamp — the polarity is part of the value, not a side channel.
 #[test]
 fn validity_polarity_is_part_of_the_value() {
-    let db = fresh_db();
+    let db = common::fresh_db();
     db.run_script(
         "?[id, val] <- [[1, validity(100, true)], [2, validity(100, false)]] \
          :create v {id => val: Validity}",
-        no_params(),
+        common::no_params(),
     )
     .expect("create v");
 
     let out = db
-        .run_script("?[id, val] := *v{id, val}", no_params())
+        .run_script("?[id, val] := *v{id, val}", common::no_params())
         .expect("scan v");
     let asserted = DataValue::Validity(ValiditySlot::from_stored(ValidityTs::of_micros(100), true));
     let retracted =
@@ -111,17 +110,17 @@ fn validity_polarity_is_part_of_the_value() {
 /// would write).
 #[test]
 fn vector_round_trips_through_a_stored_relation() {
-    let db = fresh_db();
+    let db = common::fresh_db();
     db.run_script(
         "?[id, v] <- [[1, vec([1.0, 2.0, 3.0])]] :create vt {id => v: <F32; 3>}",
-        no_params(),
+        common::no_params(),
     )
     .expect("create vt");
 
     let out = db
         .run_script(
             "?[same] := *vt{id: 1, v}, same = (v == vec([1.0, 2.0, 3.0]))",
-            no_params(),
+            common::no_params(),
         )
         .expect("vector equality check");
     assert_eq!(
@@ -133,7 +132,7 @@ fn vector_round_trips_through_a_stored_relation() {
     let out2 = db
         .run_script(
             "?[same] := *vt{id: 1, v}, same = (v == vec([9.0, 9.0, 9.0]))",
-            no_params(),
+            common::no_params(),
         )
         .expect("vector inequality check");
     assert_eq!(
@@ -150,14 +149,14 @@ fn vector_round_trips_through_a_stored_relation() {
 /// corpus, which only inserted 3.5 into Float and 42 into Int.
 #[test]
 fn integral_float_coerces_into_an_int_column() {
-    let db = fresh_db();
+    let db = common::fresh_db();
     db.run_script(
         "?[id, n] <- [[1, 3.0], [2, -7.0], [3, 42]] :create ic {id => n: Int}",
-        no_params(),
+        common::no_params(),
     )
-    .expect("integral floats coerce into an Int column");
+    .expect("integral common::floats coerce into an Int column");
     let out = db
-        .run_script("?[id, n] := *ic{id, n} :order id", no_params())
+        .run_script("?[id, n] := *ic{id, n} :order id", common::no_params())
         .expect("scan");
     let got: Vec<(i64, i64)> = out
         .rows()
@@ -167,11 +166,11 @@ fn integral_float_coerces_into_an_int_column() {
     assert_eq!(
         got,
         vec![(1, 3), (2, -7), (3, 42)],
-        "integral floats stored as ints"
+        "integral common::floats stored as common::ints"
     );
     // A NON-integral float into an Int column is still refused.
     let err = db
-        .run_script("?[id, n] <- [[9, 3.5]] :put ic {id => n: Int}", no_params())
+        .run_script("?[id, n] <- [[9, 3.5]] :put ic {id => n: Int}", common::no_params())
         .expect_err("a non-integral float must not silently truncate into an Int column");
     assert!(
         format!("{err:?}").contains("coercion"),

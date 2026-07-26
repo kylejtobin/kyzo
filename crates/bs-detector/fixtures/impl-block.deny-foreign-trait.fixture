@@ -1,0 +1,5 @@
+impl Display for Span {
+    fn fmt(self, f: Formatter) -> Formatted {
+        Formatted::of(self)
+    }
+}

@@ -1,0 +1,3 @@
+fn main(config: Config) {
+    Engine::boot(config).serve()
+}

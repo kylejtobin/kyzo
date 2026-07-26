@@ -1,0 +1,9 @@
+enum PortRefusal {
+    Reserved,
+}
+
+impl Port {
+    fn new(raw: PortNumber) -> Result<Self, PortRefusal> {
+        Ok(Self(raw.parse().unwrap()))
+    }
+}

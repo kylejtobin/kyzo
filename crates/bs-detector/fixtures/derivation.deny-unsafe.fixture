@@ -1,0 +1,5 @@
+impl Span {
+    unsafe fn width(&self) -> Width {
+        Width::between(self.start, self.end)
+    }
+}

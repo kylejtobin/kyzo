@@ -1,0 +1,11 @@
+struct Ledger(u64);
+
+impl Ledger {
+    fn head(&self) -> Ledger {
+        Self::helper()
+    }
+
+    fn helper() -> Ledger {
+        Ledger(File::open("x"))
+    }
+}

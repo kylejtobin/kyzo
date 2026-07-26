@@ -1,0 +1,23 @@
+struct Offset(u64);
+struct Width(u64);
+
+struct Span {
+    start: Offset,
+    end: Offset,
+}
+
+impl Width {
+    fn between(start: Offset, end: Offset) -> Result<Self, WidthRefusal> {
+        Ok(Width(0))
+    }
+}
+
+enum WidthRefusal {
+    Inverted,
+}
+
+impl Span {
+    fn width(&self) -> Result<Width, WidthRefusal> {
+        Width::between(self.start, self.end)
+    }
+}

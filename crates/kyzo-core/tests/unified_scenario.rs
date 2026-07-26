@@ -21,11 +21,10 @@
 //! distance per topic (aggregation) — one query, four access paths.
 
 mod common;
-use common::*;
 
 #[test]
 fn graph_vector_text_and_aggregation_compose_in_one_query() {
-    let db = fresh_db();
+    let db = common::fresh_db();
 
     // Six articles; a citation edge is "cites" (a cites b).
     db.run_script(
@@ -37,24 +36,24 @@ fn graph_vector_text_and_aggregation_compose_in_one_query() {
            [5, 'ml', 'a search engine ranking algorithm', vec([0.1, 0.9])], \
            [6, 'net', 'network routing protocols overview', vec([0.5, 0.5])] \
          ] :create article {id => topic, body: String, v: <F32; 2>}",
-        no_params(),
+        common::no_params(),
     )
     .expect("create article");
     db.run_script(
         "?[a, b] <- [[1, 2], [2, 3], [1, 4], [4, 5], [5, 6]] :create cites {a, b}",
-        no_params(),
+        common::no_params(),
     )
     .expect("create cites");
 
     db.run_script(
         "::fts create article:txt {extractor: body, tokenizer: Simple}",
-        no_params(),
+        common::no_params(),
     )
     .expect("fts create");
     db.run_script(
         "::hnsw create article:emb {fields: [v], dim: 2, m: 16, ef_construction: 32, \
           distance: L2}",
-        no_params(),
+        common::no_params(),
     )
     .expect("hnsw create");
 
@@ -77,7 +76,7 @@ fn graph_vector_text_and_aggregation_compose_in_one_query() {
                      candidate[id], \
                      *article{id, topic}, \
                      ~article:emb{id | query: vec([1.0, 0.0]), k: 10, bind_distance: dist}";
-    let out = db.run_script(query, no_params()).expect("unified query");
+    let out = db.run_script(query, common::no_params()).expect("unified query");
 
     let mut got: Vec<(String, i64, f64)> = out
         .rows()

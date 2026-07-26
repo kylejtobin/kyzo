@@ -1,0 +1,9 @@
+trait Encode {
+    fn encode(self, out: ByteSink) -> ByteSink;
+}
+
+impl Encode for Span {
+    fn encode(self, out: ByteSink) -> ByteSink {
+        out.absorb(self)
+    }
+}

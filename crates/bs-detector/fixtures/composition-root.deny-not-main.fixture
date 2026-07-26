@@ -1,0 +1,4 @@
+fn boot_everything() {
+    let home = env::var("KYZO_HOME");
+    Engine::boot(home).serve()
+}

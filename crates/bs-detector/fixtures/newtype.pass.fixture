@@ -1,0 +1,1 @@
+struct Entries(Vec<Entry>);

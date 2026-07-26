@@ -1,0 +1,14 @@
+struct Page(u64);
+struct Cursor(Page);
+
+impl Cursor {
+    fn head(&self) -> Page {
+        self.0.opened()
+    }
+}
+
+impl Page {
+    fn opened(&self) -> Page {
+        File::open("x")
+    }
+}

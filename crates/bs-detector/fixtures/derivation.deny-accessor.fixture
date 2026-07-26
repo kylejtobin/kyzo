@@ -1,0 +1,5 @@
+impl Span {
+    fn start(&self) -> Offset {
+        self.start
+    }
+}

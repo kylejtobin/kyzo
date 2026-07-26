@@ -1,0 +1,3 @@
+struct Cursor<'brand> {
+    page: &'brand PageRef,
+}

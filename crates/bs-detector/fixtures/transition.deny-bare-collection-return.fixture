@@ -1,0 +1,12 @@
+struct Timestamp(u64);
+struct Ledger(u64);
+
+struct SealedLedger {
+    at: Timestamp,
+}
+
+impl Ledger {
+    fn seal(self, clock: Timestamp) -> Vec<SealedLedger> {
+        Vec::new()
+    }
+}

@@ -179,5 +179,5 @@ gratitude for the foundation it began from. Full story and attribution: [FORK.md
 ## License
 
 Multi-licensed; **[LICENSING.md](LICENSING.md)** is the authoritative map. Engine/hosts are
-[MPL-2.0](LICENSE-MPL); agent tooling under `.claude/` is [BSL-1.1](LICENSE-BSL). See
+[MPL-2.0](LICENSE-MPL); agent tooling under `.claude/` and `crates/bs-detector/` is [BSL-1.1](LICENSE-BSL). See
 [CONTRIBUTING.md](CONTRIBUTING.md).

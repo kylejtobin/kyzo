@@ -1,0 +1,3 @@
+struct Span {
+    start: &Offset,
+}

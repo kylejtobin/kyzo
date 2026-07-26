@@ -1,0 +1,4 @@
+struct Span {
+    entries: Vec<Entry>,
+    end: Offset,
+}

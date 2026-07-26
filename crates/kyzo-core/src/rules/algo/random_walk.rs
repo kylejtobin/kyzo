@@ -32,7 +32,7 @@ use itertools::Itertools;
 use miette::{Result, bail, ensure};
 use rand::distr::Distribution;
 use rand::distr::weighted::WeightedIndex;
-use rand::prelude::*;
+use rand::seq::IndexedRandom;
 
 use crate::rules::contract::{
     BadExprValueError, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,

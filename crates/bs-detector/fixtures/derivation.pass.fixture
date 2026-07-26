@@ -1,0 +1,11 @@
+struct Ledger(u64);
+
+impl Ledger {
+    fn insert(&self) -> Ledger {
+        self.next()
+    }
+
+    fn next(&self) -> Ledger {
+        Ledger(0)
+    }
+}

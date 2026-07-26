@@ -1,0 +1,9 @@
+trait Encode: private::Sealed {
+    fn encode(self, out: ByteSink) -> ByteSink;
+}
+
+unsafe impl Encode for Span {
+    fn encode(self, out: ByteSink) -> ByteSink {
+        out.absorb(self)
+    }
+}

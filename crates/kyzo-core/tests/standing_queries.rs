@@ -18,7 +18,6 @@
 //! registration — plus an explicit no-duplicate-key check.
 
 mod common;
-use common::*;
 
 use kyzo::{DataValue, Tuple};
 
@@ -38,24 +37,24 @@ fn sorted_rows(rows: impl IntoIterator<Item = Tuple>) -> Vec<Tuple> {
 /// ONCE (not twice, old value alongside new).
 #[test]
 fn multiple_commits_between_one_poll_match_a_fresh_recompute() {
-    let db = fresh_db();
-    db.run_script(":create q {k: Int => v: Int}", no_params())
+    let db = common::fresh_db();
+    db.run_script(":create q {k: Int => v: Int}", common::no_params())
         .expect("create q");
 
     let query = "?[k, v] := *q[k, v]";
-    let mut sq = db.register_standing(query, no_params()).expect("register");
+    let mut sq = db.register_standing(query, common::no_params()).expect("register");
     assert!(sq.current_answer().is_empty(), "nothing written yet");
 
     // Five real commits, all before the one poll below:
-    db.run_script("?[k, v] <- [[1, 10]] :put q {k, v}", no_params())
+    db.run_script("?[k, v] <- [[1, 10]] :put q {k, v}", common::no_params())
         .expect("put k=1 v=10");
-    db.run_script("?[k, v] <- [[1, 20]] :put q {k, v}", no_params())
+    db.run_script("?[k, v] <- [[1, 20]] :put q {k, v}", common::no_params())
         .expect("correct k=1 to v=20");
-    db.run_script("?[k, v] <- [[2, 5]] :put q {k, v}", no_params())
+    db.run_script("?[k, v] <- [[2, 5]] :put q {k, v}", common::no_params())
         .expect("put k=2 v=5");
-    db.run_script("?[k] <- [[2]] :rm q {k}", no_params())
+    db.run_script("?[k] <- [[2]] :rm q {k}", common::no_params())
         .expect("rm k=2 (nets to nothing)");
-    db.run_script("?[k, v] <- [[3, 7]] :put q {k, v}", no_params())
+    db.run_script("?[k, v] <- [[3, 7]] :put q {k, v}", common::no_params())
         .expect("put k=3 v=7");
 
     let deltas = sq.apply_pending().expect("apply_pending");
@@ -66,7 +65,7 @@ fn multiple_commits_between_one_poll_match_a_fresh_recompute() {
 
     let maintained = sorted_rows(sq.current_answer().iter().cloned());
     let fresh = sorted_rows(
-        db.run_script(query, no_params())
+        db.run_script(query, common::no_params())
             .expect("fresh recompute")
             .rows()
             .iter()
@@ -110,17 +109,17 @@ fn multiple_commits_between_one_poll_match_a_fresh_recompute() {
 /// multi-commit drain before the one poll.
 #[test]
 fn standing_query_recomputes_min_after_retracting_it_mid_batch() {
-    let db = fresh_db();
-    db.run_script(":create p {x: Int, y: Int =>}", no_params())
+    let db = common::fresh_db();
+    db.run_script(":create p {x: Int, y: Int =>}", common::no_params())
         .expect("create p");
     db.run_script(
         "?[x, y] <- [[1, 10], [1, 20], [1, 30]] :put p {x, y}",
-        no_params(),
+        common::no_params(),
     )
     .expect("seed x=1 with y in {10,20,30}");
 
     let query = "?[x, min(y)] := *p[x, y]";
-    let mut sq = db.register_standing(query, no_params()).expect("register");
+    let mut sq = db.register_standing(query, common::no_params()).expect("register");
     let expected_initial = sorted_rows([Tuple::from_vec(vec![
         DataValue::from(1),
         DataValue::from(10),
@@ -133,16 +132,16 @@ fn standing_query_recomputes_min_after_retracting_it_mid_batch() {
 
     // In one drain: retract the current min (10), AND bring in a brand
     // new group (x=2).
-    db.run_script("?[x, y] <- [[1, 10]] :rm p {x, y}", no_params())
+    db.run_script("?[x, y] <- [[1, 10]] :rm p {x, y}", common::no_params())
         .expect("retract the current min");
-    db.run_script("?[x, y] <- [[2, 5]] :put p {x, y}", no_params())
+    db.run_script("?[x, y] <- [[2, 5]] :put p {x, y}", common::no_params())
         .expect("a brand new group appears");
 
     sq.apply_pending().expect("apply_pending");
 
     let maintained = sorted_rows(sq.current_answer().iter().cloned());
     let fresh = sorted_rows(
-        db.run_script(query, no_params())
+        db.run_script(query, common::no_params())
             .expect("fresh recompute")
             .rows()
             .iter()

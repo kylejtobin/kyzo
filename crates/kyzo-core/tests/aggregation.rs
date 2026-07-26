@@ -13,17 +13,16 @@
 //! and confirming a fresh query recomputes it, not a stale cached value).
 
 mod common;
-use common::*;
 
 /// Wrapping a head variable in an aggregation function replaces GROUP BY;
 /// grouping is implicit over the bare head variables.
 #[test]
 fn grouped_count_sum_min_max_mean() {
-    let db = fresh_db();
+    let db = common::fresh_db();
     db.run_script(
         "?[dept, salary] <- [['math', 100], ['math', 200], ['math', 300], ['compsci', 500]] \
          :create emp {dept, salary}",
-        no_params(),
+        common::no_params(),
     )
     .expect("create emp");
 
@@ -31,7 +30,7 @@ fn grouped_count_sum_min_max_mean() {
         .run_script(
             "?[dept, count(salary), sum(salary), min(salary), max(salary), mean(salary)] := \
              *emp{dept, salary}",
-            no_params(),
+            common::no_params(),
         )
         .expect("grouped aggregation");
     let mut got: Vec<(String, i64, i64, i64, i64, f64)> = out
@@ -62,17 +61,17 @@ fn grouped_count_sum_min_max_mean() {
 /// relation.
 #[test]
 fn global_aggregation() {
-    let db = fresh_db();
+    let db = common::fresh_db();
     db.run_script(
         "?[x] <- [[10], [20], [30], [40]] :create nums {x}",
-        no_params(),
+        common::no_params(),
     )
     .expect("create nums");
 
     let out = db
         .run_script(
             "?[count(x), sum(x), min(x), max(x)] := *nums{x}",
-            no_params(),
+            common::no_params(),
         )
         .expect("global aggregation");
     assert_eq!(out.rows().len(), 1);
@@ -87,16 +86,16 @@ fn global_aggregation() {
 /// we're pinning here.
 #[test]
 fn collect_aggregation() {
-    let db = fresh_db();
+    let db = common::fresh_db();
     db.run_script(
         "?[dept, name] <- [['math', 'Ada'], ['math', 'Alan'], ['compsci', 'Grace']] \
          :create emp {dept, name}",
-        no_params(),
+        common::no_params(),
     )
     .expect("create emp");
 
     let out = db
-        .run_script("?[dept, collect(name)] := *emp{dept, name}", no_params())
+        .run_script("?[dept, collect(name)] := *emp{dept, name}", common::no_params())
         .expect("collect");
     let mut got: Vec<(String, Vec<String>)> = out
         .rows()
@@ -132,24 +131,24 @@ fn collect_aggregation() {
 /// stale value (there is no incremental "subtract from running min").
 #[test]
 fn min_recomputes_after_retracting_the_current_minimum() {
-    let db = fresh_db();
+    let db = common::fresh_db();
     db.run_script(
         "?[x, y] <- [[1, 10], [1, 20], [1, 30]] :create p {x, y}",
-        no_params(),
+        common::no_params(),
     )
     .expect("create p");
 
     let out = db
-        .run_script("?[x, min(y)] := *p{x, y}", no_params())
+        .run_script("?[x, min(y)] := *p{x, y}", common::no_params())
         .expect("initial min");
     assert_eq!(out.rows()[0][1].get_int(), Some(10), "min starts at 10");
 
     // Retract the row holding the current min (10).
-    db.run_script("?[x, y] <- [[1, 10]] :rm p {x, y}", no_params())
+    db.run_script("?[x, y] <- [[1, 10]] :rm p {x, y}", common::no_params())
         .expect("rm the min row");
 
     let out = db
-        .run_script("?[x, min(y)] := *p{x, y}", no_params())
+        .run_script("?[x, min(y)] := *p{x, y}", common::no_params())
         .expect("recomputed min");
     assert_eq!(
         out.rows()[0][1].get_int(),
@@ -158,19 +157,19 @@ fn min_recomputes_after_retracting_the_current_minimum() {
     );
 
     // Retract the new min too, leaving only 30 — a single-row group.
-    db.run_script("?[x, y] <- [[1, 20]] :rm p {x, y}", no_params())
+    db.run_script("?[x, y] <- [[1, 20]] :rm p {x, y}", common::no_params())
         .expect("rm the new min row");
     let out = db
-        .run_script("?[x, min(y)] := *p{x, y}", no_params())
+        .run_script("?[x, min(y)] := *p{x, y}", common::no_params())
         .expect("recomputed min again");
     assert_eq!(out.rows()[0][1].get_int(), Some(30));
 
     // Retract the last row: the group itself must vanish, not report
     // min of nothing.
-    db.run_script("?[x, y] <- [[1, 30]] :rm p {x, y}", no_params())
+    db.run_script("?[x, y] <- [[1, 30]] :rm p {x, y}", common::no_params())
         .expect("rm the last row");
     let out = db
-        .run_script("?[x, min(y)] := *p{x, y}", no_params())
+        .run_script("?[x, min(y)] := *p{x, y}", common::no_params())
         .expect("empty relation");
     assert!(out.rows().is_empty(), "an empty group must vanish entirely");
 }

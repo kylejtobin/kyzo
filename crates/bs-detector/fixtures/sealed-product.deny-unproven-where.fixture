@@ -1,0 +1,10 @@
+trait Bound: private::Sealed {
+    fn tag(self) -> Tag;
+}
+
+struct Span<T>
+where
+    T: Missing,
+{
+    start: T,
+}

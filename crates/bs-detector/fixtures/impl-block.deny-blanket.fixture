@@ -1,0 +1,9 @@
+trait Encode: private::Sealed {
+    fn encode(self, out: ByteSink) -> ByteSink;
+}
+
+impl<T> Encode for T {
+    fn encode(self, out: ByteSink) -> ByteSink {
+        out.absorb(self)
+    }
+}

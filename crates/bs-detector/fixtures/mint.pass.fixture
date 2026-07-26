@@ -1,0 +1,25 @@
+struct PortNumber(u16);
+
+enum Reservation {
+    Held,
+    Free,
+}
+
+enum PortRefusal {
+    Reserved,
+}
+
+impl PortNumber {
+    fn reservation(&self) -> Reservation {
+        Reservation::Free
+    }
+}
+
+impl Port {
+    fn new(raw: PortNumber) -> Result<Self, PortRefusal> {
+        match raw.reservation() {
+            Reservation::Held => Err(PortRefusal::Reserved),
+            Reservation::Free => Ok(Self(raw)),
+        }
+    }
+}

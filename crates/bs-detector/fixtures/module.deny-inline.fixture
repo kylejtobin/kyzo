@@ -1,0 +1,5 @@
+mod tests {
+    fn helper() -> Helper {
+        Helper::new()
+    }
+}

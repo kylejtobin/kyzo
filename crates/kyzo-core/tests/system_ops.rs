@@ -13,23 +13,22 @@
 //! actual `NamedRows` headers and rows, not just "it didn't error".
 
 mod common;
-use common::*;
 
 /// `::relations` lists every stored relation with its name and arity;
 /// `::columns <rel>` lists one relation's columns and which are keys.
 #[test]
 fn relations_and_columns_listing() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let db = fresh_db();
+    let db = common::fresh_db();
     db.run_script(
         "?[id, name, age] <- [[1, 'Ada', 36]] :create person {id => name, age}",
-        no_params(),
+        common::no_params(),
     )
     .expect("create person");
-    db.run_script("?[a, b] <- [[1, 2]] :create edge {a, b}", no_params())
+    db.run_script("?[a, b] <- [[1, 2]] :create edge {a, b}", common::no_params())
         .expect("create edge");
 
     let rels = db
-        .run_script("::relations", no_params())
+        .run_script("::relations", common::no_params())
         .expect("::relations");
     assert_eq!(rels.headers(), vec!["name", "arity", "access_level"]);
     let mut names: Vec<String> = rels
@@ -52,7 +51,7 @@ fn relations_and_columns_listing() -> Result<(), Box<dyn std::error::Error + Sen
     }
 
     let cols = db
-        .run_script("::columns person", no_params())
+        .run_script("::columns person", common::no_params())
         .expect("::columns");
     assert_eq!(cols.headers(), vec!["column", "is_key"]);
     let mut got: Vec<(String, bool)> = cols
@@ -83,18 +82,18 @@ fn relations_and_columns_listing() -> Result<(), Box<dyn std::error::Error + Sen
 /// three, not just checking each op returns `Ok`.
 #[test]
 fn index_create_list_and_drop() {
-    let db = fresh_db();
+    let db = common::fresh_db();
     db.run_script(
         "?[id, v] <- [[1, 10], [2, 20], [3, 10]] :create t {id => v}",
-        no_params(),
+        common::no_params(),
     )
     .expect("create t");
 
-    db.run_script("::index create t:by_v {v}", no_params())
+    db.run_script("::index create t:by_v {v}", common::no_params())
         .expect("::index create");
 
     let idxs = db
-        .run_script("::indices t", no_params())
+        .run_script("::indices t", common::no_params())
         .expect("::indices");
     assert_eq!(idxs.headers(), vec!["name", "kind"]);
     let names: Vec<String> = idxs
@@ -117,14 +116,14 @@ fn index_create_list_and_drop() {
     // The index doesn't change ordinary query results — same rows either
     // way, it's an acceleration structure, not a second source of truth.
     let out = db
-        .run_script("?[id] := *t{id, v}, v = 10 :order id", no_params())
+        .run_script("?[id] := *t{id, v}, v = 10 :order id", common::no_params())
         .expect("scan using the indexed column");
-    assert_eq!(ints(&out, 0), vec![1, 3]);
+    assert_eq!(common::ints(&out, 0), vec![1, 3]);
 
-    db.run_script("::index drop t:by_v", no_params())
+    db.run_script("::index drop t:by_v", common::no_params())
         .expect("::index drop");
     let idxs_after = db
-        .run_script("::indices t", no_params())
+        .run_script("::indices t", common::no_params())
         .expect("::indices after drop");
     let names_after: Vec<String> = idxs_after
         .rows()
@@ -138,7 +137,7 @@ fn index_create_list_and_drop() {
 
     // Data itself is untouched by the drop.
     let out = db
-        .run_script("?[id] := *t{id, v}, v = 10 :order id", no_params())
+        .run_script("?[id] := *t{id, v}, v = 10 :order id", common::no_params())
         .expect("scan after drop");
-    assert_eq!(ints(&out, 0), vec![1, 3]);
+    assert_eq!(common::ints(&out, 0), vec![1, 3]);
 }

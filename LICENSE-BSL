@@ -4,9 +4,10 @@ Parameters
 
 Licensor:             Kyzo
 Licensed Work:        The parts of this repository designated as BSL-licensed in
-                      LICENSING.md — currently the `mcp/` directory (the KyzoDB
-                      MCP server and the codegraph code lens) and the `.claude/`
-                      directory (the KyzoDB agent tooling).
+                      LICENSING.md — currently `.claude/` (agent tooling),
+                      `CLAUDE.md`, `docs/`, and `crates/bs-detector/` (the
+                      conduct gate), plus the KyzoDB MCP server and codegraph
+                      code lens in their own repositories.
                       The Licensed Work is © 2026 Kyzo.
 Additional Use Grant: You may use, copy, modify, and create derivative works of
                       the Licensed Work for any non-production purpose,

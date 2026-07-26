@@ -1,0 +1,3 @@
+trait Encode: private::Sealed {
+    fn validate(self, out: ByteSink) -> ByteSink;
+}

@@ -1,0 +1,6 @@
+use std::marker::PhantomData;
+
+struct Cursor<'brand> {
+    pub page: &'brand PageRef,
+    brand: PhantomData<&'brand ()>,
+}

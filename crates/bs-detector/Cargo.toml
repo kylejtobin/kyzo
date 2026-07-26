@@ -1,0 +1,20 @@
+[package]
+name = "bs-detector"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+# BSL-1.1 — original agent/dev tooling; see LICENSING.md. Not workspace MPL.
+license = "BUSL-1.1"
+publish = false
+description = "Enumerates the only shapes a max-purity Rust program may contain, and refuses everything else. Two rules: totality (every item under crates/ classifies as exactly one construct in the closed set, or it is red) and interior discipline (each construct declares what may not appear inside its cell; a construct that refuses nothing is unconstructible). No waivers, no baseline, no partial scope. Dev tooling, never shipped — but a workspace member ON PURPOSE: the detector lives inside its own boundary and scans itself."
+
+[dependencies]
+# Pinned exactly. `ItemKind` is a closed mirror of `syn::Item`'s variant set;
+# a syn bump can add a variant that lands in `ItemKind::Unknown` and reports as
+# a violation until the map is updated. `syn_pin_is_exact` fails if this `=`
+# is ever loosened, so the mirror cannot drift silently behind a caret range.
+syn = { version = "=2.0.118", features = ["full", "visit", "extra-traits"] }
+# span-locations: Span::start() gives real file line numbers when run as a
+# plain binary (never a proc-macro) — every refusal reports file:line off it.
+proc-macro2 = { version = "1", features = ["span-locations"] }
+walkdir = "2"

@@ -1,0 +1,9 @@
+trait Bound: private::Sealed {
+    fn tag(self) -> Tag;
+}
+
+impl<T> Bound for Span {
+    fn tag(self) -> Tag {
+        Tag::of(self)
+    }
+}
