@@ -603,15 +603,14 @@ pub enum KeyShape {
     Fixed(nat),
     /// Escaped form: `0x00 -> 0x00 0xFF`, terminated `0x00 0x00`.
     Escaped,
-    /// One flags byte, then the escaped form. Regex.
-    FlagsThenEscaped,
+    /// Escaped content, then one flags byte. A regex is identified by its
+    /// pattern, so the pattern sorts first and the flags are the tie-break.
+    EscapedThenFlags,
     /// The first payload byte selects the remaining width. Num.
     ClassLed,
-    /// `u32` big-endian count, then that many Num keys. Vector.
-    CountLed,
     /// The bounded-interval grammar.
     IntervalShape,
-    /// The JSON marker grammar, then eight bytes of trailing hash.
+    /// The JSON marker grammar.
     JsonShape,
     /// A row of complete encodings, terminated by `STRUCT_END`.
     Sequence,
@@ -622,14 +621,15 @@ pub enum KeyShape {
 /// sequence terminator sort below every element.
 pub open spec fn shape_of(t: u8) -> Option<KeyShape> {
     if t == 0x05u8 { Some(KeyShape::Fixed(0nat)) }           // Null
-    else if t == 0x08u8 { Some(KeyShape::Fixed(1nat)) }      // Bool
+    else if t == 0x08u8 { Some(KeyShape::Fixed(0nat)) }      // False
+    else if t == 0x09u8 { Some(KeyShape::Fixed(0nat)) }      // True
     else if t == 0x10u8 { Some(KeyShape::ClassLed) }         // Num
     else if t == 0x18u8 { Some(KeyShape::Escaped) }          // Str
     else if t == 0x20u8 { Some(KeyShape::Escaped) }          // Bytes
     else if t == 0x28u8 { Some(KeyShape::Fixed(16nat)) }     // Uuid
-    else if t == 0x30u8 { Some(KeyShape::FlagsThenEscaped) } // Regex
+    else if t == 0x30u8 { Some(KeyShape::EscapedThenFlags) } // Regex
     else if t == 0x38u8 { Some(KeyShape::JsonShape) }        // Json
-    else if t == 0x40u8 { Some(KeyShape::CountLed) }         // Vector
+    else if t == 0x40u8 { Some(KeyShape::Fixed(32nat)) }     // Vector
     else if t == 0x48u8 { Some(KeyShape::Sequence) }         // List
     else if t == 0x50u8 { Some(KeyShape::Sequence) }         // Set
     else if t == 0x58u8 { Some(KeyShape::Fixed(9nat)) }      // Validity
@@ -646,8 +646,11 @@ pub open spec fn is_seq_tag(t: u8) -> bool {
 
 /// Width selected by a number's class byte: zero and NaN carry only the repr
 /// tie-break; a signed magnitude carries exponent, fraction, and tie-break.
+/// Zero carries only the representation tie-break; a signed magnitude carries
+/// exponent, fraction, and tie-break. There is no NaN class: NaN is not a real
+/// and the mint refuses it, so no ordering convention has to be invented for it.
 pub open spec fn class_led_width(first: u8) -> int {
-    if first == 0x02u8 || first == 0x04u8 { 2 }
+    if first == 0x02u8 { 2 }
     else if first == 0x01u8 || first == 0x03u8 { 13 }
     else { -1 }
 }
@@ -688,26 +691,6 @@ pub const LO_AT: u8 = 0x02;
 pub const HI_AT: u8 = 0x02;
 /// Upper end, positive infinity: above every instant.
 pub const HI_UNBOUNDED: u8 = 0x03;
-
-pub open spec fn be32(p: Seq<u8>) -> nat {
-    (p[0] as nat) * 16777216 + (p[1] as nat) * 65536 + (p[2] as nat) * 256 + (p[3] as nat)
-}
-
-/// Components are the eight-byte IEEE total-order transform, fixed stride.
-///
-/// `DataValue::cmp` orders a Vector by dimension, then component-wise under
-/// `Num`'s float order. `Num`'s float order is NOT IEEE `totalOrder` in general
-/// — it places every NaN in one greatest class and collapses `-0.0` with
-/// `+0.0`. `Vector::admit` normalises `-0.0` to `+0.0` and to one canonical
-/// NaN, and under that invariant the two orders coincide, so eight bytes carry
-/// the same order thirteen did.
-pub open spec fn vector_end(p: Seq<u8>) -> int {
-    if p.len() < 4 { -1 }
-    else {
-        let need = 4 + 8 * be32(p);
-        if p.len() >= need { need as int } else { -1 }
-    }
-}
 
 /// The lower end: unbounded is negative infinity, the minimum, so its marker
 /// sorts below every bounded one.
@@ -792,16 +775,13 @@ pub open spec fn key_end(t: u8, payload: Seq<u8>) -> int {
     match shape_of(t) {
         Some(KeyShape::Fixed(n)) => if payload.len() >= n { n as int } else { -1 },
         Some(KeyShape::Escaped) => esc_end(payload),
-        Some(KeyShape::FlagsThenEscaped) =>
-            if payload.len() == 0 { -1 }
-            else { let r = esc_end(payload.skip(1)); if r <= 0 { -1 } else { 1 + r } },
-        Some(KeyShape::ClassLed) => num_end(payload),
-        Some(KeyShape::CountLed) => vector_end(payload),
-        Some(KeyShape::IntervalShape) => interval_end(payload),
-        Some(KeyShape::JsonShape) => {
-            let r = json_end(payload);
-            if r <= 0 || payload.len() < r + 8 { -1 } else { r + 8 }
+        Some(KeyShape::EscapedThenFlags) => {
+            let r = esc_end(payload);
+            if r <= 0 || payload.len() < r + 1 { -1 } else { r + 1 }
         }
+        Some(KeyShape::ClassLed) => num_end(payload),
+        Some(KeyShape::IntervalShape) => interval_end(payload),
+        Some(KeyShape::JsonShape) => json_end(payload),
         Some(KeyShape::Sequence) => -1,
         None => -1,
     }
@@ -850,17 +830,6 @@ proof fn lemma_num_end_local(a: Seq<u8>, b: Seq<u8>)
     requires is_prefix(a, b), 0 <= num_end(a) <= a.len()
     ensures num_end(b) == num_end(a)
 { lemma_prefix_index(a, b, 0); }
-
-proof fn lemma_vector_end_local(a: Seq<u8>, b: Seq<u8>)
-    requires is_prefix(a, b), 0 <= vector_end(a) <= a.len()
-    ensures vector_end(b) == vector_end(a)
-{
-    lemma_prefix_index(a, b, 0);
-    lemma_prefix_index(a, b, 1);
-    lemma_prefix_index(a, b, 2);
-    lemma_prefix_index(a, b, 3);
-    assert(be32(a) == be32(b));
-}
 
 proof fn lemma_interval_end_local(a: Seq<u8>, b: Seq<u8>)
     requires is_prefix(a, b), 0 <= interval_end(a) <= a.len()
@@ -937,12 +906,8 @@ pub proof fn lemma_kind_local()
         implies #[trigger] key_end(t, b) == #[trigger] key_end(t, a) by {
         match shape_of(t) {
             Some(KeyShape::Escaped) => { lemma_esc_end_local(a, b); }
-            Some(KeyShape::FlagsThenEscaped) => {
-                lemma_prefix_skip(a, b, 1);
-                lemma_esc_end_local(a.skip(1), b.skip(1));
-            }
+            Some(KeyShape::EscapedThenFlags) => { lemma_esc_end_local(a, b); }
             Some(KeyShape::ClassLed) => { lemma_num_end_local(a, b); }
-            Some(KeyShape::CountLed) => { lemma_vector_end_local(a, b); }
             Some(KeyShape::IntervalShape) => { lemma_interval_end_local(a, b); }
             Some(KeyShape::JsonShape) => { lemma_json_end_local(a, b); }
             _ => {}
@@ -1806,47 +1771,49 @@ impl KindKey for ClassLedKey {
 }
 
 /// One flags byte, then escaped content. Regex mints here.
-// CONSTRUCT: SealedProduct FlagsEscapedKey
-pub struct FlagsEscapedKey {
+// CONSTRUCT: SealedProduct EscapedFlagsKey
+pub struct EscapedFlagsKey {
     tag: u8,
     bytes: Vec<u8>,
 }
 
-// CONSTRUCT: ImplBlock FlagsEscapedKey
-impl FlagsEscapedKey {
+// CONSTRUCT: ImplBlock EscapedFlagsKey
+impl EscapedFlagsKey {
     #[verifier::type_invariant]
     closed spec fn wf_key(self) -> bool {
         self.tag >= TAG_MIN
-        && shape_of(self.tag) == Some(KeyShape::FlagsThenEscaped)
+        && shape_of(self.tag) == Some(KeyShape::EscapedThenFlags)
         && self.bytes@.len() > 0
-        && exists|c: Seq<u8>| self.bytes@.skip(1) =~= enc_bytes(c)
+        && exists|c: Seq<u8>| self.bytes@ =~= enc_bytes(c) + seq![self.bytes@.last()]
     }
 
-    pub fn mint(tag: u8, flags: u8, content: &[u8]) -> (r: FlagsEscapedKey)
-        requires tag >= TAG_MIN, shape_of(tag) == Some(KeyShape::FlagsThenEscaped)
-        ensures r.key() =~= seq![flags] + enc_bytes(content@), r.tag() == tag
+    /// Mint from pattern and flags. The pattern sorts first because a regex is
+    /// identified by its pattern; flags break ties.
+    pub fn mint(tag: u8, content: &[u8], flags: u8) -> (r: EscapedFlagsKey)
+        requires tag >= TAG_MIN, shape_of(tag) == Some(KeyShape::EscapedThenFlags)
+        ensures r.key() =~= enc_bytes(content@) + seq![flags], r.tag() == tag
     {
-        let mut bytes: Vec<u8> = Vec::new();
+        let mut bytes = escape(content);
         bytes.push(flags);
-        let mut body = escape(content);
-        bytes.append(&mut body);
         proof {
-            assert(bytes@.skip(1) =~= enc_bytes(content@));
-            assert(exists|c: Seq<u8>| bytes@.skip(1) =~= enc_bytes(c));
+            assert(bytes@.last() == flags);
+            assert(bytes@ =~= enc_bytes(content@) + seq![flags]);
+            assert(exists|c: Seq<u8>| bytes@ =~= enc_bytes(c) + seq![bytes@.last()]);
         }
-        FlagsEscapedKey { tag, bytes }
+        EscapedFlagsKey { tag, bytes }
     }
 }
 
-impl KindKey for FlagsEscapedKey {
+impl KindKey for EscapedFlagsKey {
     closed spec fn tag(self) -> u8 { self.tag }
     closed spec fn key(self) -> Seq<u8> { self.bytes@ }
     closed spec fn wf(self) -> bool { self.wf_key() }
     proof fn law_tag(self) { assert(!is_seq_tag(self.tag)); }
     proof fn law_key(self) {
-        let c = choose|c: Seq<u8>| self.bytes@.skip(1) =~= enc_bytes(c);
+        let c = choose|c: Seq<u8>| self.bytes@ =~= enc_bytes(c) + seq![self.bytes@.last()];
         lemma_esc_end_of_enc_bytes(c);
-        assert(self.bytes@.skip(1) =~= enc_bytes(c));
+        lemma_prefix_of_self_plus(enc_bytes(c), seq![self.bytes@.last()]);
+        lemma_esc_end_local(enc_bytes(c), self.bytes@);
     }
     fn tag_byte(&self) -> (t: u8) { proof { use_type_invariant(self); } self.tag }
     fn emit(&self) -> (r: Vec<u8>) { self.bytes.clone() }
@@ -1947,84 +1914,6 @@ impl KindKey for IntervalKey {
     fn emit(&self) -> (r: Vec<u8>) { self.bytes.clone() }
 }
 
-/// A count-led key: `u32` big-endian component count, then that many Num keys.
-/// Vector mints here.
-// CONSTRUCT: SealedProduct VectorKey
-pub struct VectorKey {
-    tag: u8,
-    bytes: Vec<u8>,
-}
-
-// CONSTRUCT: ImplBlock VectorKey
-impl VectorKey {
-    #[verifier::type_invariant]
-    closed spec fn wf_key(self) -> bool {
-        self.tag >= TAG_MIN
-        && shape_of(self.tag) == Some(KeyShape::CountLed)
-        && vector_end(self.bytes@) == self.bytes@.len()
-    }
-
-    /// Mint from component keys. Each component must already be a complete Num
-    /// key; the count is written, never inferred, and the scan is proven to
-    /// land exactly on the end.
-    /// Mint from normalised components. The count is written, never inferred,
-    /// and the stride is fixed, so the payload length is arithmetic, not a walk.
-    pub fn mint(tag: u8, comps: &Vec<[u8; 8]>) -> (r: VectorKey)
-        requires
-            tag >= TAG_MIN,
-            shape_of(tag) == Some(KeyShape::CountLed),
-            comps@.len() <= 0xFFFF_FFFFu32,
-        ensures r.tag() == tag
-    {
-        let dim: u32 = comps.len() as u32;
-        let mut out: Vec<u8> = Vec::new();
-        out.push((dim >> 24) as u8);
-        out.push((dim >> 16) as u8);
-        out.push((dim >> 8) as u8);
-        out.push(dim as u8);
-        proof {
-            assert(be32(out@) == dim as nat) by {
-                assert(((dim >> 24) as u8) as nat * 16777216
-                    + ((dim >> 16) as u8) as nat * 65536
-                    + ((dim >> 8) as u8) as nat * 256
-                    + (dim as u8) as nat == dim as nat) by (bit_vector);
-            }
-        }
-        let mut i: usize = 0;
-        while i < comps.len()
-            invariant
-                0 <= i <= comps@.len(),
-                comps@.len() == dim as nat,
-                out@.len() == 4 + 8 * i,
-                be32(out@) == dim as nat,
-            decreases comps@.len() - i
-        {
-            let c = comps[i];
-            let mut j: usize = 0;
-            while j < 8
-                invariant 0 <= j <= 8, out@.len() == 4 + 8 * i + j, be32(out@) == dim as nat,
-                decreases 8 - j
-            {
-                out.push(c[j]);
-                j = j + 1;
-            }
-            i = i + 1;
-        }
-        proof { assert(vector_end(out@) == out@.len()); }
-        VectorKey { tag, bytes: out }
-    }
-}
-
-impl KindKey for VectorKey {
-    closed spec fn tag(self) -> u8 { self.tag }
-    closed spec fn key(self) -> Seq<u8> { self.bytes@ }
-    closed spec fn wf(self) -> bool { self.wf_key() }
-    proof fn law_tag(self) { assert(!is_seq_tag(self.tag)); }
-    proof fn law_key(self) {}
-    fn tag_byte(&self) -> (t: u8) { proof { use_type_invariant(self); } self.tag }
-    fn emit(&self) -> (r: Vec<u8>) { self.bytes.clone() }
-}
-
 // --- the JSON marker grammar ---
 
 pub const JNULL: u8 = 0x05;
@@ -2104,6 +1993,7 @@ proof fn lemma_json_obj_of_pairs(ps: Seq<(Seq<u8>, Seq<u8>)>, rest: Seq<u8>)
         lemma_esc_end_local(k.skip(1), buf.skip(1));
         assert(esc_end(buf.skip(1)) == k.len() - 1);
         assert(buf.skip(k.len() as int) =~= v + tail_buf);
+        assert(json_end(ps[0].1) == ps[0].1.len() > 0);
         assert(json_end(v) == v.len() > 0);
         lemma_prefix_of_self_plus(v, tail_buf);
         lemma_json_end_local(v, v + tail_buf);
@@ -2196,7 +2086,11 @@ impl JsonValueBytes {
             decreases elems@.len() - i
         {
             let e = &elems[i];
-            proof { use_type_invariant(e); }
+            proof {
+                use_type_invariant(e);
+                assert(views[i as int] =~= e.view());
+                assert(json_end(views[i as int]) == views[i as int].len() > 0);
+            }
             let src = e.as_bytes();
             let ghost before = b@;
             let mut j: usize = 0;
@@ -2251,7 +2145,11 @@ impl JsonValueBytes {
             let mut kb = escape(pair.0.as_slice());
             b.append(&mut kb);
             let ghost after_key = b@;
-            proof { use_type_invariant(&pair.1); }
+            proof {
+                use_type_invariant(&pair.1);
+                assert(ps[i as int].1 =~= pair.1.view());
+                assert(json_end(ps[i as int].1) == ps[i as int].1.len() > 0);
+            }
             let src = pair.1.as_bytes();
             let mut j: usize = 0;
             while j < src.len()
@@ -2332,7 +2230,9 @@ impl JsonKey {
         && key_end(self.tag, self.bytes@) == self.bytes@.len()
     }
 
-    pub fn mint(tag: u8, value: &JsonValueBytes, hash: [u8; 8]) -> (r: JsonKey)
+    /// Mint from a complete JSON value. The canonical bytes are the identity;
+    /// nothing else rides in the comparable key.
+    pub fn mint(tag: u8, value: &JsonValueBytes) -> (r: JsonKey)
         requires tag >= TAG_MIN, shape_of(tag) == Some(KeyShape::JsonShape)
         ensures r.tag() == tag
     {
@@ -2348,24 +2248,7 @@ impl JsonKey {
             proof { assert(src@.take(j + 1) =~= src@.take(j as int).push(src@[j as int])); }
             j = j + 1;
         }
-        let ghost body = b@;
-        let mut h: usize = 0;
-        while h < 8
-            invariant 0 <= h <= 8, body =~= src@, b@ =~= body + hash@.take(h as int),
-            decreases 8 - h
-        {
-            b.push(hash[h]);
-            proof { assert(hash@.take(h + 1) =~= hash@.take(h as int).push(hash@[h as int])); }
-            h = h + 1;
-        }
-        proof {
-            assert(src@.take(src@.len() as int) =~= src@);
-            assert(hash@.take(8int) =~= hash@);
-            assert(b@ =~= src@ + hash@);
-            lemma_prefix_of_self_plus(src@, hash@);
-            lemma_json_end_local(src@, b@);
-            assert(json_end(b@) == src@.len());
-        }
+        proof { assert(src@.take(src@.len() as int) =~= src@); }
         JsonKey { tag, bytes: b }
     }
 }
@@ -2442,7 +2325,7 @@ pub fn scan_num(p: &[u8]) -> (r: Option<usize>)
         return None;
     }
     let c = p[0];
-    let w: usize = if c == 0x02 || c == 0x04 {
+    let w: usize = if c == 0x02 {
         2
     } else if c == 0x01 || c == 0x03 {
         13
@@ -2579,23 +2462,6 @@ pub fn scan_json_obj(p: &[u8], depth: u32) -> (r: Option<usize>)
 
 /// Bytes the vector payload at the front of `p` occupies: a `u32` big-endian
 /// component count, then that many number keys.
-pub fn scan_vector(p: &[u8]) -> (r: Option<usize>)
-    ensures
-        match r {
-            Some(n) => vector_end(p@) == n as int && n <= p.len(),
-            None => vector_end(p@) < 0,
-        },
-{
-    if p.len() < 4 {
-        return None;
-    }
-    let dim: u64 = (p[0] as u64) * 16777216 + (p[1] as u64) * 65536
-        + (p[2] as u64) * 256 + (p[3] as u64);
-    proof { assert(be32(p@) == dim as nat); }
-    let need: u64 = 4 + 8 * dim;
-    if (p.len() as u64) < need { None } else { Some(need as usize) }
-}
-
 /// Bytes the interval payload at the front of `p` occupies.
 pub fn scan_interval(p: &[u8]) -> (r: Option<usize>)
     ensures
@@ -2683,8 +2549,8 @@ pub fn scan_value(p: &[u8], depth: u32) -> (r: Option<usize>)
 
     let payload: Option<usize> = if t == 0x05 {
         Some(0)
-    } else if t == 0x08 {
-        if body.len() >= 1 { Some(1) } else { None }
+    } else if t == 0x08 || t == 0x09 {
+        Some(0)
     } else if t == 0x10 {
         scan_num(body)
     } else if t == 0x18 || t == 0x20 {
@@ -2692,27 +2558,14 @@ pub fn scan_value(p: &[u8], depth: u32) -> (r: Option<usize>)
     } else if t == 0x28 {
         if body.len() >= 16 { Some(16) } else { None }
     } else if t == 0x30 {
-        if body.len() == 0 {
-            None
-        } else {
-            let after = vstd::slice::slice_subrange(body, 1, body.len());
-            proof { assert(after@ =~= body@.skip(1)); }
-            match scan_escaped(after) {
-                Some(n) => if n == 0 { None } else { Some(1 + n) },
-                None => None,
-            }
-        }
-    } else if t == 0x38 {
-        match scan_json(body, depth + 1) {
-            Some(n) => if n == 0 || body.len() < 8 || n > body.len() - 8 {
-                None
-            } else {
-                Some(n + 8)
-            },
+        match scan_escaped(body) {
+            Some(n) => if n == 0 || n >= body.len() { None } else { Some(n + 1) },
             None => None,
         }
+    } else if t == 0x38 {
+        scan_json(body, depth + 1)
     } else if t == 0x40 {
-        scan_vector(body)
+        if body.len() >= 32 { Some(32) } else { None }
     } else if t == 0x48 || t == 0x50 {
         return match scan_seq(body, depth + 1) {
             Some(n) => Some(1 + n),
