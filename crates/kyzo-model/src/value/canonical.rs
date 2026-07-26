@@ -1646,7 +1646,15 @@ pub fn escape(s: &[u8]) -> (r: Vec<u8>)
 // string has two readings, so a reader that agrees with `shape_end` is the only
 // reader there can be.
 
-/// The grammar, at exec. One value, built once, matching [`grammar`] exactly.
+/// The grammar, at exec.
+///
+/// The grammar is stated twice because a value a proof reasons about and a
+/// value a program builds cannot be the same body in this tool. The `ensures`
+/// is what makes that two bodies and not two authorities: they cannot drift,
+/// because the gate proves them equal. Change one and the gate names the other.
+///
+/// What neither body can decide is whether the widths and lead bytes are the
+/// released format. That is what `canonical-trials` pins.
 pub fn grammar_exec() -> (r: Branches)
     ensures r == grammar()
 {
