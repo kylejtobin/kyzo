@@ -240,8 +240,9 @@
 // Rust, so no exception exists. A future story that genuinely needs unsafe
 // must lower this lint deliberately, at the narrowest scope, with a full
 // safety case; until then, unsafe does not exist in this crate.
-// `cargo xtask unsafe` enforces that this lint stays and that no
-// `allow(unsafe_code)` appears anywhere in kyzo-core.
+// bs-detector enforces this: R15 refuses a crate root without the attribute,
+// R14 refuses any `allow(unsafe_code)`, and R13 refuses `unsafe` itself over
+// all of crates/ — including tests/, which this attribute does not reach.
 #![forbid(unsafe_code)]
 // Joins the panic-lint rung: sealed discriminants are matched exhaustively
 // (workspace `[workspace.lints.clippy] wildcard_enum_match_arm = "deny"`).

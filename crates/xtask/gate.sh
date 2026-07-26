@@ -57,13 +57,21 @@ n="$(printf '%s' "$total_line" | sed -n 's/^total = \([0-9][0-9]*\) violations.*
 n="${n:-?}"
 per_rule="$(printf '%s' "$det_out" | grep -E '^R[0-9][0-9]  ')"
 
+# An exemption is a shape that is still present. It never leaves the verdict:
+# a tree at zero violations with declared exemptions is not the same tree as
+# one with none, and the headline has to say which it is.
+ex="$(printf '%s' "$det_out" | sed -n 's/^exempt = \([0-9][0-9]*\) declared$/\1/p' | tail -n 1)"
+ex="${ex:-?}"
+
 if [ "$n" = "0" ]; then
-  verdict "GATE: ACKNOWLEDGE" "$(printf '%s\ntotal = 0 violations\n' "$per_rule")"
+  verdict \
+    "GATE: ACKNOWLEDGE — 0 violations, ${ex} exempt" \
+    "$(printf '%s\nexempt = %s declared\ntotal = 0 violations\n' "$per_rule" "$ex")"
   exit 0
 fi
 
 verdict \
-  "GATE: ALARM ${total_line#total = }" \
-  "$(printf '%s\n%s\n' "$per_rule" "$total_line")"
+  "GATE: ALARM ${total_line#total = }, ${ex} exempt" \
+  "$(printf '%s\nexempt = %s declared\n%s\n' "$per_rule" "$ex" "$total_line")"
 printf '%s\n' "$det_out" | tail -n 20
 exit 1

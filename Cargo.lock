@@ -508,10 +508,6 @@ dependencies = [
 [[package]]
 name = "bs-detector"
 version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "syn",
-]
 
 [[package]]
 name = "bumpalo"

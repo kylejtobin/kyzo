@@ -318,24 +318,11 @@ Format: `path` — description
 `crates/kyzo-trials/src/time_travel/path.rs` — campaign: as-of through compile→RA→eval vs naive oracle (full path)
 `crates/kyzo-trials/src/time_travel/script.rs` — campaign: as-of through Db::run_script + real `@` KyzoScript (language surface)
 `crates/xtask/src/allowlist.rs` — which paths each mechanical gate is allowed to touch
-`crates/xtask/src/checks/agreement_registry.rs` — gate: agreement/registry invariants hold in the tree
-`crates/xtask/src/checks/allocation_admission.rs` — gate: allocations cross an admission boundary, not ad hoc
-`crates/xtask/src/checks/authority_graph.rs` — gate: module authority edges match the ruled graph
-`crates/xtask/src/checks/boundary_closure.rs` — gate: host/engine boundary does not leak internals
-`crates/xtask/src/checks/build_script_sandbox.rs` — gate: build scripts stay sandboxed
-`crates/xtask/src/checks/copy_detector.rs` — gate: forbids duplicated logic that should be one seat
-`crates/xtask/src/checks/dead_code_ratchet.rs` — gate: dead code may only shrink, never grow silently
-`crates/xtask/src/checks/derive_bypass.rs` — gate: forbids Ord/Hash derives that bypass the one law
-`crates/xtask/src/checks/mod.rs` — mechanical law checks run by the gate
-`crates/xtask/src/checks/panic_lint.rs` — gate: forbids panic/unwrap on reachable engine paths
-`crates/xtask/src/checks/pure_rust.rs` — gate: forbids non-Rust / forbidden dependency shapes
-`crates/xtask/src/checks/unchecked_arith.rs` — gate: forbids unchecked arithmetic in engine code
-`crates/xtask/src/checks/unsafe_check.rs` — gate: audits or forbids unsafe in ruled regions
 `crates/xtask/src/fsutil.rs` — filesystem helpers for walking and rewriting the tree in gates
 `crates/xtask/src/gate.rs` — orchestrates the full cargo xtask gate (merge witness, not Plan DoD)
 `crates/xtask/src/main.rs` — xtask binary entry: dispatches gate verbs
 `crates/xtask/src/proc.rs` — spawns and collects subprocesses for gate commands
-`crates/bs-detector/` — the conduct gate (checks.toml registry, sworn waivers, bite-proof-bound engines) that keeps mechanical checks in agreement
+`crates/bs-detector/` — the conduct gate: fifteen blacklist rules, each decidable from syntax alone, over all of `crates/` or one aimed path
 `crates/xtask/src/synutil.rs` — syn-based AST helpers for source gates
 `crates/xtask/src/verbs.rs` — named xtask verbs the operator/CI invoke
 `fuzz/fuzz_targets/compare_prefixed_slice.rs` — fuzzes prefixed-slice compare under the one law

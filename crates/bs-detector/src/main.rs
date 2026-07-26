@@ -18,15 +18,53 @@
 //! foreign`, which is a parser without types reporting its own blindness as
 //! findings about the tree.
 //!
-//! Every rule here is absolute. The moment a rule needs a clause like "…where a
-//! domain fact belongs" it stops being decidable and does not belong in this
-//! file. Rules that need judgment are enforced by review, not by this binary,
-//! and pretending otherwise is how the count became noise.
+//! Every rule here is absolute, and every rule has the same scope. The moment a
+//! rule needs a clause like "…where a domain fact belongs", or its own list of
+//! exempt files, it stops being absolute and does not belong in this file.
+//! Rules that need judgment are enforced by review, not by this binary, and
+//! pretending otherwise is how the count became noise.
+//!
+//! One scope: all of `crates/` by default, or the single path you aim at. No
+//! rule carries a private carve-out — not for tests, not for vendored data,
+//! not for the crate the rule is inconvenient in.
 //!
 //! This crate is a workspace member on purpose: the detector scans itself.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+
+/// A declared exemption: the shape is present and someone signed for it.
+///
+/// Exemptions live at the site, never in this file. A list of exempt paths here
+/// would be a carve-out by another name — invisible in review, and growing.
+/// One form, for all fifteen rules:
+///
+/// ```text
+/// // BS-EXEMPT: R10 — this is a bench harness counter, not a domain fact
+/// n: usize,
+/// ```
+///
+/// The marker sits on the line directly above the shape. It must name the rule
+/// it exempts and give a reason. A marker naming no rule, or giving no reason,
+/// exempts nothing.
+///
+/// Rust's own `#[expect(lint, reason = "…")]` was considered and rejected here.
+/// It is the better mechanism where it applies — rustc warns when an expectation
+/// goes unfulfilled, so it expires itself — but it applies to real lints, and of
+/// the fifteen rules exactly one (`unsafe_code`) is a real lint. Registering a
+/// tool namespace for the other fourteen is nightly-only. Accepting `#[expect]`
+/// for the one would also hand R14 its own escape hatch: R14 forbids lowering
+/// the unsafe lint, and an accepted `#[expect(unsafe_code)]` is that lowering,
+/// admitted at the front door. One mechanism, uniform, no rule exempting itself.
+///
+/// Exemptions are counted and listed on every run, and the gate verdict names
+/// the count: an exemption is a debt that stays visible, never a silence.
+struct Exemption {
+    rule: &'static str,
+    file: String,
+    line: usize,
+    reason: String,
+}
 
 /// A forbidden shape, with the file and line that holds it.
 struct Violation {
@@ -41,23 +79,21 @@ const RULES: &[(&str, &str)] = &[
     ("R01", "Ord/PartialOrd/Hash with no ORDER_LAW stated in the file"),
     ("R02", "pub field on a newtype, or a public unchecked constructor"),
     ("R03", "bare Vec/HashMap/HashSet as a pub field"),
-    ("R04", "unwrap/expect/panic! outside tests"),
+    ("R04", "unwrap/expect/panic!"),
     ("R05", "String-typed error, or a refusal carrying no span"),
     ("R06", "todo!/unimplemented!/unreachable! stub"),
-    ("R07", "env::var read outside a config seat"),
+    ("R07", "env::var read outside the composition root"),
     ("R08", "String-typed kind/status/type/name field"),
     ("R09", "bool field carrying a domain decision"),
     ("R10", "bare primitive field outside a newtype"),
     ("R11", "RefCell/Cell/Mutex/RwLock field in a domain type"),
     ("R12", "f32/f64 field in a type that derives an order"),
+    ("R13", "unsafe block/fn/impl"),
+    ("R14", "allow(unsafe_code) — a lint-lowering on the strongest standard"),
+    ("R15", "crate root with no #![forbid(unsafe_code)]"),
 ];
 
-/// Files that are vendored data tables, not architecture. Cozo carries the
-/// same two under the same MIT terms.
-const VENDORED: &[&str] = &["stopwords.rs", "ascii_folding_filter.rs"];
 
-/// The one seat allowed to read the environment.
-const CONFIG_SEATS: &[&str] = &["config.rs", "main.rs", "cli.rs"];
 
 /// How the detector was asked.
 ///
@@ -120,21 +156,53 @@ fn main() {
     files.sort();
 
     let mut violations = Vec::new();
+    let mut exemptions = Vec::new();
     for f in &files {
         let Ok(text) = std::fs::read_to_string(f) else {
             continue;
         };
-        let name = f.file_name().and_then(|n| n.to_str()).unwrap_or_default();
-        if VENDORED.contains(&name) {
-            continue;
-        }
         let rel = f.strip_prefix(&root).unwrap_or(f).display().to_string();
-        scan(&rel, name, &text, &mut violations);
+        scan(&rel, &text, &mut violations, &mut exemptions);
+    }
+
+    if let Mode::Gate { .. } = mode {
+        check_forbid_unsafe(&files, &mut violations);
     }
 
     match mode {
-        Mode::Gate { root } => report_gate(&root, &files, &violations),
-        Mode::Aim { .. } => report_aim(&files, &violations),
+        Mode::Gate { root } => report_gate(&root, &files, &violations, &exemptions),
+        Mode::Aim { .. } => report_aim(&files, &violations, &exemptions),
+    }
+}
+
+/// Every crate root must carry `#![forbid(unsafe_code)]`. `forbid`, not `deny`:
+/// it cannot be lifted locally by an `allow`, which is what makes zero-unsafe a
+/// compiler guarantee rather than a convention. Decided per crate, over the
+/// file list, because absence is not a line anyone wrote.
+fn check_forbid_unsafe(files: &[PathBuf], out: &mut Vec<Violation>) {
+    for f in files {
+        let p = f.display().to_string();
+        let is_root = p.ends_with("/src/lib.rs") || p.ends_with("/src/main.rs");
+        if !is_root {
+            continue;
+        }
+        let crate_name: String = p
+            .split("/src/")
+            .next()
+            .and_then(|c| c.rsplit('/').next())
+            .unwrap_or_default()
+            .to_string();
+        let Ok(text) = std::fs::read_to_string(f) else {
+            continue;
+        };
+        if !text.contains("#![forbid(unsafe_code)]") {
+            out.push(Violation {
+                rule: "R15",
+                file: p,
+                line: 1,
+                detail: format!("crate `{crate_name}` does not forbid unsafe"),
+            });
+        }
     }
 }
 
@@ -155,69 +223,53 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// True while the line sits inside a `#[cfg(test)]` module or a `#[test]` fn.
-struct TestTracker {
-    depth: i32,
-    armed: bool,
-    brace: i32,
+/// `// BS-EXEMPT: R13 — reason` → (rule, reason). A marker naming no rule, or
+/// giving no reason, is not an exemption and does not suppress anything.
+///
+/// The line must be a line comment and nothing else. The same text inside a
+/// string, a trailing comment after code, or a doc comment describing the
+/// format does not exempt the line below it.
+fn exemption_on(line: &str) -> Option<(String, String)> {
+    let t = line.trim_start();
+    let t = t.strip_prefix("//")?;
+    if t.starts_with('/') || t.starts_with('!') {
+        return None;
+    }
+    let at = t.find("BS-EXEMPT:")?;
+    let rest = t[at + "BS-EXEMPT:".len()..].trim();
+    let rule: String = rest.chars().take_while(|c| !c.is_whitespace()).collect();
+    let named = RULES.iter().any(|(id, _)| *id == rule);
+    if !named {
+        return None;
+    }
+    let reason = rest[rule.len()..]
+        .trim_start_matches(|c: char| c == '-' || c == '—' || c.is_whitespace())
+        .trim()
+        .to_string();
+    if reason.is_empty() {
+        return None;
+    }
+    Some((rule, reason))
 }
 
-impl TestTracker {
-    fn new() -> Self {
-        Self { depth: 0, armed: false, brace: 0 }
-    }
-
-    fn feed(&mut self, line: &str) -> bool {
-        let t = line.trim();
-        if t.starts_with("#[cfg(test)]") || t.starts_with("#[test]") || t.starts_with("#[tokio::test]")
-        {
-            self.armed = true;
-        }
-        let inside = self.depth > 0;
-        let opens = line.matches('{').count() as i32;
-        let closes = line.matches('}').count() as i32;
-        if self.armed && opens > 0 {
-            self.armed = false;
-            self.depth += 1;
-            self.brace = opens - closes;
-            return true;
-        }
-        if self.depth > 0 {
-            self.brace += opens - closes;
-            if self.brace <= 0 {
-                self.depth -= 1;
-            }
-        }
-        inside
-    }
-}
-
-fn scan(rel: &str, name: &str, text: &str, out: &mut Vec<Violation>) {
-    let is_test_file = rel.contains("/tests/")
-        || rel.contains("kyzo-trials")
-        || rel.contains("kyzo-oracle")
-        || rel.contains("canonical-trials")
-        || rel.contains("kyzo-crashfs")
-        || name.ends_with("_tests.rs")
-        || name == "tests.rs";
-
+fn scan(rel: &str, text: &str, out: &mut Vec<Violation>, exempt: &mut Vec<Exemption>) {
     let states_order_law = text.contains("ORDER_LAW");
-    let mut tt = TestTracker::new();
 
     // Struct/enum context for the field rules.
     let mut in_type: Option<(String, bool)> = None; // (name, derives_order)
     let mut pending_derives = String::new();
     let mut brace = 0i32;
 
-    for (i, raw) in text.lines().enumerate() {
+    let all: Vec<&str> = text.lines().collect();
+    let found_from = out.len();
+    for (i, raw) in all.iter().enumerate() {
         let line = i + 1;
-        let in_test = tt.feed(raw) || is_test_file;
         let t = raw.trim();
         let code = strip_literals(t.split("//").next().unwrap_or(t).trim());
         let code = code.as_str();
 
         // ---- token rules -------------------------------------------------
-        if !in_test {
+        {
             if code.contains(".unwrap()") || code.contains(".expect(") || code.contains("panic!(") {
                 push(out, "R04", rel, line, code);
             }
@@ -225,14 +277,26 @@ fn scan(rel: &str, name: &str, text: &str, out: &mut Vec<Violation>) {
             {
                 push(out, "R06", rel, line, code);
             }
-            if (code.contains("env::var") || code.contains("std::env::var"))
-                && !CONFIG_SEATS.contains(&name)
-            {
+            if code.contains("env::var") || code.contains("std::env::var") {
                 push(out, "R07", rel, line, code);
             }
             if code.contains("Result<") && code.contains(", String>") {
                 push(out, "R05", rel, line, code);
             }
+        }
+        // Not test-exempt, and not scoped to two crates: `forbid(unsafe_code)`
+        // in a lib root does not reach that crate's tests/ directory, which is
+        // a separate crate root and exactly where unsafe sits unnoticed.
+        if code.starts_with("unsafe {")
+            || code.starts_with("unsafe fn ")
+            || code.starts_with("unsafe impl ")
+            || code.contains(" unsafe fn ")
+            || code.contains(" unsafe impl ")
+        {
+            push(out, "R13", rel, line, code);
+        }
+        if code.contains("allow(unsafe_code)") {
+            push(out, "R14", rel, line, code);
         }
 
         // ---- type context ------------------------------------------------
@@ -243,7 +307,7 @@ fn scan(rel: &str, name: &str, text: &str, out: &mut Vec<Violation>) {
             let derives_order = pending_derives.contains("Ord")
                 || pending_derives.contains("PartialOrd")
                 || pending_derives.contains("Hash");
-            if derives_order && !states_order_law && !in_test {
+            if derives_order && !states_order_law {
                 push(out, "R01", rel, line, &format!("{rest} derives an order"));
             }
             in_type = Some((rest.to_string(), derives_order));
@@ -259,7 +323,7 @@ fn scan(rel: &str, name: &str, text: &str, out: &mut Vec<Violation>) {
             || code.starts_with("impl PartialOrd for")
             || code.starts_with("impl Hash for")
         {
-            if !states_order_law && !in_test {
+            if !states_order_law {
                 push(out, "R01", rel, line, code);
             }
         }
@@ -276,9 +340,6 @@ fn scan(rel: &str, name: &str, text: &str, out: &mut Vec<Violation>) {
         let Some((_, derives_order)) = in_type.as_ref() else {
             continue;
         };
-        if in_test {
-            continue;
-        }
         let Some((fname, fty, is_pub)) = field(code) else {
             continue;
         };
@@ -316,6 +377,28 @@ fn scan(rel: &str, name: &str, text: &str, out: &mut Vec<Violation>) {
             push(out, "R12", rel, line, code);
         }
     }
+
+    // A shape is exempt only if the line above it names THIS rule and gives a
+    // reason. Done as a pass over what this file produced, so no early
+    // `continue` above can quietly skip an exemption.
+    let mut kept = Vec::new();
+    for v in out.drain(found_from..) {
+        let declared = if v.line >= 2 {
+            all.get(v.line - 2).and_then(|l| exemption_on(l))
+        } else {
+            None
+        };
+        match declared {
+            Some((rule, reason)) if rule == v.rule => exempt.push(Exemption {
+                rule: v.rule,
+                file: v.file,
+                line: v.line,
+                reason,
+            }),
+            _ => kept.push(v),
+        }
+    }
+    out.extend(kept);
 }
 
 /// Blank the contents of string literals. A token inside a literal is data,
@@ -398,21 +481,30 @@ fn push(out: &mut Vec<Violation>, rule: &'static str, file: &str, line: usize, d
 }
 
 /// One path, reported and nothing more: no verdict is written.
-fn report_aim(files: &[PathBuf], violations: &[Violation]) {
+fn report_aim(files: &[PathBuf], violations: &[Violation], exempt: &[Exemption]) {
     for v in violations {
         println!("{}:{}: {} {}", v.file, v.line, v.rule, v.detail);
     }
+    for e in exempt {
+        println!("{}:{}: {} EXEMPT — {}", e.file, e.line, e.rule, e.reason);
+    }
     println!(
-        "{} forbidden shapes in {} file(s)",
+        "{} forbidden shapes in {} file(s), {} exempt",
         violations.len(),
-        files.len()
+        files.len(),
+        exempt.len()
     );
     if !violations.is_empty() {
         std::process::exit(1);
     }
 }
 
-fn report_gate(_root: &Path, files: &[PathBuf], violations: &[Violation]) {
+fn report_gate(
+    _root: &Path,
+    files: &[PathBuf],
+    violations: &[Violation],
+    exempt: &[Exemption],
+) {
     let mut per_rule = std::collections::BTreeMap::new();
     for v in violations {
         *per_rule.entry(v.rule).or_insert(0usize) += 1;
@@ -431,6 +523,11 @@ fn report_gate(_root: &Path, files: &[PathBuf], violations: &[Violation]) {
     if total > 40 {
         println!("… {} more", total - 40);
     }
+    // Exemptions are never silent: every one is listed, every run.
+    for e in exempt {
+        println!("EXEMPT {} {}:{} — {}", e.rule, e.file, e.line, e.reason);
+    }
+    println!("exempt = {} declared", exempt.len());
     // The line the gate caller parses. Exactly one line may carry this shape.
     println!("total = {total} violations across {} files", touched.len());
 

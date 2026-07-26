@@ -3,7 +3,7 @@
 # docs/kyzo-plan/decisions.md is the operator's ruling document. NO agent
 # writes it — not the main session, not any subagent, not via shell
 # redirection, rename, or git plumbing. There is no exemption list on
-# purpose: unlike waivers.toml, no agent identity unlocks this file.
+# purpose: no agent identity unlocks this file, by any route.
 # Reads stay legal for everyone; the law is meant to be read.
 set -euo pipefail
 
