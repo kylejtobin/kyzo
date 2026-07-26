@@ -3,10 +3,10 @@
 # ============================================================================
 # THE SWITCH: the first non-comment, non-blank line in this file is the
 # toggle. "on" arms the stop guard — while the gate log
-# (crates/xtask/gate.log) reads FAIL, every attempt by the agent to end
+# (crates/xtask/gate.log) reads ALARM, every attempt by the agent to end
 # its turn is blocked and the message below is shown, every turn, until the
-# log is flipped to PASS. Anything other than "on" (e.g. "off") disarms the
-# guard completely.
+# tree is clean and the detector writes ACKNOWLEDGE. Anything other than "on"
+# (e.g. "off") disarms the guard completely.
 #
 # Only the operator edits the on/off switch in this file. 
 # Agents: hands off without EXPLICIT approval.
@@ -19,4 +19,6 @@ off
 # the hook script carries no copy of it.
 # ----------------------------------------------------------------------------
 
-VIOLATION: Change FAIL to PASS in crates/xtask/gate.log to acknowledge, then immediately sequence any new development work. This hook repeats every turn until resolved.
+ALARM: forbidden shapes are present in crates/. gate.log records what the detector found; it is not a switch. ACKNOWLEDGE appears only when the count reaches zero. Fire the detector at the file you are working on to see yours:
+
+    cargo run -q --release -p bs-detector -- <path>

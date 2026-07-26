@@ -1,89 +1,88 @@
 # bs-detector
 
-Thirteen approved patterns. Every item under `crates/` satisfies the conditions of exactly one of them, or it is a violation.
+Refuses the twelve forbidden shapes.
 
-Conditions are not a blacklist. They are what make an item that construct at all.
+A blacklist, not a whitelist. It does not decide what good code is — it names
+shapes that are wrong every time, and counts them.
 
-## Contents
+## The one design constraint
 
-`src/construct.rs` holds:
+**Every rule is decidable from syntax alone.** No type resolution, no macro
+expansion, no call graph.
 
-- `Construct` — the thirteen-variant closed sum, with `conditions()` naming every condition by name and `law_name()` giving each its fixture stem.
-- `seat_struct`, `seat_enum`, `seat_trait`, `seat_impl`, `seat_method`, `seat_free_fn`, `seat_use`, `seat_mod`, `seat_confinement` — each returns `Option<Construct>`. `None` is a violation.
-- `TypeFacts` — the trait the harness implements.
-- Scope-free predicates and approval tables: `FOREIGN_PURE`, `NAKED_PRIMITIVES`, `INVARIANT_CELLS`, `PURE_ATTRS`.
+That constraint is the lesson from the machine this replaces. It hand-rolled
+tree-walking and type resolution, and 68% of its reported number was
+`unproven receiver` (19,743), `unproven macro` (6,799), `unproven path` (3,084)
+and `unproven foreign` (1,641) — a parser without types reporting its own
+blindness as findings about the tree. Its count could not move, so nobody acted
+on it.
 
-There is no tree walker and no type resolver in this crate.
+**Every rule is also absolute.** "unwrap on input-reachable paths" is
+undecidable; "no unwrap outside tests" is trivial. The moment a rule needs a
+clause like "…where a domain fact belongs", it stops being scriptable and does
+not belong here. Rules that need judgment are enforced by review.
 
-## Delivery: Dylint
+This is the floor, not the ceiling. It catches shapes. It cannot catch a runtime
+check that should have been a constructor, an `Option` standing for meaningful
+absence, or two types carrying one fact under different field names. Those cost
+more, and only a reader finds them.
 
-The rules ship as [Dylint](https://github.com/trailofbits/dylint) lints — a `cdylib` crate loaded by `cargo dylint`, running as a `LateLintPass` inside `rustc`.
+## The twelve
 
-**Crate setup:**
+| | forbidden |
+| --- | --- |
+| R01 | `Ord`/`PartialOrd`/`Hash` with no `ORDER_LAW` stated in the file |
+| R02 | `pub` field on a newtype, or a public unchecked constructor |
+| R03 | bare `Vec`/`HashMap`/`HashSet` as a `pub` field |
+| R04 | `unwrap`/`expect`/`panic!` outside tests |
+| R05 | `String`-typed error, or a refusal carrying no span |
+| R06 | `todo!`/`unimplemented!`/`unreachable!` stub |
+| R07 | `env::var` read outside a config seat |
+| R08 | `String`-typed `kind`/`status`/`type`/`name` field |
+| R09 | `bool` field carrying a domain decision |
+| R10 | bare primitive field outside a newtype |
+| R11 | `RefCell`/`Cell`/`Mutex`/`RwLock` field in a domain type |
+| R12 | `f32`/`f64` field in a type that derives an order |
 
-```toml
-[lib]
-crate-type = ["cdylib"]
+## Two modes, and they are not the same thing
 
-[dependencies]
-dylint_linting = "3"
-```
-
-```rust
-dylint_linting::declare_late_lint! {
-    pub CONSTRUCT_LAW,
-    Deny,
-    "every item satisfies one of the thirteen constructs"
-}
-```
-
-**Callbacks and coverage.** `LateLintPass` provides `check_item`, `check_impl_item`, `check_trait_item`, `check_field_def`, `check_variant`, `check_fn`, `check_expr`, `check_stmt`, `check_generic_param`, `check_attribute`. The compiler drives them over every node it compiled. Items in nested blocks, closures, loop bodies, match arms, const positions inside types, `where` clauses, signatures, and macro expansions all arrive through the same callbacks with no per-position handling.
-
-**Expansion.** Lints run after macro expansion. `check_item` receives expanded items; macro invocations are not a distinct case.
-
-**Entry point.** `tcx.entry_fn(())` returns the crate's entry `DefId`. `seat_free_fn` takes `is_entry_point: bool` from that comparison.
-
-**Visibility.** `tcx.visibility(def_id)` returns `Visibility::Public` or `Visibility::Restricted(module)`. `is_public` reads it directly.
-
-## Implementing `TypeFacts`
-
-```rust
-fn provenance(&self, name: &str) -> Provenance;
-fn declares_trait(&self, name: &str) -> bool;
-fn is_closed_sum(&self, name: &str) -> bool;
-fn body_is_pure(&self, block: &syn::Block, self_ty: &str, sig: &syn::Signature) -> bool;
-fn calls_into(&self, block: &syn::Block, owner: &str) -> bool;
-```
-
-Against `TyCtxt`:
-
-- **`provenance`** — resolve the type to a `DefId`. `def_id.is_local()` → `Declared`. Non-local → check the defining crate against `FOREIGN_PURE`, else `Ambient` for `std::fs`, `std::process`, `std::net`, `std::env`, `std::io`, else `Unproven`. Unresolvable → `Unproven`.
-- **`declares_trait`** — `tcx.hir_crate_items(()).definitions()` filtered to `DefKind::Trait`, matched by `tcx.item_name`.
-- **`is_closed_sum`** — resolve to a `DefKind::Enum` `DefId`, then run `seat_enum` on its definition.
-- **`body_is_pure`** — walk the `hir::Body`. For each `ExprKind::MethodCall`, `tcx.typeck(body_owner).type_dependent_def_id(expr.hir_id)` gives the callee; take the `provenance` of its `impl` self type. For each `ExprKind::Call` on a path, resolve the path to a `DefId` directly. Pure iff every callee is `Declared` or `ForeignPure`.
-- **`calls_into`** — the same walk, testing whether any resolved callee's `DefId` has `owner`'s `DefId` as its impl parent.
-
-`body_is_pure` and `calls_into` currently take `&syn::Block`; a HIR harness passes the `hir::Body` and the signatures change to match.
-
-## Testing
-
-`dylint_testing` wraps `ui_test`: a `.rs` fixture beside an expected `.stderr`. One fixture per condition named in `conditions()`, plus one passing fixture per construct.
-
-```rust
-#[test]
-fn ui() {
-    dylint_testing::ui_test(env!("CARGO_PKG_NAME"), "ui");
-}
-```
-
-## Running
+**Gate** — the harness the pester hook reads.
 
 ```
-cargo dylint --lib bs_detector -- --workspace
+cargo run --release -p bs-detector -- --root .
 ```
 
-Exits non-zero on any violation. `Deny` level fails the build.
+Walks `crates/`. Writes `crates/xtask/gate.log` (`GATE: ALARM …` or
+`GATE: ACKNOWLEDGE`) and `crates/xtask/gate-counts.txt` (per-rule counts). Exits
+non-zero when anything is found. Called by `crates/xtask/gate.sh` and by
+`cargo xtask gate`.
 
-## License
+**Aim** — one file or directory, reported and nothing more.
 
-BSL-1.1. See `LICENSING.md`.
+```
+cargo run --release -p bs-detector -- crates/kyzo-model/src/value/canonical.rs
+cargo run --release -p bs-detector -- crates/kyzo-core/src/store
+```
+
+Prints `file:line: RULE detail` and a total. **Never writes the verdict.** A
+verdict about one file is not a verdict about the tree, and a harness that could
+be satisfied by narrowing its scope is not a harness.
+
+## The verdict is a record, not a switch
+
+`gate.log` says what the detector found. `ACKNOWLEDGE` appears when the count
+reaches zero and by no other means. Editing it to change the count is the fraud
+the gate exists to catch.
+
+The operator arms and disarms the pester hook in `pester-hook.txt` — first
+non-comment line, `on` or `off`. Agents do not touch it.
+
+## Scope
+
+Scans `crates/`, skipping `target/` and the two vendored MIT data tables
+(`stopwords.rs`, `ascii_folding_filter.rs`), which are data, not architecture.
+Test code — `#[cfg(test)]` blocks, `#[test]` fns, and the trials / oracle /
+crashfs crates — is exempt from the token rules, because a test that cannot
+panic cannot assert.
+
+A workspace member on purpose: the detector scans itself, and reports itself.

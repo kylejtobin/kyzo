@@ -6,17 +6,10 @@ rust-version.workspace = true
 # BSL-1.1 — original agent/dev tooling; see LICENSING.md. Not workspace MPL.
 license = "BUSL-1.1"
 publish = false
-description = "Enumerates the only shapes a max-purity Rust program may contain, and refuses everything else. One rule: every item under crates/ satisfies the conditions of exactly one construct in the closed set, or it is a violation. Conditions are not a blacklist — they are what make an item that construct at all. No waivers, no baseline, no partial scope. Dev tooling, never shipped — but a workspace member ON PURPOSE: the detector lives inside its own boundary and scans itself."
+description = "Refuses the twelve forbidden shapes — and only those a script can decide from syntax alone, with no type resolution, no macro expansion and no call graph. Absolute rules only: a rule needing judgment is enforced by review, not counted here. Dev tooling, never shipped — but a workspace member ON PURPOSE: the detector scans itself."
 
-[lib]
-path = "src/lib.rs"
+[[bin]]
+name = "bs-detector"
+path = "src/main.rs"
 
 [dependencies]
-# Pinned exactly. `ItemKind` is a closed mirror of `syn::Item`'s variant set;
-# a syn bump can add a variant that lands in `ItemKind::Unknown` and reports as
-# a violation until the map is updated. `syn_pin_is_exact` fails if this `=`
-# is ever loosened, so the mirror cannot drift silently behind a caret range.
-syn = { version = "=2.0.118", features = ["full", "visit", "extra-traits"] }
-# span-locations: Span::start() gives real file line numbers when run as a
-# plain binary (never a proc-macro) — every refusal reports file:line off it.
-proc-macro2 = { version = "1", features = ["span-locations"] }
