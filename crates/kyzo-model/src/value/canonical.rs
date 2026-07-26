@@ -80,6 +80,56 @@
 
 use vstd::prelude::*;
 
+/// THE GRAMMAR, written once.
+///
+/// A macro and not two functions: the value the proof reasons about and the
+/// value the program builds must be the same characters. Two bodies with an
+/// `ensures` between them are two authorities and a patch over the second.
+/// Raw constructors, because a helper function belongs to one mode or the
+/// other and this text has to live in both.
+macro_rules! branch_table {
+    () => { Branches::End };
+    ($k:expr => $s:expr $(, $rk:expr => $rs:expr)* $(,)?) => {
+        Branches::Alt($k, Box::new($s), Box::new(branch_table!($($rk => $rs),*)))
+    };
+}
+
+macro_rules! num_table {
+    () => { branch_table!(0x01 => Shape::Fixed(12), 0x02 => Shape::Fixed(1), 0x03 => Shape::Fixed(12)) };
+}
+macro_rules! lo_table {
+    () => { branch_table!(0x01 => Shape::Fixed(0), 0x02 => Shape::Fixed(8)) };
+}
+macro_rules! hi_table {
+    () => { branch_table!(0x02 => Shape::Fixed(8), 0x03 => Shape::Fixed(0)) };
+}
+macro_rules! interval_table {
+    () => { branch_table!(
+        0x01 => Shape::Fixed(0),
+        0x02 => Shape::Product(Box::new(Shape::Sum(Box::new(lo_table!()))),
+                               Box::new(Shape::Sum(Box::new(hi_table!())))),
+    ) };
+}
+macro_rules! grammar_table {
+    () => { branch_table!(
+        0x05 => Shape::Fixed(0),
+        0x08 => Shape::Fixed(0),
+        0x09 => Shape::Fixed(0),
+        0x10 => Shape::Sum(Box::new(num_table!())),
+        0x18 => Shape::Delimited,
+        0x20 => Shape::Delimited,
+        0x28 => Shape::Fixed(16),
+        0x30 => Shape::Product(Box::new(Shape::Delimited), Box::new(Shape::Fixed(1))),
+        0x38 => Shape::Tagged,
+        0x40 => Shape::Fixed(32),
+        0x48 => Shape::Row(Box::new(Shape::Tagged)),
+        0x50 => Shape::Row(Box::new(Shape::Tagged)),
+        0x58 => Shape::Fixed(9),
+        0x60 => Shape::Sum(Box::new(interval_table!())),
+        0x68 => Shape::Fixed(8),
+    ) };
+}
+
 verus! {
 
 
@@ -958,61 +1008,27 @@ proof fn lemma_marked_key(bs: Branches, b: u8)
 /// unknown length is `Delimited`, a discriminated body is a `Sum`, a container
 /// is a `Row`, and a value that carries a tie-break sorts as a `Product` with
 /// the tie-break last.
-pub open spec fn grammar() -> Branches {
-    alt(0x05, Shape::Fixed(0),                                   // Null
-    alt(0x08, Shape::Fixed(0),                                   // False
-    alt(0x09, Shape::Fixed(0),                                   // True
-    alt(0x10, num_shape(),                                          // Num
-    alt(0x18, Shape::Delimited,                                     // Str
-    alt(0x20, Shape::Delimited,                                     // Bytes
-    alt(0x28, Shape::Fixed(16),                                  // Uuid
-    alt(0x30, prod(Shape::Delimited, Shape::Fixed(1)),           // Regex: pattern, then flags
-    alt(0x38, Shape::Tagged,                                        // Json: a value, restricted
-    alt(0x40, Shape::Fixed(32),                                  // Vector
-    alt(0x48, row(Shape::Tagged),                                   // List
-    alt(0x50, row(Shape::Tagged),                                   // Set
-    alt(0x58, Shape::Fixed(9),                                   // Validity
-    alt(0x60, interval_shape(),                                     // Interval
-    alt(0x68, Shape::Fixed(8),                                   // Geometry
-    Branches::End)))))))))))))))
-}
+pub open spec fn grammar() -> Branches { grammar_table!() }
 
 /// A number's class byte selects its magnitude: zero carries only the
 /// representation tie-break, a signed magnitude carries exponent, fraction and
 /// tie-break. There is no NaN class — NaN is not a real, and no door here takes
 /// one, so no ordering convention has to be invented for it.
-pub open spec fn num_branches() -> Branches {
-    alt(0x01, Shape::Fixed(12),
-    alt(0x02, Shape::Fixed(1),
-    alt(0x03, Shape::Fixed(12),
-    Branches::End)))
-}
+pub open spec fn num_branches() -> Branches { num_table!() }
 pub open spec fn num_shape() -> Shape { Shape::Sum(Box::new(num_branches())) }
 
 /// An interval is empty, or a lower end then an upper end.
-pub open spec fn interval_branches() -> Branches {
-    alt(0x01, Shape::Fixed(0),
-    alt(0x02, prod(lo_shape(), hi_shape()),
-    Branches::End))
-}
+pub open spec fn interval_branches() -> Branches { interval_table!() }
 pub open spec fn interval_shape() -> Shape { Shape::Sum(Box::new(interval_branches())) }
 
 /// Unbounded below sorts under every instant, so its marker is the lower one.
-pub open spec fn lo_branches() -> Branches {
-    alt(0x01, Shape::Fixed(0),
-    alt(0x02, Shape::Fixed(8),
-    Branches::End))
-}
+pub open spec fn lo_branches() -> Branches { lo_table!() }
 pub open spec fn lo_shape() -> Shape { Shape::Sum(Box::new(lo_branches())) }
 
 /// Unbounded above sorts over every instant, so its marker is the higher one.
 /// The two ends cannot share a table: one unbounded shape is the least element
 /// of its axis and the other is the greatest.
-pub open spec fn hi_branches() -> Branches {
-    alt(0x02, Shape::Fixed(8),
-    alt(0x03, Shape::Fixed(0),
-    Branches::End))
-}
+pub open spec fn hi_branches() -> Branches { hi_table!() }
 pub open spec fn hi_shape() -> Shape { Shape::Sum(Box::new(hi_branches())) }
 
 pub open spec fn alt(k: u8, s: Shape, rest: Branches) -> Branches {
@@ -1505,23 +1521,13 @@ impl CanonicalBytes {
         ensures r@ =~= self.view()
     { self.bytes.as_slice() }
 
-    pub fn len(&self) -> (n: usize)
-        ensures n == self.view().len(), n > 0
-    { proof { use_type_invariant(self); lemma_complete_is_tagged(self.view()); } self.bytes.len() }
-
-    pub fn tag_byte(&self) -> (b: u8)
-        ensures b == self.view()[0], b > STRUCT_END
-    {
-        proof { use_type_invariant(self); lemma_complete_is_tagged(self.view()); }
-        self.bytes[0]
-    }
 }
 
 /// Escape a variable-length payload into the order-preserving, self-delimiting
 /// form. Its order law is [`lemma_bytes_order`] and its prefix-freedom is
 /// [`lemma_bytes_prefix_free`].
 // CONSTRUCT: Derivation escape
-pub fn escape(s: &[u8]) -> (r: Vec<u8>)
+pub(crate) fn escape(s: &[u8]) -> (r: Vec<u8>)
     ensures r@ =~= enc_bytes(s@)
 {
     let mut out: Vec<u8> = Vec::new();
@@ -1564,50 +1570,12 @@ pub fn escape(s: &[u8]) -> (r: Vec<u8>)
 ///
 /// What neither body can decide is whether the widths and lead bytes are the
 /// released format. That is what `canonical-trials` pins.
-pub fn grammar_exec() -> (r: Branches)
+pub(crate) fn grammar_exec() -> (r: Branches)
     ensures r == grammar()
-{
-    let num = Shape::Sum(Box::new(
-        alt_exec(0x01, Shape::Fixed(12),
-        alt_exec(0x02, Shape::Fixed(1),
-        alt_exec(0x03, Shape::Fixed(12),
-        Branches::End)))));
-    let lo = Shape::Sum(Box::new(
-        alt_exec(0x01, Shape::Fixed(0),
-        alt_exec(0x02, Shape::Fixed(8),
-        Branches::End))));
-    let hi = Shape::Sum(Box::new(
-        alt_exec(0x02, Shape::Fixed(8),
-        alt_exec(0x03, Shape::Fixed(0),
-        Branches::End))));
-    let iv = Shape::Sum(Box::new(
-        alt_exec(0x01, Shape::Fixed(0),
-        alt_exec(0x02, Shape::Product(Box::new(lo), Box::new(hi)),
-        Branches::End))));
-    alt_exec(0x05, Shape::Fixed(0),
-    alt_exec(0x08, Shape::Fixed(0),
-    alt_exec(0x09, Shape::Fixed(0),
-    alt_exec(0x10, num,
-    alt_exec(0x18, Shape::Delimited,
-    alt_exec(0x20, Shape::Delimited,
-    alt_exec(0x28, Shape::Fixed(16),
-    alt_exec(0x30, Shape::Product(Box::new(Shape::Delimited), Box::new(Shape::Fixed(1))),
-    alt_exec(0x38, Shape::Tagged,
-    alt_exec(0x40, Shape::Fixed(32),
-    alt_exec(0x48, Shape::Row(Box::new(Shape::Tagged)),
-    alt_exec(0x50, Shape::Row(Box::new(Shape::Tagged)),
-    alt_exec(0x58, Shape::Fixed(9),
-    alt_exec(0x60, iv,
-    alt_exec(0x68, Shape::Fixed(8),
-    Branches::End)))))))))))))))
-}
-
-fn alt_exec(k: u8, s: Shape, rest: Branches) -> (r: Branches)
-    ensures r == alt(k, s, rest)
-{ Branches::Alt(k, Box::new(s), Box::new(rest)) }
+{ grammar_table!() }
 
 /// The branch a lead byte selects, at exec.
-pub fn branch_lookup(bs: &Branches, b: u8) -> (r: Option<&Shape>)
+pub(crate) fn branch_lookup(bs: &Branches, b: u8) -> (r: Option<&Shape>)
     ensures
         match r {
             Some(s) => branch_of(*bs, b) == Some(*s),
@@ -1621,13 +1589,52 @@ pub fn branch_lookup(bs: &Branches, b: u8) -> (r: Option<&Shape>)
     }
 }
 
-/// Where the escaped body at the front of `p` ends. Total over every byte
-/// sequence: no panic, no unbounded read.
-pub fn delim_scan(p: &[u8]) -> (r: Option<usize>)
+/// Why the grammar refused, and where it stopped.
+///
+/// A reader that answers `None` tells a caller nothing it can act on and
+/// nothing an operator can read in a log. `at` is a byte offset into the input
+/// the reader was handed, accumulated through the composition, so a refusal
+/// inside the third element of a nested row names that position and not the
+/// start of the buffer.
+// CONSTRUCT: ClosedSum Reason
+#[derive(PartialEq, Eq, Structural)]
+pub enum Reason {
+    /// The input ended inside a shape that had more to read. `at` is the first
+    /// offset the reader needed and did not have — one past the last byte
+    /// available, never the last byte examined.
+    Truncated,
+    /// No branch of the table in force names this lead byte.
+    UnknownLeadByte(u8),
+    /// `0x00` followed by neither the terminator nor the escape companion.
+    BadEscape(u8),
+    /// Nesting deeper than the reader will descend. Refusing is sound in one
+    /// direction only, and this is that direction: a reader may reject, it may
+    /// never accept a reading the grammar does not give.
+    TooDeep,
+}
+
+// CONSTRUCT: ValueObject Refusal
+#[derive(PartialEq, Eq, Structural)]
+pub struct Refusal {
+    pub reason: Reason,
+    pub at: usize,
+}
+
+/// Move a refusal out from a sub-reading into the reading that contains it.
+fn deeper(e: Refusal, base: usize) -> (r: Refusal)
+    ensures r.reason == e.reason
+{
+    let at = if base <= usize::MAX - e.at { base + e.at } else { usize::MAX };
+    Refusal { reason: e.reason, at }
+}
+
+/// Where the escaped body at the front of `p` ends. Total over every
+/// byte sequence: no panic, no unbounded read.
+pub(crate) fn delim_scan(p: &[u8]) -> (r: Result<usize, Refusal>)
     ensures
         match r {
-            Some(n) => delim_end(p@) == n as int && n <= p.len(),
-            None => delim_end(p@) < 0,
+            Ok(n) => delim_end(p@) == n as int && n <= p.len(),
+            Err(_) => delim_end(p@) < 0,
         },
 {
     let mut i: usize = 0;
@@ -1642,16 +1649,16 @@ pub fn delim_scan(p: &[u8]) -> (r: Option<usize>)
         proof { assert(p@.skip(i as int)[0] == p@[i as int]); }
         if i + 1 >= p.len() {
             proof { assert(p@.skip(i as int).len() < 2); }
-            return None;
+            return Err(Refusal { reason: Reason::Truncated, at: p.len() });
         }
         proof { assert(p@.skip(i as int)[1] == p@[i as int + 1]); }
         if p[i] == STRUCT_ESC {
             if p[i + 1] == STRUCT_ESC {
                 proof { assert(delim_end(p@.skip(i as int)) == 2); }
-                return Some(i + 2);
+                return Ok(i + 2);
             }
             if p[i + 1] != 0xFF {
-                return None;
+                return Err(Refusal { reason: Reason::BadEscape(p[i + 1]), at: i + 1 });
             }
             proof { assert(p@.skip(i as int).skip(2) =~= p@.skip(i as int + 2)); }
             i = i + 2;
@@ -1661,7 +1668,7 @@ pub fn delim_scan(p: &[u8]) -> (r: Option<usize>)
         }
     }
     proof { assert(p@.skip(i as int).len() < 2); }
-    None
+    Err(Refusal { reason: Reason::Truncated, at: p.len() })
 }
 
 /// Nesting a reader will descend. Deeper input is refused, never followed: the
@@ -1673,30 +1680,34 @@ pub const MAX_DEPTH: u32 = 128;
 
 /// Where the shape at the front of `p` ends, or `None` if `p` does not open
 /// with one. One function; the whole grammar. Total over every byte sequence.
-pub fn shape_scan(g: &Branches, s: &Shape, p: &[u8], depth: u32) -> (r: Option<usize>)
+pub(crate) fn shape_scan(g: &Branches, s: &Shape, p: &[u8], depth: u32) -> (r: Result<usize, Refusal>)
     ensures
         match r {
-            Some(n) => shape_end(*g, *s, p@) == n as int && n <= p.len(),
-            None => true,
+            Ok(n) => shape_end(*g, *s, p@) == n as int && n <= p.len(),
+            Err(_) => true,
         },
     decreases p@.len(), shape_sz(*s)
 {
     if depth >= MAX_DEPTH {
-        return None;
+        return Err(Refusal { reason: Reason::TooDeep, at: 0 });
     }
     match s {
-        Shape::Fixed(n) => if p.len() >= *n { Some(*n) } else { None },
+        Shape::Fixed(n) => if p.len() >= *n {
+            Ok(*n)
+        } else {
+            Err(Refusal { reason: Reason::Truncated, at: p.len() })
+        },
         Shape::Delimited => delim_scan(p),
         Shape::Product(a, b) => {
             let j = match shape_scan(g, &**a, p, depth) {
-                Some(n) => n,
-                None => return None,
+                Ok(n) => n,
+                Err(e) => return Err(e),
             };
             let rest = vstd::slice::slice_subrange(p, j, p.len());
             proof { assert(rest@ =~= p@.skip(j as int)); }
             match shape_scan(g, &**b, rest, depth) {
-                Some(k) => Some(j + k),
-                None => None,
+                Ok(k) => Ok(j + k),
+                Err(e) => Err(deeper(e, j)),
             }
         }
         Shape::Sum(bs) => sum_scan(g, &**bs, p, depth),
@@ -1718,7 +1729,7 @@ pub fn shape_scan(g: &Branches, s: &Shape, p: &[u8], depth: u32) -> (r: Option<u
             {
                 if at >= p.len() {
                     proof { assert(p@.skip(at as int).len() == 0); }
-                    return None;
+                    return Err(Refusal { reason: Reason::Truncated, at });
                 }
                 let tail = vstd::slice::slice_subrange(p, at, p.len());
                 proof {
@@ -1726,14 +1737,14 @@ pub fn shape_scan(g: &Branches, s: &Shape, p: &[u8], depth: u32) -> (r: Option<u
                     assert(tail@[0] == p@[at as int]);
                 }
                 if tail[0] == STRUCT_END {
-                    return Some(at + 1);
+                    return Ok(at + 1);
                 }
                 let j = match shape_scan(g, &**e, tail, depth + 1) {
-                    Some(n) => n,
-                    None => return None,
+                    Ok(n) => n,
+                    Err(err) => return Err(deeper(err, at)),
                 };
                 if j == 0 {
-                    return None;
+                    return Err(Refusal { reason: Reason::Truncated, at });
                 }
                 proof { assert(p@.skip(at as int).skip(j as int) =~= p@.skip(at as int + j as int)); }
                 at = at + j;
@@ -1743,35 +1754,38 @@ pub fn shape_scan(g: &Branches, s: &Shape, p: &[u8], depth: u32) -> (r: Option<u
 }
 
 /// One lead byte selects a branch of `bs`, which reads what follows it.
-pub fn sum_scan(g: &Branches, bs: &Branches, p: &[u8], depth: u32) -> (r: Option<usize>)
+pub(crate) fn sum_scan(g: &Branches, bs: &Branches, p: &[u8], depth: u32) -> (r: Result<usize, Refusal>)
     ensures
         match r {
-            Some(n) => sum_end(*g, *bs, p@) == n as int && n <= p.len(),
-            None => true,
+            Ok(n) => sum_end(*g, *bs, p@) == n as int && n <= p.len(),
+            Err(_) => true,
         },
     decreases p@.len(), 0nat
 {
-    if p.len() == 0 || depth >= MAX_DEPTH {
-        return None;
+    if depth >= MAX_DEPTH {
+        return Err(Refusal { reason: Reason::TooDeep, at: 0 });
+    }
+    if p.len() == 0 {
+        return Err(Refusal { reason: Reason::Truncated, at: 0 });
     }
     let t = match branch_lookup(bs, p[0]) {
         Some(sh) => sh,
-        None => return None,
+        None => return Err(Refusal { reason: Reason::UnknownLeadByte(p[0]), at: 0 }),
     };
     let body = vstd::slice::slice_subrange(p, 1, p.len());
     proof { assert(body@ =~= p@.skip(1)); }
     match shape_scan(g, t, body, depth + 1) {
-        Some(n) => Some(1 + n),
-        None => None,
+        Ok(n) => Ok(1 + n),
+        Err(e) => Err(deeper(e, 1)),
     }
 }
 
 /// Where the complete encoding at the front of `p` ends.
-pub fn scan_value(p: &[u8]) -> (r: Option<usize>)
+pub fn scan_value(p: &[u8]) -> (r: Result<usize, Refusal>)
     ensures
         match r {
-            Some(n) => scan(p@) == n as int && n <= p.len(),
-            None => true,
+            Ok(n) => scan(p@) == n as int && n <= p.len(),
+            Err(_) => true,
         },
 {
     let g = grammar_exec();
@@ -1785,15 +1799,15 @@ pub fn scan_value(p: &[u8]) -> (r: Option<usize>)
 /// validating door and no fallible one — a body the grammar would refuse is not
 /// a `Body` that failed to build, it is a `Body` that cannot be written.
 // CONSTRUCT: SealedProduct Body
-pub struct Body {
+struct Body {
     bytes: Vec<u8>,
     shape: Ghost<Shape>,
 }
 
 // CONSTRUCT: ImplBlock Body
 impl Body {
-    pub closed spec fn view(self) -> Seq<u8> { self.bytes@ }
-    pub closed spec fn shape(self) -> Shape { self.shape@ }
+    closed spec fn view(self) -> Seq<u8> { self.bytes@ }
+    closed spec fn shape(self) -> Shape { self.shape@ }
 
     #[verifier::type_invariant]
     closed spec fn wf_body(self) -> bool {
@@ -1803,7 +1817,7 @@ impl Body {
     /// Exactly these bytes. The width is a fact about the vector, so a body of
     /// the wrong width is not ill-formed — it is a different shape, and the tag
     /// it is sealed under will not accept it.
-    pub fn fixed(bytes: Vec<u8>) -> (r: Body)
+    fn fixed(bytes: Vec<u8>) -> (r: Body)
         ensures r.view() =~= bytes@, r.shape() == Shape::Fixed(bytes@.len() as usize)
     {
         let n = bytes.len();
@@ -1812,7 +1826,7 @@ impl Body {
 
     /// Opaque content of any length. Every byte sequence has an escaped form,
     /// so there is nothing here that can fail.
-    pub fn delimited(content: &[u8]) -> (r: Body)
+    fn delimited(content: &[u8]) -> (r: Body)
         ensures r.view() =~= enc_bytes(content@), r.shape() == Shape::Delimited
     {
         let bytes = escape(content);
@@ -1825,7 +1839,7 @@ impl Body {
     /// The first is self-delimiting, so the second cannot reach back into it.
     /// That is [`lemma_shape_local`] — the reason a `Product` needs no length
     /// prefix, discharged here once for every kind that carries a tie-break.
-    pub fn product(a: Body, b: Body) -> (r: Body)
+    fn product(a: Body, b: Body) -> (r: Body)
         ensures
             r.view() =~= a.view() + b.view(),
             r.shape() == prod(a.shape(), b.shape()),
@@ -1851,7 +1865,7 @@ impl Body {
     /// The table is the kind's own and the key must be one of its keys. That is
     /// a precondition, discharged where the kind is defined; there is no lookup
     /// here and nothing to refuse.
-    pub fn select(bs: Ghost<Branches>, k: u8, inner: Body) -> (r: Body)
+    fn select(bs: Ghost<Branches>, k: u8, inner: Body) -> (r: Body)
         requires branch_of(bs@, k) == Some(inner.shape())
         ensures
             r.view() =~= seq![k] + inner.view(),
@@ -1877,7 +1891,7 @@ impl Body {
 
     /// A row of complete values, terminated. Elements open with a tag, which
     /// sorts above the terminator, so none can be read as the row's end.
-    pub fn row(elems: &Vec<CanonicalBytes>) -> (r: Body)
+    fn row(elems: &Vec<CanonicalBytes>) -> (r: Body)
         ensures
             r.view() =~= enc_row(elems@.map_values(|e: CanonicalBytes| e.view())),
             r.shape() == row(Shape::Tagged),
@@ -1928,7 +1942,7 @@ impl Body {
 
     /// One complete value, carried as a body. This is the back-reference: a
     /// kind whose payload is a value, not bytes of its own.
-    pub fn value(v: &CanonicalBytes) -> (r: Body)
+    fn value(v: &CanonicalBytes) -> (r: Body)
         ensures r.view() =~= v.view(), r.shape() == Shape::Tagged
     {
         proof { use_type_invariant(v); }
@@ -1954,11 +1968,16 @@ impl Body {
 /// Seal a body under its tag.
 ///
 /// The precondition is the whole contract: the tag's shape IS the body's shape.
-/// It is discharged where the kind is defined, at verification time, against the
-/// grammar. A tag sealed over a body it does not read is not refused at run
-/// time — it fails to verify, and there is no other door.
+/// A tag sealed over a body it does not read is not refused at run time — it
+/// fails to verify.
+///
+/// Private, and so is [`Body`], because that contract is a *specification*
+/// precondition: it binds callers the gate verifies and nobody else. Exported,
+/// it would be an untyped door taking a `u8` and arbitrary bytes, with its
+/// guarantee erased for every caller outside this file. The public surface is
+/// the kind doors below, which take no tag at all.
 // CONSTRUCT: Mint seal
-pub fn seal(tag: u8, body: Body) -> (r: CanonicalBytes)
+fn seal(tag: u8, body: Body) -> (r: CanonicalBytes)
     requires tag_shape(tag) == Some(body.shape())
     ensures r.view() =~= seq![tag] + body.view()
 {

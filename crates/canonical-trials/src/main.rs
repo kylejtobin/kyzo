@@ -28,12 +28,15 @@
 mod canonical;
 
 use canonical::{
-    Bound, Branches, grammar_exec, CanonicalBytes, Shape, escape, scan_value, seal_bool, seal_bytes,
+    Bound, Branches, Reason, Refusal, grammar_exec, CanonicalBytes, Shape, escape, scan_value, seal_bool, seal_bytes,
     seal_geometry, seal_interval, seal_interval_empty, seal_json, seal_list, seal_null,
     seal_num_negative, seal_num_positive, seal_num_zero, seal_regex, seal_set, seal_str,
     seal_uuid, seal_validity, seal_vector, shape_scan,
 };
 
+// The released format, written out here and nowhere else in this file. These
+// are deliberately NOT imported from the encoder: a pin that reads its expected
+// value out of the thing under test pins nothing.
 const TAG_NULL: u8 = 0x05;
 const TAG_FALSE: u8 = 0x08;
 const TAG_TRUE: u8 = 0x09;
@@ -337,10 +340,10 @@ fn attack_unmarked_row_element(t: &mut Trials) {
     let hostile = Shape::Row(Box::new(Shape::Fixed(1)));
     let empty_row: Vec<u8> = vec![0x01];
     let row_of_one: Vec<u8> = vec![0x01, 0x01]; // one element, byte 0x01, then the end
-    t.check("unmarked: empty row reads as 1", shape_scan(&g, &hostile, &empty_row, 0) == Some(1));
+    t.check("unmarked: empty row reads as 1", shape_scan(&g, &hostile, &empty_row, 0) == Ok(1));
     t.check(
         "unmarked: row holding 0x01 reads as the EMPTY row",
-        shape_scan(&g, &hostile, &row_of_one, 0) == Some(1),
+        shape_scan(&g, &hostile, &row_of_one, 0) == Ok(1),
     );
     t.check(
         "unmarked: two different rows, one reading — this is the defect",
@@ -355,10 +358,10 @@ fn attack_unmarked_row_element(t: &mut Trials) {
     )))));
     let marked_empty: Vec<u8> = vec![0x01];
     let marked_one: Vec<u8> = vec![0x18, 0x01, 0x01]; // marker, hostile content, end
-    t.check("marked: empty row reads as 1", shape_scan(&g, &marked, &marked_empty, 0) == Some(1));
+    t.check("marked: empty row reads as 1", shape_scan(&g, &marked, &marked_empty, 0) == Ok(1));
     t.check(
         "marked: row holding 0x01 reads as 3",
-        shape_scan(&g, &marked, &marked_one, 0) == Some(3),
+        shape_scan(&g, &marked, &marked_one, 0) == Ok(3),
     );
     t.check(
         "marked: the two rows have different readings",
@@ -396,11 +399,11 @@ fn trial_grammar_table(t: &mut Trials) {
     for (v, want, label) in &cases {
         let bytes = v.as_bytes();
         t.check(label, bytes.len() == *want);
-        t.check(label, scan_value(bytes) == Some(bytes.len()));
+        t.check(label, scan_value(bytes) == Ok(bytes.len()));
         // One byte short is refused, never guessed at.
         if bytes.len() > 1 {
             let short = &bytes[..bytes.len() - 1];
-            t.check(label, shape_scan(&g, &Shape::Tagged, short, 0) != Some(short.len()));
+            t.check(label, shape_scan(&g, &Shape::Tagged, short, 0) != Ok(short.len()));
         }
     }
 
@@ -517,21 +520,21 @@ fn attack_reader_agrees_with_writer(t: &mut Trials) {
     ];
     for v in &values {
         let bytes = v.as_bytes();
-        t.check("reader measures the writer exactly", scan_value(bytes) == Some(bytes.len()));
+        t.check("reader measures the writer exactly", scan_value(bytes) == Ok(bytes.len()));
 
         for trailer in [vec![0x00u8], vec![0x01], vec![0xFF; 4], vec![TAG_NULL]] {
             let mut extended = bytes.to_vec();
             extended.extend_from_slice(&trailer);
             t.check(
                 "trailing bytes cannot move the reading",
-                scan_value(&extended) == Some(bytes.len()),
+                scan_value(&extended) == Ok(bytes.len()),
             );
         }
 
         // Every proper prefix is incomplete: it may be refused, but it may
         // never be accepted as the whole value.
         for cut in 0..bytes.len() {
-            t.check("no proper prefix is complete", scan_value(&bytes[..cut]) != Some(cut));
+            t.check("no proper prefix is complete", scan_value(&bytes[..cut]) != Ok(cut));
         }
     }
 }
@@ -562,8 +565,8 @@ fn attack_reader_totality(t: &mut Trials) {
     }
     for p in &hostile {
         match scan_value(p) {
-            Some(n) => t.check("reader never claims more than it was given", n <= p.len()),
-            None => t.check("reader refuses rather than guesses", true),
+            Ok(n) => t.check("reader never claims more than it was given", n <= p.len()),
+            Err(e) => t.check("a refusal names an offset inside the input", e.at <= p.len()),
         }
     }
 
@@ -572,11 +575,56 @@ fn attack_reader_totality(t: &mut Trials) {
     for _ in 0..40 {
         deep = seal_list(&vec![deep]);
     }
-    t.check("nesting within the bound is read", scan_value(deep.as_bytes()).is_some());
+    t.check("nesting within the bound is read", scan_value(deep.as_bytes()).is_ok());
     for _ in 0..512 {
         deep = seal_list(&vec![deep]);
     }
-    t.check("nesting past the bound is refused", scan_value(deep.as_bytes()).is_none());
+    t.check("nesting past the bound is refused", scan_value(deep.as_bytes()).is_err());
+}
+
+/// ATTACK: a refusal must name itself. `None` tells a caller nothing it can act
+/// on and an operator nothing it can read. Every refusal below is pinned to its
+/// reason AND its offset, so a reading that stops in the wrong place is a
+/// failure here even though it still stops.
+fn attack_refusals_are_named(t: &mut Trials) {
+    let cases: Vec<(Vec<u8>, Reason, usize, &str)> = vec![
+        (vec![], Reason::Truncated, 0, "empty input"),
+        (vec![0x02], Reason::UnknownLeadByte(0x02), 0, "0x02 is not a tag"),
+        (vec![0x01], Reason::UnknownLeadByte(0x01), 0, "the terminator is not a tag"),
+        (vec![0xFF], Reason::UnknownLeadByte(0xFF), 0, "0xFF is not a tag"),
+        (vec![TAG_STR, 0x00, 0x41], Reason::BadEscape(0x41), 2, "0x00 followed by neither"),
+        (vec![TAG_STR], Reason::Truncated, 1, "a delimited body that never opens"),
+        (vec![TAG_STR, 0x41], Reason::Truncated, 2, "a delimited body that never closes"),
+        (vec![TAG_STR, 0x00], Reason::Truncated, 2, "an escape with nothing after it"),
+        (vec![TAG_REGEX, 0x00, 0x00], Reason::Truncated, 3, "a regex with no flags byte"),
+        (vec![TAG_UUID, 0x00, 0x00], Reason::Truncated, 3, "16 bytes promised, 2 given"),
+        (vec![TAG_NUM, 0x07], Reason::UnknownLeadByte(0x07), 1, "0x07 is not a number class"),
+        (vec![TAG_NUM], Reason::Truncated, 1, "a class byte that never arrives"),
+        (vec![TAG_LIST], Reason::Truncated, 1, "a row that never terminates"),
+        (vec![TAG_LIST, TAG_NULL], Reason::Truncated, 2, "a row whose element ends the input"),
+        (vec![TAG_INTERVAL, 0x02, 0x09], Reason::UnknownLeadByte(0x09), 2, "0x09 is not a lower end"),
+        (vec![TAG_INTERVAL, 0x02, 0x01, 0x01], Reason::UnknownLeadByte(0x01), 3,
+         "the lower end's unbounded marker is not an upper end's"),
+    ];
+    for (bytes, reason, at, label) in &cases {
+        match scan_value(bytes) {
+            Ok(_) => t.check(label, false),
+            Err(e) => {
+                t.check(label, e.reason == *reason);
+                t.check(label, e.at == *at);
+            }
+        }
+    }
+
+    // Nesting past the bound names itself too, rather than overflowing a stack.
+    let mut deep = seal_null();
+    for _ in 0..400 {
+        deep = seal_list(&vec![deep]);
+    }
+    match scan_value(deep.as_bytes()) {
+        Ok(_) => t.check("nesting past the bound", false),
+        Err(e) => t.check("nesting past the bound names TooDeep", e.reason == Reason::TooDeep),
+    }
 }
 
 /// ATTACK: JSON is not a second grammar. A JSON value is a value, so the same
@@ -593,10 +641,10 @@ fn attack_json_is_the_value_grammar(t: &mut Trials) {
         let bare = v.as_bytes().to_vec();
         let mut wrapped = vec![TAG_JSON];
         wrapped.extend_from_slice(&bare);
-        t.check("a json body IS a value", scan_value(&wrapped) == Some(bare.len() + 1));
+        t.check("a json body IS a value", scan_value(&wrapped) == Ok(bare.len() + 1));
         t.check(
             "and it is the same reading as the bare value",
-            scan_value(&bare) == Some(bare.len()),
+            scan_value(&bare) == Ok(bare.len()),
         );
     }
 }
@@ -673,6 +721,7 @@ fn main() {
     attack_interval_infinities(&mut t);
     attack_reader_agrees_with_writer(&mut t);
     attack_reader_totality(&mut t);
+    attack_refusals_are_named(&mut t);
     attack_json_is_the_value_grammar(&mut t);
     attack_high_bytes(&mut t);
     t.report("total");
