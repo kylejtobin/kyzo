@@ -55,10 +55,10 @@
 //! # Marked positions
 //!
 //! Every position a scanner reads to decide "element or terminator" holds a
-//! byte that cannot be the terminator. Sequence elements open with a tag
-//! (`>= 0x05`), and `STRUCT_END` is `0x01`, so no element can be read as the
-//! end of the row it sits in. An unmarked element position would admit an
-//! element beginning `0x01` and the body would have two readings.
+//! byte that sorts above the terminator. `wf_grammar` is exactly that check,
+//! and it is demanded of a `Row`'s element and nowhere else. An unmarked
+//! element would admit one beginning `0x01`, and the body would have two
+//! readings.
 //!
 //! # Trusted computing base
 //!
@@ -85,7 +85,6 @@ verus! {
 
 pub const STRUCT_ESC: u8 = 0x00;
 pub const STRUCT_END: u8 = 0x01;
-pub const TAG_MIN: u8 = 0x05;
 
 // ============================ lexicographic order ============================
 
@@ -458,6 +457,81 @@ pub proof fn lemma_bytes_prefix_free(s: Seq<u8>, t: Seq<u8>)
     lemma_esc_injective(s, t);
 }
 
+/// Where the escaped body in `p` ends: the first `0x00 0x00`. This is the
+/// reader of [`enc_bytes`], and it is exact because [`esc`] never emits that
+/// pair, so the terminator `enc_bytes` appends is the first one this meets.
+pub open spec fn delim_end(p: Seq<u8>) -> int
+    decreases p.len()
+{
+    if p.len() < 2 { -1 }
+    else if p[0] == STRUCT_ESC {
+        if p[1] == STRUCT_ESC { 2 }
+        else if p[1] == 0xFFu8 { let r = delim_end(p.skip(2)); if r < 0 { -1 } else { 2 + r } }
+        else { -1 }
+    } else {
+        let r = delim_end(p.skip(1)); if r < 0 { -1 } else { 1 + r }
+    }
+}
+
+pub proof fn lemma_delim_bounded(p: Seq<u8>)
+    ensures delim_end(p) >= 0 ==> 2 <= delim_end(p) <= p.len()
+    decreases p.len()
+{
+    if p.len() >= 2 {
+        if p[0] == STRUCT_ESC {
+            if p[1] == 0xFFu8 { lemma_delim_bounded(p.skip(2)); }
+        } else {
+            lemma_delim_bounded(p.skip(1));
+        }
+    }
+}
+
+/// LOCALITY for the escaped body: the terminator is inside the body, so bytes
+/// after it cannot move it.
+pub proof fn lemma_delim_local(a: Seq<u8>, b: Seq<u8>)
+    requires is_prefix(a, b), 0 <= delim_end(a) <= a.len()
+    ensures delim_end(b) == delim_end(a)
+    decreases a.len()
+{
+    lemma_delim_bounded(a);
+    lemma_prefix_index(a, b, 0);
+    lemma_prefix_index(a, b, 1);
+    if a[0] == STRUCT_ESC {
+        if a[1] == 0xFFu8 {
+            lemma_prefix_skip(a, b, 2);
+            lemma_delim_local(a.skip(2), b.skip(2));
+        }
+    } else {
+        lemma_prefix_skip(a, b, 1);
+        lemma_delim_local(a.skip(1), b.skip(1));
+    }
+}
+
+/// The escaped form measures itself exactly.
+pub proof fn lemma_delim_end_of_enc_bytes(s: Seq<u8>)
+    ensures delim_end(enc_bytes(s)) == enc_bytes(s).len()
+    decreases s.len()
+{
+    let q = enc_bytes(s);
+    if s.len() == 0 {
+        assert(esc(s) =~= Seq::<u8>::empty());
+        assert(q =~= seq![0u8, 0u8]);
+    } else {
+        lemma_enc_bytes_peel(s);
+        let rest = enc_bytes(s.drop_first());
+        lemma_delim_end_of_enc_bytes(s.drop_first());
+        if s[0] == STRUCT_ESC {
+            assert(code(s[0]) =~= seq![0x00u8, 0xFFu8]);
+            assert(q[0] == 0x00u8 && q[1] == 0xFFu8);
+            assert(q.skip(2) =~= rest);
+        } else {
+            assert(code(s[0]) =~= seq![s[0]]);
+            assert(q[0] == s[0]);
+            assert(q.skip(1) =~= rest);
+        }
+    }
+}
+
 // ================================== rows =====================================
 
 pub open spec fn cat(r: Seq<Seq<u8>>) -> Seq<u8>
@@ -476,7 +550,7 @@ pub open spec fn row_le(r: Seq<Seq<u8>>, s: Seq<Seq<u8>>) -> bool
 }
 
 pub open spec fn tagged(r: Seq<Seq<u8>>) -> bool {
-    forall|i: int| 0 <= i < r.len() ==> #[trigger] r[i].len() > 0 && r[i][0] >= TAG_MIN
+    forall|i: int| 0 <= i < r.len() ==> #[trigger] r[i].len() > 0 && r[i][0] > STRUCT_END
 }
 
 pub open spec fn pfx_family(r: Seq<Seq<u8>>, s: Seq<Seq<u8>>) -> bool {
@@ -495,7 +569,7 @@ proof fn lemma_row_peel(r: Seq<Seq<u8>>)
 
 proof fn lemma_row_head(r: Seq<Seq<u8>>)
     requires tagged(r), r.len() > 0
-    ensures enc_row(r).len() > 0, enc_row(r)[0] == r[0][0], enc_row(r)[0] >= TAG_MIN
+    ensures enc_row(r).len() > 0, enc_row(r)[0] == r[0][0], enc_row(r)[0] > STRUCT_END
 { lemma_row_peel(r); assert(r[0].len() > 0); }
 
 proof fn lemma_tail_tagged(r: Seq<Seq<u8>>)
@@ -503,8 +577,8 @@ proof fn lemma_tail_tagged(r: Seq<Seq<u8>>)
     ensures tagged(r.drop_first())
 {
     assert forall|i: int| 0 <= i < r.drop_first().len()
-        implies #[trigger] r.drop_first()[i].len() > 0 && r.drop_first()[i][0] >= TAG_MIN by {
-        assert(r[i + 1].len() > 0 && r[i + 1][0] >= TAG_MIN);
+        implies #[trigger] r.drop_first()[i].len() > 0 && r.drop_first()[i][0] > STRUCT_END by {
+        assert(r[i + 1].len() > 0 && r[i + 1][0] > STRUCT_END);
     }
 }
 
@@ -534,7 +608,7 @@ pub proof fn lemma_row_order(r: Seq<Seq<u8>>, s: Seq<Seq<u8>>)
         } else {
             lemma_row_head(s);
             assert(lex_le(enc_row(r), enc_row(s))) by {
-                assert(enc_row(r)[0] == STRUCT_END && enc_row(s)[0] >= TAG_MIN);
+                assert(enc_row(r)[0] == STRUCT_END && enc_row(s)[0] > STRUCT_END);
             }
         }
     } else if s.len() == 0 {
@@ -542,7 +616,7 @@ pub proof fn lemma_row_order(r: Seq<Seq<u8>>, s: Seq<Seq<u8>>)
         assert(enc_row(s) =~= seq![STRUCT_END]);
         lemma_row_head(r);
         assert(!lex_le(enc_row(r), enc_row(s))) by {
-            assert(enc_row(r)[0] >= TAG_MIN && enc_row(s)[0] == STRUCT_END);
+            assert(enc_row(r)[0] > STRUCT_END && enc_row(s)[0] == STRUCT_END);
         }
     } else {
         lemma_row_peel(r);
@@ -568,7 +642,7 @@ pub proof fn lemma_row_prefix_free(r: Seq<Seq<u8>>, s: Seq<Seq<u8>>)
         if s.len() > 0 {
             lemma_row_head(s);
             assert(enc_row(s).take(1)[0] == STRUCT_END);
-            assert(enc_row(s)[0] >= TAG_MIN);
+            assert(enc_row(s)[0] > STRUCT_END);
         }
     } else if s.len() == 0 {
         assert(cat(s) =~= Seq::<u8>::empty());
@@ -590,6 +664,11 @@ pub proof fn lemma_row_prefix_free(r: Seq<Seq<u8>>, s: Seq<Seq<u8>>)
     }
 }
 
+proof fn lemma_prefix_index(a: Seq<u8>, b: Seq<u8>, i: int)
+    requires is_prefix(a, b), 0 <= i < a.len()
+    ensures a[i] == b[i]
+{ assert(b.take(a.len() as int)[i] == a[i]); }
+
 proof fn lemma_prefix_skip(a: Seq<u8>, b: Seq<u8>, n: int)
     requires is_prefix(a, b), 0 <= n <= a.len()
     ensures is_prefix(a.skip(n), b.skip(n))
@@ -601,116 +680,417 @@ proof fn lemma_prefix_skip(a: Seq<u8>, b: Seq<u8>, n: int)
         }
     }
 }
-pub open spec fn scan(e: Seq<u8>) -> int
-    decreases e.len(), 0int
+
+// ===================== the self-delimiting byte grammar ======================
+//
+// A grammar is a value of type [`Shape`], read by the one function
+// [`shape_end`]. A kind does not own a scanner and owes no obligation: it names
+// a shape, and the shape's laws are already discharged by structural induction
+// over the algebra.
+
+/// A self-delimiting, order-preserving binary grammar.
+///
+/// Self-delimitation is not a side condition here: every constructor has a
+/// reader, so there is no inhabitant of this type that lacks one. The only law
+/// a grammar can break is the `Row` one, and [`wf_shape`] is exactly that law.
+// CONSTRUCT: ClosedSum Shape
+pub enum Shape {
+    /// Exactly `n` payload bytes.
+    Fixed(nat),
+    /// An escaped body terminated by `0x00 0x00` — the reader of [`enc_bytes`].
+    Delimited,
+    /// One shape, then another at the offset the first ends.
+    Product(Box<Shape>, Box<Shape>),
+    /// One lead byte selects a branch, which reads what follows it.
+    Sum(Box<Branches>),
+    /// Elements until `STRUCT_END`.
+    Row(Box<Shape>),
+    /// The whole grammar, again.
+    ///
+    /// The one back-reference, and what lets a value nest without bound while
+    /// the grammar stays a finite tree. It consumes its lead byte *before* it
+    /// recurses, which is why the reader terminates on a shrinking input rather
+    /// than a shrinking shape.
+    Tagged,
+}
+
+/// A branch table: lead byte to the shape it selects.
+// CONSTRUCT: ClosedSum Branches
+pub enum Branches {
+    End,
+    Alt(u8, Box<Shape>, Box<Branches>),
+}
+
+/// The branch a lead byte selects. First match wins, so a repeated key is dead
+/// weight rather than an ambiguity.
+pub open spec fn branch_of(bs: Branches, b: u8) -> Option<Shape>
+    decreases bs
 {
-    if e.len() == 0 { -1 }
-    else if e[0] < TAG_MIN { -1 }
-    else if is_seq_tag(e[0]) {
-        let r = scan_row_bytes(e.drop_first());
-        if r < 0 { -1 } else { 1 + r }
-    } else {
-        let k = key_end(e[0], e.drop_first());
-        if k < 0 || k > e.len() - 1 { -1 } else { 1 + k }
+    match bs {
+        Branches::End => None,
+        Branches::Alt(k, s, rest) => if k == b { Some(*s) } else { branch_of(*rest, b) },
     }
 }
 
-pub open spec fn scan_row_bytes(e: Seq<u8>) -> int
-    decreases e.len(), 1int
+/// The measure that shrinks on the two steps that read no byte: a `Product`'s
+/// factors and a `Row`'s element. Every other step consumes a lead byte, so the
+/// input shrinks instead and the selected branch's own size never matters —
+/// which is what lets `Tagged` name a grammar that contains it.
+pub open spec fn shape_sz(s: Shape) -> nat
+    decreases s
 {
-    if e.len() == 0 { -1 }
-    else if e[0] == STRUCT_END { 1 }
-    else {
-        let j = scan(e);
-        if j <= 0 || j > e.len() { -1 }
-        else {
-            let r = scan_row_bytes(e.skip(j));
-            if r < 0 { -1 } else { j + r }
+    match s {
+        Shape::Product(a, b) => 1nat + shape_sz(*a) + shape_sz(*b),
+        Shape::Row(e) => 1nat + shape_sz(*e),
+        _ => 1nat,
+    }
+}
+
+/// Where the shape ends in `p`, or negative if `p` does not open with one.
+/// Total: every shape and every byte sequence has an answer, never a panic.
+pub open spec fn shape_end(g: Branches, s: Shape, p: Seq<u8>) -> int
+    decreases p.len(), shape_sz(s)
+{
+    match s {
+        Shape::Fixed(n) => if p.len() >= n { n as int } else { -1 },
+        Shape::Delimited => delim_end(p),
+        Shape::Product(a, b) => {
+            let j = shape_end(g, *a, p);
+            if j < 0 || j > p.len() { -1 } else {
+                let k = shape_end(g, *b, p.skip(j));
+                if k < 0 { -1 } else { j + k }
+            }
         }
+        Shape::Sum(bs) => sum_end(g, *bs, p),
+        Shape::Tagged => sum_end(g, g, p),
+        Shape::Row(e) => {
+            if p.len() == 0 { -1 }
+            else if p[0] == STRUCT_END { 1 }
+            else {
+                let j = shape_end(g, *e, p);
+                if j <= 0 || j > p.len() { -1 } else {
+                    let r = shape_end(g, Shape::Row(e), p.skip(j));
+                    if r < 0 { -1 } else { j + r }
+                }
+            }
+        }
+    }
+}
+
+/// One lead byte selects a branch of `bs`, which reads what follows it.
+pub open spec fn sum_end(g: Branches, bs: Branches, p: Seq<u8>) -> int
+    decreases p.len(), 0nat
+{
+    if p.len() == 0 { -1 }
+    else {
+        match branch_of(bs, p[0]) {
+            None => -1,
+            Some(t) => { let r = shape_end(g, t, p.skip(1)); if r < 0 { -1 } else { 1 + r } }
+        }
+    }
+}
+
+// --- the one law: a row's element is never its end ---
+
+/// Every key sorts above the terminator, so a branch of this table can neither
+/// be read as the end of a row nor sort below one.
+pub open spec fn keys_marked(bs: Branches) -> bool
+    decreases bs
+{
+    match bs {
+        Branches::End => true,
+        Branches::Alt(k, _, rest) => k > STRUCT_END && keys_marked(*rest),
+    }
+}
+
+/// Whatever this shape reads opens with a byte above the terminator.
+///
+/// Demanded of a `Row`'s element and nowhere else: that is the one position a
+/// reader decides "element or end" from the byte in front of it. A `Sum` that
+/// is not a row element is free to key on `0x01` — a number's class byte does.
+pub open spec fn lead_marked(g: Branches, s: Shape) -> bool
+    decreases s
+{
+    match s {
+        Shape::Sum(bs) => keys_marked(*bs),
+        Shape::Tagged => keys_marked(g),
+        Shape::Product(a, _) => lead_marked(g, *a),
+        _ => false,
+    }
+}
+
+pub open spec fn wf_shape(g: Branches, s: Shape) -> bool
+    decreases s, 1int
+{
+    match s {
+        Shape::Product(a, b) => wf_shape(g, *a) && wf_shape(g, *b),
+        Shape::Sum(bs) => wf_branches(g, *bs),
+        Shape::Row(e) => lead_marked(g, *e) && wf_shape(g, *e),
+        _ => true,
+    }
+}
+
+pub open spec fn wf_branches(g: Branches, bs: Branches) -> bool
+    decreases bs, 0int
+{
+    match bs {
+        Branches::End => true,
+        Branches::Alt(_, s, rest) => wf_shape(g, *s) && wf_branches(g, *rest),
+    }
+}
+
+/// A grammar is well-formed when its own tree is, with `Tagged` resolved
+/// against itself. The back-reference needs nothing further: it names this same
+/// table, which this same check already covers.
+pub open spec fn wf_grammar(g: Branches) -> bool { keys_marked(g) && wf_branches(g, g) }
+
+// --- boundedness and locality, by structural induction ---
+
+pub proof fn lemma_shape_bounded(g: Branches, s: Shape, p: Seq<u8>)
+    ensures shape_end(g, s, p) >= 0 ==> shape_end(g, s, p) <= p.len()
+    decreases p.len(), shape_sz(s)
+{
+    match s {
+        Shape::Delimited => { lemma_delim_bounded(p); }
+        Shape::Product(a, b) => {
+            lemma_shape_bounded(g, *a, p);
+            let j = shape_end(g, *a, p);
+            if 0 <= j <= p.len() { lemma_shape_bounded(g, *b, p.skip(j)); }
+        }
+        Shape::Sum(bs) => { lemma_sum_bounded(g, *bs, p); }
+        Shape::Tagged => { lemma_sum_bounded(g, g, p); }
+        Shape::Row(e) => {
+            if p.len() > 0 && p[0] != STRUCT_END {
+                lemma_shape_bounded(g, *e, p);
+                let j = shape_end(g, *e, p);
+                if 0 < j <= p.len() { lemma_shape_bounded(g, Shape::Row(e), p.skip(j)); }
+            }
+        }
+        _ => {}
+    }
+}
+
+pub proof fn lemma_sum_bounded(g: Branches, bs: Branches, p: Seq<u8>)
+    ensures sum_end(g, bs, p) >= 0 ==> 1 <= sum_end(g, bs, p) <= p.len()
+    decreases p.len(), 0nat
+{
+    if p.len() > 0 {
+        match branch_of(bs, p[0]) {
+            Some(t) => { lemma_shape_bounded(g, t, p.skip(1)); }
+            None => {}
+        }
+    }
+}
+
+/// THE LOCALITY LEMMA. A shape's length is decided by the bytes it reads, so
+/// trailing bytes cannot change it.
+///
+/// One induction over the algebra replaces one lemma per kind. It asks nothing
+/// of [`wf_shape`]: lead-marking is what makes a reading unique, not what makes
+/// it local.
+pub proof fn lemma_shape_local(g: Branches, s: Shape, a: Seq<u8>, b: Seq<u8>)
+    requires is_prefix(a, b), 0 <= shape_end(g, s, a) <= a.len()
+    ensures shape_end(g, s, b) == shape_end(g, s, a)
+    decreases a.len(), shape_sz(s)
+{
+    match s {
+        Shape::Delimited => { lemma_delim_local(a, b); }
+        Shape::Product(x, y) => {
+            lemma_shape_bounded(g, *x, a);
+            let j = shape_end(g, *x, a);
+            lemma_shape_local(g, *x, a, b);
+            lemma_prefix_skip(a, b, j);
+            lemma_shape_bounded(g, *y, a.skip(j));
+            lemma_shape_local(g, *y, a.skip(j), b.skip(j));
+        }
+        Shape::Sum(bs) => { lemma_sum_local(g, *bs, a, b); }
+        Shape::Tagged => { lemma_sum_local(g, g, a, b); }
+        Shape::Row(e) => {
+            lemma_prefix_index(a, b, 0);
+            if a[0] != STRUCT_END {
+                lemma_shape_bounded(g, *e, a);
+                let j = shape_end(g, *e, a);
+                lemma_shape_local(g, *e, a, b);
+                lemma_prefix_skip(a, b, j);
+                lemma_shape_bounded(g, Shape::Row(e), a.skip(j));
+                lemma_shape_local(g, Shape::Row(e), a.skip(j), b.skip(j));
+            }
+        }
+        _ => {}
+    }
+}
+
+pub proof fn lemma_sum_local(g: Branches, bs: Branches, a: Seq<u8>, b: Seq<u8>)
+    requires is_prefix(a, b), 0 <= sum_end(g, bs, a) <= a.len()
+    ensures sum_end(g, bs, b) == sum_end(g, bs, a)
+    decreases a.len(), 0nat
+{
+    lemma_sum_bounded(g, bs, a);
+    lemma_prefix_index(a, b, 0);
+    match branch_of(bs, a[0]) {
+        Some(t) => {
+            lemma_prefix_skip(a, b, 1);
+            lemma_shape_bounded(g, t, a.skip(1));
+            lemma_shape_local(g, t, a.skip(1), b.skip(1));
+        }
+        None => {}
+    }
+}
+
+proof fn lemma_marked_key(bs: Branches, b: u8)
+    requires keys_marked(bs), branch_of(bs, b) is Some
+    ensures b > STRUCT_END
+    decreases bs
+{
+    match bs {
+        Branches::End => {}
+        Branches::Alt(k, _, rest) => { if k != b { lemma_marked_key(*rest, b); } }
+    }
+}
+
+// ========================== the canonical grammar ============================
+
+/// THE GRAMMAR. One value; the whole byte format.
+///
+/// Cross-kind order is lead-byte order, so the table's byte assignments are the
+/// released format and cannot move. What each kind's body looks like is decided
+/// by what the kind is: a fixed-width identity is `Fixed`, opaque content of
+/// unknown length is `Delimited`, a discriminated body is a `Sum`, a container
+/// is a `Row`, and a value that carries a tie-break sorts as a `Product` with
+/// the tie-break last.
+pub open spec fn grammar() -> Branches {
+    alt(0x05, Shape::Fixed(0nat),                                   // Null
+    alt(0x08, Shape::Fixed(0nat),                                   // False
+    alt(0x09, Shape::Fixed(0nat),                                   // True
+    alt(0x10, num_shape(),                                          // Num
+    alt(0x18, Shape::Delimited,                                     // Str
+    alt(0x20, Shape::Delimited,                                     // Bytes
+    alt(0x28, Shape::Fixed(16nat),                                  // Uuid
+    alt(0x30, prod(Shape::Delimited, Shape::Fixed(1nat)),           // Regex: pattern, then flags
+    alt(0x38, Shape::Tagged,                                        // Json: a value, restricted
+    alt(0x40, Shape::Fixed(32nat),                                  // Vector
+    alt(0x48, row(Shape::Tagged),                                   // List
+    alt(0x50, row(Shape::Tagged),                                   // Set
+    alt(0x58, Shape::Fixed(9nat),                                   // Validity
+    alt(0x60, interval_shape(),                                     // Interval
+    alt(0x68, Shape::Fixed(8nat),                                   // Geometry
+    Branches::End)))))))))))))))
+}
+
+/// A number's class byte selects its magnitude: zero carries only the
+/// representation tie-break, a signed magnitude carries exponent, fraction and
+/// tie-break. There is no NaN class — NaN is not a real, and the mint refuses
+/// it, so no ordering convention has to be invented for one.
+pub open spec fn num_shape() -> Shape {
+    Shape::Sum(Box::new(
+        alt(0x01, Shape::Fixed(12nat),
+        alt(0x02, Shape::Fixed(1nat),
+        alt(0x03, Shape::Fixed(12nat),
+        Branches::End)))))
+}
+
+/// An interval is empty, or a lower end then an upper end. The two ends cannot
+/// share a marker table: unbounded below is the least element of its axis and
+/// unbounded above is the greatest, so their markers must sort opposite ways
+/// against a bounded end.
+pub open spec fn interval_shape() -> Shape {
+    Shape::Sum(Box::new(
+        alt(0x01, Shape::Fixed(0nat),                               // empty
+        alt(0x02, prod(lo_shape(), hi_shape()),                     // bounded
+        Branches::End))))
+}
+
+/// Unbounded below sorts under every instant, so its marker is the lower one.
+pub open spec fn lo_shape() -> Shape {
+    Shape::Sum(Box::new(
+        alt(0x01, Shape::Fixed(0nat),
+        alt(0x02, Shape::Fixed(8nat),
+        Branches::End))))
+}
+
+/// Unbounded above sorts over every instant, so its marker is the higher one.
+pub open spec fn hi_shape() -> Shape {
+    Shape::Sum(Box::new(
+        alt(0x02, Shape::Fixed(8nat),
+        alt(0x03, Shape::Fixed(0nat),
+        Branches::End))))
+}
+
+pub open spec fn alt(k: u8, s: Shape, rest: Branches) -> Branches {
+    Branches::Alt(k, Box::new(s), Box::new(rest))
+}
+
+pub open spec fn prod(a: Shape, b: Shape) -> Shape {
+    Shape::Product(Box::new(a), Box::new(b))
+}
+
+pub open spec fn row(e: Shape) -> Shape { Shape::Row(Box::new(e)) }
+
+/// The grammar obeys its one law. Machine-checked, not asserted: it is what
+/// rejects a row whose element could be read as the row's end.
+pub proof fn theorem_grammar_wf()
+    ensures wf_grammar(grammar())
+{ assert(wf_grammar(grammar())) by (compute_only); }
+
+// --- the grammar's reader, and what it reads exactly ---
+
+/// The shape a lead byte selects.
+pub open spec fn tag_shape(t: u8) -> Option<Shape> { branch_of(grammar(), t) }
+
+/// Where tag `t`'s body ends in `p`.
+pub open spec fn body_end(t: u8, p: Seq<u8>) -> int {
+    match tag_shape(t) {
+        Some(sh) => shape_end(grammar(), sh, p),
+        None => -1,
+    }
+}
+
+/// A body the tag's shape measures exactly: the kind's mint produced it.
+pub open spec fn valid_body(t: u8, k: Seq<u8>) -> bool { body_end(t, k) == k.len() }
+
+/// A tag whose body is a row of values.
+pub open spec fn is_row_tag(t: u8) -> bool { tag_shape(t) == Some(row(Shape::Tagged)) }
+
+pub open spec fn scan(e: Seq<u8>) -> int { shape_end(grammar(), Shape::Tagged, e) }
+
+/// Peel the tag. Every completeness proof in the value tree is this step once.
+pub proof fn lemma_scan_peel(t: u8, body: Seq<u8>)
+    ensures scan(seq![t] + body) == match tag_shape(t) {
+        Some(sh) => { let r = shape_end(grammar(), sh, body); if r < 0 { -1int } else { 1 + r } }
+        None => -1int,
+    }
+{
+    let e = seq![t] + body;
+    assert(e.len() > 0 && e[0] == t);
+    assert(e.skip(1) =~= body);
+    assert(scan(e) == sum_end(grammar(), grammar(), e));
+    assert(branch_of(grammar(), e[0]) == tag_shape(t));
+    match tag_shape(t) {
+        Some(sh) => { assert(shape_end(grammar(), sh, e.skip(1)) == shape_end(grammar(), sh, body)); }
+        None => {}
     }
 }
 
 /// A complete encoding: the grammar consumes it exactly.
 pub open spec fn complete(x: Seq<u8>) -> bool { scan(x) == x.len() }
 
-proof fn lemma_prefix_index(a: Seq<u8>, b: Seq<u8>, i: int)
-    requires is_prefix(a, b), 0 <= i < a.len()
-    ensures a[i] == b[i]
-{ assert(b.take(a.len() as int)[i] == a[i]); }
+pub open spec fn scan_row_bytes(e: Seq<u8>) -> int {
+    shape_end(grammar(), row(Shape::Tagged), e)
+}
 
 proof fn lemma_scan_bounded(e: Seq<u8>)
     ensures scan(e) >= 0 ==> 1 <= scan(e) <= e.len()
-    decreases e.len(), 0int
-{ if e.len() > 0 && e[0] >= TAG_MIN && is_seq_tag(e[0]) { lemma_scan_row_bounded(e.drop_first()); } }
-
-proof fn lemma_scan_row_bounded(e: Seq<u8>)
-    ensures scan_row_bytes(e) >= 0 ==> 1 <= scan_row_bytes(e) <= e.len()
-    decreases e.len(), 1int
-{
-    if e.len() > 0 && e[0] != STRUCT_END {
-        lemma_scan_bounded(e);
-        let j = scan(e);
-        if 0 < j <= e.len() { lemma_scan_row_bounded(e.skip(j)); }
-    }
-}
+{ lemma_sum_bounded(grammar(), grammar(), e); }
 
 proof fn lemma_scan_local(a: Seq<u8>, b: Seq<u8>)
-    requires kind_local(), is_prefix(a, b), scan(a) >= 0
+    requires is_prefix(a, b), scan(a) >= 0
     ensures scan(b) == scan(a)
-    decreases a.len(), 0int
-{
-    lemma_scan_bounded(a);
-    lemma_prefix_index(a, b, 0);
-    if is_seq_tag(a[0]) {
-        assert(is_prefix(a.drop_first(), b.drop_first())) by {
-            assert(b.drop_first().take(a.drop_first().len() as int) =~= a.drop_first()) by {
-                assert forall|i: int| 0 <= i < a.len() - 1
-                    implies #[trigger] b.drop_first().take(a.len() - 1)[i] == a.drop_first()[i] by {
-                    lemma_prefix_index(a, b, i + 1);
-                }
-            }
-        }
-        lemma_scan_row_local(a.drop_first(), b.drop_first());
-    } else {
-        assert(is_prefix(a.drop_first(), b.drop_first())) by {
-            assert(b.drop_first().take(a.drop_first().len() as int) =~= a.drop_first()) by {
-                assert forall|i: int| 0 <= i < a.len() - 1
-                    implies #[trigger] b.drop_first().take(a.len() - 1)[i] == a.drop_first()[i] by {
-                    lemma_prefix_index(a, b, i + 1);
-                }
-            }
-        }
-        assert(key_end(a[0], b.drop_first()) == key_end(a[0], a.drop_first()));
-    }
-}
-
-proof fn lemma_scan_row_local(a: Seq<u8>, b: Seq<u8>)
-    requires kind_local(), is_prefix(a, b), scan_row_bytes(a) >= 0
-    ensures scan_row_bytes(b) == scan_row_bytes(a)
-    decreases a.len(), 1int
-{
-    lemma_scan_row_bounded(a);
-    lemma_prefix_index(a, b, 0);
-    if a[0] != STRUCT_END {
-        lemma_scan_bounded(a);
-        lemma_scan_local(a, b);
-        let j = scan(a);
-        assert(is_prefix(a.skip(j), b.skip(j))) by {
-            assert(b.skip(j).take(a.skip(j).len() as int) =~= a.skip(j)) by {
-                assert forall|i: int| 0 <= i < a.len() - j
-                    implies #[trigger] b.skip(j).take(a.len() - j)[i] == a.skip(j)[i] by {
-                    lemma_prefix_index(a, b, i + j);
-                }
-            }
-        }
-        lemma_scan_row_local(a.skip(j), b.skip(j));
-    }
-}
+{ lemma_scan_bounded(a); lemma_shape_local(grammar(), Shape::Tagged, a, b); }
 
 /// THE PREFIX-CODE THEOREM. Complete encodings form a prefix code, so the
 /// closure theorem's hypothesis holds for every pair of them, everywhere.
 pub proof fn theorem_prefix_code(x: Seq<u8>, y: Seq<u8>)
-    requires kind_local(), complete(x), complete(y), is_prefix(x, y)
+    requires complete(x), complete(y), is_prefix(x, y)
     ensures x =~= y
 {
     lemma_scan_local(x, y);
@@ -719,7 +1099,7 @@ pub proof fn theorem_prefix_code(x: Seq<u8>, y: Seq<u8>)
 }
 
 pub proof fn lemma_complete_incomparable(x: Seq<u8>, y: Seq<u8>)
-    requires kind_local(), complete(x), complete(y)
+    requires complete(x), complete(y)
     ensures incomparable(x, y)
 {
     if is_prefix(x, y) { theorem_prefix_code(x, y); }
@@ -728,8 +1108,14 @@ pub proof fn lemma_complete_incomparable(x: Seq<u8>, y: Seq<u8>)
 
 pub proof fn lemma_complete_is_tagged(x: Seq<u8>)
     requires complete(x)
-    ensures x.len() > 0, x[0] >= TAG_MIN
-{ lemma_scan_bounded(x); }
+    ensures x.len() > 0, x[0] > STRUCT_END
+{
+    lemma_scan_bounded(x);
+    theorem_grammar_wf();
+    assert(sum_end(grammar(), grammar(), x) == x.len());
+    assert(branch_of(grammar(), x[0]) is Some);
+    lemma_marked_key(grammar(), x[0]);
+}
 
 // ============================== the value tree ===============================
 
@@ -758,8 +1144,8 @@ pub open spec fn wf(v: Val) -> bool
     decreases v, 1int
 {
     match v {
-        Val::S(t, k) => t >= TAG_MIN && !is_seq_tag(t) && valid_key(t, k),
-        Val::L(t, es) => t >= TAG_MIN && is_seq_tag(t) && wf_all(es),
+        Val::S(t, k) => !is_row_tag(t) && valid_body(t, k),
+        Val::L(t, es) => is_row_tag(t) && wf_all(es),
     }
 }
 
@@ -834,13 +1220,13 @@ proof fn lemma_complete_row_is_tagged(r: Seq<Seq<u8>>)
     ensures tagged(r)
 {
     assert forall|i: int| 0 <= i < r.len()
-        implies #[trigger] r[i].len() > 0 && r[i][0] >= TAG_MIN by {
+        implies #[trigger] r[i].len() > 0 && r[i][0] > STRUCT_END by {
         lemma_complete_is_tagged(r[i]);
     }
 }
 
 proof fn lemma_complete_row_is_family(r: Seq<Seq<u8>>, s: Seq<Seq<u8>>)
-    requires kind_local(), all_complete(r), all_complete(s)
+    requires all_complete(r), all_complete(s)
     ensures pfx_family(r, s)
 {
     assert forall|i: int, j: int| 0 <= i < r.len() && 0 <= j < s.len()
@@ -851,7 +1237,7 @@ proof fn lemma_complete_row_is_family(r: Seq<Seq<u8>>, s: Seq<Seq<u8>>)
 
 /// A row of complete encodings is itself scanned exactly, whatever follows it.
 proof fn lemma_scan_row_of_row(r: Seq<Seq<u8>>, rest: Seq<u8>)
-    requires kind_local(), all_complete(r)
+    requires all_complete(r)
     ensures scan_row_bytes((cat(r) + seq![STRUCT_END]) + rest) == cat(r).len() + 1
     decreases r.len()
 {
@@ -877,7 +1263,7 @@ proof fn lemma_scan_row_of_row(r: Seq<Seq<u8>>, rest: Seq<u8>)
 }
 
 pub proof fn lemma_enc_complete(v: Val)
-    requires kind_laws(), wf(v)
+    requires wf(v)
     ensures complete(enc(v))
     decreases sz(v)
 {
@@ -886,20 +1272,22 @@ pub proof fn lemma_enc_complete(v: Val)
     assert(e.drop_first() =~= body(v));
     match v {
         Val::S(t, k) => {
-            assert(valid_key(t, k));
-            assert(key_end(t, k) == k.len());
+            lemma_scan_peel(t, k);
+            assert(valid_body(t, k));
+            assert(body_end(t, k) == k.len());
         }
         Val::L(t, es) => {
             lemma_enc_seq_complete(es);
             let r = enc_seq(es);
             lemma_scan_row_of_row(r, Seq::empty());
             assert(body(v) =~= (cat(r) + seq![STRUCT_END]) + Seq::<u8>::empty());
+            lemma_scan_peel(t, body(v));
         }
     }
 }
 
 pub proof fn lemma_enc_seq_complete(es: Vals)
-    requires kind_laws(), wf_all(es)
+    requires wf_all(es)
     ensures all_complete(enc_seq(es))
     decreases sz_all(es)
 {
@@ -920,7 +1308,7 @@ pub proof fn lemma_enc_seq_complete(es: Vals)
 // --- injectivity ---
 
 pub proof fn lemma_enc_injective(u: Val, v: Val)
-    requires kind_laws(), wf(u), wf(v), enc(u) =~= enc(v)
+    requires wf(u), wf(v), enc(u) =~= enc(v)
     ensures u == v
     decreases sz(u)
 {
@@ -950,7 +1338,7 @@ pub proof fn lemma_enc_injective(u: Val, v: Val)
 }
 
 pub proof fn lemma_enc_seq_injective(xs: Vals, ys: Vals)
-    requires kind_laws(), wf_all(xs), wf_all(ys), enc_seq(xs) =~= enc_seq(ys)
+    requires wf_all(xs), wf_all(ys), enc_seq(xs) =~= enc_seq(ys)
     ensures xs == ys
     decreases sz_all(xs)
 {
@@ -984,7 +1372,7 @@ pub proof fn lemma_enc_seq_injective(xs: Vals, ys: Vals)
 
 /// `a <= b  <=>  encode(a) <=lex encode(b)`, over the whole value domain.
 pub proof fn theorem_value_order(u: Val, v: Val)
-    requires kind_laws(), wf(u), wf(v)
+    requires wf(u), wf(v)
     ensures val_le(u, v) == lex_le(enc(u), enc(v))
     decreases sz(u)
 {
@@ -1019,7 +1407,7 @@ pub proof fn theorem_value_order(u: Val, v: Val)
 }
 
 pub proof fn lemma_vals_order(xs: Vals, ys: Vals)
-    requires kind_laws(), wf_all(xs), wf_all(ys)
+    requires wf_all(xs), wf_all(ys)
     ensures vals_le(xs, ys) == row_le(enc_seq(xs), enc_seq(ys))
     decreases sz_all(xs)
 {
@@ -1074,6 +1462,7 @@ proof fn lemma_esc_snoc(t: Seq<u8>, b: u8)
     }
 }
 
+#[verifier::rlimit(4)]
 proof fn lemma_cat_snoc(r: Seq<Seq<u8>>, x: Seq<u8>)
     ensures cat(r.push(x)) =~= cat(r) + x
     decreases r.len()
@@ -1122,38 +1511,16 @@ impl CanonicalBytes {
     { proof { use_type_invariant(self); lemma_complete_is_tagged(self.view()); } self.bytes.len() }
 
     pub fn tag_byte(&self) -> (b: u8)
-        ensures b == self.view()[0], b >= TAG_MIN
+        ensures b == self.view()[0], b > STRUCT_END
     {
         proof { use_type_invariant(self); lemma_complete_is_tagged(self.view()); }
         self.bytes[0]
     }
 }
 
-/// The grammar's two obligations, as a value.
-///
-/// A `requires kind_laws()` can be forgotten at a call site; a value cannot.
-/// [`GrammarLaws::establish`] is the sole mint and it discharges both laws, so
-/// every sealing entry point below takes the token rather than restating the
-/// hypothesis. There is no way to encode anything without holding it.
-// CONSTRUCT: Marker GrammarLaws
-pub struct GrammarLaws {
-    seal: bool,
-}
-
-// CONSTRUCT: ImplBlock GrammarLaws
-impl GrammarLaws {
-    #[verifier::type_invariant]
-    closed spec fn holds(self) -> bool { kind_laws() && self.seal }
-
-    /// Mint the token by discharging both obligations.
-    pub fn establish() -> (r: GrammarLaws) {
-        proof { lemma_kind_local(); lemma_kind_complete(); }
-        GrammarLaws { seal: true }
-    }
-}
-
-/// A tag that opens a sequence. A `u8` is not a tag: the invariant travels with
-/// the value, so no site re-checks and no site can pass a scalar tag here.
+/// A tag whose body is a row of values. A `u8` is not a tag: the invariant
+/// travels with the value, so no site re-checks and no site can pass a scalar
+/// tag here.
 // CONSTRUCT: Newtype SeqTag
 #[derive(Clone, Copy)]
 pub struct SeqTag {
@@ -1168,27 +1535,27 @@ impl View for SeqTag {
 // CONSTRUCT: ImplBlock SeqTag
 impl SeqTag {
     #[verifier::type_invariant]
-    closed spec fn wf_tag(self) -> bool { self@ >= TAG_MIN && is_seq_tag(self@) }
+    closed spec fn wf_tag(self) -> bool { is_row_tag(self@) }
 
     pub fn mint(b: u8) -> (r: SeqTag)
-        requires b >= TAG_MIN, is_seq_tag(b)
+        requires is_row_tag(b)
         ensures r@ == b
     { SeqTag { byte: b } }
 
     pub fn byte(&self) -> (b: u8)
-        ensures b == self@, b >= TAG_MIN, is_seq_tag(b)
+        ensures b == self@, is_row_tag(b)
     { proof { use_type_invariant(*self); } self.byte }
 }
 
 
 /// Seal a sequence of already-sealed values.
 // CONSTRUCT: Mint seal_sequence
-pub fn seal_sequence(laws: &GrammarLaws, tag: SeqTag, elems: &Vec<CanonicalBytes>)
+pub fn seal_sequence(tag: SeqTag, elems: &Vec<CanonicalBytes>)
     -> (r: CanonicalBytes)
     ensures
         r.view() =~= seq![tag@] + enc_row(elems@.map_values(|e: CanonicalBytes| e.view())),
 {
-    proof { use_type_invariant(laws); use_type_invariant(tag); }
+    proof { use_type_invariant(tag); }
     let tag = tag.byte();
     let ghost views = elems@.map_values(|e: CanonicalBytes| e.view());
     let mut out: Vec<u8> = Vec::new();
@@ -1230,9 +1597,9 @@ pub fn seal_sequence(laws: &GrammarLaws, tag: SeqTag, elems: &Vec<CanonicalBytes
         assert(all_complete(views));
         assert(views.take(elems.len() as int) =~= views);
         lemma_scan_row_of_row(views, Seq::empty());
-        assert(out@ =~= seq![tag] + ((cat(views) + seq![STRUCT_END]) + Seq::<u8>::empty()));
-        assert(out@[0] == tag);
-        assert(out@.drop_first() =~= (cat(views) + seq![STRUCT_END]) + Seq::<u8>::empty());
+        assert(out@ =~= seq![tag] + (cat(views) + seq![STRUCT_END]));
+        lemma_scan_peel(tag, cat(views) + seq![STRUCT_END]);
+        assert((cat(views) + seq![STRUCT_END]) =~= (cat(views) + seq![STRUCT_END]) + Seq::<u8>::empty());
     }
     CanonicalBytes { bytes: out }
 }
