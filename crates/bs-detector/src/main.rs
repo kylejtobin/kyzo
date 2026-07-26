@@ -26,7 +26,6 @@
 //! This crate is a workspace member on purpose: the detector scans itself.
 
 use std::collections::BTreeSet;
-use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 /// A forbidden shape, with the file and line that holds it.
@@ -71,6 +70,11 @@ enum Mode {
     Gate { root: PathBuf },
     Aim { target: PathBuf },
 }
+
+// Note: neither mode writes crates/xtask/gate.log. The verdict combines this
+// report with whether the tree compiles, and only crates/xtask/gate.sh holds
+// both facts. A detector that authored the verdict would be claiming a green
+// tree it never built.
 
 fn main() {
     let mut root = PathBuf::from(".");
@@ -408,54 +412,27 @@ fn report_aim(files: &[PathBuf], violations: &[Violation]) {
     }
 }
 
-fn report_gate(root: &Path, files: &[PathBuf], violations: &[Violation]) {
+fn report_gate(_root: &Path, files: &[PathBuf], violations: &[Violation]) {
     let mut per_rule = std::collections::BTreeMap::new();
     for v in violations {
         *per_rule.entry(v.rule).or_insert(0usize) += 1;
     }
     let total = violations.len();
-
-    // Exactly ONE line here may match the hook's `= N violations` pattern
-    // (.claude/hooks/build-gate-prompt.sh); the per-rule breakdown is written
-    // in a shape that cannot match, so the banner reports one number.
-    let mut counts = String::new();
-    for (rule, desc) in RULES {
-        let n = per_rule.get(rule).copied().unwrap_or(0);
-        let _ = writeln!(counts, "{rule}  {n:>6}  {desc}");
-    }
-    let _ = writeln!(counts, "total = {total} violations");
-
-    // ACKNOWLEDGE / ALARM is the pester hook's vocabulary, and it is the hook
-    // that decides what a red tree costs. Any other word here reads as neither
-    // and silently disarms the guard.
-    let verdict = if total == 0 {
-        "GATE: ACKNOWLEDGE".to_string()
-    } else {
-        format!("GATE: ALARM {total} forbidden shapes across {} files", {
-            let s: BTreeSet<&str> = violations.iter().map(|v| v.file.as_str()).collect();
-            s.len()
-        })
-    };
-
-    let log = root.join("crates/xtask/gate.log");
-    let cnt = root.join("crates/xtask/gate-counts.txt");
-    let _ = std::fs::write(&log, format!("{verdict}\n"));
-    let _ = std::fs::write(&cnt, counts);
+    let touched: BTreeSet<&str> = violations.iter().map(|v| v.file.as_str()).collect();
 
     println!("bs-detector — forbidden shapes, {} files scanned", files.len());
     for (rule, desc) in RULES {
         let n = per_rule.get(rule).copied().unwrap_or(0);
-        println!("  {rule}  {n:>6}  {desc}");
+        println!("{rule}  {n:>6}  {desc}");
     }
-    println!("  {:->6}  {total:>6}  TOTAL", "");
-
     for v in violations.iter().take(40) {
         println!("{}:{}: {} {}", v.file, v.line, v.rule, v.detail);
     }
     if total > 40 {
         println!("… {} more", total - 40);
     }
-    println!("{verdict}");
+    // The line the gate caller parses. Exactly one line may carry this shape.
+    println!("total = {total} violations across {} files", touched.len());
 
     if total > 0 {
         std::process::exit(1);

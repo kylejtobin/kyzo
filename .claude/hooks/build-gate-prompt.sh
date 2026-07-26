@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# UserPromptSubmit hook: BUILD GATE notice + live BS-detector counts.
-# (bs-message.txt at the repo root belongs to the STOP guard, not this hook.)
-# The count line is produced by the gate itself — run_bs_detector writes
-# crates/xtask/gate-counts.txt on every gate run (watcher fires on every
-# crates/ change). This script only echoes that artifact; it never counts
-# the tree itself — a second counting authority is the fraud the gate kills.
-f="${CLAUDE_PROJECT_DIR:-.}/crates/xtask/gate-counts.txt"
+# UserPromptSubmit hook: echo the gate verdict.
+#
+# The verdict is authored by crates/xtask/gate.sh, which is the only thing that
+# knows both whether the tree compiles and what it contains. This script echoes
+# that headline verbatim and computes nothing — a second counting authority is
+# the fraud the gate exists to catch, and a bare number cannot distinguish
+# "1122 forbidden shapes" from "the workspace does not build".
+f="${CLAUDE_PROJECT_DIR:-.}/crates/xtask/gate.log"
 if [ -f "$f" ]; then
-    n="$(sed -n 's/.*= \([0-9][0-9]*\) violations.*/\1/p' "$f")"
-    printf 'GATE ALARM: %s violations\n' "${n:-?}"
+    head -n 1 "$f"
 else
-    printf 'GATE ALARM: no count yet\n'
+    printf 'GATE: no verdict yet — run `just gate`\n'
 fi

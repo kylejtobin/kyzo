@@ -44,9 +44,11 @@ case "$head1" in
   "GATE: ACKNOWLEDGE"* ) exit 0 ;;
   "GATE: ALARM"* )
     echo "$now" > "$STAMP"
-    counts="${CLAUDE_PROJECT_DIR:-.}/crates/xtask/gate-counts.txt"
-    n="$(sed -n 's/.*= \([0-9][0-9]*\) violations.*/\1/p' "$counts" 2>/dev/null)"
-    echo "GATE ALARM: ${n:-?} violations in crates/ — real code, reported by the detector; gate.log only records them, never edit it to change the count" >&2
+    # Echo the verdict verbatim. It is authored by crates/xtask/gate.sh, the
+    # only thing holding both facts; recomposing it here from the counts file
+    # would be a second authority, and a bare violation count cannot say
+    # "the workspace does not build".
+    echo "$head1 — gate.log records what was found; it is never edited to change it" >&2
     exit 2
     ;;
   *) exit 0 ;;
