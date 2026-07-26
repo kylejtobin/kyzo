@@ -55,9 +55,35 @@ if [ "$tool" = "Bash" ]; then
   # read-only commands — a guard that blocks reads teaches people to route
   # around it, which is the one failure mode a wall cannot afford.
   write_shaped='>[[:space:]]*[^&|[:space:]]|(^|[^[:alnum:]_.-])(tee|mv|cp|rm|ln|install|truncate|dd|python3?|perl|patch|ed)([^[:alnum:]_.-]|$)|sed[[:space:]]+-i|awk[[:space:]]+-i|git[[:space:]]+(checkout|restore|apply|stash|reset|clean|mv|rm|revert)'
-  if printf '%s' "$cmd" | grep -Eq "$protected" \
-     && printf '%s' "$cmd" | grep -Eq "$write_shaped"; then
-    deny "$(reason "This command writes to gate machinery, which")"
+
+  # Discarding output is not writing to the tree. /dev/null is a fixed sink
+  # that cannot name a repository file, so blank those redirects before the
+  # write test — otherwise `./crates/xtask/gate.sh >/dev/null` reads as an edit
+  # to gate.sh, and the guard blocks the gate from running at all.
+  probe=$(printf '%s' "$cmd" | sed 's#[0-9]*>[[:space:]]*/dev/null##g')
+
+  if printf '%s' "$probe" | grep -Eq "$protected" \
+     && printf '%s' "$probe" | grep -Eq "$write_shaped"; then
+    # Approvals mean the same thing on both branches. The editor branch has
+    # always honoured them; this one did not, so an approved path could be
+    # edited but not executed alongside a redirect, and the approval file meant
+    # two different things depending on which tool you reached for.
+    #
+    # Every protected path the command names must be approved. One unapproved
+    # path denies the whole command: a command touching an approved file and an
+    # unapproved one is not half allowed. A command that matched the protected
+    # pattern but yields no extractable path stays denied, because an
+    # unreadable command is not an approved one.
+    approved_all=0
+    for candidate in $(printf '%s' "$probe" \
+      | grep -oE '(crates/bs-detector/[A-Za-z0-9_./-]+|crates/xtask/gate\.sh|\.claude/hooks/[A-Za-z0-9_./-]+|\.claude/settings\.json)'); do
+      approves "$candidate" || approved_all=1
+      [ "$approved_all" -eq 0 ] || break
+    done
+    if [ "$approved_all" -ne 0 ] \
+       || ! printf '%s' "$probe" | grep -qE '(crates/bs-detector/[A-Za-z0-9_./-]+|crates/xtask/gate\.sh|\.claude/hooks/[A-Za-z0-9_./-]+|\.claude/settings\.json)'; then
+      deny "$(reason "This command writes to gate machinery, which")"
+    fi
   fi
   exit 0
 fi
