@@ -121,7 +121,19 @@ macro_rules! grammar_table {
         0x28 => Shape::Fixed(16),
         0x30 => Shape::Product(Box::new(Shape::Delimited), Box::new(Shape::Fixed(1))),
         0x38 => Shape::Tagged,
-        0x40 => Shape::Fixed(32),
+        // A vector is its dimension, then its components. Dimension leads
+        // because two vectors of different length order by length first, and a
+        // fixed width here would pin dimensionality into the value type — the
+        // one thing the model zone forbids, since dimension is per row.
+        //
+        // The components are a row of TAGGED values, not a row of bare Num
+        // bodies: `keys_marked` requires a lead byte above STRUCT_END, and
+        // Num's negative class byte IS 0x01. A row of bare Nums could not tell
+        // a negative component from the end of the row.
+        0x40 => Shape::Product(
+            Box::new(Shape::Fixed(4)),
+            Box::new(Shape::Row(Box::new(Shape::Tagged))),
+        ),
         0x48 => Shape::Row(Box::new(Shape::Tagged)),
         0x50 => Shape::Row(Box::new(Shape::Tagged)),
         0x58 => Shape::Fixed(9),
@@ -1597,7 +1609,7 @@ pub(crate) fn branch_lookup(bs: &Branches, b: u8) -> (r: Option<&Shape>)
 /// inside the third element of a nested row names that position and not the
 /// start of the buffer.
 // CONSTRUCT: ClosedSum Reason
-#[derive(PartialEq, Eq, Structural)]
+#[derive(Clone, Copy, PartialEq, Eq, Structural)]
 pub enum Reason {
     /// The input ended inside a shape that had more to read. `at` is the first
     /// offset the reader needed and did not have — one past the last byte
@@ -1613,19 +1625,69 @@ pub enum Reason {
     TooDeep,
 }
 
+/// A byte offset into the input a reader was handed.
+///
+/// A newtype and not a `usize` because an offset is a fact about one buffer.
+/// Bare integers add to lengths, compare against offsets into other buffers,
+/// and read as capacities — all silently. The only way in is `Offset::at`,
+/// inside this module, on the path that actually did the reading.
+// CONSTRUCT: ValueObject Offset
+#[derive(Clone, Copy, PartialEq, Eq, Structural)]
+pub struct Offset(usize);
+
+impl Offset {
+    /// The offset as a number, in spec. `closed` because the field is private:
+    /// a postcondition on a public function has to be well-formed for callers
+    /// that cannot see inside, so the view is what they get to reason about.
+    pub closed spec fn spec_get(&self) -> usize { self.0 }
+
+    /// Where the reader stopped, for a caller that wants to point at it.
+    pub fn get(&self) -> (n: usize)
+        ensures n == self.spec_get()
+    { self.0 }
+}
+
+/// A reader's typed refusal: what was wrong, and where.
+///
+/// Both seats are private. A refusal is a claim about where a reading stopped,
+/// so a caller that can mint one can put any offset in a log or a test
+/// expectation and have it read as the reader's own finding. Only the scan
+/// path in this module produces them; everyone else reads them.
 // CONSTRUCT: ValueObject Refusal
-#[derive(PartialEq, Eq, Structural)]
+#[derive(Clone, Copy, PartialEq, Eq, Structural)]
 pub struct Refusal {
-    pub reason: Reason,
-    pub at: usize,
+    reason: Reason,
+    at: Offset,
+}
+
+impl Refusal {
+    pub closed spec fn spec_reason(&self) -> Reason { self.reason }
+    pub closed spec fn spec_at(&self) -> Offset { self.at }
+
+    pub fn reason(&self) -> (r: Reason)
+        ensures r == self.spec_reason()
+    { self.reason }
+
+    /// The offset the reading stopped at.
+    pub fn at(&self) -> (o: Offset)
+        ensures o == self.spec_at()
+    { self.at }
+}
+
+/// The one constructor, module-private.
+fn refuse(reason: Reason, at: usize) -> (r: Refusal)
+    ensures r.spec_reason() == reason, r.spec_at().spec_get() == at
+{
+    Refusal { reason, at: Offset(at) }
 }
 
 /// Move a refusal out from a sub-reading into the reading that contains it.
 fn deeper(e: Refusal, base: usize) -> (r: Refusal)
-    ensures r.reason == e.reason
+    ensures r.spec_reason() == e.spec_reason()
 {
-    let at = if base <= usize::MAX - e.at { base + e.at } else { usize::MAX };
-    Refusal { reason: e.reason, at }
+    let inner = e.at.0;
+    let at = if base <= usize::MAX - inner { base + inner } else { usize::MAX };
+    refuse(e.reason, at)
 }
 
 /// Where the escaped body at the front of `p` ends. Total over every
@@ -1649,7 +1711,7 @@ pub(crate) fn delim_scan(p: &[u8]) -> (r: Result<usize, Refusal>)
         proof { assert(p@.skip(i as int)[0] == p@[i as int]); }
         if i + 1 >= p.len() {
             proof { assert(p@.skip(i as int).len() < 2); }
-            return Err(Refusal { reason: Reason::Truncated, at: p.len() });
+            return Err(refuse(Reason::Truncated, p.len()));
         }
         proof { assert(p@.skip(i as int)[1] == p@[i as int + 1]); }
         if p[i] == STRUCT_ESC {
@@ -1658,7 +1720,7 @@ pub(crate) fn delim_scan(p: &[u8]) -> (r: Result<usize, Refusal>)
                 return Ok(i + 2);
             }
             if p[i + 1] != 0xFF {
-                return Err(Refusal { reason: Reason::BadEscape(p[i + 1]), at: i + 1 });
+                return Err(refuse(Reason::BadEscape(p[i + 1]), i + 1));
             }
             proof { assert(p@.skip(i as int).skip(2) =~= p@.skip(i as int + 2)); }
             i = i + 2;
@@ -1668,7 +1730,7 @@ pub(crate) fn delim_scan(p: &[u8]) -> (r: Result<usize, Refusal>)
         }
     }
     proof { assert(p@.skip(i as int).len() < 2); }
-    Err(Refusal { reason: Reason::Truncated, at: p.len() })
+    Err(refuse(Reason::Truncated, p.len()))
 }
 
 /// Nesting a reader will descend. Deeper input is refused, never followed: the
@@ -1689,13 +1751,13 @@ pub(crate) fn shape_scan(g: &Branches, s: &Shape, p: &[u8], depth: u32) -> (r: R
     decreases p@.len(), shape_sz(*s)
 {
     if depth >= MAX_DEPTH {
-        return Err(Refusal { reason: Reason::TooDeep, at: 0 });
+        return Err(refuse(Reason::TooDeep, 0));
     }
     match s {
         Shape::Fixed(n) => if p.len() >= *n {
             Ok(*n)
         } else {
-            Err(Refusal { reason: Reason::Truncated, at: p.len() })
+            Err(refuse(Reason::Truncated, p.len()))
         },
         Shape::Delimited => delim_scan(p),
         Shape::Product(a, b) => {
@@ -1729,7 +1791,7 @@ pub(crate) fn shape_scan(g: &Branches, s: &Shape, p: &[u8], depth: u32) -> (r: R
             {
                 if at >= p.len() {
                     proof { assert(p@.skip(at as int).len() == 0); }
-                    return Err(Refusal { reason: Reason::Truncated, at });
+                    return Err(refuse(Reason::Truncated, at));
                 }
                 let tail = vstd::slice::slice_subrange(p, at, p.len());
                 proof {
@@ -1744,7 +1806,7 @@ pub(crate) fn shape_scan(g: &Branches, s: &Shape, p: &[u8], depth: u32) -> (r: R
                     Err(err) => return Err(deeper(err, at)),
                 };
                 if j == 0 {
-                    return Err(Refusal { reason: Reason::Truncated, at });
+                    return Err(refuse(Reason::Truncated, at));
                 }
                 proof { assert(p@.skip(at as int).skip(j as int) =~= p@.skip(at as int + j as int)); }
                 at = at + j;
@@ -1763,14 +1825,14 @@ pub(crate) fn sum_scan(g: &Branches, bs: &Branches, p: &[u8], depth: u32) -> (r:
     decreases p@.len(), 0nat
 {
     if depth >= MAX_DEPTH {
-        return Err(Refusal { reason: Reason::TooDeep, at: 0 });
+        return Err(refuse(Reason::TooDeep, 0));
     }
     if p.len() == 0 {
-        return Err(Refusal { reason: Reason::Truncated, at: 0 });
+        return Err(refuse(Reason::Truncated, 0));
     }
     let t = match branch_lookup(bs, p[0]) {
         Some(sh) => sh,
-        None => return Err(Refusal { reason: Reason::UnknownLeadByte(p[0]), at: 0 }),
+        None => return Err(refuse(Reason::UnknownLeadByte(p[0]), 0)),
     };
     let body = vstd::slice::slice_subrange(p, 1, p.len());
     proof { assert(body@ =~= p@.skip(1)); }
@@ -2032,7 +2094,7 @@ pub proof fn lemma_tag_shapes()
         tag_shape(TAG_UUID) == Some(Shape::Fixed(16)),
         tag_shape(TAG_REGEX) == Some(prod(Shape::Delimited, Shape::Fixed(1))),
         tag_shape(TAG_JSON) == Some(Shape::Tagged),
-        tag_shape(TAG_VECTOR) == Some(Shape::Fixed(32)),
+        tag_shape(TAG_VECTOR) == Some(prod(Shape::Fixed(4), row(Shape::Tagged))),
         tag_shape(TAG_LIST) == Some(row(Shape::Tagged)),
         tag_shape(TAG_SET) == Some(row(Shape::Tagged)),
         tag_shape(TAG_VALIDITY) == Some(Shape::Fixed(9)),
@@ -2048,7 +2110,8 @@ pub proof fn lemma_tag_shapes()
     assert(tag_shape(TAG_UUID) == Some(Shape::Fixed(16))) by (compute_only);
     assert(tag_shape(TAG_REGEX) == Some(prod(Shape::Delimited, Shape::Fixed(1)))) by (compute_only);
     assert(tag_shape(TAG_JSON) == Some(Shape::Tagged)) by (compute_only);
-    assert(tag_shape(TAG_VECTOR) == Some(Shape::Fixed(32))) by (compute_only);
+    assert(tag_shape(TAG_VECTOR) == Some(prod(Shape::Fixed(4), row(Shape::Tagged))))
+        by (compute_only);
     assert(tag_shape(TAG_LIST) == Some(row(Shape::Tagged))) by (compute_only);
     assert(tag_shape(TAG_SET) == Some(row(Shape::Tagged))) by (compute_only);
     assert(tag_shape(TAG_VALIDITY) == Some(Shape::Fixed(9))) by (compute_only);
@@ -2168,10 +2231,23 @@ pub fn seal_json(v: &CanonicalBytes) -> (r: CanonicalBytes)
     ensures r.view() =~= seq![TAG_JSON] + v.view()
 { proof { lemma_tag_shapes(); } seal(TAG_JSON, Body::value(v)) }
 
-pub fn seal_vector(components: &[u8; 32]) -> (r: CanonicalBytes) {
+/// Dimension, then components.
+///
+/// The dimension is written big-endian so numeric order is byte order: two
+/// vectors of different length order by length before either is examined, and
+/// a shorter one can never be a prefix of a longer one. There is no fixed
+/// width here on purpose — dimensionality is a per-row fact, and a door that
+/// pinned it would make that fact a property of the type.
+pub fn seal_vector(dim: u32, components: &Vec<CanonicalBytes>) -> (r: CanonicalBytes) {
     proof { lemma_tag_shapes(); }
-    let b = Body::fixed(owned(components.as_slice()));
-    seal(TAG_VECTOR, b)
+    // Written out rather than `to_be_bytes` so the width is four by
+    // construction, which is the obligation `Body::fixed` discharges.
+    let mut d: Vec<u8> = Vec::new();
+    d.push(((dim >> 24) & 0xff) as u8);
+    d.push(((dim >> 16) & 0xff) as u8);
+    d.push(((dim >> 8) & 0xff) as u8);
+    d.push((dim & 0xff) as u8);
+    seal(TAG_VECTOR, Body::product(Body::fixed(d), Body::row(components)))
 }
 
 pub fn seal_validity(v: &[u8; 9]) -> (r: CanonicalBytes) {

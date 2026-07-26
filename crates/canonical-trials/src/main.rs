@@ -6,6 +6,8 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+#![forbid(unsafe_code)]
+
 //! AUTHORITY: Adversarial trials against the canonical encoder's order law.
 //!
 //! ORDER_LAW: `a <= b  <=>  encode(a) <=lex encode(b)`.
@@ -28,7 +30,7 @@
 mod canonical;
 
 use canonical::{
-    Bound, Branches, Reason, Refusal, grammar_exec, CanonicalBytes, Shape, escape, scan_value, seal_bool, seal_bytes,
+    Bound, Branches, Reason, grammar_exec, CanonicalBytes, Shape, escape, scan_value, seal_bool, seal_bytes,
     seal_geometry, seal_interval, seal_interval_empty, seal_json, seal_list, seal_null,
     seal_num_negative, seal_num_positive, seal_num_zero, seal_regex, seal_set, seal_str,
     seal_uuid, seal_validity, seal_vector, shape_scan,
@@ -55,25 +57,52 @@ const TAG_GEOMETRY: u8 = 0x68;
 
 // ---------------------------------------------------------------- harness --
 
+/// How many checks have run.
+///
+/// A newtype because this number is the campaign's own claim about its
+/// coverage — the thing a reader trusts when the run says "all N passed". A
+/// bare `usize` here adds to lengths and byte counts without complaint, and a
+/// coverage number that can be arithmetic with a buffer size is a number that
+/// can silently become the wrong number.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Checks(usize);
+
+impl Checks {
+    const NONE: Checks = Checks(0);
+
+    /// Saturating on purpose: a campaign that overflowed its own counter must
+    /// not wrap to a small number and report thin coverage as complete.
+    fn one_more(self) -> Checks {
+        Checks(self.0.saturating_add(1))
+    }
+
+    fn count(self) -> usize {
+        self.0
+    }
+}
+
+/// The name of a check that failed, as written at the call site.
+struct FailedCheck(String);
+
 struct Trials {
-    run: usize,
-    failed: Vec<String>,
+    run: Checks,
+    failed: Vec<FailedCheck>,
 }
 
 impl Trials {
     fn new() -> Trials {
-        Trials { run: 0, failed: Vec::new() }
+        Trials { run: Checks::NONE, failed: Vec::new() }
     }
 
     fn check(&mut self, name: &str, ok: bool) {
-        self.run += 1;
+        self.run = self.run.one_more();
         if !ok {
-            self.failed.push(name.to_string());
+            self.failed.push(FailedCheck(name.to_string()));
         }
     }
 
     fn report(&self, section: &str) {
-        println!("  {section}: {} checks", self.run);
+        println!("  {section}: {} checks", self.run.count());
     }
 }
 
@@ -386,7 +415,8 @@ fn trial_grammar_table(t: &mut Trials) {
         (seal_uuid(&[0x00; 16]), 17, "Uuid: tag, 16"),
         (seal_regex(b"ab", 0x07), 6, "Regex: tag, pattern, terminator, flags"),
         (seal_json(&seal_null()), 2, "Json: tag, a value"),
-        (seal_vector(&[0x00; 32]), 33, "Vector: tag, 32"),
+        (seal_vector(2, &vec![seal_num_zero(0), seal_num_zero(0)]), 12,
+            "Vector: tag, 4 dimension, two components, terminator"),
         (seal_list(&Vec::new()), 2, "List: tag, terminator"),
         (seal_set(&Vec::new()), 2, "Set: tag, terminator"),
         (seal_validity(&[0x00; 9]), 10, "Validity: tag, 9"),
@@ -418,7 +448,7 @@ fn trial_grammar_table(t: &mut Trials) {
         (seal_uuid(&[0; 16]), TAG_UUID, "Uuid tag"),
         (seal_regex(b"", 0), TAG_REGEX, "Regex tag"),
         (seal_json(&seal_null()), TAG_JSON, "Json tag"),
-        (seal_vector(&[0; 32]), TAG_VECTOR, "Vector tag"),
+        (seal_vector(0, &Vec::new()), TAG_VECTOR, "Vector tag"),
         (seal_list(&Vec::new()), TAG_LIST, "List tag"),
         (seal_set(&Vec::new()), TAG_SET, "Set tag"),
         (seal_validity(&[0; 9]), TAG_VALIDITY, "Validity tag"),
@@ -457,6 +487,58 @@ fn trial_grammar_table(t: &mut Trials) {
 /// `Bound` is why no trial here can smuggle a sentinel: there is no `[u8; 8]`
 /// that means "no bound", so "unbounded" is a variant the caller names and the
 /// markers are chosen by position, inside the gate.
+/// Dimension leads, so length decides before any component is examined.
+///
+/// The claim `seal_vector` makes in prose is that two vectors of different
+/// dimension order by dimension. The check that can contradict it is a short
+/// vector whose components sort ABOVE a longer vector's: if components leaked
+/// ahead of dimension, this pair would come back in the other order.
+fn attack_vector_dimension_leads(t: &mut Trials) {
+    // Re-sealed per use: CanonicalBytes is not Clone, and a trial that built
+    // its components once and shared them would be testing one buffer twice.
+    let big = || seal_num_positive(&[0xFF; 12]);
+    let small = || seal_num_negative(&[0x00; 12]);
+
+    let one_big = seal_vector(1, &vec![big()]);
+    let two_small = seal_vector(2, &vec![small(), small()]);
+    t.check(
+        "a shorter vector sorts under a longer one whatever the components say",
+        lex_le_independent(one_big.as_bytes(), two_small.as_bytes())
+            && one_big.as_bytes() != two_small.as_bytes(),
+    );
+
+    // Same dimension: now the components are what decides, componentwise.
+    let a = seal_vector(2, &vec![small(), small()]);
+    let b = seal_vector(2, &vec![small(), big()]);
+    t.check(
+        "at equal dimension the components decide, in order",
+        lex_le_independent(a.as_bytes(), b.as_bytes()) && a.as_bytes() != b.as_bytes(),
+    );
+
+    // Dimension is compared as a number, not as text: 2 < 10 must hold, which
+    // a decimal or little-endian width would get wrong.
+    let d2 = seal_vector(2, &Vec::new());
+    let d10 = seal_vector(10, &Vec::new());
+    let d256 = seal_vector(256, &Vec::new());
+    t.check(
+        "dimension compares numerically across a byte boundary",
+        lex_le_independent(d2.as_bytes(), d10.as_bytes())
+            && lex_le_independent(d10.as_bytes(), d256.as_bytes())
+            && d2.as_bytes() != d10.as_bytes(),
+    );
+
+    // Exhaustive over the low dimension byte, so no single value is special.
+    for n in 0u32..=255 {
+        let lo = seal_vector(n, &Vec::new());
+        let hi = seal_vector(n + 1, &Vec::new());
+        t.check(
+            "dimension order is total over the low byte",
+            lex_le_independent(lo.as_bytes(), hi.as_bytes())
+                && lo.as_bytes() != hi.as_bytes(),
+        );
+    }
+}
+
 fn attack_interval_infinities(t: &mut Trials) {
     let lo_unbounded = seal_interval(&Bound::Unbounded, &Bound::At([0x00; 8]));
     let lo_at_min = seal_interval(&Bound::At([0x00; 8]), &Bound::At([0x00; 8]));
@@ -566,7 +648,7 @@ fn attack_reader_totality(t: &mut Trials) {
     for p in &hostile {
         match scan_value(p) {
             Ok(n) => t.check("reader never claims more than it was given", n <= p.len()),
-            Err(e) => t.check("a refusal names an offset inside the input", e.at <= p.len()),
+            Err(e) => t.check("a refusal names an offset inside the input", e.at().get() <= p.len()),
         }
     }
 
@@ -610,8 +692,8 @@ fn attack_refusals_are_named(t: &mut Trials) {
         match scan_value(bytes) {
             Ok(_) => t.check(label, false),
             Err(e) => {
-                t.check(label, e.reason == *reason);
-                t.check(label, e.at == *at);
+                t.check(label, e.reason() == *reason);
+                t.check(label, e.at().get() == *at);
             }
         }
     }
@@ -623,7 +705,7 @@ fn attack_refusals_are_named(t: &mut Trials) {
     }
     match scan_value(deep.as_bytes()) {
         Ok(_) => t.check("nesting past the bound", false),
-        Err(e) => t.check("nesting past the bound names TooDeep", e.reason == Reason::TooDeep),
+        Err(e) => t.check("nesting past the bound names TooDeep", e.reason() == Reason::TooDeep),
     }
 }
 
@@ -718,6 +800,7 @@ fn main() {
     attack_prefix_sequence_exhaustive(&mut t);
     attack_deep_nesting(&mut t);
     attack_unmarked_row_element(&mut t);
+    attack_vector_dimension_leads(&mut t);
     attack_interval_infinities(&mut t);
     attack_reader_agrees_with_writer(&mut t);
     attack_reader_totality(&mut t);
@@ -727,14 +810,14 @@ fn main() {
     t.report("total");
 
     if t.failed.is_empty() {
-        println!("\nall {} checks passed", t.run);
+        println!("\nall {} checks passed", t.run.count());
     } else {
         println!("\n{} FAILURES:", t.failed.len());
-        let mut seen: Vec<&String> = Vec::new();
-        for f in &t.failed {
-            if !seen.contains(&f) {
-                seen.push(f);
-                println!("  {f}");
+        let mut seen: Vec<&str> = Vec::new();
+        for FailedCheck(name) in &t.failed {
+            if !seen.contains(&name.as_str()) {
+                seen.push(name);
+                println!("  {name}");
             }
         }
         std::process::exit(1);
