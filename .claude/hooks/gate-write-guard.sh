@@ -36,7 +36,24 @@ MSG
 }
 
 # The protected set, as path fragments.
-protected='crates/bs-detector/|crates/xtask/gate\.sh|\.claude/hooks/|\.claude/settings\.json'
+#
+# CLAUDE.md is here because it is the agent's own standing instructions. An
+# agent that can edit them can widen its remit, delete a rule it found
+# inconvenient, or paste in a justification for what it just did — and the
+# next session reads the result as the operator's word. That is the same shape
+# as editing the detector: not the diff, the loss of an independent statement
+# of what the agent is for.
+#
+# The hooks directory and settings cover every hook script and its wiring,
+# including the guards themselves, so no guard can quietly unhook another.
+# The CLAUDE.md clause is bounded on both sides rather than anchored with
+# `(^|/)`. This pattern is applied to two different subjects: a bare file path
+# on the editor branch, where the name does start a segment, and a whole
+# command line on the Bash branch, where it follows a space. Anchoring on
+# `^` or `/` matched the first and missed the second, so every shell route to
+# the file — a redirect, sed -i, git checkout — was allowed. The trailing
+# bound keeps a file merely named after it, like notes-on-CLAUDE.md.txt, out.
+protected='crates/bs-detector/|crates/xtask/gate\.sh|\.claude/hooks/|\.claude/settings[A-Za-z.]*\.json|(^|[[:space:]]|/|")CLAUDE\.md([^A-Za-z0-9_.-]|$)'
 
 # The approval file itself is never writable by an agent — an approval an agent
 # can grant itself is not an approval.
@@ -76,12 +93,12 @@ if [ "$tool" = "Bash" ]; then
     # unreadable command is not an approved one.
     approved_all=0
     for candidate in $(printf '%s' "$probe" \
-      | grep -oE '(crates/bs-detector/[A-Za-z0-9_./-]+|crates/xtask/gate\.sh|\.claude/hooks/[A-Za-z0-9_./-]+|\.claude/settings\.json)'); do
+      | grep -oE '(crates/bs-detector/[A-Za-z0-9_./-]+|crates/xtask/gate\.sh|\.claude/hooks/[A-Za-z0-9_./-]+|\.claude/settings[A-Za-z.]*\.json|CLAUDE\.md)'); do
       approves "$candidate" || approved_all=1
       [ "$approved_all" -eq 0 ] || break
     done
     if [ "$approved_all" -ne 0 ] \
-       || ! printf '%s' "$probe" | grep -qE '(crates/bs-detector/[A-Za-z0-9_./-]+|crates/xtask/gate\.sh|\.claude/hooks/[A-Za-z0-9_./-]+|\.claude/settings\.json)'; then
+       || ! printf '%s' "$probe" | grep -qE '(crates/bs-detector/[A-Za-z0-9_./-]+|crates/xtask/gate\.sh|\.claude/hooks/[A-Za-z0-9_./-]+|\.claude/settings[A-Za-z.]*\.json|CLAUDE\.md)'; then
       deny "$(reason "This command writes to gate machinery, which")"
     fi
   fi
