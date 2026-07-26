@@ -1,0 +1,16 @@
+# Operator approval for writes to gate machinery.
+#
+# One repo-relative path per line. An agent may write a listed path and
+# nothing else. Lines starting with # are comments.
+#
+# Only the operator writes this file. Every agent route to it is denied by
+# .claude/hooks/gate-write-guard.sh, including edits to that guard itself.
+#
+# Remove a line when the work is done. A path left here is a standing grant.
+
+crates/bs-detector/src/main.rs
+crates/bs-detector/Cargo.toml
+crates/bs-detector/README.md
+crates/xtask/gate.sh
+.claude/hooks/post-edit-guard.sh
+.claude/hooks/gate-write-guard.sh

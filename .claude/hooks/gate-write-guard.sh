@@ -50,7 +50,11 @@ approves() {
 
 if [ "$tool" = "Bash" ]; then
   cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // ""')
-  write_shaped='>|(^|[^[:alnum:]_.-])(tee|mv|cp|rm|ln|install|truncate|dd|python3?|perl|patch|ed)([^[:alnum:]_.-]|$)|sed[[:space:]]+-i|awk[[:space:]]+-i|git[[:space:]]+(checkout|restore|apply|stash|reset|clean|mv|rm|revert)'
+  # `>` only when it redirects to a file. `2>&1` and `>&2` move a descriptor
+  # onto another descriptor and create nothing, so matching a bare `>` denied
+  # read-only commands — a guard that blocks reads teaches people to route
+  # around it, which is the one failure mode a wall cannot afford.
+  write_shaped='>[[:space:]]*[^&|[:space:]]|(^|[^[:alnum:]_.-])(tee|mv|cp|rm|ln|install|truncate|dd|python3?|perl|patch|ed)([^[:alnum:]_.-]|$)|sed[[:space:]]+-i|awk[[:space:]]+-i|git[[:space:]]+(checkout|restore|apply|stash|reset|clean|mv|rm|revert)'
   if printf '%s' "$cmd" | grep -Eq "$protected" \
      && printf '%s' "$cmd" | grep -Eq "$write_shaped"; then
     deny "$(reason "This command writes to gate machinery, which")"
