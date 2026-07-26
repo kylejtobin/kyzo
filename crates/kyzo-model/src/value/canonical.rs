@@ -51,11 +51,9 @@
 //!
 //! Every position a scanner reads to decide "element or terminator" holds a
 //! byte that cannot be the terminator. Sequence elements open with a tag
-//! (`>= 0x05`); JSON array elements open with a marker in
-//! `{0x05, 0x06, 0x07, 0x10, 0x18, 0x48, 0x4C}`; JSON object keys open with
-//! `JSTR`. An unmarked key position would admit a key beginning `0x01` — legal
-//! JSON, legal UTF-8 — and the body would have two readings. `json_obj`
-//! requires the marker, which is what makes `lemma_json_obj_of_pairs` close.
+//! (`>= 0x05`), and `STRUCT_END` is `0x01`, so no element can be read as the
+//! end of the row it sits in. An unmarked element position would admit an
+//! element beginning `0x01` and the body would have two readings.
 //!
 //! # Trusted computing base
 //!
@@ -610,8 +608,6 @@ pub enum KeyShape {
     ClassLed,
     /// The bounded-interval grammar.
     IntervalShape,
-    /// The JSON marker grammar.
-    JsonShape,
     /// A row of complete encodings, terminated by `STRUCT_END`.
     Sequence,
 }
@@ -628,7 +624,6 @@ pub open spec fn shape_of(t: u8) -> Option<KeyShape> {
     else if t == 0x20u8 { Some(KeyShape::Escaped) }          // Bytes
     else if t == 0x28u8 { Some(KeyShape::Fixed(16nat)) }     // Uuid
     else if t == 0x30u8 { Some(KeyShape::EscapedThenFlags) } // Regex
-    else if t == 0x38u8 { Some(KeyShape::JsonShape) }        // Json
     else if t == 0x40u8 { Some(KeyShape::Fixed(32nat)) }     // Vector
     else if t == 0x48u8 { Some(KeyShape::Sequence) }         // List
     else if t == 0x50u8 { Some(KeyShape::Sequence) }         // Set
@@ -724,50 +719,6 @@ pub open spec fn interval_end(p: Seq<u8>) -> int {
     } else { -1 }
 }
 
-pub open spec fn json_end(p: Seq<u8>) -> int
-    decreases p.len(), 0int
-{
-    if p.len() == 0 { -1 }
-    else if p[0] == 0x05u8 || p[0] == 0x06u8 || p[0] == 0x07u8 { 1 }
-    else if p[0] == 0x10u8 { let w = num_end(p.skip(1)); if w <= 0 { -1 } else { 1 + w } }
-    else if p[0] == 0x18u8 { let w = esc_end(p.skip(1)); if w <= 0 { -1 } else { 1 + w } }
-    else if p[0] == 0x48u8 { let r = json_arr(p.skip(1)); if r <= 0 { -1 } else { 1 + r } }
-    else if p[0] == 0x4Cu8 { let r = json_obj(p.skip(1)); if r <= 0 { -1 } else { 1 + r } }
-    else { -1 }
-}
-
-pub open spec fn json_arr(p: Seq<u8>) -> int
-    decreases p.len(), 1int
-{
-    if p.len() == 0 { -1 }
-    else if p[0] == STRUCT_END { 1 }
-    else {
-        let j = json_end(p);
-        if j <= 0 || j > p.len() { -1 }
-        else { let r = json_arr(p.skip(j)); if r <= 0 { -1 } else { j + r } }
-    }
-}
-
-pub open spec fn json_obj(p: Seq<u8>) -> int
-    decreases p.len(), 1int
-{
-    if p.len() == 0 { -1 }
-    else if p[0] == STRUCT_END { 1 }
-    else if p[0] != JSTR { -1 }
-    else {
-        let k = esc_end(p.skip(1));
-        if k <= 0 || 1 + k > p.len() { -1 }
-        else {
-            let j = json_end(p.skip(1 + k));
-            if j <= 0 || 1 + k + j > p.len() { -1 }
-            else {
-                let r = json_obj(p.skip(1 + k + j));
-                if r <= 0 { -1 } else { 1 + k + j + r }
-            }
-        }
-    }
-}
-
 /// Length of the kind's key at the front of `payload`, or negative if the
 /// payload does not open with a complete key of that kind. Total: every tag
 /// and every byte sequence has an answer, and the answer is never a panic.
@@ -781,7 +732,6 @@ pub open spec fn key_end(t: u8, payload: Seq<u8>) -> int {
         }
         Some(KeyShape::ClassLed) => num_end(payload),
         Some(KeyShape::IntervalShape) => interval_end(payload),
-        Some(KeyShape::JsonShape) => json_end(payload),
         Some(KeyShape::Sequence) => -1,
         None => -1,
     }
@@ -843,59 +793,6 @@ proof fn lemma_interval_end_local(a: Seq<u8>, b: Seq<u8>)
     }
 }
 
-proof fn lemma_json_end_local(a: Seq<u8>, b: Seq<u8>)
-    requires is_prefix(a, b), 0 < json_end(a) <= a.len()
-    ensures json_end(b) == json_end(a)
-    decreases a.len(), 0int
-{
-    lemma_prefix_index(a, b, 0);
-    if a[0] == 0x10u8 {
-        lemma_prefix_skip(a, b, 1);
-        lemma_num_end_local(a.skip(1), b.skip(1));
-    } else if a[0] == 0x18u8 {
-        lemma_prefix_skip(a, b, 1);
-        lemma_esc_end_local(a.skip(1), b.skip(1));
-    } else if a[0] == 0x48u8 {
-        lemma_prefix_skip(a, b, 1);
-        lemma_json_arr_local(a.skip(1), b.skip(1));
-    } else if a[0] == 0x4Cu8 {
-        lemma_prefix_skip(a, b, 1);
-        lemma_json_obj_local(a.skip(1), b.skip(1));
-    }
-}
-
-proof fn lemma_json_arr_local(a: Seq<u8>, b: Seq<u8>)
-    requires is_prefix(a, b), 0 < json_arr(a) <= a.len()
-    ensures json_arr(b) == json_arr(a)
-    decreases a.len(), 1int
-{
-    lemma_prefix_index(a, b, 0);
-    if a[0] != STRUCT_END {
-        let j = json_end(a);
-        lemma_json_end_local(a, b);
-        lemma_prefix_skip(a, b, j);
-        lemma_json_arr_local(a.skip(j), b.skip(j));
-    }
-}
-
-proof fn lemma_json_obj_local(a: Seq<u8>, b: Seq<u8>)
-    requires is_prefix(a, b), 0 < json_obj(a) <= a.len()
-    ensures json_obj(b) == json_obj(a)
-    decreases a.len(), 1int
-{
-    lemma_prefix_index(a, b, 0);
-    if a[0] != STRUCT_END {
-        lemma_prefix_skip(a, b, 1);
-        let k = esc_end(a.skip(1));
-        lemma_esc_end_local(a.skip(1), b.skip(1));
-        lemma_prefix_skip(a, b, 1 + k);
-        let j = json_end(a.skip(1 + k));
-        lemma_json_end_local(a.skip(1 + k), b.skip(1 + k));
-        lemma_prefix_skip(a, b, 1 + k + j);
-        lemma_json_obj_local(a.skip(1 + k + j), b.skip(1 + k + j));
-    }
-}
-
 /// OBLIGATION 1 — locality: a key's length is decided by the key, so trailing
 /// bytes cannot change it. Discharged for every shape in the table.
 pub proof fn lemma_kind_local()
@@ -909,7 +806,6 @@ pub proof fn lemma_kind_local()
             Some(KeyShape::EscapedThenFlags) => { lemma_esc_end_local(a, b); }
             Some(KeyShape::ClassLed) => { lemma_num_end_local(a, b); }
             Some(KeyShape::IntervalShape) => { lemma_interval_end_local(a, b); }
-            Some(KeyShape::JsonShape) => { lemma_json_end_local(a, b); }
             _ => {}
         }
     }
@@ -1914,355 +1810,6 @@ impl KindKey for IntervalKey {
     fn emit(&self) -> (r: Vec<u8>) { self.bytes.clone() }
 }
 
-// --- the JSON marker grammar ---
-
-pub const JNULL: u8 = 0x05;
-pub const JFALSE: u8 = 0x06;
-pub const JTRUE: u8 = 0x07;
-pub const JNUM: u8 = 0x10;
-pub const JSTR: u8 = 0x18;
-pub const JARR: u8 = 0x48;
-pub const JOBJ: u8 = 0x4C;
-
-proof fn lemma_json_head(p: Seq<u8>)
-    requires json_end(p) > 0
-    ensures p.len() > 0, p[0] != STRUCT_END
-{}
-
-/// A JSON array body scans to exactly its elements plus the terminator.
-proof fn lemma_json_arr_of_row(r: Seq<Seq<u8>>, rest: Seq<u8>)
-    requires forall|i: int| 0 <= i < r.len() ==> #[trigger] json_end(r[i]) == r[i].len() > 0
-    ensures json_arr((cat(r) + seq![STRUCT_END]) + rest) == cat(r).len() + 1
-    decreases r.len()
-{
-    let buf = (cat(r) + seq![STRUCT_END]) + rest;
-    if r.len() == 0 {
-        assert(cat(r) =~= Seq::<u8>::empty());
-        assert(buf[0] == STRUCT_END);
-    } else {
-        let head = r[0];
-        let tail_buf = (cat(r.drop_first()) + seq![STRUCT_END]) + rest;
-        assert(json_end(r[0]) == r[0].len() > 0);
-        assert(json_end(head) == head.len() > 0);
-        lemma_json_head(head);
-        assert(buf =~= head + tail_buf) by { assert(cat(r) =~= head + cat(r.drop_first())); }
-        assert(buf[0] == head[0] && buf[0] != STRUCT_END);
-        lemma_prefix_of_self_plus(head, tail_buf);
-        lemma_json_end_local(head, buf);
-        assert(json_end(buf) == head.len());
-        assert(buf.skip(head.len() as int) =~= tail_buf);
-        assert forall|i: int| 0 <= i < r.drop_first().len()
-            implies #[trigger] json_end(r.drop_first()[i]) == r.drop_first()[i].len() > 0 by {
-            assert(json_end(r[i + 1]) == r[i + 1].len() > 0);
-        }
-        lemma_json_arr_of_row(r.drop_first(), rest);
-    }
-}
-
-pub open spec fn obj_cat(ps: Seq<(Seq<u8>, Seq<u8>)>) -> Seq<u8>
-    decreases ps.len()
-{
-    if ps.len() == 0 { Seq::empty() }
-    else { ((seq![JSTR] + enc_bytes(ps[0].0)) + ps[0].1) + obj_cat(ps.drop_first()) }
-}
-
-/// A JSON object body scans to exactly its key/value pairs plus the terminator.
-proof fn lemma_json_obj_of_pairs(ps: Seq<(Seq<u8>, Seq<u8>)>, rest: Seq<u8>)
-    requires forall|i: int| 0 <= i < ps.len() ==> #[trigger] json_end(ps[i].1) == ps[i].1.len() > 0
-    ensures json_obj((obj_cat(ps) + seq![STRUCT_END]) + rest) == obj_cat(ps).len() + 1
-    decreases ps.len()
-{
-    let buf = (obj_cat(ps) + seq![STRUCT_END]) + rest;
-    if ps.len() == 0 {
-        assert(obj_cat(ps) =~= Seq::<u8>::empty());
-        assert(buf[0] == STRUCT_END);
-    } else {
-        let k = seq![JSTR] + enc_bytes(ps[0].0);
-        let v = ps[0].1;
-        let tail_buf = (obj_cat(ps.drop_first()) + seq![STRUCT_END]) + rest;
-        lemma_esc_end_of_enc_bytes(ps[0].0);
-        assert(k.len() >= 3 && k[0] == JSTR && k[0] != STRUCT_END);
-        assert(k.skip(1) =~= enc_bytes(ps[0].0));
-        assert(buf =~= (k + v) + tail_buf) by {
-            assert(obj_cat(ps) =~= (k + v) + obj_cat(ps.drop_first()));
-        }
-        assert(buf =~= k + (v + tail_buf));
-        assert(buf[0] == k[0] && buf[0] != STRUCT_END);
-        lemma_prefix_of_self_plus(k.skip(1), v + tail_buf);
-        assert(buf.skip(1) =~= k.skip(1) + (v + tail_buf));
-        lemma_esc_end_local(k.skip(1), buf.skip(1));
-        assert(esc_end(buf.skip(1)) == k.len() - 1);
-        assert(buf.skip(k.len() as int) =~= v + tail_buf);
-        assert(json_end(ps[0].1) == ps[0].1.len() > 0);
-        assert(json_end(v) == v.len() > 0);
-        lemma_prefix_of_self_plus(v, tail_buf);
-        lemma_json_end_local(v, v + tail_buf);
-        assert(json_end(buf.skip(1 + (k.len() - 1))) == v.len());
-        assert(buf.skip(k.len() as int + v.len() as int) =~= tail_buf);
-        assert forall|i: int| 0 <= i < ps.drop_first().len()
-            implies #[trigger] json_end(ps.drop_first()[i].1) == ps.drop_first()[i].1.len() > 0 by {
-            assert(json_end(ps[i + 1].1) == ps[i + 1].1.len() > 0);
-        }
-        lemma_json_obj_of_pairs(ps.drop_first(), rest);
-    }
-}
-
-/// Bytes that are exactly one complete JSON value in the marker grammar.
-/// Private field, and every constructor below establishes the invariant, so a
-/// half-formed JSON value cannot exist.
-// CONSTRUCT: SealedProduct JsonValueBytes
-pub struct JsonValueBytes {
-    bytes: Vec<u8>,
-}
-
-// CONSTRUCT: ImplBlock JsonValueBytes
-impl JsonValueBytes {
-    pub closed spec fn view(self) -> Seq<u8> { self.bytes@ }
-
-    #[verifier::type_invariant]
-    closed spec fn wf_json(self) -> bool { json_end(self.view()) == self.view().len() > 0 }
-
-    pub fn null() -> (r: JsonValueBytes) {
-        let mut b: Vec<u8> = Vec::new();
-        b.push(JNULL);
-        proof { assert(b@[0] == JNULL); }
-        JsonValueBytes { bytes: b }
-    }
-
-    pub fn boolean(v: bool) -> (r: JsonValueBytes) {
-        let mut b: Vec<u8> = Vec::new();
-        b.push(if v { JTRUE } else { JFALSE });
-        JsonValueBytes { bytes: b }
-    }
-
-    /// A number carries the Num key unchanged; the class byte measures it.
-    pub fn number(key: &[u8]) -> (r: JsonValueBytes)
-        requires num_end(key@) == key@.len() > 0
-    {
-        let mut b: Vec<u8> = Vec::new();
-        b.push(JNUM);
-        let mut i: usize = 0;
-        while i < key.len()
-            invariant 0 <= i <= key@.len(), b@ =~= seq![JNUM] + key@.take(i as int),
-            decreases key@.len() - i
-        {
-            b.push(key[i]);
-            proof { assert(key@.take(i + 1) =~= key@.take(i as int).push(key@[i as int])); }
-            i = i + 1;
-        }
-        proof {
-            assert(key@.take(key@.len() as int) =~= key@);
-            assert(b@.skip(1) =~= key@);
-            assert(b@[0] == JNUM);
-        }
-        JsonValueBytes { bytes: b }
-    }
-
-    pub fn string(s: &[u8]) -> (r: JsonValueBytes) {
-        let mut b: Vec<u8> = Vec::new();
-        b.push(JSTR);
-        let mut body = escape(s);
-        b.append(&mut body);
-        proof {
-            lemma_esc_end_of_enc_bytes(s@);
-            assert(b@.skip(1) =~= enc_bytes(s@));
-            assert(b@[0] == JSTR);
-        }
-        JsonValueBytes { bytes: b }
-    }
-
-    pub fn array(elems: &Vec<JsonValueBytes>) -> (r: JsonValueBytes) {
-        let ghost views = elems@.map_values(|e: JsonValueBytes| e.view());
-        let mut b: Vec<u8> = Vec::new();
-        b.push(JARR);
-        let mut i: usize = 0;
-        while i < elems.len()
-            invariant
-                0 <= i <= elems@.len(),
-                views =~= elems@.map_values(|e: JsonValueBytes| e.view()),
-                b@ =~= seq![JARR] + cat(views.take(i as int)),
-                forall|k: int| 0 <= k < i
-                    ==> #[trigger] json_end(views[k]) == views[k].len() > 0,
-            decreases elems@.len() - i
-        {
-            let e = &elems[i];
-            proof {
-                use_type_invariant(e);
-                assert(views[i as int] =~= e.view());
-                assert(json_end(views[i as int]) == views[i as int].len() > 0);
-            }
-            let src = e.as_bytes();
-            let ghost before = b@;
-            let mut j: usize = 0;
-            while j < src.len()
-                invariant
-                    0 <= j <= src@.len(),
-                    src@ =~= views[i as int],
-                    b@ =~= before + src@.take(j as int),
-                decreases src@.len() - j
-            {
-                b.push(src[j]);
-                proof { assert(src@.take(j + 1) =~= src@.take(j as int).push(src@[j as int])); }
-                j = j + 1;
-            }
-            proof {
-                assert(src@.take(src@.len() as int) =~= views[i as int]);
-                lemma_cat_snoc(views.take(i as int), views[i as int]);
-                assert(views.take(i + 1) =~= views.take(i as int).push(views[i as int]));
-            }
-            i = i + 1;
-        }
-        b.push(STRUCT_END);
-        proof {
-            assert(views.take(elems@.len() as int) =~= views);
-            assert forall|k: int| 0 <= k < views.len()
-                implies #[trigger] json_end(views[k]) == views[k].len() > 0 by {}
-            lemma_json_arr_of_row(views, Seq::empty());
-            assert(b@[0] == JARR);
-            assert(b@.skip(1) =~= (cat(views) + seq![STRUCT_END]) + Seq::<u8>::empty());
-        }
-        JsonValueBytes { bytes: b }
-    }
-
-    pub fn object(pairs: &Vec<(Vec<u8>, JsonValueBytes)>) -> (r: JsonValueBytes) {
-        let ghost ps = pairs@.map_values(|q: (Vec<u8>, JsonValueBytes)| (q.0@, q.1.view()));
-        let mut b: Vec<u8> = Vec::new();
-        b.push(JOBJ);
-        let mut i: usize = 0;
-        while i < pairs.len()
-            invariant
-                0 <= i <= pairs@.len(),
-                ps =~= pairs@.map_values(|q: (Vec<u8>, JsonValueBytes)| (q.0@, q.1.view())),
-                ps.len() == pairs@.len(),
-                b@ =~= seq![JOBJ] + obj_cat(ps.take(i as int)),
-                forall|k: int| 0 <= k < i
-                    ==> #[trigger] json_end(ps[k].1) == ps[k].1.len() > 0,
-            decreases pairs@.len() - i
-        {
-            let ghost before = b@;
-            let pair = &pairs[i];
-            b.push(JSTR);
-            let mut kb = escape(pair.0.as_slice());
-            b.append(&mut kb);
-            let ghost after_key = b@;
-            proof {
-                use_type_invariant(&pair.1);
-                assert(ps[i as int].1 =~= pair.1.view());
-                assert(json_end(ps[i as int].1) == ps[i as int].1.len() > 0);
-            }
-            let src = pair.1.as_bytes();
-            let mut j: usize = 0;
-            while j < src.len()
-                invariant
-                    0 <= j <= src@.len(),
-                    src@ =~= ps[i as int].1,
-                    b@ =~= after_key + src@.take(j as int),
-                decreases src@.len() - j
-            {
-                b.push(src[j]);
-                proof { assert(src@.take(j + 1) =~= src@.take(j as int).push(src@[j as int])); }
-                j = j + 1;
-            }
-            proof {
-                assert(src@.take(src@.len() as int) =~= ps[i as int].1);
-                assert(after_key =~= before + (seq![JSTR] + enc_bytes(ps[i as int].0)));
-                assert(b@ =~= before
-                    + ((seq![JSTR] + enc_bytes(ps[i as int].0)) + ps[i as int].1));
-                lemma_obj_cat_snoc(ps.take(i as int), ps[i as int]);
-                assert(ps.take(i + 1) =~= ps.take(i as int).push(ps[i as int]));
-            }
-            i = i + 1;
-        }
-        b.push(STRUCT_END);
-        proof {
-            assert(ps.take(pairs@.len() as int) =~= ps);
-            assert forall|k: int| 0 <= k < ps.len()
-                implies #[trigger] json_end(ps[k].1) == ps[k].1.len() > 0 by {}
-            lemma_json_obj_of_pairs(ps, Seq::empty());
-            assert(b@[0] == JOBJ);
-            assert(b@.skip(1) =~= (obj_cat(ps) + seq![STRUCT_END]) + Seq::<u8>::empty());
-        }
-        JsonValueBytes { bytes: b }
-    }
-
-    pub fn as_bytes(&self) -> (r: &[u8])
-        ensures r@ =~= self.view()
-    { self.bytes.as_slice() }
-}
-
-proof fn lemma_obj_cat_snoc(ps: Seq<(Seq<u8>, Seq<u8>)>, q: (Seq<u8>, Seq<u8>))
-    ensures obj_cat(ps.push(q)) =~= obj_cat(ps) + ((seq![JSTR] + enc_bytes(q.0)) + q.1)
-    decreases ps.len()
-{
-    if ps.len() == 0 {
-        assert(ps.push(q) =~= seq![q]);
-        assert(seq![q].len() == 1 && seq![q][0] == q);
-        assert(seq![q].drop_first() =~= Seq::<(Seq<u8>, Seq<u8>)>::empty());
-        assert(obj_cat(Seq::<(Seq<u8>, Seq<u8>)>::empty()) =~= Seq::<u8>::empty());
-        assert(obj_cat(ps) =~= Seq::<u8>::empty());
-        assert(((seq![JSTR] + enc_bytes(q.0)) + q.1) + Seq::<u8>::empty()
-            =~= (seq![JSTR] + enc_bytes(q.0)) + q.1);
-    } else {
-        assert(ps.push(q)[0] == ps[0]);
-        assert(ps.push(q).drop_first() =~= ps.drop_first().push(q));
-        lemma_obj_cat_snoc(ps.drop_first(), q);
-        assert(((seq![JSTR] + enc_bytes(ps[0].0)) + ps[0].1)
-            + (obj_cat(ps.drop_first()) + ((seq![JSTR] + enc_bytes(q.0)) + q.1))
-            =~= (((seq![JSTR] + enc_bytes(ps[0].0)) + ps[0].1) + obj_cat(ps.drop_first()))
-            + ((seq![JSTR] + enc_bytes(q.0)) + q.1));
-    }
-}
-
-/// The JSON key: a complete JSON value, then eight bytes of trailing hash. The
-/// hash sits after the self-terminating value, so it can never influence order.
-// CONSTRUCT: SealedProduct JsonKey
-pub struct JsonKey {
-    tag: u8,
-    bytes: Vec<u8>,
-}
-
-// CONSTRUCT: ImplBlock JsonKey
-impl JsonKey {
-    #[verifier::type_invariant]
-    closed spec fn wf_key(self) -> bool {
-        self.tag >= TAG_MIN
-        && shape_of(self.tag) == Some(KeyShape::JsonShape)
-        && key_end(self.tag, self.bytes@) == self.bytes@.len()
-    }
-
-    /// Mint from a complete JSON value. The canonical bytes are the identity;
-    /// nothing else rides in the comparable key.
-    pub fn mint(tag: u8, value: &JsonValueBytes) -> (r: JsonKey)
-        requires tag >= TAG_MIN, shape_of(tag) == Some(KeyShape::JsonShape)
-        ensures r.tag() == tag
-    {
-        proof { use_type_invariant(value); }
-        let src = value.as_bytes();
-        let mut b: Vec<u8> = Vec::new();
-        let mut j: usize = 0;
-        while j < src.len()
-            invariant 0 <= j <= src@.len(), b@ =~= src@.take(j as int),
-            decreases src@.len() - j
-        {
-            b.push(src[j]);
-            proof { assert(src@.take(j + 1) =~= src@.take(j as int).push(src@[j as int])); }
-            j = j + 1;
-        }
-        proof { assert(src@.take(src@.len() as int) =~= src@); }
-        JsonKey { tag, bytes: b }
-    }
-}
-
-impl KindKey for JsonKey {
-    closed spec fn tag(self) -> u8 { self.tag }
-    closed spec fn key(self) -> Seq<u8> { self.bytes@ }
-    closed spec fn wf(self) -> bool { self.wf_key() }
-    proof fn law_tag(self) { assert(!is_seq_tag(self.tag)); }
-    proof fn law_key(self) {}
-    fn tag_byte(&self) -> (t: u8) { proof { use_type_invariant(self); } self.tag }
-    fn emit(&self) -> (r: Vec<u8>) { self.bytes.clone() }
-}
-
 // ================================ the scanner ================================
 //
 // The grammar above is a specification; these are the executable readers proven
@@ -2341,124 +1888,6 @@ pub fn scan_num(p: &[u8]) -> (r: Option<usize>)
 /// direction that matters — a scanner may reject, it may never accept a reading
 /// the grammar does not give.
 pub const MAX_DEPTH: u32 = 128;
-
-/// Bytes the JSON value at the front of `p` occupies.
-pub fn scan_json(p: &[u8], depth: u32) -> (r: Option<usize>)
-    ensures
-        match r {
-            Some(n) => json_end(p@) == n as int && n <= p.len(),
-            None => true,
-        },
-    decreases p.len(), 0int
-{
-    if p.len() == 0 || depth >= MAX_DEPTH {
-        return None;
-    }
-    let m = p[0];
-    let body = vstd::slice::slice_subrange(p, 1, p.len());
-    proof { assert(body@ =~= p@.skip(1)); }
-    if m == JNULL || m == JFALSE || m == JTRUE {
-        Some(1)
-    } else if m == JNUM {
-        match scan_num(body) {
-            Some(n) => if n == 0 { None } else { Some(1 + n) },
-            None => None,
-        }
-    } else if m == JSTR {
-        match scan_escaped(body) {
-            Some(n) => if n == 0 { None } else { Some(1 + n) },
-            None => None,
-        }
-    } else if m == JARR {
-        match scan_json_arr(body, depth + 1) {
-            Some(n) => if n == 0 { None } else { Some(1 + n) },
-            None => None,
-        }
-    } else if m == JOBJ {
-        match scan_json_obj(body, depth + 1) {
-            Some(n) => if n == 0 { None } else { Some(1 + n) },
-            None => None,
-        }
-    } else {
-        None
-    }
-}
-
-/// Bytes the JSON array body at the front of `p` occupies, terminator included.
-pub fn scan_json_arr(p: &[u8], depth: u32) -> (r: Option<usize>)
-    ensures
-        match r {
-            Some(n) => json_arr(p@) == n as int && n <= p.len(),
-            None => true,
-        },
-    decreases p.len(), 1int
-{
-    if p.len() == 0 || depth >= MAX_DEPTH {
-        return None;
-    }
-    if p[0] == STRUCT_END {
-        return Some(1);
-    }
-    let j = match scan_json(p, depth) {
-        Some(n) => n,
-        None => return None,
-    };
-    if j == 0 || j > p.len() {
-        return None;
-    }
-    let rest = vstd::slice::slice_subrange(p, j, p.len());
-    proof { assert(rest@ =~= p@.skip(j as int)); }
-    match scan_json_arr(rest, depth) {
-        Some(n) => if n == 0 { None } else { Some(j + n) },
-        None => None,
-    }
-}
-
-/// Bytes the JSON object body at the front of `p` occupies, terminator
-/// included. Each key opens with `JSTR`, so a key can never be read as the
-/// terminator.
-pub fn scan_json_obj(p: &[u8], depth: u32) -> (r: Option<usize>)
-    ensures
-        match r {
-            Some(n) => json_obj(p@) == n as int && n <= p.len(),
-            None => true,
-        },
-    decreases p.len(), 1int
-{
-    if p.len() == 0 || depth >= MAX_DEPTH {
-        return None;
-    }
-    if p[0] == STRUCT_END {
-        return Some(1);
-    }
-    if p[0] != JSTR {
-        return None;
-    }
-    let after_marker = vstd::slice::slice_subrange(p, 1, p.len());
-    proof { assert(after_marker@ =~= p@.skip(1)); }
-    let k = match scan_escaped(after_marker) {
-        Some(n) => n,
-        None => return None,
-    };
-    if k == 0 || 1 + k > p.len() {
-        return None;
-    }
-    let after_key = vstd::slice::slice_subrange(p, 1 + k, p.len());
-    proof { assert(after_key@ =~= p@.skip(1 + k as int)); }
-    let j = match scan_json(after_key, depth) {
-        Some(n) => n,
-        None => return None,
-    };
-    if j == 0 || 1 + k + j > p.len() {
-        return None;
-    }
-    let rest = vstd::slice::slice_subrange(p, 1 + k + j, p.len());
-    proof { assert(rest@ =~= p@.skip(1 + k as int + j as int)); }
-    match scan_json_obj(rest, depth) {
-        Some(n) => if n == 0 { None } else { Some(1 + k + j + n) },
-        None => None,
-    }
-}
 
 /// Bytes the vector payload at the front of `p` occupies: a `u32` big-endian
 /// component count, then that many number keys.
@@ -2562,8 +1991,6 @@ pub fn scan_value(p: &[u8], depth: u32) -> (r: Option<usize>)
             Some(n) => if n == 0 || n >= body.len() { None } else { Some(n + 1) },
             None => None,
         }
-    } else if t == 0x38 {
-        scan_json(body, depth + 1)
     } else if t == 0x40 {
         if body.len() >= 32 { Some(32) } else { None }
     } else if t == 0x48 || t == 0x50 {
