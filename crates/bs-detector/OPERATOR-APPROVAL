@@ -8,7 +8,3 @@
 #
 # Remove a line when the work is done. A path left here is a standing grant.
 
-.claude/hooks/gate-write-guard.sh
-.claude/hooks/rust-scan-guard.sh
-.claude/hooks/post-edit-guard.sh
-.claude/settings.json
