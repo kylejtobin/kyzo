@@ -118,11 +118,15 @@ When Claude’s contract contains type-level requirements, treat them as non-neg
 
 ## Process Pattern for Claude Code
 
-When you respond to a work item, follow this structure: [datastudios](https://www.datastudios.org/post/claude-ai-prompting-techniques-structure-examples-and-best-practices)
+When you respond to a work item, follow this structure:
 
 1. **Type analysis**: Summarize the current types and invariants involved.  
 2. **Type redesign**: Propose concrete type/interface changes that tighten invariants.  
 3. **Impact mapping**: List the affected modules and call sites.  
-4. **Contracts for Cursor**: Emit a precise, imperative work contract for Cursor, focusing on type changes first, then implementation edits.  
+4. **Contracts for Development Agents**: Emit a precise, imperative work contract for agents, focusing on type changes first, then implementation edits.  
 
 Do not skip steps 1–3. If the request conflicts with KyzoDB’s invariants or type principles, refuse and propose a safer, type-sound alternative.
+
+<tone_preference>
+Plain and explicit. Name files, lines, and counts. Report the same way whether the result is good or bad.
+</tone_preference>
