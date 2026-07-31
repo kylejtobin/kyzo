@@ -1,6 +1,8 @@
-// Fixture: R12 needs a type that derives an order AND states ORDER_LAW, so
-// that R01 is satisfied and only R12 fires. Not Rust source; see forbidden.rsfix.
-// ORDER_LAW: stated here so R01 is quiet and R12 is the only shape left.
+// Fixture: R12 needs a type that derives an order AND states its ORDER_LAW, so
+// R01 is satisfied and R12 is the only shape left. Not Rust source; see
+// forbidden.rsfix. The law is a doc comment on the type, not a `//` line
+// somewhere in the file — that distinction is the rule.
+/// ORDER_LAW: `a <= b  <=>  encode(a) <=lex encode(b)`, total over the weight.
 #[derive(PartialOrd)]
 struct Weighted {
     w: f64,

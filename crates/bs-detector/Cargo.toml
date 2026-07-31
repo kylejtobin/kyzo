@@ -13,3 +13,12 @@ name = "bs-detector"
 path = "src/main.rs"
 
 [dependencies]
+# Tier 1 of the rewrite: the walker reads the item tree instead of lines, so a
+# rule sees every position a type can appear rather than only `name: Type`.
+# `span-locations` gives line numbers on spans parsed from a string. Under
+# resolver 3 a normal dependency's features do not unify with the proc-macro
+# instances of the same crate, so this does not make every derive macro in the
+# workspace track line/column.
+syn = { version = "2", features = ["full", "visit", "extra-traits"] }
+proc-macro2 = { version = "1", features = ["span-locations"] }
+quote = "1"

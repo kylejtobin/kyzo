@@ -1,4 +1,4 @@
-// Fixture: every rule that reads a line, one shape per rule, on purpose.
+// Fixture: every rule, one shape per rule, on purpose.
 //
 // This file is NOT Rust source. The extension is `.rsfix`, so it is not
 // compiled, and the detector's walker — which reads `.rs` and nothing else —
@@ -6,8 +6,14 @@
 // write a forbidden shape is to prove a rule fires on it, and such a shape is
 // test data, not program text. No marker, no attribute, no exemption.
 //
+// It MUST parse as a Rust file. The item-tree pass is skipped on anything `syn`
+// refuses, so a fixture that does not parse proves only the token rules. This
+// file previously held bare statements at file scope, which meant seven rules
+// were unproven while the suite reported green.
+//
 // Line numbers are asserted in `mod law`. Adding a line shifts them; the test
 // fails loudly rather than drifting.
+
 #[derive(Ord)]
 pub struct Undeclared(u8);
 pub struct Exposed(pub Inner);
@@ -18,16 +24,31 @@ pub struct Fields {
     count: usize,
     shared: RefCell<u8>,
 }
-let a = x.unwrap();
-let b = x.expect("no");
-panic!("no");
-todo!();
-unimplemented!();
-unreachable!();
-let c = std::env::var("HOME");
-fn f() -> Result<(), String> {}
-unsafe { }
-unsafe fn g() {}
+struct Inline { n: u64, on: bool }
+pub struct Wide(pub u8, bool);
+pub enum Payload { V(u64, f32) }
+type Alias = bool;
+pub enum ParseRefuse { Empty, TooLong }
+
+impl Undeclared {
+    pub fn new(v: u8) -> Self { Self(v) }
+}
+
+fn f() -> Result<(), String> { Ok(()) }
+fn g(count: usize, flag: bool) -> u32 { 0 }
+
+fn statements() {
+    let a = x.unwrap();
+    let b = x.expect("no");
+    panic!("no");
+    todo!();
+    unimplemented!();
+    unreachable!();
+    let c = std::env::var("HOME");
+    unsafe { }
+}
+
+unsafe fn h() {}
 unsafe impl Send for T {}
 #[allow(unsafe_code)]
-struct Inline { n: u64, on: bool }
+struct Lowered { v: u8 }
