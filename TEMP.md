@@ -170,7 +170,22 @@ not just a type change.
 
 ---
 
-## 8. Detector: R01 is not enforcing anything
+## 8. Detector — DONE (`aee65e8f`)
+
+Kept below as the record of what was wrong and what the fix was.
+
+Result on unchanged code: `crates/kyzo-core/src/store/replica.rs`,
+byte-identical, **31 → 87**. Workspace: 5647 findings across 438 of 570 files.
+14/14 tests pass. R12 is 0, and the fixture proves the rule fires — so no float
+sits inside an order-deriving type anywhere in the tree. That is the encoding
+law holding, confirmed mechanically instead of asserted.
+
+Still open on the detector: **tier 2, dylint post-expansion.** 10,617 macro
+bodies are unscanned; `syn` sees an invocation, never its output. The token pass
+reaches inside for `unsafe`/`panic!`/`todo!`/`env::var`, but every type rule is
+blind there. That count is the remaining ceiling and it is printed, not hidden.
+
+### What R01 was
 
 `crates/bs-detector/src/main.rs:202`
 
@@ -193,33 +208,40 @@ of any type that derives or impls `Ord` / `PartialOrd` / `Hash`.
 Whether the stated order is *correct* stays undetectable — that is the trials'
 job. "This type states its law" is decidable and currently unchecked.
 
-## 9. Detector: the rest of the `syn` rewrite
+## 9. Detector: the rest of the `syn` rewrite — DONE (`aee65e8f`)
 
-From the prior design, still true:
+Landed:
 
-- **R10 / R03 / R08 / R09 only see `name: Type` lines.** Replace the line walker
-  with `syn::visit::Visit` and apply type rules at every position a type can
-  appear: struct field, tuple element, enum variant payload, fn parameter, fn
-  return, type alias RHS, generic argument, typed `let`.
-- **R05 has no missing-span clause.** Implement it: a type whose name ends
-  `Refusal` / `Refuse` / `Error` / `Denial` must carry a field typed `Span` /
-  `SourceSpan` / `Offset`.
-- **R07 matches `env::var` textually.** Track `use` statements so
-  `use std::env; env::var(..)` and `use std::env::var; var(..)` both resolve.
-- **The brace counter is deleted.** No scope tracking to desync once you have
-  the item tree.
-- **Type aliases**: same-crate pre-pass collecting `type X = Y`, substituted
-  transitively. Cross-crate needs `ty.kind()` — tier 2, dylint.
-- **Macro bodies are unscanned.** `syn` sees the invocation, never the output.
-  Count them and report the number: a coverage gap stated, not a silent pass.
-- **Scope**: every `.rs` in the workspace except `target/`. `fuzz/` is
-  first-party and currently unscanned. `vendor/` is third-party — scan it and
-  let the count tell the truth.
+- `syn::visit::Visit` over the item tree. Type rules apply at named field, tuple
+  element, enum variant payload, fn parameter, return type, alias RHS, typed
+  `let`.
+- **R05's missing-span clause**, implemented for the first time: a type ending
+  `Refusal` / `Refuse` / `Error` / `Denial` must carry a `Span` / `SourceSpan` /
+  `Offset` field. 170 findings.
+- **R02's unchecked-constructor clause**, also a first: `pub fn -> Self` with no
+  `Result`/`Option` wrapper.
+- **R10's newtype exemption**, which the rule's own name always implied: the
+  single field of a one-field tuple struct does not fire.
+- `env::var` resolved off the path in the item tree as well as the token text.
+- The brace counter is gone. Its removal alone surfaced `R10 tag: u8` at
+  `replica.rs:1218`, never previously reported.
+- Macro bodies counted and printed: 10,617.
+- Scope is the workspace. `fuzz/` (59) and `vendor/` (1,734) had never been
+  walked.
 
-Tier 1 needs nothing from the broken build: `syn` needs valid syntax, not a
-compiling crate.
+Not done, deliberately: **the same-crate type-alias pre-pass.** `type X = Vec<u8>`
+still hides a `Vec` from R03. Cross-crate aliases need `ty.kind()` and belong to
+tier 2 regardless; doing half of it in tier 1 buys little and the honest place
+for all of it is dylint.
 
-**Blocked on** `crates/bs-detector/OPERATOR-APPROVAL` for the detector paths.
+### Tier 2 — dylint, post-expansion
+
+The 10,617 unscanned macro bodies are the ceiling tier 1 cannot lift. Diagnostics
+must go through the compiler's error channel rather than the lint-level
+machinery, so there is no level to lower and `#[allow(bs::r10)]` cannot silence a
+rule. Violation-pattern tests become `ui_test` `.stderr` files — still the only
+place a forbidden shape is permitted to exist, same rule as the `.rsfix`
+fixtures.
 
 ## 10. Detector debt in `store/replica.rs`
 

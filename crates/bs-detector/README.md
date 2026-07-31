@@ -10,6 +10,20 @@ shapes that are wrong every time, and counts them.
 **Every rule is decidable from syntax alone.** No type resolution, no macro
 expansion, no call graph.
 
+Two passes, unioned — never one substituted for the other:
+
+- **Tokens, per line.** The only pass that sees inside a macro body, because no
+  parser expands one. `unsafe`, `panic!`, `todo!`, `env::var` are found here.
+- **The item tree, via `syn`.** Every position a type can appear: named field,
+  tuple element, enum variant payload, function parameter, return type, alias
+  right-hand side, typed `let`. The pass this replaced read `name: Type` lines
+  and tracked scope with a brace counter, so a shape one column off its expected
+  form was invisible.
+
+Replacing the token pass with the parser would silently drop every shape written
+inside a macro. A rewrite that *lowers* the count on unchanged code has narrowed
+a rule, not fixed a tree — that is the number to watch when either pass changes.
+
 That constraint is the lesson from the machine this replaces. It hand-rolled
 tree-walking and type resolution, and 68% of its reported number was
 `unproven receiver` (19,743), `unproven macro` (6,799), `unproven path` (3,084)
@@ -23,11 +37,17 @@ needs a clause like "…where a domain fact belongs", or its own list of exempt
 files, it stops being absolute and does not belong here. Rules that need
 judgment are enforced by review.
 
-**One scope: all of `crates/`, or the single path you aim at.** No rule carries
-a private carve-out — not for tests, not for vendored data, not for the crate
-the rule is inconvenient in. `#![forbid(unsafe_code)]` in a lib root does not
-reach that crate's `tests/` directory, and that is exactly the kind of gap a
+**One scope: the whole workspace, or the single path you aim at.** No rule
+carries a private carve-out — not for tests, not for vendored code, not for the
+crate the rule is inconvenient in. `#![forbid(unsafe_code)]` in a lib root does
+not reach that crate's `tests/` directory, and that is exactly the kind of gap a
 per-rule exemption hides.
+
+The walk used to start at `crates/`. `fuzz/` is first-party and was never
+scanned; `vendor/fjall` and `vendor/lsm-tree` are forks we publish under our own
+names. A boundary in the walker is an exemption list wearing a different hat, so
+the per-tree subtotals in the report exist instead — `vendor/` is large enough
+to hide movement in the engine behind a single number.
 
 This is the floor, not the ceiling. It catches shapes. It cannot catch a runtime
 check that should have been a constructor, an `Option` standing for meaningful
@@ -38,8 +58,8 @@ more, and only a reader finds them.
 
 | | forbidden |
 | --- | --- |
-| R01 | `Ord`/`PartialOrd`/`Hash` with no `ORDER_LAW` stated in the file |
-| R02 | `pub` field on a newtype, or a public unchecked constructor |
+| R01 | `Ord`/`PartialOrd`/`Hash` on a type that does not state its `ORDER_LAW` |
+| R02 | `pub` field, or a public constructor that cannot refuse |
 | R03 | bare `Vec`/`HashMap`/`HashSet` as a `pub` field |
 | R04 | `unwrap`/`expect`/`panic!` |
 | R05 | `String`-typed error, or a refusal carrying no span |
@@ -62,7 +82,7 @@ more, and only a reader finds them.
 cargo run --release -p bs-detector -- --root .
 ```
 
-Walks `crates/`. Prints per-rule counts and a total.
+Walks the workspace. Prints per-rule counts, per-tree subtotals, and a total.
 Exits non-zero when anything is found. Called by `crates/xtask/gate.sh`, which
 reads this output and is the sole writer of `crates/xtask/gate.log` and
 `gate-counts.txt` — the detector writes no files in either mode. It reports what
@@ -118,11 +138,31 @@ the gate exists to catch.
 The operator arms and disarms the pester hook in `pester-hook.txt` — first
 non-comment line, `on` or `off`. Agents do not touch it.
 
+## What it cannot see, stated rather than passed over
+
+Two numbers print next to the findings, and they are part of the report:
+
+- **macro bodies.** `syn` sees an invocation, never its output. The token pass
+  reaches inside for `unsafe`, `panic!`, `todo!` and `env::var`; R01, R02, R09,
+  R10 and the rest of the type rules cannot. Currently 10,617.
+- **files the parser refused.** Their token findings still count; their item
+  findings are absent. Currently 0.
+
+A parser that skips a construct in silence is reporting a tree it never read.
+That was the failure mode of the machine this replaces — 68% of its number was
+its own blindness, filed as findings — so the blindness is a count here instead,
+kept out of the violation total.
+
+This also bit the fixtures: `forbidden.rsfix` held bare statements at file scope,
+so it did not parse, so the item pass was skipped on it, so seven rules were
+unproven while the suite reported green. `the_fixture_parses` is now a test.
+
 ## Scope
 
-All of `crates/`, skipping only `target/`. Nothing else is excluded: not tests,
-not vendored data, not the detector itself. It scans itself and reports itself.
-Aim mode has no scope restriction at all — it checks whatever path you give it.
+The whole workspace, skipping only `target/` and `.git/`. Nothing else is
+excluded: not tests, not `fuzz/`, not `vendor/`, not the detector itself. It
+scans itself and reports itself. Aim mode has no scope restriction at all — it
+checks whatever path you give it.
 
 R13 matches the bare `unsafe` keyword at a token boundary, not just the line
 forms. Matching only `unsafe fn` / `unsafe impl` / a line *starting* with
