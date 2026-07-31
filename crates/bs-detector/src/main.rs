@@ -105,7 +105,7 @@ rules! {
     R04 => "unwrap/expect/panic!",
     R05 => "String-typed error, or a refusal carrying no span",
     R06 => "todo!/unimplemented!/unreachable! stub",
-    R07 => "env::var read outside the composition root",
+    R07 => "env::var — process environment read as a value",
     R08 => "String-typed kind/status/type/name field",
     R09 => "bool field carrying a domain decision",
     R10 => "bare primitive field outside a newtype",
@@ -651,6 +651,25 @@ impl<'ast> Visit<'ast> for Ast<'_> {
             {
                 self.hit(Rule::R01, i.span(), &format!("impl {last} for {self_ty}"));
             }
+            // `impl From<T> for X` is a public constructor that cannot refuse:
+            // `fn from` returns `Self` with no `Result`, so every caller-supplied
+            // `T` is accepted. `Default` is the same shape with no input at all —
+            // a value invented rather than proven.
+            //
+            // Neither method carries `pub`: a trait impl's items inherit the
+            // trait's visibility, so the inherent-impl branch below — which
+            // requires `syn::Visibility::Public` — never saw them. That is why
+            // R02's constructor clause reported nothing on either shape.
+            //
+            // `TryFrom` is the refusing form. Its last path segment is `TryFrom`,
+            // not `From`, so it does not match.
+            if matches!(last.as_str(), "From" | "Default") {
+                self.hit(
+                    Rule::R02,
+                    i.span(),
+                    &format!("impl {last} for {self_ty} cannot refuse"),
+                );
+            }
         }
         // A public constructor that cannot refuse. `-> Self` or `-> TheType`
         // with no `Result`/`Option` wrapper means every caller-supplied value is
@@ -965,6 +984,8 @@ mod law {
             (Rule::R13, 51), // unsafe fn
             (Rule::R13, 52), // unsafe impl
             (Rule::R14, 53), // allow(unsafe_code)
+            (Rule::R02, 56), // impl From — a constructor that cannot refuse
+            (Rule::R02, 57), // impl Default — a value invented, not proven
         ];
         let missed: Vec<_> = want.iter().filter(|w| !got.contains(*w)).collect();
         assert!(missed.is_empty(), "rules did not fire: {missed:?}");
@@ -1225,6 +1246,23 @@ impl Thing {
         let mut cov = Coverage::default();
         scan("bad.rs", "pub struct {{{ not rust\n", &mut out, &mut cov);
         assert_eq!(cov.unparsed.len(), 1, "unparsable file not recorded");
+    }
+
+    /// `TryFrom` is the refusing conversion and must not fire, or R02 would be
+    /// telling every author that the correct shape is the violation.
+    #[test]
+    fn a_refusing_conversion_does_not_fire() {
+        let got = fire(
+            "t.rs",
+            "impl TryFrom<u16> for X {\n\
+             type Error = E;\n\
+             fn try_from(v: u16) -> Result<Self, E> { Err(E) }\n\
+             }\n",
+        );
+        assert!(
+            !got.iter().any(|(r, l)| *r == Rule::R02 && *l == 1),
+            "TryFrom reported as a constructor that cannot refuse: {got:?}"
+        );
     }
 
     /// Every rule in the table is one the scanner can actually produce. A rule

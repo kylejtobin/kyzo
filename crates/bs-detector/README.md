@@ -64,7 +64,7 @@ more, and only a reader finds them.
 | R04 | `unwrap`/`expect`/`panic!` |
 | R05 | `String`-typed error, or a refusal carrying no span |
 | R06 | `todo!`/`unimplemented!`/`unreachable!` stub |
-| R07 | `env::var` read outside the composition root |
+| R07 | `env::var` — process environment read as a value |
 | R08 | `String`-typed `kind`/`status`/`type`/`name` field |
 | R09 | `bool` field carrying a domain decision |
 | R10 | bare primitive field outside a newtype |

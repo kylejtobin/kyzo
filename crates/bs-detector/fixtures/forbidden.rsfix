@@ -52,3 +52,10 @@ unsafe fn h() {}
 unsafe impl Send for T {}
 #[allow(unsafe_code)]
 struct Lowered { v: u8 }
+
+impl From<u8> for Undeclared { fn from(v: u8) -> Self { Self(v) } }
+impl Default for Undeclared { fn default() -> Self { Self(0) } }
+impl TryFrom<u16> for Undeclared {
+    type Error = ParseRefuse;
+    fn try_from(v: u16) -> Result<Self, ParseRefuse> { Err(ParseRefuse::TooLong) }
+}
