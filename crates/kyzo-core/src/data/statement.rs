@@ -13,25 +13,12 @@
 //! ONTOK variants are constructions over this kernel — never a second record
 //! type and never a nullable mega-struct fork.
 
-use smartstring::{LazyCompact, SmartString};
-use thiserror::Error;
-
-use kyzo_model::value::{Bound, DataValue, Interval};
-
 /// ONTOK conceptual kind — type authority on the statement kernel.
 ///
 /// Variants are constructions over the one [`StatementBody`], not distinct
 /// record types (`EntityRecord` / `ClaimRecord` / … are condemned forks).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum OntokKind {
-    /// Anchors identity.
-    Entity,
-    /// Something that happened.
-    Event,
-    /// Truth over a scope or interval.
-    State,
-    /// Contextual participation.
-    Role,
     /// Typed connection.
     Relation,
     /// Assertion whose standing can change.
@@ -48,89 +35,6 @@ pub enum OntokKind {
     Derivation,
     /// Supersession / invalidation without overwrite.
     Invalidation,
-}
-
-/// Subject of a typed statement — what the assertion is about.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct StatementSubject(DataValue);
-
-impl StatementSubject {
-    /// Mint a subject from an already-typed value.
-    pub fn new(value: DataValue) -> Self {
-        Self(value)
-    }
-
-    /// Borrow the subject value.
-    pub fn as_value(&self) -> &DataValue {
-        &self.0
-    }
-}
-
-/// Predicate of a typed statement — ontology slot, not a free-string taxonomy.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct StatementPredicate(SmartString<LazyCompact>);
-
-impl StatementPredicate {
-    /// Mint a non-empty predicate name.
-    pub fn new(name: impl AsRef<str>) -> Result<Self, StatementRefuse> {
-        let name = name.as_ref();
-        if name.is_empty() {
-            return Err(StatementRefuse::EmptyPredicate);
-        }
-        Ok(Self(SmartString::from(name)))
-    }
-
-    /// Borrow the predicate name.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-/// Value (object) of a typed statement.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct StatementValue(DataValue);
-
-impl StatementValue {
-    /// Mint a statement value from an already-typed [`DataValue`].
-    pub fn new(value: DataValue) -> Self {
-        Self(value)
-    }
-
-    /// Borrow the value.
-    pub fn as_value(&self) -> &DataValue {
-        &self.0
-    }
-}
-
-/// Validity-time scope — when the assertion holds in the represented world.
-///
-/// Uses the engine's [`Interval`] (unbounded ends as variants, not sentinels).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ValidityTime(Interval);
-
-impl ValidityTime {
-    /// Wrap a proven interval.
-    pub fn new(interval: Interval) -> Self {
-        Self(interval)
-    }
-
-    /// A single closed instant.
-    pub fn instant(ts_micros: i64) -> Self {
-        Self(Interval::new(
-            Bound::Closed(ts_micros),
-            Bound::Closed(ts_micros),
-        ))
-    }
-
-    /// Closed start, open end (still holds).
-    pub fn from_onward(from_micros: i64) -> Self {
-        Self(Interval::new(Bound::Closed(from_micros), Bound::Unbounded))
-    }
-
-    /// Borrow the interval.
-    pub fn as_interval(self) -> Interval {
-        self.0
-    }
 }
 
 /// Durable context identity that scopes an assertion.
@@ -295,15 +199,6 @@ impl StatementBody {
     }
 }
 
-/// Refusal at statement-body construction.
-#[derive(Debug, Clone, PartialEq, Eq, Error, miette::Diagnostic)]
-pub enum StatementRefuse {
-    /// Predicate name was empty.
-    #[error("EmptyPredicate: statement predicate must be non-empty")]
-    #[diagnostic(code(data::statement::empty_predicate))]
-    EmptyPredicate,
-}
-
 /// ONTOK constructions over the statement kernel.
 ///
 /// Each function returns `(OntokKind, StatementBody)` for the one private
@@ -320,21 +215,6 @@ pub mod construct {
         source: StatementSource,
     ) -> StatementBody {
         StatementBody::new(subject, predicate, value, validity_time, context, source)
-    }
-
-    /// Entity: subject exists and is identifiable.
-    pub fn entity(
-        subject: StatementSubject,
-        validity_time: ValidityTime,
-        context: StatementContext,
-        source: StatementSource,
-    ) -> Result<(OntokKind, StatementBody), StatementRefuse> {
-        let predicate = StatementPredicate::new("ontok:entity")?;
-        let value = StatementValue::new(DataValue::Bool(true));
-        Ok((
-            OntokKind::Entity,
-            body(subject, predicate, value, validity_time, context, source),
-        ))
     }
 
     /// Claim: subject / domain-predicate / value assertion.
@@ -378,51 +258,6 @@ pub mod construct {
     ) -> (OntokKind, StatementBody) {
         (
             OntokKind::Relation,
-            body(subject, predicate, value, validity_time, context, source),
-        )
-    }
-
-    /// State: scoped truth over validity-time.
-    pub fn state(
-        subject: StatementSubject,
-        predicate: StatementPredicate,
-        value: StatementValue,
-        validity_time: ValidityTime,
-        context: StatementContext,
-        source: StatementSource,
-    ) -> (OntokKind, StatementBody) {
-        (
-            OntokKind::State,
-            body(subject, predicate, value, validity_time, context, source),
-        )
-    }
-
-    /// Event: something that happened at a validity instant/interval.
-    pub fn event(
-        subject: StatementSubject,
-        predicate: StatementPredicate,
-        value: StatementValue,
-        validity_time: ValidityTime,
-        context: StatementContext,
-        source: StatementSource,
-    ) -> (OntokKind, StatementBody) {
-        (
-            OntokKind::Event,
-            body(subject, predicate, value, validity_time, context, source),
-        )
-    }
-
-    /// Role: contextual participation.
-    pub fn role(
-        subject: StatementSubject,
-        predicate: StatementPredicate,
-        value: StatementValue,
-        validity_time: ValidityTime,
-        context: StatementContext,
-        source: StatementSource,
-    ) -> (OntokKind, StatementBody) {
-        (
-            OntokKind::Role,
             body(subject, predicate, value, validity_time, context, source),
         )
     }

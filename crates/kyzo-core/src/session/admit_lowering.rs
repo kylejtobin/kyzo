@@ -95,29 +95,6 @@ impl SurfaceTag {
     }
 }
 
-/// Dimensions entailed by an ONTOK kind — pure function of type, not write config.
-///
-/// Returned slice is sorted by [`StatementDimension`] Ord. Every kind produces
-/// Identity / Time / Source (statement kernel). Relationship, Similarity, and
-/// QuantityAndLocation are selected by kind responsibility.
-pub(crate) fn dimensions_entailed(kind: OntokKind) -> &'static [StatementDimension] {
-    use StatementDimension::{
-        Identity, QuantityAndLocation, Relationship, Similarity, Source, Time,
-    };
-    match kind {
-        OntokKind::Entity | OntokKind::Context => &[Identity, Time, Source],
-        OntokKind::Event | OntokKind::State => &[Identity, QuantityAndLocation, Time, Source],
-        OntokKind::Role
-        | OntokKind::Relation
-        | OntokKind::Rule
-        | OntokKind::Derivation
-        | OntokKind::Invalidation => &[Identity, Relationship, Time, Source],
-        OntokKind::Claim | OntokKind::Evidence | OntokKind::Concept => {
-            &[Identity, Similarity, Time, Source]
-        }
-    }
-}
-
 /// Lower a record into the closed six-dimension projection set.
 ///
 /// Recomputes from typed fields on every call. Same record → same rows/bytes.
@@ -133,24 +110,6 @@ pub(crate) fn lower_record(record: &KyzoRecord) -> RecordLowering {
         rows.push(LoweredRow::new(dimension, source, payload));
     }
     RecordLowering::from_ordered_rows(rows)
-}
-
-/// Map ONTOK kind to the crossing wire tag (#270 T1).
-pub(crate) fn crossing_kind_from_ontok(kind: OntokKind) -> CrossingKind {
-    match kind {
-        OntokKind::Entity => CrossingKind::Entity,
-        OntokKind::Event => CrossingKind::Event,
-        OntokKind::State => CrossingKind::State,
-        OntokKind::Role => CrossingKind::Role,
-        OntokKind::Relation => CrossingKind::Relation,
-        OntokKind::Claim => CrossingKind::Claim,
-        OntokKind::Evidence => CrossingKind::Evidence,
-        OntokKind::Context => CrossingKind::Context,
-        OntokKind::Concept => CrossingKind::Concept,
-        OntokKind::Rule => CrossingKind::Rule,
-        OntokKind::Derivation => CrossingKind::Derivation,
-        OntokKind::Invalidation => CrossingKind::Invalidation,
-    }
 }
 
 /// Build a crossing envelope from an admitted record + its certificate.

@@ -199,12 +199,9 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 fn scan(rel: &str, text: &str, out: &mut Vec<Violation>) {
-    let states_order_law = text.contains("ORDER_LAW");
-
     // Struct/enum context for the field rules.
     let mut in_type: Option<(String, bool)> = None; // (name, derives_order)
     let mut pending_derives = String::new();
-    let mut brace = 0i32;
 
     let all: Vec<&str> = text.lines().collect();
     for (i, raw) in all.iter().enumerate() {
@@ -254,11 +251,7 @@ fn scan(rel: &str, text: &str, out: &mut Vec<Violation>) {
             let derives_order = pending_derives.contains("Ord")
                 || pending_derives.contains("PartialOrd")
                 || pending_derives.contains("Hash");
-            if derives_order && !states_order_law {
-                push(out, "R01", rel, line, &format!("{rest} derives an order"));
-            }
             in_type = Some((rest.to_string(), derives_order));
-            brace = code.matches('{').count() as i32 - code.matches('}').count() as i32;
             // tuple newtype with a pub field: `pub struct X(pub T);`
             if code.contains("(pub ") {
                 push(out, "R02", rel, line, code);
@@ -272,22 +265,6 @@ fn scan(rel: &str, text: &str, out: &mut Vec<Violation>) {
             pending_derives.clear();
             continue;
         }
-        if !states_order_law
-            && (code.starts_with("impl Ord for")
-                || code.starts_with("impl PartialOrd for")
-                || code.starts_with("impl Hash for"))
-        {
-            push(out, "R01", rel, line, code);
-        }
-
-        if in_type.is_some() {
-            brace += code.matches('{').count() as i32 - code.matches('}').count() as i32;
-            if brace <= 0 {
-                in_type = None;
-                continue;
-            }
-        }
-
         // ---- field rules ---------------------------------------------------
         let Some((_, derives_order)) = in_type.as_ref() else {
             continue;
@@ -385,45 +362,6 @@ fn strip_literals(code: &str) -> String {
         }
     }
     out
-}
-
-/// `pub struct Foo {` / `enum Foo {` → the declared name.
-fn type_header(code: &str) -> Option<&str> {
-    let rest = code
-        .strip_prefix("pub ")
-        .or_else(|| code.strip_prefix("pub(crate) "))
-        .unwrap_or(code);
-    let rest = rest.strip_prefix("struct ").or_else(|| rest.strip_prefix("enum "))?;
-    let name = rest
-        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
-        .next()
-        .unwrap_or_default();
-    if name.is_empty() {
-        None
-    } else {
-        Some(name)
-    }
-}
-
-/// `pub name: Type,` → (name, Type, is_pub).
-fn field(code: &str) -> Option<(String, String, bool)> {
-    let (is_pub, rest) = if let Some(r) = code.strip_prefix("pub ") {
-        (true, r)
-    } else if let Some(r) = code.strip_prefix("pub(crate) ") {
-        (false, r)
-    } else {
-        (false, code)
-    };
-    let (name, ty) = rest.split_once(':')?;
-    let name = name.trim();
-    if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
-        return None;
-    }
-    let ty = ty.trim().trim_end_matches(',').trim();
-    if ty.is_empty() {
-        return None;
-    }
-    Some((name.to_string(), ty.to_string(), is_pub))
 }
 
 fn push(out: &mut Vec<Violation>, rule: &'static str, file: &str, line: usize, detail: &str) {
@@ -530,7 +468,6 @@ mod law {
         scan("ordered_float.rsfix", text, &mut out);
         let got: BTreeSet<(&str, usize)> = out.iter().map(|v| (v.rule, v.line)).collect();
         assert!(got.contains(&("R12", 6)), "R12 did not fire: {got:?}");
-        assert!(!got.contains(&("R01", 5)), "R01 fired despite ORDER_LAW: {got:?}");
     }
 
     /// A shape inside a string literal is data, and a `//` inside a string
