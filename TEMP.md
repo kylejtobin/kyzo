@@ -229,10 +229,19 @@ Landed:
 - Scope is the workspace. `fuzz/` (59) and `vendor/` (1,734) had never been
   walked.
 
-Not done, deliberately: **the same-crate type-alias pre-pass.** `type X = Vec<u8>`
-still hides a `Vec` from R03. Cross-crate aliases need `ty.kind()` and belong to
-tier 2 regardless; doing half of it in tier 1 buys little and the honest place
-for all of it is dylint.
+- **Same-crate type-alias resolution.** `type Bytes = Vec<u8>` no longer hides a
+  `Vec` from R03, nor `type Flag = bool` a bool from R09. Collected in a pass of
+  its own so declaration order does not matter, and bounded so an `A = B; B = A`
+  cycle terminates. Found 13 more R10s, all in `vendor/`.
+
+  I first shipped this as "deliberately not built," arguing it belonged whole in
+  tier 2. That was wrong twice: it is twenty lines and needs no resolved types,
+  and leaving it meant a one-line rename suppressed a rule — a narrowing, the
+  exact failure the rising-count check exists to catch.
+
+Still open: **cross-crate aliases.** An alias declared in another crate needs
+`ty.kind()` and genuinely is tier 2. That one is a real boundary, not a
+preference.
 
 ### Tier 2 — dylint, post-expansion
 

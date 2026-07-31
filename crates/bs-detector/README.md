@@ -147,6 +147,9 @@ Two numbers print next to the findings, and they are part of the report:
   R10 and the rest of the type rules cannot. Currently 10,617.
 - **files the parser refused.** Their token findings still count; their item
   findings are absent. Currently 0.
+- **cross-crate type aliases.** Same-crate `type X = Y` is resolved before the
+  rules run, so a rename cannot hide what a binding holds. An alias declared in
+  another crate needs resolved types and is not seen.
 
 A parser that skips a construct in silence is reporting a tree it never read.
 That was the failure mode of the machine this replaces — 68% of its number was

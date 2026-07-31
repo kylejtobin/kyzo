@@ -85,8 +85,8 @@ fi
 printf '%s' "$out" | grep -oE '^[^:]+\.rs' | sort -u > "$OUTSTANDING"
 
 block "<required_action>
-Fix every shape listed below, in the files listed below, before doing anything
-else. Report what you changed and why each change is the stronger form.
+Fix every finding below before anything else. Report each change and the
+illegal state it makes unconstructible.
 </required_action>
 
 <findings>
@@ -94,48 +94,30 @@ $out
 </findings>
 
 <scope>
-These are yours because you changed these files, not because they are part of
-the task you were on. A violation left in place because it predates you is how
-the count never falls: every one already in this tree was left by someone who
-was working on something else at the time.
+These are yours because you touched these files, not because they were your
+task. Violations that survive because they predate the editor are how the
+count never falls.
 </scope>
 
 <what_counts_as_fixed>
-You are a type-driven purist here. Start from the type, not the diagnostic.
+Start from the type, not the diagnostic. Binary order equals semantic order;
+the invariant goes in a type, not a check, comment, or convention; untyped
+surface area is removed, not documented.
 
-  1. Preserve the encoding law: binary order equals semantic order.
-  2. Put the invariant in a type, not in a check, a comment, or a convention.
-  3. Remove untyped surface area rather than documenting it.
-
-Where two fixes are available, take the one that costs more now. The cheap fix
-satisfies the scanner and leaves the defect: a runtime check where a private
-constructor belongs, an accessor where a newtype belongs, a rename where a
-redesign belongs. That outcome is worse than the finding you started with,
-because the defect is now labelled fixed and nobody looks again.
-
-Before you edit, state which illegal state your change makes unconstructible.
-If the answer is none, you have found a workaround rather than a fix.
+If your change makes no illegal state unconstructible, it is a workaround.
+A runtime check where a private constructor belongs is worse than the
+finding, because it is now labelled fixed.
 </what_counts_as_fixed>
 
 <how_this_check_works>
-This is not a lint pass over your edit. Before your tool ran, every Rust file
-under crates/ was hashed; after it ran, they were hashed again, and everything
-that differs is scanned. The tool you used is not consulted. An Edit, a Write,
-a heredoc into python3, sed -i, a shell redirect, a script you wrote and then
-executed — all reach this identically, and preserving mtimes changes nothing
-because the comparison is over content.
-
-Findings persist. The files above are re-scanned on every subsequent tool call
-until they come back clean. Working on something else does not clear them, and
-no marker or attribute suppresses a rule.
-
-Knowing that is the point: there is no state of the world in which searching
-for a way around this ends better than fixing the shape.
+Files under crates/ are content-hashed before and after every tool call and
+diffs are scanned. The tool used is irrelevant: Edit, sed, heredoc, and
+generated scripts all reach this identically. Findings persist and re-scan
+on every call until clean. There is no route around this that is shorter
+than fixing the shape.
 </how_this_check_works>
 
 <if_the_rule_is_wrong>
-Say so in chat: name the rule, the input it mishandles, and the shape it should
-have accepted instead. A precisely described defect in the scanner is worth
-more than any change you could get past it. The rules are in
+Say so in chat: rule, mishandled input, correct shape. Rules live in
 crates/bs-detector/README.md.
 </if_the_rule_is_wrong>"

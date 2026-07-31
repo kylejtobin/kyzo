@@ -243,10 +243,17 @@ fn scan(rel: &str, text: &str, out: &mut Vec<Violation>, cov: &mut Coverage) {
     token_pass(rel, text, out);
     match syn::parse_file(text) {
         Ok(file) => {
+            // Aliases first: `type Bytes = Vec<u8>` must not hide a `Vec` from
+            // R03, nor `type Flag = bool` a bool from R09. Same-crate only —
+            // an alias declared in another crate needs resolved types and is
+            // tier 2's, but that is no reason to leave the local case blind.
+            let mut aliases = Aliases::default();
+            aliases.visit_file(&file);
             let mut ast = Ast {
                 rel,
                 out: Vec::new(),
                 macro_bodies: 0,
+                aliases: aliases.0,
             };
             ast.visit_file(&file);
             cov.macro_bodies += ast.macro_bodies;
@@ -361,6 +368,23 @@ struct Ast<'a> {
     rel: &'a str,
     out: Vec<Violation>,
     macro_bodies: usize,
+    /// Same-crate `type X = Y` declarations, so a rule reads what a binding
+    /// actually holds rather than the name someone gave it.
+    aliases: BTreeMap<String, String>,
+}
+
+/// Collects `type X = Y` before the rules run.
+///
+/// A separate pass because an alias may be declared after its use, and a rule
+/// that only resolves backwards is a rule you avoid by moving a line.
+#[derive(Default)]
+struct Aliases(BTreeMap<String, String>);
+
+impl<'ast> Visit<'ast> for Aliases {
+    fn visit_item_type(&mut self, i: &'ast syn::ItemType) {
+        self.0.insert(i.ident.to_string(), tystr(&i.ty));
+        syn::visit::visit_item_type(self, i);
+    }
 }
 
 /// Where a type was written. Only `TupleNewtype` changes a verdict: it is the
@@ -385,6 +409,22 @@ impl Ast<'_> {
         });
     }
 
+    /// Follow same-crate aliases to what the binding actually holds.
+    ///
+    /// Bounded, because a cycle (`type A = B; type B = A;`) does not compile
+    /// but does reach this scanner — a detector that hangs on bad input is a
+    /// detector that gets removed from the loop.
+    fn resolve(&self, ty: &str) -> String {
+        let mut seen = ty.to_string();
+        for _ in 0..8 {
+            match self.aliases.get(&seen) {
+                Some(next) if *next != seen => seen = next.clone(),
+                _ => break,
+            }
+        }
+        seen
+    }
+
     /// The rules that read one binding. Applied at every type position, which
     /// is the whole reason this pass exists.
     fn binding(
@@ -396,10 +436,13 @@ impl Ast<'_> {
         site: Site,
         span: proc_macro2::Span,
     ) {
-        let t = tystr(ty);
+        let written = tystr(ty);
+        // The rules read what the binding holds, not the name it was given.
+        // `type Bytes = Vec<u8>` hid a `Vec` from R03 until this line existed.
+        let t = self.resolve(&written);
         let shown = match name {
-            Some(n) => format!("{n}: {t}"),
-            None => t.clone(),
+            Some(n) => format!("{n}: {written}"),
+            None => written.clone(),
         };
 
         if is_pub {
@@ -964,6 +1007,39 @@ type Alias = bool;
             !got.iter().any(|(r, _)| *r == "R10"),
             "R10 fired on the newtype itself: {got:?}"
         );
+    }
+
+    /// A same-crate alias does not hide what a binding holds. Without this,
+    /// renaming a type in one line is a working suppression mechanism — the
+    /// count drops and nothing was fixed.
+    #[test]
+    fn an_alias_does_not_hide_the_type_it_names() {
+        let text = "\
+type Bytes = Vec<u8>;
+type Flag = bool;
+type Count = usize;
+pub struct S { pub b: Bytes, f: Flag, n: Count }
+";
+        let got = fire("t.rs", text);
+        assert!(got.contains(&("R03", 4)), "alias hid a Vec from R03: {got:?}");
+        assert!(got.contains(&("R09", 4)), "alias hid a bool from R09: {got:?}");
+        assert!(got.contains(&("R10", 4)), "alias hid a usize from R10: {got:?}");
+    }
+
+    /// Declaration order must not matter. A rule that only resolves backwards
+    /// is a rule you avoid by moving a line.
+    #[test]
+    fn an_alias_declared_after_its_use_still_resolves() {
+        let got = fire("t.rs", "pub struct S { f: Flag }\ntype Flag = bool;\n");
+        assert!(got.contains(&("R09", 1)), "forward alias not resolved: {got:?}");
+    }
+
+    /// `type A = B; type B = A;` does not compile, but it reaches this scanner.
+    /// A detector that hangs on bad input is a detector nobody runs.
+    #[test]
+    fn an_alias_cycle_terminates() {
+        let got = fire("t.rs", "type A = B;\ntype B = A;\npub struct S { f: A }\n");
+        let _ = got;
     }
 
     /// A refusal that cannot point at what it refused.
