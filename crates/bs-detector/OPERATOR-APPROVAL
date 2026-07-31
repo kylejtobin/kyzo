@@ -8,10 +8,3 @@
 #
 # Remove a line when the work is done. A path left here is a standing grant.
 
-crates/bs-detector/src/main.rs
-crates/bs-detector/Cargo.toml
-crates/bs-detector/README.md
-crates/bs-detector/fixtures/forbidden.rsfix
-crates/bs-detector/fixtures/ordered_float.rsfix
-crates/xtask/gate.sh
-.claude/hooks/rust-scan-guard.sh
