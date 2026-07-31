@@ -59,33 +59,77 @@ use quote::ToTokens;
 use syn::spanned::Spanned;
 use syn::visit::Visit;
 
+/// The fifteen, declared once.
+///
+/// The name, the printed id, and the sentence saying what the rule forbids come
+/// from a single list. Before this they were three: an enum, a `const ALL`
+/// array, and a `RULES: &[(&str, &str)]` table read by the report. Any two
+/// could disagree, and the report's `&'static str` rule field meant
+/// `push(out, "R16", ..)` typechecked and printed a rule that did not exist.
+///
+/// A test asserting the three agree is a check where a construction belongs:
+/// it fails after the drift is written. Here the drift cannot be written.
+macro_rules! rules {
+    ($($v:ident => $forbids:literal,)+) => {
+        /// One of the fifteen, as a name rather than a string.
+        ///
+        /// ORDER_LAW: declaration order is report order — `R01 < R02 < … < R15`
+        /// — and that is the whole of it. A rule is a name in a closed
+        /// vocabulary, never a stored value, so it has no encoded form and no
+        /// byte order to agree with. `Ord` exists here to sort a report and for
+        /// nothing else.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+        enum Rule { $($v,)+ }
+
+        impl Rule {
+            /// Every rule, in report order. Cannot omit one: it is the same
+            /// list the enum is generated from.
+            const ALL: &'static [Rule] = &[$(Rule::$v,)+];
+
+            fn id(self) -> &'static str {
+                match self { $(Rule::$v => stringify!($v),)+ }
+            }
+
+            /// What the rule forbids, as the report prints it.
+            fn forbids(self) -> &'static str {
+                match self { $(Rule::$v => $forbids,)+ }
+            }
+        }
+    };
+}
+
+rules! {
+    R01 => "Ord/PartialOrd/Hash on a type that does not state its ORDER_LAW",
+    R02 => "pub field, or a public constructor that cannot refuse",
+    R03 => "bare Vec/HashMap/HashSet as a pub field",
+    R04 => "unwrap/expect/panic!",
+    R05 => "String-typed error, or a refusal carrying no span",
+    R06 => "todo!/unimplemented!/unreachable! stub",
+    R07 => "env::var read outside the composition root",
+    R08 => "String-typed kind/status/type/name field",
+    R09 => "bool field carrying a domain decision",
+    R10 => "bare primitive field outside a newtype",
+    R11 => "RefCell/Cell/Mutex/RwLock field in a domain type",
+    R12 => "f32/f64 field in a type that derives an order",
+    R13 => "unsafe block/fn/impl",
+    R14 => "allow(unsafe_code) — a lint-lowering on the strongest standard",
+    R15 => "crate root with no #![forbid(unsafe_code)]",
+}
+
+impl std::fmt::Display for Rule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.id())
+    }
+}
+
 /// A forbidden shape, with the file and line that holds it.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct Violation {
-    rule: &'static str,
+    rule: Rule,
     file: String,
     line: usize,
     detail: String,
 }
-
-/// The fifteen rules, as the report prints them.
-const RULES: &[(&str, &str)] = &[
-    ("R01", "Ord/PartialOrd/Hash on a type that does not state its ORDER_LAW"),
-    ("R02", "pub field, or a public constructor that cannot refuse"),
-    ("R03", "bare Vec/HashMap/HashSet as a pub field"),
-    ("R04", "unwrap/expect/panic!"),
-    ("R05", "String-typed error, or a refusal carrying no span"),
-    ("R06", "todo!/unimplemented!/unreachable! stub"),
-    ("R07", "env::var read outside the composition root"),
-    ("R08", "String-typed kind/status/type/name field"),
-    ("R09", "bool field carrying a domain decision"),
-    ("R10", "bare primitive field outside a newtype"),
-    ("R11", "RefCell/Cell/Mutex/RwLock field in a domain type"),
-    ("R12", "f32/f64 field in a type that derives an order"),
-    ("R13", "unsafe block/fn/impl"),
-    ("R14", "allow(unsafe_code) — a lint-lowering on the strongest standard"),
-    ("R15", "crate root with no #![forbid(unsafe_code)]"),
-];
 
 /// What the parser could not read, reported rather than passed over.
 ///
@@ -205,7 +249,7 @@ fn check_forbid_unsafe(files: &[PathBuf], out: &mut Vec<Violation>) {
         };
         if !text.contains("#![forbid(unsafe_code)]") {
             out.push(Violation {
-                rule: "R15",
+                rule: Rule::R15,
                 file: p,
                 line: 1,
                 detail: format!("{kind} does not forbid unsafe"),
@@ -307,17 +351,17 @@ fn token_pass(rel: &str, text: &str, out: &mut Vec<Violation>) {
         let code = blanked.split("//").next().unwrap_or(&blanked).trim();
 
         if code.contains(".unwrap()") || code.contains(".expect(") || code.contains("panic!(") {
-            push(out, "R04", rel, line, code);
+            push(out, Rule::R04, rel, line, code);
         }
         if code.contains("todo!(") || code.contains("unimplemented!(") || code.contains("unreachable!(")
         {
-            push(out, "R06", rel, line, code);
+            push(out, Rule::R06, rel, line, code);
         }
         if code.contains("env::var") {
-            push(out, "R07", rel, line, code);
+            push(out, Rule::R07, rel, line, code);
         }
         if code.contains("Result<") && code.contains(", String>") {
-            push(out, "R05", rel, line, code);
+            push(out, Rule::R05, rel, line, code);
         }
         // Not test-exempt, and not scoped to two crates: `forbid(unsafe_code)`
         // in a lib root does not reach that crate's tests/ directory, which is
@@ -328,10 +372,10 @@ fn token_pass(rel: &str, text: &str, out: &mut Vec<Violation>) {
         // likely to be reached for. `unsafe_code` is a different token and does
         // not match; R14 owns that one.
         if has_token(code, "unsafe") {
-            push(out, "R13", rel, line, code);
+            push(out, Rule::R13, rel, line, code);
         }
         if code.contains("allow(unsafe_code)") {
-            push(out, "R14", rel, line, code);
+            push(out, Rule::R14, rel, line, code);
         }
     }
 }
@@ -425,7 +469,7 @@ enum Site {
 }
 
 impl Ast<'_> {
-    fn hit(&mut self, rule: &'static str, span: proc_macro2::Span, detail: &str) {
+    fn hit(&mut self, rule: Rule, span: proc_macro2::Span, detail: &str) {
         self.out.push(Violation {
             rule,
             file: self.rel.to_string(),
@@ -471,9 +515,9 @@ impl Ast<'_> {
         };
 
         if is_pub {
-            self.hit("R02", span, &shown);
+            self.hit(Rule::R02, span, &shown);
             if t.starts_with("Vec<") || t.starts_with("HashMap") || t.starts_with("HashSet") {
-                self.hit("R03", span, &shown);
+                self.hit(Rule::R03, span, &shown);
             }
         }
         if let Some(n) = name {
@@ -481,32 +525,32 @@ impl Ast<'_> {
             if (t == "String" || t.starts_with("SmartString"))
                 && matches!(lower.as_str(), "kind" | "status" | "type" | "name" | "state")
             {
-                self.hit("R08", span, &shown);
+                self.hit(Rule::R08, span, &shown);
             }
         }
         if t == "bool" {
-            self.hit("R09", span, &shown);
+            self.hit(Rule::R09, span, &shown);
         }
         // A one-field tuple struct IS the newtype R10 asks for. Every other
         // position holding a bare integer is the shape.
         if site != Site::TupleNewtype && is_bare_primitive(&t) {
-            self.hit("R10", span, &shown);
+            self.hit(Rule::R10, span, &shown);
         }
         if t.starts_with("RefCell")
             || t.starts_with("Cell<")
             || t.starts_with("Mutex")
             || t.starts_with("RwLock")
         {
-            self.hit("R11", span, &shown);
+            self.hit(Rule::R11, span, &shown);
         }
         if (t == "f32" || t == "f64") && derives_order {
-            self.hit("R12", span, &shown);
+            self.hit(Rule::R12, span, &shown);
         }
         // Reaches the nested position the line scanner never read: a `String`
         // error inside `Result<_, String>` written across two lines, or as a
         // parameter, or behind an alias.
         if t.contains("Result<") && t.ends_with(",String>") {
-            self.hit("R05", span, &shown);
+            self.hit(Rule::R05, span, &shown);
         }
     }
 
@@ -552,7 +596,7 @@ impl<'ast> Visit<'ast> for Ast<'_> {
     fn visit_item_struct(&mut self, i: &'ast syn::ItemStruct) {
         let ord = derives_order(&i.attrs);
         if ord && !states_order_law(&i.attrs) {
-            self.hit("R01", i.ident.span(), &format!("{} derives an order", i.ident));
+            self.hit(Rule::R01, i.ident.span(), &format!("{} derives an order", i.ident));
         }
         refusal_needs_span(self, &i.ident, i.fields.iter(), i.ident.span());
         self.fields(&i.fields, ord);
@@ -562,7 +606,7 @@ impl<'ast> Visit<'ast> for Ast<'_> {
     fn visit_item_enum(&mut self, i: &'ast syn::ItemEnum) {
         let ord = derives_order(&i.attrs);
         if ord && !states_order_law(&i.attrs) {
-            self.hit("R01", i.ident.span(), &format!("{} derives an order", i.ident));
+            self.hit(Rule::R01, i.ident.span(), &format!("{} derives an order", i.ident));
         }
         refusal_needs_span(
             self,
@@ -579,7 +623,7 @@ impl<'ast> Visit<'ast> for Ast<'_> {
     fn visit_item_union(&mut self, i: &'ast syn::ItemUnion) {
         let ord = derives_order(&i.attrs);
         if ord && !states_order_law(&i.attrs) {
-            self.hit("R01", i.ident.span(), &format!("{} derives an order", i.ident));
+            self.hit(Rule::R01, i.ident.span(), &format!("{} derives an order", i.ident));
         }
         for f in &i.fields.named {
             self.binding(
@@ -605,7 +649,7 @@ impl<'ast> Visit<'ast> for Ast<'_> {
             if matches!(last.as_str(), "Ord" | "PartialOrd" | "Hash")
                 && !states_order_law(&i.attrs)
             {
-                self.hit("R01", i.span(), &format!("impl {last} for {self_ty}"));
+                self.hit(Rule::R01, i.span(), &format!("impl {last} for {self_ty}"));
             }
         }
         // A public constructor that cannot refuse. `-> Self` or `-> TheType`
@@ -623,7 +667,7 @@ impl<'ast> Visit<'ast> for Ast<'_> {
                 let r = tystr(ty);
                 if r == "Self" || r == self_ty {
                     self.hit(
-                        "R02",
+                        Rule::R02,
                         f.sig.ident.span(),
                         &format!("pub fn {}(..) -> {r}", f.sig.ident),
                     );
@@ -674,7 +718,7 @@ impl<'ast> Visit<'ast> for Ast<'_> {
     fn visit_expr_method_call(&mut self, i: &'ast syn::ExprMethodCall) {
         let m = i.method.to_string();
         if m == "unwrap" || m == "expect" {
-            self.hit("R04", i.method.span(), &format!(".{m}(..)"));
+            self.hit(Rule::R04, i.method.span(), &format!(".{m}(..)"));
         }
         syn::visit::visit_expr_method_call(self, i);
     }
@@ -685,7 +729,7 @@ impl<'ast> Visit<'ast> for Ast<'_> {
         // the item tree carries it.
         let p: Vec<String> = i.path.segments.iter().map(|s| s.ident.to_string()).collect();
         if p.len() >= 2 && p[p.len() - 2] == "env" && p[p.len() - 1] == "var" {
-            self.hit("R07", i.span(), &p.join("::"));
+            self.hit(Rule::R07, i.span(), &p.join("::"));
         }
         syn::visit::visit_expr_path(self, i);
     }
@@ -698,8 +742,8 @@ impl<'ast> Visit<'ast> for Ast<'_> {
             .map(|s| s.ident.to_string())
             .unwrap_or_default();
         match name.as_str() {
-            "panic" => self.hit("R04", i.span(), "panic!"),
-            "todo" | "unimplemented" | "unreachable" => self.hit("R06", i.span(), &format!("{name}!")),
+            "panic" => self.hit(Rule::R04, i.span(), "panic!"),
+            "todo" | "unimplemented" | "unreachable" => self.hit(Rule::R06, i.span(), &format!("{name}!")),
             _ => {}
         }
         // Every macro body is tokens this walker does not expand. Counted, and
@@ -732,7 +776,7 @@ fn refusal_needs_span<'a>(
         t.contains("Span") || t.contains("SourceSpan") || t.contains("Offset")
     });
     if !carries {
-        ast.hit("R05", span, &format!("{n} carries no span"));
+        ast.hit(Rule::R05, span, &format!("{n} carries no span"));
     }
 }
 
@@ -785,7 +829,7 @@ fn states_order_law(attrs: &[syn::Attribute]) -> bool {
         .any(|a| a.to_token_stream().to_string().contains("ORDER_LAW"))
 }
 
-fn push(out: &mut Vec<Violation>, rule: &'static str, file: &str, line: usize, detail: &str) {
+fn push(out: &mut Vec<Violation>, rule: Rule, file: &str, line: usize, detail: &str) {
     out.push(Violation {
         rule,
         file: file.to_string(),
@@ -832,9 +876,9 @@ fn report_gate(_root: &Path, files: &[PathBuf], violations: &[Violation], cov: &
     let touched: BTreeSet<&str> = violations.iter().map(|v| v.file.as_str()).collect();
 
     println!("bs-detector — forbidden shapes, {} files scanned", files.len());
-    for (rule, desc) in RULES {
-        let n = per_rule.get(rule).copied().unwrap_or(0);
-        println!("{rule}  {n:>6}  {desc}");
+    for rule in Rule::ALL {
+        let n = per_rule.get(&rule).copied().unwrap_or(0);
+        println!("{rule}  {n:>6}  {}", rule.forbids());
     }
 
     // Per-tree subtotals. `vendor/` is large enough to hide movement in the
@@ -874,7 +918,7 @@ fn report_gate(_root: &Path, files: &[PathBuf], violations: &[Violation], cov: &
 mod law {
     use super::*;
 
-    fn fire(name: &str, text: &str) -> BTreeSet<(&'static str, usize)> {
+    fn fire(name: &str, text: &str) -> BTreeSet<(Rule, usize)> {
         let mut out = Vec::new();
         let mut cov = Coverage::default();
         scan(name, text, &mut out, &mut cov);
@@ -889,38 +933,38 @@ mod law {
             include_str!("../fixtures/forbidden.rsfix"),
         );
 
-        let want: &[(&str, usize)] = &[
-            ("R01", 18), // derives Ord, no ORDER_LAW on the type
-            ("R02", 19), // pub field on a tuple newtype
-            ("R02", 21), // pub field in a struct body
-            ("R03", 21), // bare Vec as a pub field
-            ("R08", 22), // String-typed `kind`
-            ("R09", 23), // bool field
-            ("R10", 24), // bare usize field
-            ("R11", 25), // RefCell field
-            ("R09", 27), // bool in a single-line struct body
-            ("R10", 27), // bare u64 in a single-line struct body
-            ("R02", 28), // pub tuple element of a struct wider than one field
-            ("R09", 28), // bool as an unnamed tuple element
-            ("R10", 28), // bare u8 as a tuple element — not a newtype, two fields
-            ("R10", 29), // bare u64 in an enum variant payload
-            ("R09", 30), // bool as a type alias right-hand side
-            ("R05", 31), // a refusal carrying no span
-            ("R02", 34), // a public constructor that cannot refuse
-            ("R05", 37), // Result<_, String>
-            ("R09", 38), // bool parameter
-            ("R10", 38), // usize parameter and u32 return
-            ("R04", 41), // unwrap
-            ("R04", 42), // expect
-            ("R04", 43), // panic!
-            ("R06", 44), // todo!
-            ("R06", 45), // unimplemented!
-            ("R06", 46), // unreachable!
-            ("R07", 47), // env::var
-            ("R13", 48), // unsafe block
-            ("R13", 51), // unsafe fn
-            ("R13", 52), // unsafe impl
-            ("R14", 53), // allow(unsafe_code)
+        let want: &[(Rule, usize)] = &[
+            (Rule::R01, 18), // derives Ord, no ORDER_LAW on the type
+            (Rule::R02, 19), // pub field on a tuple newtype
+            (Rule::R02, 21), // pub field in a struct body
+            (Rule::R03, 21), // bare Vec as a pub field
+            (Rule::R08, 22), // String-typed `kind`
+            (Rule::R09, 23), // bool field
+            (Rule::R10, 24), // bare usize field
+            (Rule::R11, 25), // RefCell field
+            (Rule::R09, 27), // bool in a single-line struct body
+            (Rule::R10, 27), // bare u64 in a single-line struct body
+            (Rule::R02, 28), // pub tuple element of a struct wider than one field
+            (Rule::R09, 28), // bool as an unnamed tuple element
+            (Rule::R10, 28), // bare u8 as a tuple element — not a newtype, two fields
+            (Rule::R10, 29), // bare u64 in an enum variant payload
+            (Rule::R09, 30), // bool as a type alias right-hand side
+            (Rule::R05, 31), // a refusal carrying no span
+            (Rule::R02, 34), // a public constructor that cannot refuse
+            (Rule::R05, 37), // Result<_, String>
+            (Rule::R09, 38), // bool parameter
+            (Rule::R10, 38), // usize parameter and u32 return
+            (Rule::R04, 41), // unwrap
+            (Rule::R04, 42), // expect
+            (Rule::R04, 43), // panic!
+            (Rule::R06, 44), // todo!
+            (Rule::R06, 45), // unimplemented!
+            (Rule::R06, 46), // unreachable!
+            (Rule::R07, 47), // env::var
+            (Rule::R13, 48), // unsafe block
+            (Rule::R13, 51), // unsafe fn
+            (Rule::R13, 52), // unsafe impl
+            (Rule::R14, 53), // allow(unsafe_code)
         ];
         let missed: Vec<_> = want.iter().filter(|w| !got.contains(*w)).collect();
         assert!(missed.is_empty(), "rules did not fire: {missed:?}");
@@ -953,9 +997,9 @@ mod law {
             "ordered_float.rsfix",
             include_str!("../fixtures/ordered_float.rsfix"),
         );
-        assert!(got.contains(&("R12", 8)), "R12 did not fire: {got:?}");
+        assert!(got.contains(&(Rule::R12, 8)), "R12 did not fire: {got:?}");
         assert!(
-            !got.iter().any(|(r, _)| *r == "R01"),
+            !got.iter().any(|(r, _)| *r == Rule::R01),
             "R01 fired on a type that states its law in its own doc: {got:?}"
         );
     }
@@ -974,11 +1018,11 @@ pub struct Silent(u8);
 ";
         let got = fire("t.rs", text);
         assert!(
-            !got.iter().any(|(r, l)| *r == "R01" && *l == 3),
+            !got.iter().any(|(r, l)| *r == Rule::R01 && *l == 3),
             "R01 fired on the type that states its law: {got:?}"
         );
         assert!(
-            got.contains(&("R01", 6)),
+            got.contains(&(Rule::R01, 6)),
             "a law on one type cleared another: {got:?}"
         );
     }
@@ -995,7 +1039,7 @@ pub struct Borrowed(u8);
 ";
         let got = fire("t.rs", text);
         assert!(
-            got.contains(&("R01", 4)),
+            got.contains(&(Rule::R01, 4)),
             "a module doc satisfied a type's law: {got:?}"
         );
     }
@@ -1012,15 +1056,15 @@ type Alias = bool;
 ";
         let got = fire("t.rs", text);
         // tuple element of a struct wider than one field — not a newtype
-        assert!(got.contains(&("R10", 1)), "tuple element missed: {got:?}");
-        assert!(got.contains(&("R09", 1)), "tuple bool missed: {got:?}");
+        assert!(got.contains(&(Rule::R10, 1)), "tuple element missed: {got:?}");
+        assert!(got.contains(&(Rule::R09, 1)), "tuple bool missed: {got:?}");
         // enum variant payload
-        assert!(got.contains(&("R10", 2)), "variant payload missed: {got:?}");
+        assert!(got.contains(&(Rule::R10, 2)), "variant payload missed: {got:?}");
         // parameters and return
-        assert!(got.contains(&("R10", 3)), "fn param/return missed: {got:?}");
-        assert!(got.contains(&("R09", 3)), "bool param missed: {got:?}");
+        assert!(got.contains(&(Rule::R10, 3)), "fn param/return missed: {got:?}");
+        assert!(got.contains(&(Rule::R09, 3)), "bool param missed: {got:?}");
         // alias right-hand side
-        assert!(got.contains(&("R09", 4)), "alias RHS missed: {got:?}");
+        assert!(got.contains(&(Rule::R09, 4)), "alias RHS missed: {got:?}");
     }
 
     /// A one-field tuple struct is the newtype R10 asks for. Firing on it would
@@ -1029,7 +1073,7 @@ type Alias = bool;
     fn a_newtype_is_not_a_bare_primitive() {
         let got = fire("t.rs", "pub struct Micros(i64);\n");
         assert!(
-            !got.iter().any(|(r, _)| *r == "R10"),
+            !got.iter().any(|(r, _)| *r == Rule::R10),
             "R10 fired on the newtype itself: {got:?}"
         );
     }
@@ -1074,9 +1118,9 @@ type Count = usize;
 pub struct S { pub b: Bytes, f: Flag, n: Count }
 ";
         let got = fire("t.rs", text);
-        assert!(got.contains(&("R03", 4)), "alias hid a Vec from R03: {got:?}");
-        assert!(got.contains(&("R09", 4)), "alias hid a bool from R09: {got:?}");
-        assert!(got.contains(&("R10", 4)), "alias hid a usize from R10: {got:?}");
+        assert!(got.contains(&(Rule::R03, 4)), "alias hid a Vec from R03: {got:?}");
+        assert!(got.contains(&(Rule::R09, 4)), "alias hid a bool from R09: {got:?}");
+        assert!(got.contains(&(Rule::R10, 4)), "alias hid a usize from R10: {got:?}");
     }
 
     /// Declaration order must not matter. A rule that only resolves backwards
@@ -1084,7 +1128,7 @@ pub struct S { pub b: Bytes, f: Flag, n: Count }
     #[test]
     fn an_alias_declared_after_its_use_still_resolves() {
         let got = fire("t.rs", "pub struct S { f: Flag }\ntype Flag = bool;\n");
-        assert!(got.contains(&("R09", 1)), "forward alias not resolved: {got:?}");
+        assert!(got.contains(&(Rule::R09, 1)), "forward alias not resolved: {got:?}");
     }
 
     /// `type A = B; type B = A;` does not compile, but it reaches this scanner.
@@ -1103,9 +1147,9 @@ pub enum ParseRefuse { Empty, TooLong }
 pub enum GoodRefuse { Empty(Span) }
 ";
         let got = fire("t.rs", text);
-        assert!(got.contains(&("R05", 1)), "spanless refusal missed: {got:?}");
+        assert!(got.contains(&(Rule::R05, 1)), "spanless refusal missed: {got:?}");
         assert!(
-            !got.iter().any(|(r, l)| *r == "R05" && *l == 2),
+            !got.iter().any(|(r, l)| *r == Rule::R05 && *l == 2),
             "R05 fired on a refusal that carries a span: {got:?}"
         );
     }
@@ -1120,9 +1164,9 @@ impl Thing {
 }
 ";
         let got = fire("t.rs", text);
-        assert!(got.contains(&("R02", 2)), "unchecked ctor missed: {got:?}");
+        assert!(got.contains(&(Rule::R02, 2)), "unchecked ctor missed: {got:?}");
         assert!(
-            !got.iter().any(|(r, l)| *r == "R02" && *l == 3),
+            !got.iter().any(|(r, l)| *r == Rule::R02 && *l == 3),
             "R02 fired on a constructor that can refuse: {got:?}"
         );
     }
@@ -1138,7 +1182,7 @@ impl Thing {
         let mut out = Vec::new();
         token_pass("t.rs", "let u = \"http://x\"; unsafe { }\n", &mut out);
         assert!(
-            out.iter().any(|v| v.rule == "R13"),
+            out.iter().any(|v| v.rule == Rule::R13),
             "a `//` inside a literal hid the shape after it: {out:?}"
         );
     }
@@ -1150,7 +1194,7 @@ impl Thing {
         let text = "macro_rules! m { () => { unsafe { } } }\n";
         let got = fire("t.rs", text);
         assert!(
-            got.contains(&("R13", 1)),
+            got.contains(&(Rule::R13, 1)),
             "unsafe inside a macro body was not reported: {got:?}"
         );
     }
@@ -1168,7 +1212,7 @@ impl Thing {
             let text = format!("{marker}\nunsafe fn f() {{}}\n");
             let got = fire("t.rs", &text);
             assert!(
-                got.contains(&("R13", 2)),
+                got.contains(&(Rule::R13, 2)),
                 "`{marker}` suppressed R13: {got:?}"
             );
         }
@@ -1187,7 +1231,7 @@ impl Thing {
     /// that only exists as a row is a claim the tree is not being held to.
     #[test]
     fn every_listed_rule_is_reachable() {
-        let mut fired: BTreeSet<&str> = BTreeSet::new();
+        let mut fired: BTreeSet<Rule> = BTreeSet::new();
         for (n, t) in [
             ("f.rsfix", include_str!("../fixtures/forbidden.rsfix")),
             ("o.rsfix", include_str!("../fixtures/ordered_float.rsfix")),
@@ -1197,10 +1241,10 @@ impl Thing {
         // R15 is absence — no line carries it — so it is decided over the file
         // list in `check_forbid_unsafe`, not by `scan`, and no fixture can
         // trigger it here.
-        let dead: Vec<&str> = RULES
+        let dead: Vec<Rule> = Rule::ALL
             .iter()
-            .map(|(id, _)| *id)
-            .filter(|id| *id != "R15" && !fired.contains(id))
+            .copied()
+            .filter(|r| *r != Rule::R15 && !fired.contains(r))
             .collect();
         assert!(dead.is_empty(), "rules no fixture can trigger: {dead:?}");
     }
