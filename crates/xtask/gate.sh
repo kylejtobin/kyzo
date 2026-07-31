@@ -27,15 +27,26 @@ cd "$REPO" || exit 1
 
 LOG="crates/xtask/gate.log"
 COUNTS="crates/xtask/gate-counts.txt"
-IN_CONTAINER=(docker compose run --rm -T kyzo-dev)
+# `--progress quiet` so docker's own container-lifecycle chatter does not land
+# in gate.log next to the findings. It suppresses the wrapper, never the output
+# of the thing being run — .claude/hooks/rust-scan-guard.sh already invokes it
+# this way.
+IN_CONTAINER=(docker compose --progress quiet run --rm -T kyzo-dev)
 
 verdict() {
-  # $1 = gate.log headline, $2 = gate-counts.txt body
+  # $1 = gate.log headline, $2 = gate-counts.txt body, $3 = the detail (optional)
   #
   # Line 2 stamps the tree the verdict describes. Without it a verdict is a
   # claim about no particular tree: leave an old ACKNOWLEDGE behind, change
   # anything, and the stop guard reads clearance it was never given. The stamp
   # is what makes a green verdict expire.
+  #
+  # $3 lands from line 3 onward: every finding, or every compile error. Before
+  # this, gate.log held two lines and the findings existed nowhere an agent
+  # could read — each one had to re-run a full scan to learn what was already
+  # known, or take a wall of text through its context. Lines 1 and 2 are the
+  # only ones .claude/hooks/gate-stop-guard.sh reads (head -n 1, sed -n 2p), so
+  # the detail cannot reach the latch.
   sha="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
   if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
     state=dirty
@@ -43,6 +54,9 @@ verdict() {
     state=clean
   fi
   printf '%s\nat %s %s\n' "$1" "$sha" "$state" > "$LOG"
+  if [ -n "${3:-}" ]; then
+    printf '\n%s\n' "$3" >> "$LOG"
+  fi
   printf '%s\n' "$2" > "$COUNTS"
   printf '%s\n' "$1"
 }
@@ -56,7 +70,8 @@ if [ $build_rc -ne 0 ]; then
   first="$(printf '%s' "$build_out" | grep -E '^error(\[|:)' | head -n 1)"
   verdict \
     "GATE: ALARM build broken — ${errs} compile errors" \
-    "$(printf 'build = %s compile errors\n%s\n' "$errs" "$first")"
+    "$(printf 'build = %s compile errors\n%s\n' "$errs" "$first")" \
+    "$build_out"
   printf '%s\n' "$build_out" | tail -n 40
   exit 1
 fi
@@ -75,6 +90,7 @@ fi
 
 verdict \
   "GATE: ALARM ${total_line#total = }" \
-  "$(printf '%s\n%s\n' "$per_rule" "$total_line")"
+  "$(printf '%s\n%s\n' "$per_rule" "$total_line")" \
+  "$det_out"
 printf '%s\n' "$det_out" | tail -n 20
 exit 1

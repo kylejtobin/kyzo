@@ -85,13 +85,26 @@ fi
 printf '%s' "$out" | grep -oE '^[^:]+\.rs' | sort -u > "$OUTSTANDING"
 
 block "<required_action>
-Fix every finding below before anything else. Report each change and the
-illegal state it makes unconstructible.
+Fix every finding in the files below before anything else. Report each change
+and the illegal state it makes unconstructible.
 </required_action>
 
 <findings>
-$out
+$(printf '%s' "$out" | tail -n 2)
+
+$(cat "$OUTSTANDING")
+
+Read them: crates/xtask/gate.log, or aim the detector at one path —
+    cargo run -q --release -p bs-detector -- <path>
 </findings>
+
+<why_this_is_a_pointer_and_not_the_list>
+The full dump was reprinted on EVERY tool call, including reads, for as long as
+a file stayed dirty. On a file with 87 findings that is ninety lines of
+identical text per call, which is how a check trains its reader to skip it.
+gate.log carries every finding from line 3 onward; this block carries the count
+and the files, which is what decides what to do next.
+</why_this_is_a_pointer_and_not_the_list>
 
 <scope>
 These are yours because you touched these files, not because they were your
