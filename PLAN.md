@@ -128,6 +128,38 @@ target    export CARGO_TARGET_DIR=<private dir>  (cannot write ./target)
   `encode_owned` lands. It lays `CLASS_ZERO`/exponent/`frac72`/repr bytes by hand
   while `seal_num_{zero,negative,positive,nan}` are the verified doors for the same
   bytes. `sign_magnitude` survives — it computes a magnitude, it does not lay bytes.
+- **`Num::encode_key` and `Num::decode_key` have no callers outside `number.rs`'s
+  own tests.** Swept the whole tree: every other `encode_key*` hit is a different
+  function (`encode_key_with_suffix`, `encode_key_for_store`,
+  `encode_key_commitment`). The dual authority is dead code, so retiring it is a
+  deletion and not a migration. Do not re-derive this; it costs a full sweep.
+
+  The shape that replaces it, forced by the four branches canonical already owns:
+
+  ```rust
+  // the variant IS the class — 0x01..0x04 live only in canonical's num_table!()
+  pub(crate) enum NumKey {
+      Negative([u8; 12]),
+      Zero(u8),          // tie byte
+      Positive([u8; 12]),
+      Nan(u8),           // repr byte
+  }
+  ```
+
+  `Num::key(self) -> NumKey`, `Num::from_key(NumKey) -> Result<Num, NumDecodeError>`,
+  and `canonical::seal_num(NumKey)` is one match onto the four existing doors. Delete
+  `encode_key`, `decode_key`, `CLASS_NEG/ZERO/POS/NAN`, and the `canonical.rs:101-105`
+  comment about keeping the two encoders in step — there stops being a second one.
+  Six test sites in `number.rs` move onto `key`/`from_key`.
+- **A validator body with branching is a shape you have not finished declaring**
+  (`canon/crates/lang-rust/law/purity.md`). The statement model's attribute value
+  must not be a `prove(DataValue) -> Result` that refuses `List`/`Set`/`Json`. The
+  split is already written and verified in this file: `Val { S(u8, Seq<u8>), L(u8,
+  Vals) }` — leaf versus list. Build the record model on that arm; do not hand-roll
+  a check over the wider type.
+- The record model (TEMP.md §1–§7) was written this session and reverted unbuilt: it
+  claimed order laws whose proofs live here and do not exist yet. Rewrite it after
+  the decoder, deriving `Ord` only where the law is provable.
 - Open, from your own list: `Set` ordering is still not enforced by the encoder;
   `json_storage_cmp` is unread; `DataValue::cmp` is still the circular mirror.
 - Next work is step 4's exec half. Do not ask first.
