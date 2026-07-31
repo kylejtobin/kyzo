@@ -197,16 +197,9 @@ fn main() {
 fn check_forbid_unsafe(files: &[PathBuf], out: &mut Vec<Violation>) {
     for f in files {
         let p = f.display().to_string();
-        let is_root = p.ends_with("/src/lib.rs") || p.ends_with("/src/main.rs");
-        if !is_root {
+        let Some(kind) = crate_root_kind(&p) else {
             continue;
-        }
-        let crate_name: String = p
-            .split("/src/")
-            .next()
-            .and_then(|c| c.rsplit('/').next())
-            .unwrap_or_default()
-            .to_string();
+        };
         let Ok(text) = std::fs::read_to_string(f) else {
             continue;
         };
@@ -215,10 +208,42 @@ fn check_forbid_unsafe(files: &[PathBuf], out: &mut Vec<Violation>) {
                 rule: "R15",
                 file: p,
                 line: 1,
-                detail: format!("crate `{crate_name}` does not forbid unsafe"),
+                detail: format!("{kind} does not forbid unsafe"),
             });
         }
     }
+}
+
+/// Every file rustc compiles as its own crate, not only `src/lib.rs`.
+///
+/// `#![forbid(unsafe_code)]` is a crate-root attribute, so the one in a lib root
+/// says nothing about that crate's `tests/`, `benches/`, `examples/`, or extra
+/// binaries — each is a separate crate root, and the only `unsafe` in this tree
+/// lives in exactly such a place. Checking two of the five forms is a rule that
+/// reports the roots nobody writes unsafe in.
+///
+/// `tests/common/mod.rs` is a module of a test crate, not a root of its own, so
+/// only files directly inside the directory count.
+fn crate_root_kind(p: &str) -> Option<&'static str> {
+    if p.ends_with("/src/lib.rs") {
+        return Some("lib root");
+    }
+    if p.ends_with("/src/main.rs") {
+        return Some("binary root");
+    }
+    for (dir, kind) in [
+        ("/tests/", "integration-test root"),
+        ("/benches/", "bench root"),
+        ("/examples/", "example root"),
+        ("/src/bin/", "binary root"),
+    ] {
+        if let Some(rest) = p.split(dir).nth(1)
+            && !rest.contains('/')
+        {
+            return Some(kind);
+        }
+    }
+    None
 }
 
 fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -1007,6 +1032,34 @@ type Alias = bool;
             !got.iter().any(|(r, _)| *r == "R10"),
             "R10 fired on the newtype itself: {got:?}"
         );
+    }
+
+    /// Every form of crate root, not only the two that are easy to match.
+    #[test]
+    fn every_crate_root_form_is_a_root() {
+        for p in [
+            "crates/k/src/lib.rs",
+            "crates/k/src/main.rs",
+            "crates/k/src/bin/tool.rs",
+            "crates/k/tests/admit.rs",
+            "crates/k/benches/encode.rs",
+            "crates/k/examples/demo.rs",
+        ] {
+            assert!(crate_root_kind(p).is_some(), "{p} was not read as a root");
+        }
+    }
+
+    /// A file inside a test crate is not a root of its own, and neither is
+    /// ordinary source that happens to sit under `src/`.
+    #[test]
+    fn a_module_is_not_a_crate_root() {
+        for p in [
+            "crates/k/tests/common/mod.rs",
+            "crates/k/src/store/replica.rs",
+            "crates/k/src/bin/tool/helper.rs",
+        ] {
+            assert!(crate_root_kind(p).is_none(), "{p} was read as a root");
+        }
     }
 
     /// A same-crate alias does not hide what a binding holds. Without this,
