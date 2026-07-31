@@ -82,9 +82,16 @@ target    export CARGO_TARGET_DIR=<private dir>  (cannot write ./target)
 - `cargo verus verify` is broken here (published vstd vs release binary skew). Use
   `verus --crate-type=lib <file> --triggers-mode silent` directly. That is what the
   gate script does.
-- **The `GATE ALARM: 46018 violations` hook is stale.** `bs-detector/src/main.rs` is
-  deleted; that number cannot have been recomputed. Ignore it. It is the argument
-  against scores, arriving on cue.
+- **bs-detector is rebuilt and live — do not ignore it.** It was deleted; it is now a
+  two-pass scanner (tokens per line, `syn` item tree) over the whole workspace,
+  reporting 5,817 shapes across 482 files, with 10,628 macro bodies it states it
+  cannot see. Findings land in `crates/xtask/gate.log` from line 3 onward; the hook
+  prints a pointer, not the dump.
+
+  It still is not the judge — Verus is. The number measures the scanner's sight, not
+  the tree's health, so on unchanged code it going **up** is the pass condition and a
+  fall means a rule was narrowed. It catches shapes; it has never produced an input
+  that returns a wrong answer. Weigh it accordingly and do not work to it.
 
 ### Standing orders
 
@@ -95,13 +102,35 @@ target    export CARGO_TARGET_DIR=<private dir>  (cannot write ./target)
 
 ### What is true right now
 
-- `crates/kyzo-model/src/value/canonical.rs` — 165 theorems, green. HEAD `06d7c8c7`.
-- `kyzo-model` **does not compile**: 16 call sites import `encode`, `encode_owned`,
-  `decode`, `decode_one`, `skip_one`, `append_canonical`, `Datum`, `DecodeError`,
-  `prefix4` — all deleted, no shim. They need a verified decoder, which does not exist.
+- `crates/kyzo-model/src/value/canonical.rs` — **144 theorems, 0 errors**, green.
+  165 → 144 because steps 1 and 2 deleted proofs, not because anything broke.
+- **Steps 1, 2 and 3 below are done.** Every deletion target is gone: `json_end`,
+  `json_arr`, `json_obj`, `JsonValueBytes`, `scan_json`, `JsonKey`, `shape_of`,
+  `key_end`, `esc_end`, `num_end`, `interval_end`, `lo_bound_end`, `hi_bound_end`,
+  `class_led_width`, `KindKey`, `scan_num`, `scan_interval`, `scan_escaped` — zero
+  occurrences of any. `Shape`, `Branches`, `shape_end`, `wf_grammar`,
+  `lemma_shape_local` are built.
+- **Step 4's spec half is done.** `grammar()` is one `Shape` constant,
+  `scan(e) == shape_end(grammar(), Shape::Tagged, e)`, and `scan_value` is the exec
+  cursor proven against it. `CanonicalBytes` carries `complete(view())` as a
+  `#[verifier::type_invariant]`, and the twenty-odd `seal_*` doors are verified.
+- `kyzo-model` **does not compile**, and this is the only reason: the exec
+  encode/decode doors do not exist. 16 call sites across 14 files import `Datum` (7),
+  `encode` (7), `decode` (6), `encode_owned` (5), `decode_one` (5), `DecodeError` (3),
+  `decode_terminated`, `append_canonical`, `CanonicalBytes::prefix4`.
+- `Datum<'a>` is the **encode-side borrowed view** — `Datum::Str(&str)`,
+  `Datum::Num(Num)`, `Datum::Null` — not a decode result. Read the call sites in
+  `row.rs` and `string.rs` before assuming otherwise.
+- **Ruled: `DecodeError` does not come back.** `Refusal` already carries `Reason` and
+  `Offset` and is what the verified `scan_value` returns. A second error type for one
+  event is the fork.
+- **Ruled: `number.rs::encode_key` is a second number encoder and dies** when
+  `encode_owned` lands. It lays `CLASS_ZERO`/exponent/`frac72`/repr bytes by hand
+  while `seal_num_{zero,negative,positive,nan}` are the verified doors for the same
+  bytes. `sign_magnitude` survives — it computes a magnitude, it does not lay bytes.
 - Open, from your own list: `Set` ordering is still not enforced by the encoder;
   `json_storage_cmp` is unread; `DataValue::cmp` is still the circular mirror.
-- Next work is the Shape rewrite below. Start at step 1 and do not ask first.
+- Next work is step 4's exec half. Do not ask first.
 
 ## What We've Been Doing And Learned
 ## What we started doing
