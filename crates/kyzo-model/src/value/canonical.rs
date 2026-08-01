@@ -2321,6 +2321,90 @@ pub enum Magnitude {
     Infinite,
 }
 
+pub open spec fn pow2(n: nat) -> nat
+    decreases n
+{ if n == 0 { 1nat } else { (2 * pow2((n - 1) as nat)) as nat } }
+
+/// What a magnitude denotes: `significand × 2^biased_scale`, or nothing for
+/// `Infinite`, which is above every finite value rather than equal to one.
+pub open spec fn mag_value(m: Magnitude) -> Option<nat> {
+    match m {
+        Magnitude::Finite { significand, biased_scale } =>
+            Some((significand as nat * pow2(biased_scale as nat)) as nat),
+        Magnitude::Infinite => None,
+    }
+}
+
+/// ORDER_LAW: finite magnitudes by numeric value; `Infinite` above all of them.
+///
+/// This is the semantic side of the bridge. It is stated over what a magnitude
+/// *denotes*, never over the bytes it encodes to, so `theorem_magnitude_order`
+/// relates two independently-defined orders instead of restating one of them.
+pub open spec fn mag_le(a: Magnitude, b: Magnitude) -> bool {
+    match (mag_value(a), mag_value(b)) {
+        (_, None) => true,
+        (None, Some(_)) => false,
+        (Some(x), Some(y)) => x <= y,
+    }
+}
+
+pub open spec fn spec_bit_len(v: nat) -> nat
+    decreases v
+{ if v == 0 { 0nat } else { (1 + spec_bit_len((v / 2) as nat)) as nat } }
+
+/// The layout as a number: exponent above fraction, which is the order law
+/// stated arithmetically rather than as a byte diagram.
+pub open spec fn spec_packed(m: Magnitude) -> nat {
+    match m {
+        Magnitude::Finite { significand, biased_scale } => {
+            let bits = spec_bit_len(significand as nat);
+            let exponent = (bits + biased_scale as nat) as nat;
+            (exponent * pow2(FRAC_BITS as nat)
+                + significand as nat * pow2((FRAC_BITS - bits) as nat)) as nat
+        }
+        Magnitude::Infinite =>
+            (EXP_INFINITE as nat * pow2(FRAC_BITS as nat)
+                + (pow2(FRAC_BITS as nat) - 1) as nat) as nat,
+    }
+}
+
+/// `v` big-endian in `width` bytes.
+pub open spec fn spec_be(v: nat, width: nat) -> Seq<u8>
+    decreases width
+{
+    if width == 0 { Seq::empty() }
+    else { spec_be((v / 256) as nat, (width - 1) as nat).push((v % 256) as u8) }
+}
+
+pub open spec fn spec_mag_body(m: Magnitude, tie: Repr) -> Seq<u8> {
+    spec_be(spec_packed(m), MAG_BYTES as nat).push(tie.spec_byte())
+}
+
+// THE OPEN OBLIGATION — the magnitude order bridge.
+//
+// `mag_le` above is the semantic order and `spec_packed`/`spec_be` are the
+// encoding. Relating them needs two lemmas, neither of which is written:
+//
+//   lemma_be_order(x, y, width)
+//     ensures (x <= y) == lex_le(spec_be(x, width), spec_be(y, width))
+//
+//   lemma_packed_order(a, b)
+//     requires wf_mag(a), wf_mag(b)
+//     ensures mag_le(a, b) == (spec_packed(a) <= spec_packed(b))
+//
+// Until both exist, `theorem_value_order` proves that framing preserves an
+// order the scalar bytes were defined to have, not that the bytes preserve
+// the order of the numbers they encode.
+
+/// A magnitude the numeric doors accept.
+pub open spec fn wf_mag(m: Magnitude) -> bool {
+    match m {
+        Magnitude::Finite { significand, biased_scale } =>
+            significand > 0 && biased_scale + 64 < EXP_INFINITE,
+        Magnitude::Infinite => true,
+    }
+}
+
 /// Bit-length of a non-zero value: the width the significand occupies, which
 /// decides both the exponent and how far the fraction is left-aligned.
 pub fn bit_len(v: u64) -> (r: u32)
