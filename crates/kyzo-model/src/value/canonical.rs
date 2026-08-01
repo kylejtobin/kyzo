@@ -2719,7 +2719,7 @@ pub proof fn lemma_value_scaled(m: Magnitude)
     requires wf_mag(m), m is Finite
     ensures
         mag_value(m) is Some,
-        mag_value(m).unwrap() * pow2(FRAC_BITS as nat)
+        mag_value(m)->Some_0 * pow2(FRAC_BITS as nat)
             == spec_frac(m) * pow2(spec_exp(m)),
 {
     let s = m->Finite_significand as nat;
@@ -2801,8 +2801,8 @@ pub proof fn lemma_packed_order(a: Magnitude, b: Magnitude)
             lemma_value_scaled(a);
             lemma_value_scaled(b);
             lemma_pow2_pos(FRAC_BITS as nat);
-            let va = mag_value(a).unwrap();
-            let vb = mag_value(b).unwrap();
+            let va = mag_value(a)->Some_0;
+            let vb = mag_value(b)->Some_0;
             assert(va <= vb <==> va * pf <= vb * pf) by (nonlinear_arith)
                 requires pf >= 1;
             if ea < eb { lemma_exp_dominates(a, b); }
