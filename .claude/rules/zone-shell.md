@@ -2,7 +2,7 @@
 law_format: 1
 assignment: zone
 zone: shell
-globs:
+paths:
   - "crates/kyzo-bin/src/**/*.rs"
   - "crates/kyzo-lsp/src/**/*.rs"
   - "crates/xtask/src/**/*.rs"

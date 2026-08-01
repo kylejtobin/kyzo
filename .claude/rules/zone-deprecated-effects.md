@@ -3,7 +3,7 @@ law_format: 1
 assignment: deprecated
 zone: boundary
 destination: core
-globs:
+paths:
   - "crates/kyzo-core/src/exec/op/temporal.rs"
   - "crates/kyzo-core/src/exec/stdlib/nondet.rs"
   - "crates/kyzo-core/src/rules/rng.rs"

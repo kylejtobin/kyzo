@@ -3,7 +3,7 @@ law_format: 1
 assignment: deprecated
 zone: boundary
 destination: proof
-globs:
+paths:
   - "crates/kyzo-core/src/session/footprint.rs"
 description: "Deprecated. A seventeen-type vocabulary with sole-mint discipline, sitting inside the admission path."
 purity:

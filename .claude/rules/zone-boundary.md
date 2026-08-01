@@ -2,7 +2,7 @@
 law_format: 1
 assignment: zone
 zone: boundary
-globs:
+paths:
   - "crates/kyzo-core/src/session/access.rs"
   - "crates/kyzo-core/src/session/admit.rs"
   - "crates/kyzo-core/src/session/admit_lowering.rs"

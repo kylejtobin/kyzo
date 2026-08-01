@@ -2,7 +2,7 @@
 law_format: 1
 assignment: zone
 zone: core
-globs:
+paths:
   - "crates/kyzo-core/src/exec/expr/**/*.rs"
   - "crates/kyzo-core/src/exec/fixpoint/**/*.rs"
   - "crates/kyzo-core/src/exec/fold/**/*.rs"

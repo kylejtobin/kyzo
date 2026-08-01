@@ -2,7 +2,7 @@
 law_format: 1
 assignment: zone
 zone: proof
-globs:
+paths:
   - "crates/kyzo-model/src/value/kind/**/*.rs"
   - "crates/kyzo-model/src/schema/**/*.rs"
   - "crates/kyzo-model/src/program/**/*.rs"
