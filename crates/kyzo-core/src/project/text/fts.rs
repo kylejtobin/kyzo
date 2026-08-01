@@ -313,10 +313,6 @@ pub(crate) fn fts_del<T: WriteTx>(
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Query.
-// ---------------------------------------------------------------------------
-
 /// The total number of documents in the base relation — the `N` in TF-IDF.
 /// Hoisted so a multi-tuple search counts once; pass `0` when the score kind
 /// is `Tf` (the count is unused there).
@@ -737,10 +733,6 @@ fn fts_search_body(tx: &impl ReadTx, request: FtsSearchRequest<'_>) -> Result<Ve
     }
     Ok(ret)
 }
-
-// ---------------------------------------------------------------------------
-// Tests: the engine's executable law.
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
