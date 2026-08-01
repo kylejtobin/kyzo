@@ -316,38 +316,38 @@
 
 ## Lists and sets
 
-- [ ] list_preserves_element_order
-- [ ] list_prefix_sorts_before_list_extension
-- [ ] list_first_differing_element_decides
-- [ ] list_encoding_is_injective
-- [ ] empty_list_and_empty_set_are_distinct
-- [ ] list_and_set_same_elements_are_distinct
-- [ ] set_input_is_sorted_before_sealing
-- [ ] set_input_is_deduplicated_before_sealing
-- [ ] set_permutation_invariance
-- [ ] set_duplicate_invariance
-- [ ] set_normalization_is_idempotent
-- [ ] set_encoding_is_injective_over_semantic_sets
-- [ ] set_order_matches_canonical_element_order
-- [ ] nested_list_set_values_remain_prefix_free
-- [ ] raw_set_sealer_cannot_bypass_normalization
+- [x] list_preserves_element_order
+- [x] list_prefix_sorts_before_list_extension
+- [x] list_first_differing_element_decides
+- [x] list_encoding_is_injective
+- [x] empty_list_and_empty_set_are_distinct
+- [x] list_and_set_same_elements_are_distinct
+- [x] set_input_is_sorted_before_sealing
+- [x] set_input_is_deduplicated_before_sealing
+- [x] set_permutation_invariance
+- [x] set_duplicate_invariance
+- [x] set_normalization_is_idempotent
+- [x] set_encoding_is_injective_over_semantic_sets
+- [x] set_order_matches_canonical_element_order
+- [x] nested_list_set_values_remain_prefix_free
+- [x] raw_set_sealer_cannot_bypass_normalization
 
 ## Intervals
 
-- [ ] empty_interval_sorts_before_every_inhabited_interval
-- [ ] empty_interval_has_exactly_one_encoding
-- [ ] unbounded_lower_sorts_before_every_bounded_lower
-- [ ] unbounded_upper_sorts_after_every_bounded_upper
-- [ ] lower_endpoint_is_primary_sort_key
-- [ ] upper_endpoint_is_secondary_sort_key
-- [ ] fully_unbounded_interval_is_canonical
-- [ ] point_interval_is_canonical
-- [ ] empty_interval_cannot_collide_with_inhabited_interval
-- [ ] lower_unbounded_marker_cannot_collide_with_timestamp
-- [ ] upper_unbounded_marker_cannot_collide_with_timestamp
-- [ ] interval_encoding_is_injective
-- [ ] interval_semantic_order_matches_byte_order
-- [ ] interval_golden_vectors_cover_all_bound_combinations
+- [x] empty_interval_sorts_before_every_inhabited_interval
+- [x] empty_interval_has_exactly_one_encoding
+- [x] unbounded_lower_sorts_before_every_bounded_lower
+- [x] unbounded_upper_sorts_after_every_bounded_upper
+- [x] lower_endpoint_is_primary_sort_key
+- [x] upper_endpoint_is_secondary_sort_key
+- [x] fully_unbounded_interval_is_canonical
+- [x] point_interval_is_canonical
+- [x] empty_interval_cannot_collide_with_inhabited_interval
+- [x] lower_unbounded_marker_cannot_collide_with_timestamp
+- [x] upper_unbounded_marker_cannot_collide_with_timestamp
+- [x] interval_encoding_is_injective
+- [x] interval_semantic_order_matches_byte_order
+- [x] interval_golden_vectors_cover_all_bound_combinations
 
 ## Validity and geometry
 

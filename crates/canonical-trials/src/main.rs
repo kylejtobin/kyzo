@@ -1601,6 +1601,41 @@ fn main() {
     fuzz_mutated_valid_encodings_never_have_two_readings(&mut t);
     t.report("independent reference");
 
+    println!("lists and sets");
+    list_preserves_element_order(&mut t);
+    list_prefix_sorts_before_list_extension(&mut t);
+    list_first_differing_element_decides(&mut t);
+    list_encoding_is_injective(&mut t);
+    empty_list_and_empty_set_are_distinct(&mut t);
+    list_and_set_same_elements_are_distinct(&mut t);
+    set_input_is_sorted_before_sealing(&mut t);
+    set_input_is_deduplicated_before_sealing(&mut t);
+    set_permutation_invariance(&mut t);
+    set_duplicate_invariance(&mut t);
+    set_normalization_is_idempotent(&mut t);
+    set_encoding_is_injective_over_semantic_sets(&mut t);
+    set_order_matches_canonical_element_order(&mut t);
+    nested_list_set_values_remain_prefix_free(&mut t);
+    raw_set_sealer_cannot_bypass_normalization(&mut t);
+    t.report("lists and sets");
+
+    println!("intervals");
+    empty_interval_sorts_before_every_inhabited_interval(&mut t);
+    empty_interval_has_exactly_one_encoding(&mut t);
+    unbounded_lower_sorts_before_every_bounded_lower(&mut t);
+    unbounded_upper_sorts_after_every_bounded_upper(&mut t);
+    lower_endpoint_is_primary_sort_key(&mut t);
+    upper_endpoint_is_secondary_sort_key(&mut t);
+    fully_unbounded_interval_is_canonical(&mut t);
+    point_interval_is_canonical(&mut t);
+    empty_interval_cannot_collide_with_inhabited_interval(&mut t);
+    lower_unbounded_marker_cannot_collide_with_timestamp(&mut t);
+    upper_unbounded_marker_cannot_collide_with_timestamp(&mut t);
+    interval_encoding_is_injective(&mut t);
+    interval_semantic_order_matches_byte_order(&mut t);
+    interval_golden_vectors_cover_all_bound_combinations(&mut t);
+    t.report("intervals");
+
     println!("depth");
     mixed_container_nesting_boundary_is_exact(&mut t);
     wide_structure_does_not_consume_depth_budget(&mut t);
@@ -2821,4 +2856,643 @@ fn canonical_bytes_invariant_implies_executable_readability(t: &mut Trials) {
             scanned(scan_value(bytes)) == Some(bytes.len()),
         );
     }
+}
+
+// ============================== intervals ===================================
+//
+// An interval's order is two axes, not one: unbounded below is the least point
+// of the lower axis and unbounded above the greatest of the upper. The trials
+// below hold both axes against the bytes at once.
+
+/// Every interval, as a semantic value, with its ends in order.
+fn interval_corpus() -> Vec<(Option<(reference::Bound, reference::Bound)>, CanonicalBytes)> {
+    use reference::Bound as B;
+    let stamps: [[u8; 8]; 5] = [
+        [0x00; 8],
+        [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01],
+        [0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+        [0x7F; 8],
+        [0xFF; 8],
+    ];
+    let mut ends: Vec<B> = vec![B::Unbounded];
+    for s in stamps {
+        ends.push(B::At(s));
+    }
+    let mut out: Vec<(Option<(B, B)>, CanonicalBytes)> = vec![(None, seal_interval_empty())];
+    for lo in &ends {
+        for hi in &ends {
+            match ordered_lo_hi(*lo, *hi) {
+                None => {}
+                Some(()) => out.push((
+                    Some((*lo, *hi)),
+                    seal_interval(&bound_of(*lo), &bound_of(*hi)),
+                )),
+            }
+        }
+    }
+    out
+}
+
+/// Whether the pair is one the door accepts: the lower end at or below the
+/// upper one.
+fn ordered_lo_hi(lo: reference::Bound, hi: reference::Bound) -> Option<()> {
+    use reference::Bound as B;
+    match (lo, hi) {
+        (B::Unbounded, _) | (_, B::Unbounded) => Some(()),
+        (B::At(a), B::At(b)) => match a <= b {
+            true => Some(()),
+            false => None,
+        },
+    }
+}
+
+fn empty_interval_sorts_before_every_inhabited_interval(t: &mut Trials) {
+    let empty = seal_interval_empty();
+    for (kind, bytes) in interval_corpus() {
+        if kind.is_some() {
+            t.check(
+                "the empty interval sorts below every inhabited one",
+                empty.as_bytes() < bytes.as_bytes(),
+            );
+        }
+    }
+}
+
+fn empty_interval_has_exactly_one_encoding(t: &mut Trials) {
+    let a = seal_interval_empty();
+    let b = seal_interval_empty();
+    t.check("the empty interval has one encoding", a.as_bytes() == b.as_bytes());
+    t.check("the empty interval is a tag and a marker", a.as_bytes().len() == 2);
+    t.check(
+        "the empty interval opens with the interval tag",
+        a.as_bytes()[0] == TAG_INTERVAL,
+    );
+}
+
+fn unbounded_lower_sorts_before_every_bounded_lower(t: &mut Trials) {
+    use reference::Bound as B;
+    let open = seal_interval(&Bound::Unbounded, &Bound::Unbounded);
+    for (kind, bytes) in interval_corpus() {
+        match kind {
+            Some((B::At(_), _)) => t.check(
+                "an unbounded lower end sorts below every instant",
+                open.as_bytes() < bytes.as_bytes(),
+            ),
+            _ => {}
+        }
+    }
+}
+
+fn unbounded_upper_sorts_after_every_bounded_upper(t: &mut Trials) {
+    use reference::Bound as B;
+    for (kind, bytes) in interval_corpus() {
+        match kind {
+            Some((lo, B::At(_))) => {
+                let open_above = seal_interval(&bound_of(lo), &Bound::Unbounded);
+                t.check(
+                    "an unbounded upper end sorts above every instant",
+                    bytes.as_bytes() < open_above.as_bytes(),
+                )
+            }
+            _ => {}
+        }
+    }
+}
+
+fn lower_endpoint_is_primary_sort_key(t: &mut Trials) {
+    use reference::Bound as B;
+    let all = interval_corpus();
+    for (ka, a) in &all {
+        for (kb, b) in &all {
+            match (ka, kb) {
+                (Some((la, _)), Some((lb, _))) => {
+                    let lower = cmp_bound_low(*la, *lb);
+                    if lower != Ordering::Equal {
+                        t.check(
+                            "the lower end decides before the upper is read",
+                            a.as_bytes().cmp(b.as_bytes()) == lower,
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let _ = B::Unbounded;
+}
+
+fn upper_endpoint_is_secondary_sort_key(t: &mut Trials) {
+    let all = interval_corpus();
+    for (ka, a) in &all {
+        for (kb, b) in &all {
+            match (ka, kb) {
+                (Some((la, ha)), Some((lb, hb))) => {
+                    if cmp_bound_low(*la, *lb) == Ordering::Equal {
+                        t.check(
+                            "equal lower ends are decided by the upper one",
+                            a.as_bytes().cmp(b.as_bytes()) == cmp_bound_high(*ha, *hb),
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+fn cmp_bound_low(a: reference::Bound, b: reference::Bound) -> Ordering {
+    use reference::Bound as B;
+    match (a, b) {
+        (B::Unbounded, B::Unbounded) => Ordering::Equal,
+        (B::Unbounded, B::At(_)) => Ordering::Less,
+        (B::At(_), B::Unbounded) => Ordering::Greater,
+        (B::At(x), B::At(y)) => x.cmp(&y),
+    }
+}
+
+fn cmp_bound_high(a: reference::Bound, b: reference::Bound) -> Ordering {
+    use reference::Bound as B;
+    match (a, b) {
+        (B::Unbounded, B::Unbounded) => Ordering::Equal,
+        (B::Unbounded, B::At(_)) => Ordering::Greater,
+        (B::At(_), B::Unbounded) => Ordering::Less,
+        (B::At(x), B::At(y)) => x.cmp(&y),
+    }
+}
+
+fn fully_unbounded_interval_is_canonical(t: &mut Trials) {
+    let open = seal_interval(&Bound::Unbounded, &Bound::Unbounded);
+    let again = seal_interval(&Bound::Unbounded, &Bound::Unbounded);
+    let bytes = open.as_bytes();
+    t.check("the open interval has one encoding", bytes == again.as_bytes());
+    t.check(
+        "the open interval reads back whole",
+        scanned(scan_value(bytes)) == Some(bytes.len()),
+    );
+    t.check(
+        "the open interval is tag, marker, and two end markers",
+        bytes.len() == 4,
+    );
+}
+
+fn point_interval_is_canonical(t: &mut Trials) {
+    for stamp in [[0x00u8; 8], [0x7F; 8], [0xFF; 8]] {
+        let point = seal_interval(&Bound::At(stamp), &Bound::At(stamp));
+        let bytes = point.as_bytes();
+        t.check(
+            "a point interval reads back whole",
+            scanned(scan_value(bytes)) == Some(bytes.len()),
+        );
+        t.check(
+            "a point interval is both ends written out",
+            bytes.len() == 2 + 9 + 9,
+        );
+        t.check(
+            "a point interval has one encoding",
+            bytes == seal_interval(&Bound::At(stamp), &Bound::At(stamp)).as_bytes(),
+        );
+    }
+}
+
+fn empty_interval_cannot_collide_with_inhabited_interval(t: &mut Trials) {
+    let empty = seal_interval_empty();
+    for (kind, bytes) in interval_corpus() {
+        if kind.is_some() {
+            t.check(
+                "the empty interval is not an inhabited one",
+                empty.as_bytes() != bytes.as_bytes(),
+            );
+            t.check(
+                "the empty interval is not a prefix of an inhabited one",
+                !is_proper_prefix(empty.as_bytes(), bytes.as_bytes()),
+            );
+        }
+    }
+}
+
+/// The marker that means "no lower bound" must not be a byte an instant can
+/// open with, or an unbounded end would read as a timestamp.
+fn lower_unbounded_marker_cannot_collide_with_timestamp(t: &mut Trials) {
+    let open = seal_interval(&Bound::Unbounded, &Bound::Unbounded);
+    let marker = open.as_bytes()[2];
+    for first in 0u16..=255 {
+        let mut stamp = [0u8; 8];
+        stamp[0] = first as u8;
+        let bounded = seal_interval(&Bound::At(stamp), &Bound::Unbounded);
+        t.check(
+            "an instant never opens with the unbounded-lower marker",
+            bounded.as_bytes()[2] != marker,
+        );
+        t.check(
+            "the unbounded lower end sorts below every instant",
+            open.as_bytes() < bounded.as_bytes(),
+        );
+    }
+}
+
+fn upper_unbounded_marker_cannot_collide_with_timestamp(t: &mut Trials) {
+    let open = seal_interval(&Bound::Unbounded, &Bound::Unbounded);
+    let marker = open.as_bytes()[3];
+    for first in 0u16..=255 {
+        let mut stamp = [0u8; 8];
+        stamp[0] = first as u8;
+        let bounded = seal_interval(&Bound::Unbounded, &Bound::At(stamp));
+        t.check(
+            "an instant never opens with the unbounded-upper marker",
+            bounded.as_bytes()[2] != marker,
+        );
+        t.check(
+            "the unbounded upper end sorts above every instant",
+            bounded.as_bytes() < open.as_bytes(),
+        );
+    }
+}
+
+fn interval_encoding_is_injective(t: &mut Trials) {
+    let all = interval_corpus();
+    for (ka, a) in &all {
+        for (kb, b) in &all {
+            t.check(
+                "one interval, one byte string",
+                (a.as_bytes() == b.as_bytes()) == (ka == kb),
+            );
+        }
+    }
+}
+
+fn interval_semantic_order_matches_byte_order(t: &mut Trials) {
+    let all = interval_corpus();
+    for (ka, a) in &all {
+        for (kb, b) in &all {
+            let semantic = match (ka, kb) {
+                (None, None) => Ordering::Equal,
+                (None, Some(_)) => Ordering::Less,
+                (Some(_), None) => Ordering::Greater,
+                (Some((la, ha)), Some((lb, hb))) => {
+                    cmp_bound_low(*la, *lb).then(cmp_bound_high(*ha, *hb))
+                }
+            };
+            t.check(
+                "interval order is byte order",
+                a.as_bytes().cmp(b.as_bytes()) == semantic,
+            );
+        }
+    }
+}
+
+fn interval_golden_vectors_cover_all_bound_combinations(t: &mut Trials) {
+    let zero = [0x00u8; 8];
+    let ones = [0xFFu8; 8];
+    let cases: Vec<(CanonicalBytes, Vec<u8>)> = vec![
+        (seal_interval_empty(), vec![0x60, 0x01]),
+        (
+            seal_interval(&Bound::Unbounded, &Bound::Unbounded),
+            vec![0x60, 0x02, 0x01, 0x03],
+        ),
+        (
+            seal_interval(&Bound::Unbounded, &Bound::At(zero)),
+            vec![0x60, 0x02, 0x01, 0x02, 0, 0, 0, 0, 0, 0, 0, 0],
+        ),
+        (
+            seal_interval(&Bound::At(zero), &Bound::Unbounded),
+            vec![0x60, 0x02, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0x03],
+        ),
+        (
+            seal_interval(&Bound::At(zero), &Bound::At(ones)),
+            vec![
+                0x60, 0x02, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0x02, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+                0xFF, 0xFF, 0xFF,
+            ],
+        ),
+    ];
+    for (sealed, expected) in &cases {
+        t.check(
+            "an interval encodes to its pinned bytes",
+            sealed.as_bytes() == expected.as_slice(),
+        );
+    }
+}
+
+// ============================= lists and sets ===============================
+//
+// A row is ordered and a set is not, which is the whole difference: the list
+// door writes what it is handed, and the set door decides what it was handed
+// means before it writes anything.
+
+/// A short list of leaf values, by index, so the trials can name what they
+/// built without repeating it.
+fn leaf(i: usize) -> CanonicalBytes {
+    match i {
+        0 => seal_null(),
+        1 => seal_bool(false),
+        2 => seal_bool(true),
+        3 => seal_str(&Utf8::of("")),
+        4 => seal_str(&Utf8::of("a")),
+        5 => seal_str(&Utf8::of("b")),
+        6 => seal_bytes(&[0x00]),
+        _ => seal_bytes(&[0xFF]),
+    }
+}
+
+fn list_of(indices: &[usize]) -> CanonicalBytes {
+    seal_list(&row(indices.iter().map(|i| leaf(*i)).collect()))
+}
+
+fn set_of(indices: &[usize]) -> CanonicalBytes {
+    CanonicalSet::of(indices.iter().map(|i| member(leaf(*i)))).seal()
+}
+
+fn list_preserves_element_order(t: &mut Trials) {
+    let ab = list_of(&[4, 5]);
+    let ba = list_of(&[5, 4]);
+    t.check("a list keeps the order it was given", ab.as_bytes() != ba.as_bytes());
+    t.check("the earlier element decides", ab.as_bytes() < ba.as_bytes());
+    for i in 0..8usize {
+        for j in 0..8usize {
+            let x = list_of(&[i, j]);
+            let y = list_of(&[j, i]);
+            t.check(
+                "a list of two orders by its first element",
+                (x.as_bytes() < y.as_bytes())
+                    == (leaf(i).as_bytes() < leaf(j).as_bytes()),
+            );
+        }
+    }
+}
+
+fn list_prefix_sorts_before_list_extension(t: &mut Trials) {
+    for i in 0..8usize {
+        let short = list_of(&[i]);
+        for j in 0..8usize {
+            let long = list_of(&[i, j]);
+            t.check(
+                "a list sorts before its own extension",
+                short.as_bytes() < long.as_bytes(),
+            );
+            t.check(
+                "a list is not a byte prefix of its extension",
+                !is_proper_prefix(short.as_bytes(), long.as_bytes()),
+            );
+        }
+    }
+}
+
+fn list_first_differing_element_decides(t: &mut Trials) {
+    for i in 0..8usize {
+        for j in 0..8usize {
+            if i == j {
+                continue;
+            }
+            let a = list_of(&[0, i, 7]);
+            let b = list_of(&[0, j, 0]);
+            t.check(
+                "the first element that differs decides the list",
+                (a.as_bytes() < b.as_bytes())
+                    == (leaf(i).as_bytes() < leaf(j).as_bytes()),
+            );
+        }
+    }
+}
+
+fn list_encoding_is_injective(t: &mut Trials) {
+    let shapes: Vec<Vec<usize>> = vec![
+        vec![],
+        vec![0],
+        vec![1],
+        vec![0, 0],
+        vec![0, 1],
+        vec![1, 0],
+        vec![0, 0, 0],
+        vec![4, 5],
+        vec![5, 4],
+    ];
+    for a in &shapes {
+        for b in &shapes {
+            t.check(
+                "one list, one byte string",
+                (list_of(a).as_bytes() == list_of(b).as_bytes()) == (a == b),
+            );
+        }
+    }
+}
+
+fn empty_list_and_empty_set_are_distinct(t: &mut Trials) {
+    let list = seal_list(&Vec::new());
+    let set = set_of(&[]);
+    t.check("an empty list is not an empty set", list.as_bytes() != set.as_bytes());
+    t.check("a list sorts below a set", list.as_bytes() < set.as_bytes());
+    t.check("both read back whole", scanned(scan_value(list.as_bytes())) == Some(2));
+    t.check("both read back whole", scanned(scan_value(set.as_bytes())) == Some(2));
+}
+
+fn list_and_set_same_elements_are_distinct(t: &mut Trials) {
+    for members in [vec![0usize], vec![4, 5], vec![0, 1, 2]] {
+        let list = list_of(&members);
+        let set = set_of(&members);
+        t.check(
+            "a list and a set of the same members are different values",
+            list.as_bytes() != set.as_bytes(),
+        );
+        t.check(
+            "the two differ in their tag, not their contents",
+            list.as_bytes()[1..] == set.as_bytes()[1..],
+        );
+    }
+}
+
+fn set_input_is_sorted_before_sealing(t: &mut Trials) {
+    let given = set_of(&[5, 4, 0]);
+    let sorted = set_of(&[0, 4, 5]);
+    t.check("a set is sealed in order", given.as_bytes() == sorted.as_bytes());
+    // Read the row back and check it ascends, rather than trusting the door.
+    let body = &given.as_bytes()[1..given.as_bytes().len() - 1];
+    let mut at = 0usize;
+    let mut previous: Option<Vec<u8>> = None;
+    while at < body.len() {
+        match scan_value(&body[at..]) {
+            Ok(n) => {
+                let element = body[at..at + n].to_vec();
+                if let Some(before) = &previous {
+                    t.check("members come out ascending", before.as_slice() < element.as_slice());
+                }
+                previous = Some(element);
+                at += n;
+            }
+            Err(_) => {
+                t.check("a set body is a row of whole values", false);
+                return;
+            }
+        }
+    }
+}
+
+fn set_input_is_deduplicated_before_sealing(t: &mut Trials) {
+    for i in 0..8usize {
+        let once = set_of(&[i]);
+        let thrice = set_of(&[i, i, i]);
+        t.check("a repeated member is one member", once.as_bytes() == thrice.as_bytes());
+        t.check(
+            "a set of one is its member and its frame",
+            once.as_bytes().len() == leaf(i).as_bytes().len() + 2,
+        );
+    }
+}
+
+fn set_permutation_invariance(t: &mut Trials) {
+    let base = [0usize, 4, 5];
+    let expected = set_of(&base);
+    let orders: [[usize; 3]; 6] = [
+        [0, 1, 2],
+        [0, 2, 1],
+        [1, 0, 2],
+        [1, 2, 0],
+        [2, 0, 1],
+        [2, 1, 0],
+    ];
+    for order in orders {
+        let permuted: Vec<usize> = order.iter().map(|k| base[*k]).collect();
+        t.check(
+            "a set encodes the same however it is ordered",
+            set_of(&permuted).as_bytes() == expected.as_bytes(),
+        );
+    }
+}
+
+fn set_duplicate_invariance(t: &mut Trials) {
+    let expected = set_of(&[0, 4, 5]);
+    for repeated in [
+        vec![0usize, 0, 4, 5],
+        vec![0, 4, 4, 5],
+        vec![0, 4, 5, 5],
+        vec![5, 4, 0, 5, 4, 0],
+    ] {
+        t.check(
+            "repeats do not change a set",
+            set_of(&repeated).as_bytes() == expected.as_bytes(),
+        );
+    }
+}
+
+/// Normalising a set twice is normalising it once. The second pass is the
+/// reference's, so the two normalisations have to land on the same members for
+/// this to hold rather than merely agreeing with themselves.
+fn set_normalization_is_idempotent(t: &mut Trials) {
+    use reference::Sem;
+    let sets: Vec<Vec<Sem>> = vec![
+        vec![Sem::Bool(true), Sem::Bool(false), Sem::Null],
+        vec![Sem::Null, Sem::Null, Sem::Bool(true)],
+        vec![Sem::Text("b".to_string()), Sem::Text("a".to_string()), Sem::Null],
+        Vec::new(),
+    ];
+    for given in &sets {
+        let raw = Sem::Set(given.clone());
+        let once = raw.normalized();
+        let twice = once.normalized();
+        t.check("the reference normalises to a fixpoint", once == twice);
+        let sealed_raw = built(&raw);
+        let sealed_once = built(&once);
+        t.check(
+            "the encoder lands on the same members the reference does",
+            sealed_raw.as_bytes() == sealed_once.as_bytes(),
+        );
+        let members = match &once {
+            Sem::Set(m) => m.clone(),
+            _ => Vec::new(),
+        };
+        let resealed = CanonicalSet::of(members.iter().map(|e| member(built(e)))).seal();
+        t.check(
+            "sealing already-normal members changes nothing",
+            resealed.as_bytes() == sealed_raw.as_bytes(),
+        );
+        let reversed: Vec<Sem> = members.iter().rev().cloned().collect();
+        let backwards = CanonicalSet::of(reversed.iter().map(|e| member(built(e)))).seal();
+        t.check(
+            "a normalised set handed back reversed is the same set",
+            backwards.as_bytes() == sealed_raw.as_bytes(),
+        );
+    }
+}
+
+fn set_encoding_is_injective_over_semantic_sets(t: &mut Trials) {
+    let sets: Vec<Vec<usize>> = vec![
+        vec![],
+        vec![0],
+        vec![1],
+        vec![0, 1],
+        vec![0, 4],
+        vec![4, 5],
+        vec![0, 4, 5],
+        vec![0, 1, 2, 3, 4, 5, 6, 7],
+    ];
+    for a in &sets {
+        for b in &sets {
+            t.check(
+                "one semantic set, one byte string",
+                (set_of(a).as_bytes() == set_of(b).as_bytes()) == (a == b),
+            );
+        }
+    }
+}
+
+fn set_order_matches_canonical_element_order(t: &mut Trials) {
+    for i in 0..8usize {
+        for j in 0..8usize {
+            if i == j {
+                continue;
+            }
+            let one = set_of(&[i]);
+            let other = set_of(&[j]);
+            t.check(
+                "a set of one orders as its member does",
+                (one.as_bytes() < other.as_bytes())
+                    == (leaf(i).as_bytes() < leaf(j).as_bytes()),
+            );
+        }
+    }
+}
+
+fn nested_list_set_values_remain_prefix_free(t: &mut Trials) {
+    let mut values: Vec<CanonicalBytes> = Vec::new();
+    for shape in [vec![], vec![0usize], vec![0, 1], vec![4, 5]] {
+        values.push(list_of(&shape));
+        values.push(set_of(&shape));
+        values.push(seal_list(&row(vec![list_of(&shape)])));
+        values.push(seal_list(&row(vec![set_of(&shape)])));
+        values.push(seal_json(&wrap(list_of(&shape))));
+    }
+    for a in &values {
+        for b in &values {
+            let (x, y) = (a.as_bytes(), b.as_bytes());
+            if x != y {
+                t.check(
+                    "nested rows stay prefix-free",
+                    !is_proper_prefix(x, y) && !is_proper_prefix(y, x),
+                );
+            }
+        }
+    }
+}
+
+/// The raw row-in-set-order door is not public, so the only way to a Set tag
+/// from outside this crate is through the door that normalises. What runs here
+/// is that the two doors disagree exactly when the input is not already
+/// normal — which is why the raw one is not exported.
+fn raw_set_sealer_cannot_bypass_normalization(t: &mut Trials) {
+    let unsorted = vec![member(leaf(5)), member(leaf(4))];
+    let raw = canonical::seal_set(&unsorted);
+    let normalised = set_of(&[5, 4]);
+    t.check(
+        "the raw door writes the order it is given",
+        raw.as_bytes() != normalised.as_bytes(),
+    );
+    let already = vec![member(leaf(4)), member(leaf(5))];
+    t.check(
+        "the two doors agree on an input that is already normal",
+        canonical::seal_set(&already).as_bytes() == normalised.as_bytes(),
+    );
+    let duplicated = vec![member(leaf(4)), member(leaf(4))];
+    t.check(
+        "the raw door writes a repeat the public door would drop",
+        canonical::seal_set(&duplicated).as_bytes() != set_of(&[4, 4]).as_bytes(),
+    );
 }

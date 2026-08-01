@@ -213,15 +213,6 @@ impl Num {
         }
     }
 
-    fn tie(self) -> Repr {
-        match self {
-            Num::Negative(_, t) | Num::Zero(t) | Num::Positive(_, t) => t,
-            // NaN has one writing, and it is the float one: there is no
-            // integer that is not a number.
-            Num::NotANumber => Repr::Float,
-        }
-    }
-
     fn cmp_num(self, other: Num) -> Ordering {
         match self.class().cmp(&other.class()) {
             Ordering::Equal => match (self, other) {
