@@ -36,7 +36,8 @@ use canonical::{
     seal_geometry, seal_interval, seal_interval_empty, seal_json, seal_list, seal_null,
     seal_num_negative, seal_num_nan, seal_num_positive, seal_num_zero, seal_regex, seal_set, seal_str,
     Magnitude, Repr, RegexFlags, EXP_INFINITE, DIM_BYTES,
-    seal_uuid, seal_validity, seal_vector, shape_scan, Geometry, RowItem, Validity, Wrapped,
+    seal_uuid, seal_validity, seal_vector, shape_scan, Components, Geometry, RowItem, Validity,
+    Wrapped, MAX_DIMENSION,
 };
 
 // The released format, written out here and nowhere else in this file. These
@@ -155,6 +156,18 @@ fn wrap(v: CanonicalBytes) -> Wrapped {
     match Wrapped::of(v) {
         Ok(w) => w,
         Err(refused) => harness_cannot_continue("wrapper", &refused),
+    }
+}
+
+/// Components the harness asserts are countable: the dimension field holds
+/// four billion of them and no trial here builds that many.
+fn components(values: Vec<NumericBytes>) -> Components {
+    match Components::of(values) {
+        Ok(c) => c,
+        Err(back) => {
+            eprintln!("canonical-trials: {} components is too many to count", back.len());
+            std::process::exit(2)
+        }
     }
 }
 
@@ -540,7 +553,7 @@ fn trial_grammar_table(t: &mut Trials) {
         (seal_uuid(&[0x00; 16]), 17, "Uuid: tag, 16"),
         (seal_regex(b"ab", &RegexFlags::new(true, true, true)), 6, "Regex: tag, pattern, terminator, flags"),
         (seal_json(&wrap(seal_null())), 2, "Json: tag, a value"),
-        (seal_vector(vec![seal_num_zero(Repr::Int), seal_num_zero(Repr::Int)]), 12,
+        (seal_vector(components(vec![seal_num_zero(Repr::Int), seal_num_zero(Repr::Int)])), 12,
             "Vector: tag, 4 dimension, two components, terminator"),
         (seal_list(&Vec::new()), 2, "List: tag, terminator"),
         (seal_set(&Vec::new()), 2, "Set: tag, terminator"),
@@ -573,7 +586,7 @@ fn trial_grammar_table(t: &mut Trials) {
         (seal_uuid(&[0; 16]), TAG_UUID, "Uuid tag"),
         (seal_regex(b"", &RegexFlags::new(false, false, false)), TAG_REGEX, "Regex tag"),
         (seal_json(&wrap(seal_null())), TAG_JSON, "Json tag"),
-        (seal_vector(Vec::new()), TAG_VECTOR, "Vector tag"),
+        (seal_vector(components(Vec::new())), TAG_VECTOR, "Vector tag"),
         (seal_list(&Vec::new()), TAG_LIST, "List tag"),
         (seal_set(&Vec::new()), TAG_SET, "Set tag"),
         (seal_validity(&validity(0, true)), TAG_VALIDITY, "Validity tag"),
@@ -673,8 +686,8 @@ fn attack_vector_dimension_leads(t: &mut Trials) {
     let big = || seal_num_positive(&mag_max(), Repr::Int);
     let small = || seal_num_negative(&mag_min(), Repr::Int);
 
-    let one_big = seal_vector(vec![big()]);
-    let two_small = seal_vector(vec![small(), small()]);
+    let one_big = seal_vector(components(vec![big()]));
+    let two_small = seal_vector(components(vec![small(), small()]));
     t.check(
         "a shorter vector sorts under a longer one whatever the components say",
         lex_le_independent(one_big.as_bytes(), two_small.as_bytes())
@@ -682,8 +695,8 @@ fn attack_vector_dimension_leads(t: &mut Trials) {
     );
 
     // Same dimension: now the components are what decides, componentwise.
-    let a = seal_vector(vec![small(), small()]);
-    let b = seal_vector(vec![small(), big()]);
+    let a = seal_vector(components(vec![small(), small()]));
+    let b = seal_vector(components(vec![small(), big()]));
     t.check(
         "at equal dimension the components decide, in order",
         lex_le_independent(a.as_bytes(), b.as_bytes()) && a.as_bytes() != b.as_bytes(),
@@ -691,9 +704,9 @@ fn attack_vector_dimension_leads(t: &mut Trials) {
 
     // Dimension is compared as a number, not as text: 2 < 10 must hold, which
     // a decimal or little-endian width would get wrong.
-    let d2 = seal_vector(vec_of(2));
-    let d10 = seal_vector(vec_of(10));
-    let d256 = seal_vector(vec_of(256));
+    let d2 = seal_vector(components(vec_of(2)));
+    let d10 = seal_vector(components(vec_of(10)));
+    let d256 = seal_vector(components(vec_of(256)));
     t.check(
         "dimension compares numerically across a byte boundary",
         lex_le_independent(d2.as_bytes(), d10.as_bytes())
@@ -703,8 +716,8 @@ fn attack_vector_dimension_leads(t: &mut Trials) {
 
     // Exhaustive over the low dimension byte, so no single value is special.
     for n in 0usize..=255 {
-        let lo = seal_vector(vec_of(n));
-        let hi = seal_vector(vec_of(n + 1));
+        let lo = seal_vector(components(vec_of(n)));
+        let hi = seal_vector(components(vec_of(n + 1)));
         t.check(
             "dimension order is total over the low byte",
             lex_le_independent(lo.as_bytes(), hi.as_bytes())
@@ -1254,7 +1267,7 @@ fn set_duplicates_encode_identically(t: &mut Trials) {
 /// as a Num, and that the row ends where the value does.
 fn vector_components_are_numeric_only(t: &mut Trials) {
     for n in 0usize..=8 {
-        let v = seal_vector(vec_of(n));
+        let v = seal_vector(components(vec_of(n)));
         let bytes = v.as_bytes();
         t.check("a vector reads back exactly",
             scanned(scan_value(bytes)) == Some(bytes.len()));
@@ -1361,8 +1374,8 @@ fn red_team_corpus() -> Vec<CanonicalBytes> {
         seal_regex(b"", &RegexFlags::new(false, false, false)),
         seal_regex(b"a.*b", &RegexFlags::new(true, false, true)),
         seal_json(&wrap(seal_null())),
-        seal_vector(Vec::new()),
-        seal_vector(vec_of(3)),
+        seal_vector(components(Vec::new())),
+        seal_vector(components(vec_of(3))),
         seal_list(&Vec::new()),
         seal_list(&vec_of(2).into_iter().map(|n| n.into_row_item()).collect()),
         seal_set(&Vec::new()),
@@ -1601,6 +1614,32 @@ fn main() {
     fuzz_mutated_valid_encodings_never_have_two_readings(&mut t);
     t.report("independent reference");
 
+    println!("json");
+    json_wraps_exactly_one_complete_value(&mut t);
+    json_encoding_order_matches_inner_value_order(&mut t);
+    json_encoding_is_injective(&mut t);
+    json_nested_lists_roundtrip(&mut t);
+    json_depth_boundary_matches_reader_policy(&mut t);
+    json_golden_vectors_cover_every_json_kind(&mut t);
+    t.report("json");
+
+    println!("vectors");
+    vector_dimension_equals_component_count(&mut t);
+    vector_dimension_is_big_endian(&mut t);
+    vector_dimension_is_primary_sort_key(&mut t);
+    vector_components_are_secondary_sort_key(&mut t);
+    shorter_dimension_sorts_before_longer_dimension(&mut t);
+    same_dimension_uses_component_lexicographic_order(&mut t);
+    zero_dimension_vector_is_canonical(&mut t);
+    vector_rejects_non_numeric_components(&mut t);
+    vector_rejects_heterogeneous_components(&mut t);
+    vector_nan_component_order_is_defined(&mut t);
+    vector_encoding_is_injective(&mut t);
+    vector_component_count_overflow_is_unconstructible(&mut t);
+    vector_large_row_is_stack_safe(&mut t);
+    vector_golden_vectors_cover_dimension_boundaries(&mut t);
+    t.report("vectors");
+
     println!("lists and sets");
     list_preserves_element_order(&mut t);
     list_prefix_sorts_before_list_extension(&mut t);
@@ -1715,8 +1754,8 @@ fn built(v: &reference::Sem) -> CanonicalBytes {
             &RegexFlags::new(*case_insensitive, *multi_line, *dot_matches_new_line),
         ),
         Sem::Json(inner) => seal_json(&wrap(built(inner))),
-        Sem::Vector(components) => {
-            seal_vector(components.iter().map(|c| built_num(*c)).collect())
+        Sem::Vector(parts) => {
+            seal_vector(components(parts.iter().map(|c| built_num(*c)).collect()))
         }
         Sem::List(elems) => seal_list(&row(elems.iter().map(built).collect())),
         Sem::Set(_) => match v.normalized() {
@@ -3495,4 +3534,470 @@ fn raw_set_sealer_cannot_bypass_normalization(t: &mut Trials) {
         "the raw door writes a repeat the public door would drop",
         canonical::seal_set(&duplicated).as_bytes() != set_of(&[4, 4]).as_bytes(),
     );
+}
+
+// ================================ vectors ===================================
+//
+// A vector is a length and then its components, and the length leads: two
+// vectors of different dimension order by dimension before a single component
+// is read. Everything below holds that division.
+
+/// A component, by index, so a trial can name the vector it built.
+fn part(i: usize) -> NumericBytes {
+    match i {
+        0 => seal_num_negative(&Magnitude::Infinite, Repr::Float),
+        1 => seal_num_negative(&mag_max(), Repr::Int),
+        2 => seal_num_negative(&mag_min(), Repr::Int),
+        3 => seal_num_zero(Repr::Int),
+        4 => seal_num_zero(Repr::Float),
+        5 => seal_num_positive(&mag_min(), Repr::Int),
+        6 => seal_num_positive(&mag_max(), Repr::Float),
+        7 => seal_num_positive(&Magnitude::Infinite, Repr::Float),
+        _ => seal_num_nan(),
+    }
+}
+
+fn vector_of(indices: &[usize]) -> CanonicalBytes {
+    seal_vector(components(indices.iter().map(|i| part(*i)).collect()))
+}
+
+fn vector_dimension_equals_component_count(t: &mut Trials) {
+    for n in [0usize, 1, 2, 3, 8, 64, 300] {
+        let indices: Vec<usize> = (0..n).map(|k| k % 9).collect();
+        let v = vector_of(&indices);
+        let bytes = v.as_bytes();
+        let declared = u32::from_be_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]);
+        t.check("the dimension field is the component count", declared as usize == n);
+        t.check(
+            "a vector reads back whole",
+            scanned(scan_value(bytes)) == Some(bytes.len()),
+        );
+    }
+}
+
+fn vector_dimension_is_big_endian(t: &mut Trials) {
+    for n in [0usize, 1, 255, 256, 257] {
+        let indices: Vec<usize> = (0..n).map(|_| 3).collect();
+        let v = vector_of(&indices);
+        let bytes = v.as_bytes();
+        t.check(
+            "the dimension is written most significant byte first",
+            bytes[1..1 + DIM_BYTES] == (n as u32).to_be_bytes(),
+        );
+    }
+}
+
+fn vector_dimension_is_primary_sort_key(t: &mut Trials) {
+    // A short vector of the greatest components against a long vector of the
+    // least: if the dimension did not lead, the components would win.
+    for short in 0usize..4 {
+        for long in (short + 1)..5 {
+            let high: Vec<usize> = (0..short).map(|_| 8).collect();
+            let low: Vec<usize> = (0..long).map(|_| 0).collect();
+            t.check(
+                "the dimension decides before any component is read",
+                vector_of(&high).as_bytes() < vector_of(&low).as_bytes(),
+            );
+        }
+    }
+}
+
+fn vector_components_are_secondary_sort_key(t: &mut Trials) {
+    for n in 1usize..4 {
+        for i in 0..9usize {
+            for j in 0..9usize {
+                let a: Vec<usize> = (0..n).map(|k| if k == 0 { i } else { 3 }).collect();
+                let b: Vec<usize> = (0..n).map(|k| if k == 0 { j } else { 3 }).collect();
+                t.check(
+                    "at equal dimension the components decide",
+                    vector_of(&a).as_bytes().cmp(vector_of(&b).as_bytes())
+                        == part(i).as_bytes().cmp(part(j).as_bytes()),
+                );
+            }
+        }
+    }
+}
+
+fn shorter_dimension_sorts_before_longer_dimension(t: &mut Trials) {
+    let mut previous: Option<CanonicalBytes> = None;
+    for n in 0usize..40 {
+        let indices: Vec<usize> = (0..n).map(|_| 8).collect();
+        let v = vector_of(&indices);
+        if let Some(before) = &previous {
+            t.check(
+                "a shorter vector sorts before a longer one",
+                before.as_bytes() < v.as_bytes(),
+            );
+            t.check(
+                "a shorter vector is not a prefix of a longer one",
+                !is_proper_prefix(before.as_bytes(), v.as_bytes()),
+            );
+        }
+        previous = Some(v);
+    }
+}
+
+fn same_dimension_uses_component_lexicographic_order(t: &mut Trials) {
+    for i in 0..9usize {
+        for j in 0..9usize {
+            let a = vector_of(&[3, i]);
+            let b = vector_of(&[3, j]);
+            t.check(
+                "equal-dimension vectors compare component by component",
+                a.as_bytes().cmp(b.as_bytes()) == part(i).as_bytes().cmp(part(j).as_bytes()),
+            );
+        }
+    }
+}
+
+fn zero_dimension_vector_is_canonical(t: &mut Trials) {
+    let empty = vector_of(&[]);
+    let bytes = empty.as_bytes();
+    t.check("an empty vector has one encoding", bytes == vector_of(&[]).as_bytes());
+    t.check(
+        "an empty vector is tag, dimension, terminator",
+        bytes.len() == 1 + DIM_BYTES + 1,
+    );
+    t.check("its dimension is zero", bytes[1..1 + DIM_BYTES] == [0u8; 4]);
+    t.check(
+        "an empty vector reads back whole",
+        scanned(scan_value(bytes)) == Some(bytes.len()),
+    );
+    for n in 1usize..5 {
+        let indices: Vec<usize> = (0..n).map(|_| 0).collect();
+        t.check(
+            "the empty vector sorts below every inhabited one",
+            bytes < vector_of(&indices).as_bytes(),
+        );
+    }
+}
+
+/// The door takes `NumericBytes`, whose only mints are the four numeric doors,
+/// so a component of another kind is not an argument that exists. What runs
+/// here is that every component in a sealed vector reads back as a Num.
+fn vector_rejects_non_numeric_components(t: &mut Trials) {
+    for n in 1usize..6 {
+        let indices: Vec<usize> = (0..n).map(|k| k % 9).collect();
+        let v = vector_of(&indices);
+        let bytes = v.as_bytes();
+        let mut at = 1 + DIM_BYTES;
+        let mut counted = 0usize;
+        while bytes[at] != 0x01 {
+            match scan_value(&bytes[at..]) {
+                Ok(len) => {
+                    t.check("every component opens with the Num tag", bytes[at] == TAG_NUM);
+                    at += len;
+                    counted += 1;
+                }
+                Err(_) => {
+                    t.check("every component is a whole value", false);
+                    return;
+                }
+            }
+        }
+        t.check("the row holds exactly the components given", counted == n);
+    }
+}
+
+/// Heterogeneous components are the same argument by another name: there is no
+/// `NumericBytes` that is not a number, so a mixed row cannot be handed over.
+/// Every component of every vector below is a Num of a different class, and the
+/// row still reads as one kind.
+fn vector_rejects_heterogeneous_components(t: &mut Trials) {
+    let mixed = vector_of(&[0, 3, 5, 7, 8]);
+    let bytes = mixed.as_bytes();
+    let mut at = 1 + DIM_BYTES;
+    let mut classes: Vec<u8> = Vec::new();
+    while bytes[at] != 0x01 {
+        match scan_value(&bytes[at..]) {
+            Ok(len) => {
+                classes.push(bytes[at + 1]);
+                at += len;
+            }
+            Err(_) => {
+                t.check("a mixed vector is still a row of whole values", false);
+                return;
+            }
+        }
+    }
+    t.check("every class of number is admissible as a component", classes.len() == 5);
+    t.check(
+        "the classes are the ones the doors were asked for",
+        classes == vec![0x01, 0x02, 0x03, 0x03, 0x04],
+    );
+}
+
+fn vector_nan_component_order_is_defined(t: &mut Trials) {
+    let nan = vector_of(&[8]);
+    for i in 0..8usize {
+        let other = vector_of(&[i]);
+        t.check(
+            "a NaN component sorts above every number",
+            other.as_bytes() < nan.as_bytes(),
+        );
+    }
+    t.check(
+        "two NaN components are one value",
+        nan.as_bytes() == vector_of(&[8]).as_bytes(),
+    );
+    t.check(
+        "NaN keeps its place inside a longer vector",
+        vector_of(&[3, 7]).as_bytes() < vector_of(&[3, 8]).as_bytes(),
+    );
+}
+
+fn vector_encoding_is_injective(t: &mut Trials) {
+    let shapes: Vec<Vec<usize>> = vec![
+        vec![],
+        vec![3],
+        vec![4],
+        vec![3, 3],
+        vec![3, 4],
+        vec![4, 3],
+        vec![3, 3, 3],
+        vec![0, 8],
+        vec![8, 0],
+    ];
+    for a in &shapes {
+        for b in &shapes {
+            t.check(
+                "one vector, one byte string",
+                (vector_of(a).as_bytes() == vector_of(b).as_bytes()) == (a == b),
+            );
+        }
+    }
+}
+
+/// The dimension field holds four billion components, and a list longer than
+/// that is not a `Components` — so `seal_vector` has no argument that could
+/// carry a count it cannot write. The refusing arm needs 2^32 components and is
+/// not executable on this machine; what runs is that every constructible count
+/// is accepted and lands in the field exactly.
+fn vector_component_count_overflow_is_unconstructible(t: &mut Trials) {
+    t.check(
+        "the dimension field's capacity is what the mint refuses past",
+        MAX_DIMENSION == 1u64 << (8 * DIM_BYTES as u64),
+    );
+    for n in [0usize, 1, 2, 255, 256, 65_535, 65_536] {
+        let values: Vec<NumericBytes> = (0..n).map(|_| seal_num_zero(Repr::Int)).collect();
+        match Components::of(values) {
+            Err(_) => t.check("a constructible count is countable", false),
+            Ok(c) => {
+                t.check("the mint counts what it was given", c.count() == n);
+                let v = seal_vector(c);
+                let bytes = v.as_bytes();
+                t.check(
+                    "the count reaches the dimension field unchanged",
+                    bytes[1..1 + DIM_BYTES] == (n as u32).to_be_bytes(),
+                );
+            }
+        }
+    }
+}
+
+fn vector_large_row_is_stack_safe(t: &mut Trials) {
+    for n in [1000usize, 10_000, 50_000] {
+        let v = seal_vector(components(
+            (0..n).map(|_| seal_num_zero(Repr::Int)).collect(),
+        ));
+        let bytes = v.as_bytes();
+        t.check(
+            "a large vector reads back whole",
+            scanned(scan_value(bytes)) == Some(bytes.len()),
+        );
+        t.check("a large vector spends no extra depth", v.descent() == 4);
+        t.check(
+            "the reference reads a large vector too",
+            reference::scan(bytes).map(|r| r.end).ok() == Some(bytes.len()),
+        );
+    }
+}
+
+fn vector_golden_vectors_cover_dimension_boundaries(t: &mut Trials) {
+    let zero_int: Vec<u8> = vec![0x10, 0x02, 0x00];
+    let cases: Vec<(CanonicalBytes, Vec<u8>)> = vec![
+        (vector_of(&[]), vec![0x40, 0x00, 0x00, 0x00, 0x00, 0x01]),
+        (
+            vector_of(&[3]),
+            [
+                vec![0x40, 0x00, 0x00, 0x00, 0x01],
+                zero_int.clone(),
+                vec![0x01],
+            ]
+            .concat(),
+        ),
+        (
+            vector_of(&[3, 3]),
+            [
+                vec![0x40, 0x00, 0x00, 0x00, 0x02],
+                zero_int.clone(),
+                zero_int.clone(),
+                vec![0x01],
+            ]
+            .concat(),
+        ),
+    ];
+    for (sealed, expected) in &cases {
+        t.check(
+            "a vector encodes to its pinned bytes",
+            sealed.as_bytes() == expected.as_slice(),
+        );
+    }
+    let wide = seal_vector(components(
+        (0..256).map(|_| seal_num_zero(Repr::Int)).collect(),
+    ));
+    t.check(
+        "a dimension of 256 crosses into the third byte",
+        wide.as_bytes()[1..5] == [0x00, 0x00, 0x01, 0x00],
+    );
+}
+
+// ================================= json =====================================
+//
+// The Json tag carries one whole value, and the value grammar is the JSON
+// grammar: a wrapped value reads exactly as it does bare.
+
+fn json_wraps_exactly_one_complete_value(t: &mut Trials) {
+    for v in red_team_corpus() {
+        let bare = v.as_bytes().to_vec();
+        let sealed = seal_json(&wrap(v));
+        let bytes = sealed.as_bytes();
+        t.check("a wrapper is its tag and one value", bytes.len() == bare.len() + 1);
+        t.check("a wrapper opens with the json tag", bytes[0] == TAG_JSON);
+        t.check("the value follows unchanged", bytes[1..] == bare[..]);
+        t.check(
+            "a wrapped value reads back whole",
+            scanned(scan_value(bytes)) == Some(bytes.len()),
+        );
+        t.check(
+            "the wrapped value ends where the wrapper does",
+            scanned(scan_value(&bytes[1..])) == Some(bare.len()),
+        );
+    }
+}
+
+fn json_encoding_order_matches_inner_value_order(t: &mut Trials) {
+    let all = domain();
+    for (va, a) in &all {
+        for (vb, b) in &all {
+            let wrapped_a = seal_json(&wrap(built(va)));
+            let wrapped_b = seal_json(&wrap(built(vb)));
+            t.check(
+                "wrapped values order as their contents do",
+                wrapped_a.as_bytes().cmp(wrapped_b.as_bytes())
+                    == a.as_bytes().cmp(b.as_bytes()),
+            );
+        }
+    }
+}
+
+fn json_encoding_is_injective(t: &mut Trials) {
+    let all = domain();
+    for (va, a) in &all {
+        for (vb, b) in &all {
+            let same_inner = a.as_bytes() == b.as_bytes();
+            let wrapped_a = seal_json(&wrap(built(va)));
+            let wrapped_b = seal_json(&wrap(built(vb)));
+            t.check(
+                "one wrapped value, one byte string",
+                (wrapped_a.as_bytes() == wrapped_b.as_bytes()) == same_inner,
+            );
+        }
+    }
+}
+
+/// The nested shapes, built fresh each call so a trial can seal the same shape
+/// twice without a door from bytes back to a value.
+fn nested_list_shapes() -> Vec<CanonicalBytes> {
+    vec![
+        list_of(&[]),
+        list_of(&[0]),
+        list_of(&[4, 5]),
+        seal_list(&row(vec![list_of(&[0]), list_of(&[])])),
+        seal_list(&row(vec![seal_list(&row(vec![list_of(&[4])]))])),
+    ]
+}
+
+fn json_nested_lists_roundtrip(t: &mut Trials) {
+    for (i, shape) in nested_list_shapes().into_iter().enumerate() {
+        let bare = shape.as_bytes().to_vec();
+        let wrapped = seal_json(&wrap(shape));
+        let bytes = wrapped.as_bytes();
+        t.check(
+            "a wrapped list reads back whole",
+            scanned(scan_value(bytes)) == Some(bytes.len()),
+        );
+        t.check("the list survives the wrapper unchanged", bytes[1..] == bare[..]);
+        let again = nested_list_shapes().remove(i);
+        t.check(
+            "wrapping is deterministic",
+            seal_json(&wrap(again)).as_bytes() == bytes,
+        );
+    }
+}
+
+/// A wrapper spends exactly one level, so the bound on wrapping is the reader's
+/// bound minus what the value inside it already spends.
+fn json_depth_boundary_matches_reader_policy(t: &mut Trials) {
+    let (deepest, levels) = deepest_wrapped();
+    t.check("wrapping stops at the reader's bound", levels == 126);
+    t.check("the deepest wrapper is one below the limit", deepest.descent() == 127);
+    let bytes = deepest.as_bytes();
+    t.check(
+        "the deepest wrapper reads back whole",
+        scanned(scan_value(bytes)) == Some(bytes.len()),
+    );
+    t.check(
+        "the reference agrees on the deepest wrapper",
+        reference::scan(bytes).map(|r| r.descent).ok() == Some(127),
+    );
+    // One more level, which only a forger can write.
+    let mut forged = vec![TAG_JSON];
+    forged.extend_from_slice(bytes);
+    match scan_value(&forged) {
+        Ok(_) => t.check("one wrapper past the bound is refused", false),
+        Err(e) => t.check(
+            "one wrapper past the bound is refused as TooDeep",
+            e.reason() == Reason::TooDeep,
+        ),
+    }
+    t.check(
+        "the reference refuses it too",
+        reference::scan(&forged).is_err(),
+    );
+}
+
+fn json_golden_vectors_cover_every_json_kind(t: &mut Trials) {
+    let cases: Vec<(CanonicalBytes, Vec<u8>)> = vec![
+        (seal_json(&wrap(seal_null())), vec![0x38, 0x05]),
+        (seal_json(&wrap(seal_bool(false))), vec![0x38, 0x08]),
+        (seal_json(&wrap(seal_bool(true))), vec![0x38, 0x09]),
+        (
+            seal_json(&wrap(seal_num_zero(Repr::Int).into_value())),
+            vec![0x38, 0x10, 0x02, 0x00],
+        ),
+        (
+            seal_json(&wrap(seal_str(&Utf8::of("")))),
+            vec![0x38, 0x18, 0x00, 0x00],
+        ),
+        (
+            seal_json(&wrap(seal_str(&Utf8::of("a")))),
+            vec![0x38, 0x18, 0x61, 0x00, 0x00],
+        ),
+        (seal_json(&wrap(list_of(&[]))), vec![0x38, 0x48, 0x01]),
+        (
+            seal_json(&wrap(list_of(&[0]))),
+            vec![0x38, 0x48, 0x05, 0x01],
+        ),
+        (
+            seal_json(&wrap(seal_json(&wrap(seal_null())))),
+            vec![0x38, 0x38, 0x05],
+        ),
+    ];
+    for (sealed, expected) in &cases {
+        t.check(
+            "a wrapped value encodes to its pinned bytes",
+            sealed.as_bytes() == expected.as_slice(),
+        );
+    }
 }

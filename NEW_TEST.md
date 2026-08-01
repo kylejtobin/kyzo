@@ -286,33 +286,33 @@
 
 ## JSON
 
-- [ ] json_wraps_exactly_one_complete_value
-- [ ] json_encoding_order_matches_inner_value_order
-- [ ] json_encoding_is_injective
+- [x] json_wraps_exactly_one_complete_value
+- [x] json_encoding_order_matches_inner_value_order
+- [x] json_encoding_is_injective
 - [ ] json_rejects_non_json_database_values
-- [ ] json_nested_lists_roundtrip
+- [x] json_nested_lists_roundtrip
 - [ ] json_nested_objects_are_canonical
 - [ ] json_object_key_permutations_encode_identically
 - [ ] json_duplicate_object_keys_are_rejected_or_normalized
-- [ ] json_depth_boundary_matches_reader_policy
-- [ ] json_golden_vectors_cover_every_json_kind
+- [x] json_depth_boundary_matches_reader_policy
+- [x] json_golden_vectors_cover_every_json_kind
 
 ## Vectors
 
-- [ ] vector_dimension_equals_component_count
-- [ ] vector_dimension_is_big_endian
-- [ ] vector_dimension_is_primary_sort_key
-- [ ] vector_components_are_secondary_sort_key
-- [ ] shorter_dimension_sorts_before_longer_dimension
-- [ ] same_dimension_uses_component_lexicographic_order
-- [ ] zero_dimension_vector_is_canonical
-- [ ] vector_rejects_non_numeric_components
-- [ ] vector_rejects_heterogeneous_components
-- [ ] vector_nan_component_order_is_defined
-- [ ] vector_encoding_is_injective
-- [ ] vector_component_count_overflow_is_unconstructible
-- [ ] vector_large_row_is_stack_safe
-- [ ] vector_golden_vectors_cover_dimension_boundaries
+- [x] vector_dimension_equals_component_count
+- [x] vector_dimension_is_big_endian
+- [x] vector_dimension_is_primary_sort_key
+- [x] vector_components_are_secondary_sort_key
+- [x] shorter_dimension_sorts_before_longer_dimension
+- [x] same_dimension_uses_component_lexicographic_order
+- [x] zero_dimension_vector_is_canonical
+- [x] vector_rejects_non_numeric_components
+- [x] vector_rejects_heterogeneous_components
+- [x] vector_nan_component_order_is_defined
+- [x] vector_encoding_is_injective
+- [x] vector_component_count_overflow_is_unconstructible
+- [x] vector_large_row_is_stack_safe
+- [x] vector_golden_vectors_cover_dimension_boundaries
 
 ## Lists and sets
 

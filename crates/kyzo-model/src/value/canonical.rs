@@ -3150,16 +3150,59 @@ impl NumericBytes {
 /// Width of the dimension field, in bytes.
 pub const DIM_BYTES: usize = 4;
 
+/// One past the largest count the dimension field can hold. A component list
+/// this long has no dimension to write, so it is not a vector. Stated in `u64`
+/// because a `usize` need not be wide enough to name it.
+pub const MAX_DIMENSION: u64 = 0x1_0000_0000;
+
+/// A vector's components, few enough to be counted in the dimension field.
+///
+/// The bound was a specification precondition, which binds the verifier and no
+/// caller outside it. Here it is the type: a list too long to count is not a
+/// `Components`, and [`seal_vector`] has nothing left to refuse.
+// CONSTRUCT: ValueObject Components
+pub struct Components {
+    values: Vec<NumericBytes>,
+}
+
+impl Components {
+    pub closed spec fn spec_count(&self) -> nat { self.values.len() as nat }
+
+    #[verifier::type_invariant]
+    closed spec fn wf_components(&self) -> bool { self.values.len() < MAX_DIMENSION }
+
+
+    /// Refusing hands the components back: they are still numbers, and a
+    /// refusal that consumed them would cost more than it reports.
+    pub fn of(values: Vec<NumericBytes>) -> (r: Result<Components, Vec<NumericBytes>>)
+        ensures match r {
+            Ok(c) => c.spec_count() == values.len(),
+            Err(back) => back.len() == values.len(),
+        }
+    {
+        // Widening: a `usize` count always fits a `u64`, so the comparison is
+        // the bound and not a truncation of it.
+        match (values.len() as u64) < MAX_DIMENSION {
+            true => Ok(Components { values }),
+            false => Err(values),
+        }
+    }
+
+    pub fn count(&self) -> (r: usize)
+        ensures r == self.spec_count(), r < MAX_DIMENSION
+    { proof { use_type_invariant(self); } self.values.len() }
+}
+
 /// Dimension, then components.
 ///
 /// ORDER_LAW: the dimension sorts first, so two vectors of different length
 /// order by length before either is examined and a shorter one is never a
 /// prefix of a longer one.
-pub fn seal_vector(components: Vec<NumericBytes>) -> (r: CanonicalBytes)
-    requires components.len() < 0x1_0000_0000u64
+pub fn seal_vector(components: Components) -> (r: CanonicalBytes)
 {
-    proof { lemma_tag_shapes(); }
-    let dim = components.len();
+    proof { lemma_tag_shapes(); use_type_invariant(&components); }
+    let dim = components.count();
+    let components = components.values;
     let d = be_bytes(dim as u128, DIM_BYTES);
     let mut rest = components;
     let mut vals: Vec<RowItem> = Vec::new();
