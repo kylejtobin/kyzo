@@ -3134,6 +3134,10 @@ pub struct RegexFlags {
 /// A closed sum rather than six constants, so the bit layout below is one
 /// exhaustive match: a seventh flag does not compile until someone decides
 /// which bit it takes, which is the format decision it is.
+///
+/// ORDER_LAW: ascending by [`RegexFlag::bit`], which is declaration order.
+/// Total and stable across releases: a flag's bit is where it sits inside
+/// every flag set that holds it, so changing this order is a format break.
 // CONSTRUCT: ClosedSum RegexFlag
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Structural)]
 pub enum RegexFlag {
