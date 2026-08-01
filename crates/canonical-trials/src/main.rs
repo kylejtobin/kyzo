@@ -1622,6 +1622,66 @@ fn main() {
     fuzz_mutated_valid_encodings_never_have_two_readings(&mut t);
     t.report("independent reference");
 
+    println!("scanner equivalence");
+    scan_value_success_matches_scan_spec(&mut t);
+    scan_value_rejection_matches_scan_spec_or_depth_limit(&mut t);
+    scan_value_success_length_is_nonzero(&mut t);
+    scan_value_success_length_is_within_input(&mut t);
+    scan_value_success_prefix_is_complete(&mut t);
+    scan_value_accepts_every_sealed_value(&mut t);
+    scan_value_accepts_concatenated_values_one_at_a_time(&mut t);
+    scan_value_preserves_exact_trailing_suffix(&mut t);
+    scan_value_is_deterministic(&mut t);
+    scan_value_never_panics_on_arbitrary_bytes(&mut t);
+    scan_value_matches_independent_reference_parser(&mut t);
+    every_truncated_prefix_of_valid_encoding_is_rejected(&mut t);
+    every_one_byte_mutation_rejects_or_decodes_unambiguously(&mut t);
+    every_accepted_mutation_has_exactly_one_reading(&mut t);
+    complete_encoding_never_has_complete_strict_prefix(&mut t);
+    complete_encoding_never_has_two_parse_boundaries(&mut t);
+    t.report("scanner equivalence");
+
+    println!("refusal correctness");
+    truncated_fixed_body_reports_eof_suffix(&mut t);
+    truncated_delimited_body_reports_eof_suffix(&mut t);
+    truncated_product_first_factor_reports_exact_suffix(&mut t);
+    truncated_product_second_factor_reports_exact_suffix(&mut t);
+    truncated_row_reports_exact_suffix(&mut t);
+    truncated_nested_value_reports_exact_suffix(&mut t);
+    unknown_tag_reports_original_unconsumed_suffix(&mut t);
+    unknown_nested_branch_reports_exact_nested_suffix(&mut t);
+    bad_escape_reports_suffix_beginning_at_bad_companion(&mut t);
+    too_deep_reports_first_unread_nested_suffix(&mut t);
+    refusal_reason_matches_actual_failure(&mut t);
+    refusal_suffix_is_borrowed_from_original_input(&mut t);
+    refusal_suffix_is_never_fabricated(&mut t);
+    refusal_suffix_never_points_past_end(&mut t);
+    refusal_location_composition_never_overflows(&mut t);
+    non_too_deep_failure_implies_spec_rejection(&mut t);
+    t.report("refusal correctness");
+
+    println!("shape algebra");
+    fixed_shape_accepts_exact_width(&mut t);
+    fixed_shape_accepts_prefix_of_larger_buffer(&mut t);
+    fixed_shape_rejects_short_buffer(&mut t);
+    delimited_shape_matches_delim_spec(&mut t);
+    product_shape_ends_after_both_factors(&mut t);
+    product_shape_rejects_when_first_factor_rejects(&mut t);
+    product_shape_rejects_when_second_factor_rejects(&mut t);
+    sum_shape_selects_exact_matching_branch(&mut t);
+    sum_shape_rejects_unknown_lead(&mut t);
+    tagged_shape_uses_canonical_grammar(&mut t);
+    row_shape_terminates_only_on_struct_end(&mut t);
+    shape_end_is_bounded_for_all_shapes(&mut t);
+    shape_end_is_local_for_all_shapes(&mut t);
+    shape_end_is_total_for_arbitrary_bytes(&mut t);
+    shape_scan_success_matches_shape_end(&mut t);
+    shape_scan_non_depth_failure_matches_shape_end_none(&mut t);
+    shape_scan_never_returns_zero_for_row_element(&mut t);
+    malformed_custom_shape_cannot_cause_infinite_loop(&mut t);
+    arbitrary_shape_and_input_never_panics(&mut t);
+    t.report("shape algebra");
+
     println!("concatenation");
     concat_order_matches_lexicographic_product_order(&mut t);
     concat_order_equal_heads_defers_to_tail(&mut t);
@@ -6766,6 +6826,929 @@ fn nested_products_preserve_lexicographic_order(t: &mut Trials) {
                     }
                 }
             }
+        }
+    }
+}
+
+// ============================== shape algebra ===============================
+//
+// Five constructors and nothing else: a width, a delimited body, one shape then
+// another, a choice on a lead byte, and a row. Every one is read directly here,
+// on inputs no door would have written.
+
+fn shape_read(s: &Shape, p: &[u8]) -> Option<usize> {
+    let g = grammar_exec();
+    scanned(shape_scan(&g, s, p, 0))
+}
+
+fn fixed_shape_accepts_exact_width(t: &mut Trials) {
+    for n in 0usize..20 {
+        let input = vec![0x41u8; n];
+        t.check("a width reads exactly its width", shape_read(&Shape::Fixed(n), &input) == Some(n));
+    }
+}
+
+fn fixed_shape_accepts_prefix_of_larger_buffer(t: &mut Trials) {
+    for n in 0usize..10 {
+        for extra in 1usize..5 {
+            let input = vec![0x41u8; n + extra];
+            t.check(
+                "a width reads its width and stops",
+                shape_read(&Shape::Fixed(n), &input) == Some(n),
+            );
+        }
+    }
+}
+
+fn fixed_shape_rejects_short_buffer(t: &mut Trials) {
+    for n in 1usize..10 {
+        for given in 0..n {
+            let input = vec![0x41u8; given];
+            t.check(
+                "a width refuses a buffer shorter than itself",
+                shape_read(&Shape::Fixed(n), &input).is_none(),
+            );
+        }
+    }
+}
+
+fn delimited_shape_matches_delim_spec(t: &mut Trials) {
+    for payload in payload_corpus() {
+        let escaped = escape(&payload);
+        t.check(
+            "the delimited shape reads what the escape wrote",
+            shape_read(&Shape::Delimited, &escaped) == Some(escaped.len()),
+        );
+        t.check(
+            "and agrees with the delimiter reader",
+            shape_read(&Shape::Delimited, &escaped) == scanned(canonical::delim_scan(&escaped)),
+        );
+    }
+    let mut g = Seeded::new(0x5EED_0300);
+    for _ in 0..2000 {
+        let input = g.bytes(8);
+        t.check(
+            "on arbitrary bytes too",
+            shape_read(&Shape::Delimited, &input) == scanned(canonical::delim_scan(&input)),
+        );
+    }
+}
+
+fn product_shape_ends_after_both_factors(t: &mut Trials) {
+    for a in 0usize..6 {
+        for b in 0usize..6 {
+            let shape = Shape::Product(Box::new(Shape::Fixed(a)), Box::new(Shape::Fixed(b)));
+            let input = vec![0x41u8; a + b + 2];
+            t.check(
+                "a product ends after both factors",
+                shape_read(&shape, &input) == Some(a + b),
+            );
+        }
+    }
+    // A width then a delimited body: the second starts where the first ended.
+    for payload in [vec![], vec![0x00u8], vec![0x41, 0x42]] {
+        let escaped = escape(&payload);
+        let shape = Shape::Product(Box::new(Shape::Fixed(3)), Box::new(Shape::Delimited));
+        let mut input = vec![0x41u8; 3];
+        input.extend_from_slice(&escaped);
+        t.check(
+            "a delimited factor starts where the fixed one ended",
+            shape_read(&shape, &input) == Some(3 + escaped.len()),
+        );
+    }
+}
+
+fn product_shape_rejects_when_first_factor_rejects(t: &mut Trials) {
+    let shape = Shape::Product(Box::new(Shape::Fixed(4)), Box::new(Shape::Fixed(1)));
+    for given in 0usize..4 {
+        let input = vec![0x41u8; given];
+        t.check(
+            "a product refuses when its first factor does",
+            shape_read(&shape, &input).is_none(),
+        );
+    }
+}
+
+fn product_shape_rejects_when_second_factor_rejects(t: &mut Trials) {
+    let shape = Shape::Product(Box::new(Shape::Fixed(2)), Box::new(Shape::Fixed(3)));
+    for given in 2usize..5 {
+        let input = vec![0x41u8; given];
+        t.check(
+            "a product refuses when its second factor does",
+            shape_read(&shape, &input).is_none(),
+        );
+    }
+    // And with a delimited second factor that never terminates.
+    let shape = Shape::Product(Box::new(Shape::Fixed(1)), Box::new(Shape::Delimited));
+    t.check(
+        "an unterminated second factor refuses the whole product",
+        shape_read(&shape, &[0x41, 0x42, 0x43]).is_none(),
+    );
+}
+
+fn sum_shape_selects_exact_matching_branch(t: &mut Trials) {
+    let g = grammar_exec();
+    for (key, shape) in branches_of(&g) {
+        let width = match shape {
+            Shape::Fixed(n) => Some(*n),
+            _ => None,
+        };
+        match width {
+            None => {}
+            Some(n) => {
+                let mut input = vec![key];
+                input.extend(std::iter::repeat(0x00).take(n + 2));
+                t.check(
+                    "a choice reads the branch its lead byte names",
+                    scanned(scan_value(&input)) == Some(1 + n),
+                );
+            }
+        }
+    }
+}
+
+fn sum_shape_rejects_unknown_lead(t: &mut Trials) {
+    let g = grammar_exec();
+    let known: Vec<u8> = branches_of(&g).iter().map(|(k, _)| *k).collect();
+    for b in 0u16..=255 {
+        let lead = b as u8;
+        if known.contains(&lead) {
+            continue;
+        }
+        let input = vec![lead, 0x00, 0x00, 0x00];
+        t.check(
+            "a choice refuses a lead byte it has no branch for",
+            shape_read(&Shape::Tagged, &input).is_none(),
+        );
+    }
+}
+
+fn tagged_shape_uses_canonical_grammar(t: &mut Trials) {
+    for v in red_team_corpus() {
+        let bytes = v.as_bytes();
+        t.check(
+            "the tagged shape is the whole grammar",
+            shape_read(&Shape::Tagged, bytes) == scanned(scan_value(bytes)),
+        );
+    }
+    let mut g = Seeded::new(0x5EED_0301);
+    for _ in 0..2000 {
+        let input = g.bytes(8);
+        t.check(
+            "on arbitrary bytes too",
+            shape_read(&Shape::Tagged, &input) == scanned(scan_value(&input)),
+        );
+    }
+}
+
+fn row_shape_terminates_only_on_struct_end(t: &mut Trials) {
+    let shape = Shape::Row(Box::new(Shape::Tagged));
+    for b in 0u16..=255 {
+        let lead = b as u8;
+        let input = vec![lead];
+        let ends_here = shape_read(&shape, &input) == Some(1);
+        t.check(
+            "a row of one byte ends only on the terminator",
+            ends_here == (lead == 0x01),
+        );
+    }
+}
+
+fn shape_end_is_bounded_for_all_shapes(t: &mut Trials) {
+    let shapes = vec![
+        Shape::Fixed(0),
+        Shape::Fixed(7),
+        Shape::Delimited,
+        Shape::Tagged,
+        Shape::Row(Box::new(Shape::Tagged)),
+        Shape::Product(Box::new(Shape::Fixed(2)), Box::new(Shape::Delimited)),
+    ];
+    let mut g = Seeded::new(0x5EED_0302);
+    for _ in 0..1500 {
+        let input = g.bytes(12);
+        for s in &shapes {
+            match shape_read(s, &input) {
+                None => {}
+                Some(n) => t.check("a reading never exceeds its input", n <= input.len()),
+            }
+        }
+    }
+}
+
+/// Locality: what a shape reads depends on the bytes it reads, not on what
+/// follows them.
+fn shape_end_is_local_for_all_shapes(t: &mut Trials) {
+    let shapes = vec![
+        Shape::Fixed(3),
+        Shape::Delimited,
+        Shape::Tagged,
+        Shape::Row(Box::new(Shape::Tagged)),
+    ];
+    let mut g = Seeded::new(0x5EED_0303);
+    for _ in 0..1500 {
+        let input = g.bytes(10);
+        for s in &shapes {
+            match shape_read(s, &input) {
+                None => {}
+                Some(n) => {
+                    for _ in 0..3 {
+                        let mut extended = input.clone();
+                        extended.extend(g.bytes(4));
+                        t.check(
+                            "trailing bytes cannot move a reading",
+                            shape_read(s, &extended) == Some(n),
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn shape_end_is_total_for_arbitrary_bytes(t: &mut Trials) {
+    let shapes = vec![
+        Shape::Fixed(0),
+        Shape::Fixed(255),
+        Shape::Delimited,
+        Shape::Tagged,
+        Shape::Row(Box::new(Shape::Tagged)),
+        Shape::Product(Box::new(Shape::Tagged), Box::new(Shape::Tagged)),
+    ];
+    let mut g = Seeded::new(0x5EED_0304);
+    for _ in 0..1000 {
+        let input = g.bytes(10);
+        for s in &shapes {
+            let survived = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                shape_read(s, &input).is_some()
+            }))
+            .is_ok();
+            t.check("every shape returns on every input", survived);
+        }
+    }
+}
+
+/// The success side of this equivalence is proven: `shape_scan`'s `ensures`
+/// ties `Ok(n)` to `shape_end == Some(n)`. What runs here is the executable
+/// half against the independent reference, which states the same grammar
+/// separately.
+fn shape_scan_success_matches_shape_end(t: &mut Trials) {
+    for v in red_team_corpus() {
+        let bytes = v.as_bytes();
+        t.check(
+            "a success is the reading the grammar gives",
+            shape_read(&Shape::Tagged, bytes) == reference::scan(bytes).map(|r| r.end).ok(),
+        );
+    }
+    let mut g = Seeded::new(0x5EED_0305);
+    for _ in 0..3000 {
+        let input = g.bytes(10);
+        t.check(
+            "on arbitrary bytes too",
+            shape_read(&Shape::Tagged, &input) == reference::scan(&input).map(|r| r.end).ok(),
+        );
+    }
+}
+
+/// The refusal side is proven too, now: a refusal is either the descent bound
+/// or the grammar having no reading. What runs here is the same statement
+/// against the independent reference.
+fn shape_scan_non_depth_failure_matches_shape_end_none(t: &mut Trials) {
+    let g = grammar_exec();
+    for input in hostile_inputs(0x5EED_0306, 3000) {
+        match shape_scan(&g, &Shape::Tagged, &input, 0) {
+            Ok(_) => {}
+            Err(e) => match e.reason() {
+                Reason::TooDeep => t.check(
+                    "the descent bound is the reader's, not the grammar's",
+                    reference::scan(&input) == Err(reference::RefRefusal::TooDeep),
+                ),
+                _ => t.check(
+                    "every other refusal is the grammar having no reading",
+                    reference::scan(&input).is_err(),
+                ),
+            },
+        }
+    }
+}
+
+fn shape_scan_never_returns_zero_for_row_element(t: &mut Trials) {
+    // An element that read nothing would leave the row where it started. Every
+    // element shape in the grammar consumes at least its own lead byte.
+    for v in red_team_corpus() {
+        let bytes = v.as_bytes();
+        t.check(
+            "an element reads at least its tag",
+            shape_read(&Shape::Tagged, bytes).unwrap_or(0) >= 1,
+        );
+    }
+    let mut g = Seeded::new(0x5EED_0307);
+    for _ in 0..2000 {
+        let input = g.bytes(8);
+        match shape_read(&Shape::Tagged, &input) {
+            None => {}
+            Some(n) => t.check("no reading of a value is empty", n >= 1),
+        }
+    }
+}
+
+/// A row reads by iteration, so a shape that read nothing cannot spin it. The
+/// grammar has no such shape, and a row whose element reads nothing is refused
+/// rather than followed.
+fn malformed_custom_shape_cannot_cause_infinite_loop(t: &mut Trials) {
+    let empty_element = Shape::Row(Box::new(Shape::Fixed(0)));
+    for input in [vec![0x41u8], vec![0x41, 0x42], vec![0x01], Vec::new()] {
+        let survived = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            shape_read(&empty_element, &input)
+        }));
+        match survived {
+            Err(_) => t.check("a row of empty elements returns", false),
+            Ok(read) => t.check(
+                "a row whose element reads nothing is refused, not followed",
+                read == Some(1) || read.is_none(),
+            ),
+        }
+    }
+    // Nested rows of empty elements, which is the same trap one level in.
+    let nested = Shape::Row(Box::new(Shape::Row(Box::new(Shape::Fixed(0)))));
+    let survived = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        shape_read(&nested, &[0x41, 0x01])
+    }));
+    t.check("and returns when nested", survived.is_ok());
+}
+
+fn arbitrary_shape_and_input_never_panics(t: &mut Trials) {
+    let mut g = Seeded::new(0x5EED_0308);
+    for _ in 0..2000 {
+        let shape = some_shape(&mut g, 3);
+        let input = g.bytes(10);
+        let survived = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            shape_read(&shape, &input).is_some()
+        }))
+        .is_ok();
+        t.check("any shape on any input returns", survived);
+    }
+}
+
+/// A shape the grammar does not contain, built at random: the reader is total
+/// over shapes as well as over bytes.
+fn some_shape(g: &mut Seeded, fuel: u32) -> Shape {
+    let leaf = fuel == 0;
+    match g.below(if leaf { 3 } else { 6 }) {
+        0 => Shape::Fixed(g.below(6) as usize),
+        1 => Shape::Delimited,
+        2 => Shape::Tagged,
+        3 => Shape::Row(Box::new(some_shape(g, fuel - 1))),
+        4 => Shape::Product(
+            Box::new(some_shape(g, fuel - 1)),
+            Box::new(some_shape(g, fuel - 1)),
+        ),
+        _ => Shape::Row(Box::new(Shape::Product(
+            Box::new(some_shape(g, fuel - 1)),
+            Box::new(Shape::Fixed(0)),
+        ))),
+    }
+}
+
+// ================== scanner and executable/spec equivalence =================
+//
+// `scan_value` is tied to the grammar by proof on both sides now: a success IS
+// the grammar's reading, and a refusal is either the descent bound or the
+// grammar having no reading at all. What runs here is the same pair of
+// statements against the independent reference, plus the properties a reading
+// must have whatever the input.
+
+fn scan_value_success_matches_scan_spec(t: &mut Trials) {
+    for v in red_team_corpus() {
+        let bytes = v.as_bytes();
+        t.check(
+            "a success is the grammar's reading",
+            scanned(scan_value(bytes)) == reference::scan(bytes).map(|r| r.end).ok(),
+        );
+    }
+    for input in hostile_inputs(0x5EED_0400, 3000) {
+        match scan_value(&input) {
+            Err(_) => {}
+            Ok(n) => t.check(
+                "and so is every success on hostile input",
+                reference::scan(&input).map(|r| r.end).ok() == Some(n),
+            ),
+        }
+    }
+}
+
+fn scan_value_rejection_matches_scan_spec_or_depth_limit(t: &mut Trials) {
+    for input in hostile_inputs(0x5EED_0401, 4000) {
+        match scan_value(&input) {
+            Ok(_) => {}
+            Err(e) => match e.reason() {
+                Reason::TooDeep => t.check(
+                    "the descent bound refuses what the grammar would read",
+                    reference::scan(&input) == Err(reference::RefRefusal::TooDeep),
+                ),
+                _ => t.check(
+                    "every other refusal is the grammar having no reading",
+                    reference::scan(&input).is_err(),
+                ),
+            },
+        }
+    }
+}
+
+fn scan_value_success_length_is_nonzero(t: &mut Trials) {
+    for input in hostile_inputs(0x5EED_0402, 3000) {
+        match scan_value(&input) {
+            Err(_) => {}
+            Ok(n) => t.check("a reading is never empty", n >= 1),
+        }
+    }
+}
+
+fn scan_value_success_length_is_within_input(t: &mut Trials) {
+    for input in hostile_inputs(0x5EED_0403, 3000) {
+        match scan_value(&input) {
+            Err(_) => {}
+            Ok(n) => t.check("a reading never claims more than it was given", n <= input.len()),
+        }
+    }
+}
+
+fn scan_value_success_prefix_is_complete(t: &mut Trials) {
+    for input in hostile_inputs(0x5EED_0404, 3000) {
+        match scan_value(&input) {
+            Err(_) => {}
+            Ok(n) => t.check(
+                "the bytes a reading claimed are a complete value alone",
+                scanned(scan_value(&input[..n])) == Some(n),
+            ),
+        }
+    }
+}
+
+fn scan_value_accepts_every_sealed_value(t: &mut Trials) {
+    for v in red_team_corpus() {
+        let bytes = v.as_bytes();
+        t.check("every door's output reads whole", scanned(scan_value(bytes)) == Some(bytes.len()));
+    }
+    let mut g = Seeded::new(0x5EED_0405);
+    for _ in 0..2000 {
+        let v = built(&some_value(&mut g, 4));
+        let bytes = v.as_bytes();
+        t.check("and every random value too", scanned(scan_value(bytes)) == Some(bytes.len()));
+    }
+}
+
+fn scan_value_accepts_concatenated_values_one_at_a_time(t: &mut Trials) {
+    let mut g = Seeded::new(0x5EED_0406);
+    for _ in 0..600 {
+        let values: Vec<CanonicalBytes> =
+            (0..3).map(|_| built(&some_value(&mut g, 2))).collect();
+        let mut joined: Vec<u8> = Vec::new();
+        for v in &values {
+            joined.extend_from_slice(v.as_bytes());
+        }
+        let mut at = 0usize;
+        for v in &values {
+            match scan_value(&joined[at..]) {
+                Err(_) => t.check("a joined value reads", false),
+                Ok(n) => {
+                    t.check("one value at a time", n == v.as_bytes().len());
+                    at += n;
+                }
+            }
+        }
+        t.check("and the join is exactly its values", at == joined.len());
+    }
+}
+
+fn scan_value_preserves_exact_trailing_suffix(t: &mut Trials) {
+    let mut g = Seeded::new(0x5EED_0407);
+    for _ in 0..1000 {
+        let v = built(&some_value(&mut g, 3));
+        let bytes = v.as_bytes().to_vec();
+        let trailer = g.bytes(6);
+        let mut extended = bytes.clone();
+        extended.extend_from_slice(&trailer);
+        match scan_value(&extended) {
+            Err(_) => t.check("a value with a trailer reads", false),
+            Ok(n) => {
+                t.check("the reading stops at the value", n == bytes.len());
+                t.check("and the suffix is untouched", extended[n..] == trailer[..]);
+            }
+        }
+    }
+}
+
+fn scan_value_is_deterministic(t: &mut Trials) {
+    for input in hostile_inputs(0x5EED_0408, 2000) {
+        let first = scanned(scan_value(&input));
+        for _ in 0..3 {
+            t.check("a reading is a function of its input", scanned(scan_value(&input)) == first);
+        }
+    }
+}
+
+fn scan_value_never_panics_on_arbitrary_bytes(t: &mut Trials) {
+    let mut g = Seeded::new(0x5EED_0409);
+    for _ in 0..4000 {
+        let input = g.bytes(16);
+        let survived = std::panic::catch_unwind(|| scan_value(&input).is_ok()).is_ok();
+        t.check("the reader returns on every input", survived);
+    }
+}
+
+fn scan_value_matches_independent_reference_parser(t: &mut Trials) {
+    for input in hostile_inputs(0x5EED_040A, 4000) {
+        t.check(
+            "both readers agree on every hostile input",
+            scanned(scan_value(&input)) == reference::scan(&input).map(|r| r.end).ok(),
+        );
+    }
+}
+
+fn every_truncated_prefix_of_valid_encoding_is_rejected(t: &mut Trials) {
+    for v in red_team_corpus() {
+        let bytes = v.as_bytes();
+        for cut in 0..bytes.len() {
+            let truncated = &bytes[..cut];
+            t.check(
+                "no proper prefix of a value is a value",
+                scanned(scan_value(truncated)) != Some(cut),
+            );
+        }
+    }
+}
+
+fn every_one_byte_mutation_rejects_or_decodes_unambiguously(t: &mut Trials) {
+    for v in red_team_corpus() {
+        let bytes = v.as_bytes().to_vec();
+        for at in 0..bytes.len() {
+            for delta in [1u8, 0x7F, 0xFF] {
+                let mut mutated = bytes.clone();
+                mutated[at] = mutated[at].wrapping_add(delta);
+                match scan_value(&mutated) {
+                    Err(_) => {}
+                    Ok(n) => {
+                        t.check("a mutation that reads, reads within itself", n <= mutated.len());
+                        t.check(
+                            "and reads the same way twice",
+                            scanned(scan_value(&mutated)) == Some(n),
+                        );
+                        t.check(
+                            "and the reference reads it the same way",
+                            reference::scan(&mutated).map(|r| r.end).ok() == Some(n),
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn every_accepted_mutation_has_exactly_one_reading(t: &mut Trials) {
+    for input in hostile_inputs(0x5EED_040B, 3000) {
+        match scan_value(&input) {
+            Err(_) => {}
+            Ok(n) => {
+                for shorter in 0..n {
+                    t.check(
+                        "no shorter prefix is also a whole reading",
+                        scanned(scan_value(&input[..shorter])) != Some(shorter),
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn complete_encoding_never_has_complete_strict_prefix(t: &mut Trials) {
+    let corpus = red_team_corpus();
+    for a in &corpus {
+        for b in &corpus {
+            let (x, y) = (a.as_bytes(), b.as_bytes());
+            if x != y {
+                t.check(
+                    "no complete encoding is a prefix of another",
+                    !is_proper_prefix(x, y),
+                );
+            }
+        }
+    }
+    for v in &corpus {
+        let bytes = v.as_bytes();
+        for cut in 1..bytes.len() {
+            t.check(
+                "and no proper prefix of one is complete",
+                scanned(scan_value(&bytes[..cut])) != Some(cut),
+            );
+        }
+    }
+}
+
+fn complete_encoding_never_has_two_parse_boundaries(t: &mut Trials) {
+    let mut g = Seeded::new(0x5EED_040C);
+    for _ in 0..1500 {
+        let v = built(&some_value(&mut g, 3));
+        let bytes = v.as_bytes();
+        let mut boundaries = 0usize;
+        for cut in 1..=bytes.len() {
+            if scanned(scan_value(&bytes[..cut])) == Some(cut) {
+                boundaries += 1;
+            }
+        }
+        t.check("a value has exactly one reading boundary", boundaries == 1);
+    }
+}
+
+// =========================== refusal correctness ============================
+//
+// A refusal names its reason and carries the suffix it had not consumed. Both
+// are part of the contract: a refusal that stops in the wrong place is a
+// failure here even though it still stops.
+
+fn truncated_fixed_body_reports_eof_suffix(t: &mut Trials) {
+    for (tag, width) in [(TAG_UUID, 16usize), (TAG_VALIDITY, 9), (TAG_GEOMETRY, 8)] {
+        for given in 0..width {
+            let mut input = vec![tag];
+            input.extend(std::iter::repeat(0x41).take(given));
+            match scan_value(&input) {
+                Ok(_) => t.check("a short fixed body is refused", false),
+                Err(e) => {
+                    t.check("named truncated", e.reason() == Reason::Truncated);
+                    t.check(
+                        "and stopped at the end of what it was given",
+                        stopped_at(&input, &e) == input.len(),
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn truncated_delimited_body_reports_eof_suffix(t: &mut Trials) {
+    for payload in [vec![], vec![0x41u8], vec![0x00], vec![0x41, 0x00, 0x42]] {
+        let sealed = seal_bytes(&payload);
+        let bytes = sealed.as_bytes();
+        for cut in 1..bytes.len() {
+            let truncated = &bytes[..cut];
+            match scan_value(truncated) {
+                Ok(_) => t.check("a truncated delimited body is refused", false),
+                Err(e) => t.check(
+                    "and the refusal stops inside what it was given",
+                    stopped_at(truncated, &e) <= truncated.len(),
+                ),
+            }
+        }
+    }
+}
+
+fn truncated_product_first_factor_reports_exact_suffix(t: &mut Trials) {
+    // A regex is a delimited pattern then a flags byte; cutting inside the
+    // pattern is a refusal in the first factor.
+    let sealed = seal_regex(&Utf8::of("ab"), &RegexFlags::new(false, false, false));
+    let bytes = sealed.as_bytes();
+    for cut in 1..bytes.len() - 1 {
+        let truncated = &bytes[..cut];
+        match scan_value(truncated) {
+            Ok(_) => t.check("a cut inside the pattern is refused", false),
+            Err(e) => t.check(
+                "and stops at the end of what it was given",
+                stopped_at(truncated, &e) == truncated.len(),
+            ),
+        }
+    }
+}
+
+fn truncated_product_second_factor_reports_exact_suffix(t: &mut Trials) {
+    // The flags byte is the second factor: everything but it is present.
+    let sealed = seal_regex(&Utf8::of("ab"), &RegexFlags::new(true, true, true));
+    let bytes = sealed.as_bytes();
+    let without_flags = &bytes[..bytes.len() - 1];
+    match scan_value(without_flags) {
+        Ok(_) => t.check("a missing flags byte is refused", false),
+        Err(e) => {
+            t.check("named truncated", e.reason() == Reason::Truncated);
+            t.check(
+                "and stopped where the flags byte would have been",
+                stopped_at(without_flags, &e) == without_flags.len(),
+            );
+        }
+    }
+}
+
+fn truncated_row_reports_exact_suffix(t: &mut Trials) {
+    let listed = list_of(&[0, 4]);
+    let bytes = listed.as_bytes();
+    for cut in 1..bytes.len() {
+        let truncated = &bytes[..cut];
+        match scan_value(truncated) {
+            Ok(_) => t.check("a truncated row is refused", false),
+            Err(e) => t.check(
+                "and the refusal stops inside what it was given",
+                stopped_at(truncated, &e) <= truncated.len(),
+            ),
+        }
+    }
+}
+
+fn truncated_nested_value_reports_exact_suffix(t: &mut Trials) {
+    let nested = seal_json(&wrap(seal_json(&wrap(seal_str(&Utf8::of("abc"))))));
+    let bytes = nested.as_bytes();
+    for cut in 1..bytes.len() {
+        let truncated = &bytes[..cut];
+        match scan_value(truncated) {
+            Ok(_) => t.check("a truncated nested value is refused", false),
+            Err(e) => t.check(
+                "and the refusal stops inside what it was given",
+                stopped_at(truncated, &e) <= truncated.len(),
+            ),
+        }
+    }
+}
+
+fn unknown_tag_reports_original_unconsumed_suffix(t: &mut Trials) {
+    let g = grammar_exec();
+    let known: Vec<u8> = branches_of(&g).iter().map(|(k, _)| *k).collect();
+    for b in 0u16..=255 {
+        let lead = b as u8;
+        if known.contains(&lead) {
+            continue;
+        }
+        let input = vec![lead, 0x41, 0x42];
+        match scan_value(&input) {
+            Ok(_) => t.check("an unknown tag is refused", false),
+            Err(e) => {
+                t.check("named with the byte itself", e.reason() == Reason::UnknownLeadByte(lead));
+                t.check("and stopped at the tag", stopped_at(&input, &e) == 0);
+                t.check("with the whole input unconsumed", e.at() == input.as_slice());
+            }
+        }
+    }
+}
+
+fn unknown_nested_branch_reports_exact_nested_suffix(t: &mut Trials) {
+    for b in 0u16..=255 {
+        let class = b as u8;
+        if (0x01..=0x04).contains(&class) {
+            continue;
+        }
+        let input = vec![TAG_NUM, class, 0x41];
+        match scan_value(&input) {
+            Ok(_) => t.check("an unknown class is refused", false),
+            Err(e) => {
+                t.check("named with the byte itself", e.reason() == Reason::UnknownLeadByte(class));
+                t.check("and stopped at the class byte", stopped_at(&input, &e) == 1);
+            }
+        }
+    }
+}
+
+fn bad_escape_reports_suffix_beginning_at_bad_companion(t: &mut Trials) {
+    for b in 0u16..=255 {
+        let companion = b as u8;
+        if companion == 0x00 || companion == 0xFF {
+            continue;
+        }
+        for prefix in 0usize..3 {
+            let mut input = vec![TAG_STR];
+            input.extend(std::iter::repeat(0x41).take(prefix));
+            input.push(0x00);
+            input.push(companion);
+            match scan_value(&input) {
+                Ok(_) => t.check("a bad escape is refused", false),
+                Err(e) => {
+                    t.check("named with the companion", e.reason() == Reason::BadEscape(companion));
+                    t.check(
+                        "and stopped at the companion",
+                        stopped_at(&input, &e) == 1 + prefix + 1,
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn too_deep_reports_first_unread_nested_suffix(t: &mut Trials) {
+    let leafy = seal_null();
+    for levels in [200usize, 500] {
+        let forged = forged_nest(leafy.as_bytes(), levels);
+        match scan_value(&forged) {
+            Ok(_) => t.check("a forged deep nest is refused", false),
+            Err(e) => {
+                t.check("named too deep", e.reason() == Reason::TooDeep);
+                let at = stopped_at(&forged, &e);
+                t.check("and stopped inside the input", at < forged.len());
+                // A row spends two levels per nest -- one for its own tag, one
+                // for the element inside it -- so the reader reaches the bound
+                // after MAX_DEPTH/2 tags and stops on the 64th.
+                t.check("at the level the bound was reached", at == 64);
+            }
+        }
+    }
+}
+
+fn refusal_reason_matches_actual_failure(t: &mut Trials) {
+    let cases: Vec<(Vec<u8>, Reason)> = vec![
+        (vec![], Reason::Truncated),
+        (vec![0x02], Reason::UnknownLeadByte(0x02)),
+        (vec![TAG_STR, 0x00, 0x41], Reason::BadEscape(0x41)),
+        (vec![TAG_UUID, 0x00], Reason::Truncated),
+        (vec![TAG_NUM, 0x07], Reason::UnknownLeadByte(0x07)),
+        (vec![TAG_LIST], Reason::Truncated),
+        (vec![TAG_INTERVAL, 0x09], Reason::UnknownLeadByte(0x09)),
+    ];
+    for (input, reason) in &cases {
+        match scan_value(input) {
+            Ok(_) => t.check("the input is refused", false),
+            Err(e) => t.check("with the reason the failure had", e.reason() == *reason),
+        }
+    }
+}
+
+fn refusal_suffix_is_borrowed_from_original_input(t: &mut Trials) {
+    for input in hostile_inputs(0x5EED_0500, 3000) {
+        match scan_value(&input) {
+            Ok(_) => {}
+            Err(e) => {
+                let at = stopped_at(&input, &e);
+                t.check("the suffix is a suffix of the input", input[at..] == *e.at());
+            }
+        }
+    }
+}
+
+fn refusal_suffix_is_never_fabricated(t: &mut Trials) {
+    for input in hostile_inputs(0x5EED_0501, 3000) {
+        match scan_value(&input) {
+            Ok(_) => {}
+            Err(e) => {
+                let suffix = e.at();
+                t.check("the suffix is no longer than the input", suffix.len() <= input.len());
+                let at = input.len() - suffix.len();
+                t.check("and its bytes are the input's own", &input[at..] == suffix);
+            }
+        }
+    }
+}
+
+fn refusal_suffix_never_points_past_end(t: &mut Trials) {
+    for input in hostile_inputs(0x5EED_0502, 3000) {
+        match scan_value(&input) {
+            Ok(_) => {}
+            Err(e) => t.check(
+                "a refusal never points past the end",
+                stopped_at(&input, &e) <= input.len(),
+            ),
+        }
+    }
+}
+
+/// A refusal deep inside a nested value composes its offset from the outside
+/// in. The arithmetic is the caller's, and it must not overflow or wrap on the
+/// deepest input the writer can mint.
+fn refusal_location_composition_never_overflows(t: &mut Trials) {
+    let (deepest, _) = deepest_nested_row();
+    let bytes = deepest.as_bytes().to_vec();
+    for cut in [1usize, bytes.len() / 2, bytes.len() - 1] {
+        let truncated = &bytes[..cut];
+        match scan_value(truncated) {
+            Ok(_) => t.check("a truncated deep value is refused", false),
+            Err(e) => t.check(
+                "and its offset is inside the input",
+                stopped_at(truncated, &e) <= truncated.len(),
+            ),
+        }
+    }
+    // A bad escape at the bottom of a deep nest: the offset is the whole depth.
+    let deep_bad = forged_nest(&[TAG_STR, 0x00, 0x41], 100);
+    match scan_value(&deep_bad) {
+        Ok(_) => t.check("a bad escape deep inside is refused", false),
+        Err(e) => t.check(
+            "and its offset is inside the input",
+            stopped_at(&deep_bad, &e) <= deep_bad.len(),
+        ),
+    }
+}
+
+/// The statement the verifier now discharges: a refusal that is not the descent
+/// bound means the grammar has no reading. Here it is again, executably,
+/// against the independent reference.
+fn non_too_deep_failure_implies_spec_rejection(t: &mut Trials) {
+    for input in hostile_inputs(0x5EED_0503, 4000) {
+        match scan_value(&input) {
+            Ok(_) => {}
+            Err(e) => match e.reason() {
+                Reason::TooDeep => {}
+                _ => {
+                    t.check(
+                        "a refusal that is not the bound is the grammar's",
+                        reference::scan(&input).is_err(),
+                    );
+                    t.check(
+                        "and the reference did not stop for depth either",
+                        reference::scan(&input) != Err(reference::RefRefusal::TooDeep),
+                    );
+                }
+            },
         }
     }
 }

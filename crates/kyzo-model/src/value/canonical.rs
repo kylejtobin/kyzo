@@ -1837,7 +1837,11 @@ pub(crate) fn shape_scan<'a>(g: &Branches, s: &Shape, p: &'a [u8], depth: u32) -
     ensures
         match r {
             Ok(n) => shape_end(*g, *s, p@) == Some(n as nat) && n <= p.len(),
-            Err(_) => true,
+            // A refusal is either the descent bound -- which is the reader's,
+            // not the grammar's -- or the grammar having no reading at all. It
+            // is never "the reader gave up on something readable".
+            Err(e) => e.spec_reason() == Reason::TooDeep
+                || shape_end(*g, *s, p@) is None,
         },
     decreases p@.len(), shape_sz(*s)
 {
@@ -1910,7 +1914,8 @@ pub(crate) fn sum_scan<'a>(g: &Branches, bs: &Branches, p: &'a [u8], depth: u32)
     ensures
         match r {
             Ok(n) => sum_end(*g, *bs, p@) == Some(n as nat) && n <= p.len(),
-            Err(_) => true,
+            Err(e) => e.spec_reason() == Reason::TooDeep
+                || sum_end(*g, *bs, p@) is None,
         },
     decreases p@.len(), 0nat
 {
@@ -1937,7 +1942,7 @@ pub fn scan_value<'a>(p: &'a [u8]) -> (r: Result<usize, Refusal<'a>>)
     ensures
         match r {
             Ok(n) => scan(p@) == Some(n as nat) && n <= p.len(),
-            Err(_) => true,
+            Err(e) => e.spec_reason() == Reason::TooDeep || scan(p@) is None,
         },
 {
     let g = grammar_exec();

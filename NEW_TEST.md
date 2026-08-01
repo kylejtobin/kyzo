@@ -12,7 +12,7 @@
 - [x] positive_infinity_sorts_above_every_finite_number
 - [x] canonical_writer_output_is_always_readable
 - [x] max_writer_nesting_never_exceeds_reader_capacity
-- [ ] scan_rejection_matches_spec_rejection_except_depth_limit
+- [x] scan_rejection_matches_spec_rejection_except_depth_limit
 - [x] accepted_scan_prefix_is_complete
 - [x] refusal_position_is_suffix_of_original_input
 - [x] inverted_interval_is_unconstructible
@@ -126,63 +126,63 @@
 
 ## Shape algebra
 
-- [ ] fixed_shape_accepts_exact_width
-- [ ] fixed_shape_accepts_prefix_of_larger_buffer
-- [ ] fixed_shape_rejects_short_buffer
-- [ ] delimited_shape_matches_delim_spec
-- [ ] product_shape_ends_after_both_factors
-- [ ] product_shape_rejects_when_first_factor_rejects
-- [ ] product_shape_rejects_when_second_factor_rejects
-- [ ] sum_shape_selects_exact_matching_branch
-- [ ] sum_shape_rejects_unknown_lead
-- [ ] tagged_shape_uses_canonical_grammar
-- [ ] row_shape_terminates_only_on_struct_end
-- [ ] shape_end_is_bounded_for_all_shapes
-- [ ] shape_end_is_local_for_all_shapes
-- [ ] shape_end_is_total_for_arbitrary_bytes
-- [ ] shape_scan_success_matches_shape_end
-- [ ] shape_scan_non_depth_failure_matches_shape_end_none
-- [ ] shape_scan_never_returns_zero_for_row_element
-- [ ] malformed_custom_shape_cannot_cause_infinite_loop
-- [ ] arbitrary_shape_and_input_never_panics
+- [x] fixed_shape_accepts_exact_width
+- [x] fixed_shape_accepts_prefix_of_larger_buffer
+- [x] fixed_shape_rejects_short_buffer
+- [x] delimited_shape_matches_delim_spec
+- [x] product_shape_ends_after_both_factors
+- [x] product_shape_rejects_when_first_factor_rejects
+- [x] product_shape_rejects_when_second_factor_rejects
+- [x] sum_shape_selects_exact_matching_branch
+- [x] sum_shape_rejects_unknown_lead
+- [x] tagged_shape_uses_canonical_grammar
+- [x] row_shape_terminates_only_on_struct_end
+- [x] shape_end_is_bounded_for_all_shapes
+- [x] shape_end_is_local_for_all_shapes
+- [x] shape_end_is_total_for_arbitrary_bytes
+- [x] shape_scan_success_matches_shape_end
+- [x] shape_scan_non_depth_failure_matches_shape_end_none
+- [x] shape_scan_never_returns_zero_for_row_element
+- [x] malformed_custom_shape_cannot_cause_infinite_loop
+- [x] arbitrary_shape_and_input_never_panics
 
 ## Scanner and executable/spec equivalence
 
-- [ ] scan_value_success_matches_scan_spec
-- [ ] scan_value_rejection_matches_scan_spec_or_depth_limit
-- [ ] scan_value_success_length_is_nonzero
-- [ ] scan_value_success_length_is_within_input
-- [ ] scan_value_success_prefix_is_complete
-- [ ] scan_value_accepts_every_sealed_value
-- [ ] scan_value_accepts_concatenated_values_one_at_a_time
-- [ ] scan_value_preserves_exact_trailing_suffix
-- [ ] scan_value_is_deterministic
-- [ ] scan_value_never_panics_on_arbitrary_bytes
-- [ ] scan_value_matches_independent_reference_parser
-- [ ] every_truncated_prefix_of_valid_encoding_is_rejected
-- [ ] every_one_byte_mutation_rejects_or_decodes_unambiguously
-- [ ] every_accepted_mutation_has_exactly_one_reading
-- [ ] complete_encoding_never_has_complete_strict_prefix
-- [ ] complete_encoding_never_has_two_parse_boundaries
+- [x] scan_value_success_matches_scan_spec
+- [x] scan_value_rejection_matches_scan_spec_or_depth_limit
+- [x] scan_value_success_length_is_nonzero
+- [x] scan_value_success_length_is_within_input
+- [x] scan_value_success_prefix_is_complete
+- [x] scan_value_accepts_every_sealed_value
+- [x] scan_value_accepts_concatenated_values_one_at_a_time
+- [x] scan_value_preserves_exact_trailing_suffix
+- [x] scan_value_is_deterministic
+- [x] scan_value_never_panics_on_arbitrary_bytes
+- [x] scan_value_matches_independent_reference_parser
+- [x] every_truncated_prefix_of_valid_encoding_is_rejected
+- [x] every_one_byte_mutation_rejects_or_decodes_unambiguously
+- [x] every_accepted_mutation_has_exactly_one_reading
+- [x] complete_encoding_never_has_complete_strict_prefix
+- [x] complete_encoding_never_has_two_parse_boundaries
 
 ## Refusal correctness
 
-- [ ] truncated_fixed_body_reports_eof_suffix
-- [ ] truncated_delimited_body_reports_eof_suffix
-- [ ] truncated_product_first_factor_reports_exact_suffix
-- [ ] truncated_product_second_factor_reports_exact_suffix
-- [ ] truncated_row_reports_exact_suffix
-- [ ] truncated_nested_value_reports_exact_suffix
-- [ ] unknown_tag_reports_original_unconsumed_suffix
-- [ ] unknown_nested_branch_reports_exact_nested_suffix
-- [ ] bad_escape_reports_suffix_beginning_at_bad_companion
-- [ ] too_deep_reports_first_unread_nested_suffix
-- [ ] refusal_reason_matches_actual_failure
-- [ ] refusal_suffix_is_borrowed_from_original_input
-- [ ] refusal_suffix_is_never_fabricated
-- [ ] refusal_suffix_never_points_past_end
-- [ ] refusal_location_composition_never_overflows
-- [ ] non_too_deep_failure_implies_spec_rejection
+- [x] truncated_fixed_body_reports_eof_suffix
+- [x] truncated_delimited_body_reports_eof_suffix
+- [x] truncated_product_first_factor_reports_exact_suffix
+- [x] truncated_product_second_factor_reports_exact_suffix
+- [x] truncated_row_reports_exact_suffix
+- [x] truncated_nested_value_reports_exact_suffix
+- [x] unknown_tag_reports_original_unconsumed_suffix
+- [x] unknown_nested_branch_reports_exact_nested_suffix
+- [x] bad_escape_reports_suffix_beginning_at_bad_companion
+- [x] too_deep_reports_first_unread_nested_suffix
+- [x] refusal_reason_matches_actual_failure
+- [x] refusal_suffix_is_borrowed_from_original_input
+- [x] refusal_suffix_is_never_fabricated
+- [x] refusal_suffix_never_points_past_end
+- [x] refusal_location_composition_never_overflows
+- [x] non_too_deep_failure_implies_spec_rejection
 
 ## Depth and writer-reader closure
 
