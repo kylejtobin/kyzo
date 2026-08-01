@@ -163,6 +163,9 @@ verus! {
 
 pub const STRUCT_ESC: u8 = 0x00;
 pub const STRUCT_END: u8 = 0x01;
+/// What an escaped `STRUCT_ESC` is followed by. Any other second byte is not
+/// an escape, which is what keeps `STRUCT_ESC STRUCT_ESC` free to terminate.
+pub const ESC_ZERO: u8 = 0xFF;
 
 // ============================ lexicographic order ============================
 
@@ -335,7 +338,7 @@ proof fn lemma_prefix_of_self_plus(x: Seq<u8>, a: Seq<u8>)
 // ======================= the escaped byte-string code ========================
 
 pub open spec fn code(b: u8) -> Seq<u8> {
-    if b == STRUCT_ESC { seq![STRUCT_ESC, 0xFFu8] } else { seq![b] }
+    if b == STRUCT_ESC { seq![STRUCT_ESC, ESC_ZERO] } else { seq![b] }
 }
 
 pub open spec fn esc(s: Seq<u8>) -> Seq<u8>
@@ -365,7 +368,7 @@ pub proof fn lemma_esc_no_terminator(s: Seq<u8>)
                 assert(esc(s)[i + 1] == rest[i + 1 - c.len()]);
                 assert(rest[i - c.len()] == 0u8 ==> rest[i - c.len() + 1] != 0u8);
             } else if s[0] == 0u8 {
-                assert(esc(s)[1] == 0xFFu8);
+                assert(esc(s)[1] == ESC_ZERO);
             } else {
                 assert(esc(s)[0] == s[0]);
             }
@@ -432,15 +435,15 @@ proof fn lemma_terminator_is_minimum(t: Seq<u8>)
     let e = enc_bytes(t);
     let z = seq![0u8, 0u8];
     if t[0] == 0u8 {
-        assert(code(t[0]) =~= seq![0u8, 0xFFu8]);
+        assert(code(t[0]) =~= seq![STRUCT_ESC, ESC_ZERO]);
         assert(e.len() >= 4);
-        assert(e[0] == 0u8 && e[1] == 0xFFu8);
+        assert(e[0] == STRUCT_ESC && e[1] == ESC_ZERO);
         let e1 = e.drop_first();
         let z1 = z.drop_first();
         assert(z1 =~= seq![0u8]);
-        assert(e1.len() >= 3 && e1[0] == 0xFFu8);
-        assert(lex_le(z1, e1)) by { assert(z1[0] == 0u8 && e1[0] == 0xFFu8); }
-        assert(!lex_le(e1, z1)) by { assert(z1[0] == 0u8 && e1[0] == 0xFFu8); }
+        assert(e1.len() >= 3 && e1[0] == ESC_ZERO);
+        assert(lex_le(z1, e1)) by { assert(z1[0] == STRUCT_ESC && e1[0] == ESC_ZERO); }
+        assert(!lex_le(e1, z1)) by { assert(z1[0] == STRUCT_ESC && e1[0] == ESC_ZERO); }
         assert(z[0] == e[0]);
     } else {
         assert(code(t[0]) =~= seq![t[0]]);
@@ -552,7 +555,7 @@ pub open spec fn delim_end(p: Seq<u8>) -> Option<nat>
     if p.len() < 2 { None }
     else if p[0] == STRUCT_ESC {
         if p[1] == STRUCT_ESC { Some(2nat) }
-        else if p[1] == 0xFFu8 { after(delim_end(p.skip(2)), 2nat) }
+        else if p[1] == ESC_ZERO { after(delim_end(p.skip(2)), 2nat) }
         else { None }
     } else {
         after(delim_end(p.skip(1)), 1nat)
@@ -565,7 +568,7 @@ pub proof fn lemma_delim_bounded(p: Seq<u8>)
 {
     if p.len() >= 2 {
         if p[0] == STRUCT_ESC {
-            if p[1] == 0xFFu8 { lemma_delim_bounded(p.skip(2)); }
+            if p[1] == ESC_ZERO { lemma_delim_bounded(p.skip(2)); }
         } else {
             lemma_delim_bounded(p.skip(1));
         }
@@ -583,7 +586,7 @@ pub proof fn lemma_delim_local(a: Seq<u8>, b: Seq<u8>)
     lemma_prefix_index(a, b, 0);
     lemma_prefix_index(a, b, 1);
     if a[0] == STRUCT_ESC {
-        if a[1] == 0xFFu8 {
+        if a[1] == ESC_ZERO {
             lemma_prefix_skip(a, b, 2);
             lemma_delim_local(a.skip(2), b.skip(2));
         }
@@ -607,8 +610,8 @@ pub proof fn lemma_delim_end_of_enc_bytes(s: Seq<u8>)
         let rest = enc_bytes(s.drop_first());
         lemma_delim_end_of_enc_bytes(s.drop_first());
         if s[0] == STRUCT_ESC {
-            assert(code(s[0]) =~= seq![0x00u8, 0xFFu8]);
-            assert(q[0] == 0x00u8 && q[1] == 0xFFu8);
+            assert(code(s[0]) =~= seq![STRUCT_ESC, ESC_ZERO]);
+            assert(q[0] == STRUCT_ESC && q[1] == ESC_ZERO);
             assert(q.skip(2) =~= rest);
         } else {
             assert(code(s[0]) =~= seq![s[0]]);
@@ -1596,16 +1599,16 @@ pub(crate) fn escape(s: &[u8]) -> (r: Vec<u8>)
             lemma_esc_snoc(s@.take(i as int), s@[i as int]);
             assert(s@.take(i + 1) =~= s@.take(i as int).push(s@[i as int]));
         }
-        if s[i] == 0 {
-            out.push(0u8);
-            out.push(0xFFu8);
+        if s[i] == STRUCT_ESC {
+            out.push(STRUCT_ESC);
+            out.push(ESC_ZERO);
         } else {
             out.push(s[i]);
         }
         i = i + 1;
     }
-    out.push(0u8);
-    out.push(0u8);
+    out.push(STRUCT_ESC);
+    out.push(STRUCT_ESC);
     proof { assert(s@.take(s.len() as int) =~= s@); }
     out
 }
@@ -1736,7 +1739,7 @@ pub(crate) fn delim_scan<'a>(p: &'a [u8]) -> (r: Result<usize, Refusal<'a>>)
                 proof { assert(delim_end(p@.skip(i as int)) == Some(2nat)); }
                 return Ok(i + 2);
             }
-            if p[i + 1] != 0xFF {
+            if p[i + 1] != ESC_ZERO {
                 return Err(refuse(Reason::BadEscape(p[i + 1]), vstd::slice::slice_subrange(p, i + 1, p.len())));
             }
             proof { assert(p@.skip(i as int).skip(2) =~= p@.skip(i as int + 2)); }
