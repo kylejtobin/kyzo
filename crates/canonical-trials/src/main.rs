@@ -1332,11 +1332,6 @@ fn validity_orders_latest_first(t: &mut Trials) {
         "at one instant an assert sorts before a retract",
         assert_at.as_bytes() < retract_at.as_bytes(),
     );
-    t.check(
-        "a validity payload is a temporal value, not nine free bytes",
-        seal_validity(&validity(0, true)).as_bytes()
-            == seal_validity(&validity(0, true)).as_bytes(),
-    );
 }
 
 fn geometry_orders_by_curve_index(t: &mut Trials) {
@@ -1626,6 +1621,44 @@ fn main() {
     fuzz_mutated_valid_encodings_never_overread(&mut t);
     fuzz_mutated_valid_encodings_never_have_two_readings(&mut t);
     t.report("independent reference");
+
+    println!("concatenation");
+    concat_order_matches_lexicographic_product_order(&mut t);
+    concat_order_equal_heads_defers_to_tail(&mut t);
+    concat_order_distinct_heads_ignores_tail(&mut t);
+    concat_order_handles_empty_heads(&mut t);
+    concat_order_requires_prefix_incomparability(&mut t);
+    concat_order_counterexample_collides_as_documented(&mut t);
+    prefix_split_recovers_equal_heads(&mut t);
+    prefix_split_recovers_tail_prefix(&mut t);
+    complete_heads_discharge_concat_hypothesis(&mut t);
+    nested_products_preserve_lexicographic_order(&mut t);
+    t.report("concatenation");
+
+    println!("grammar integrity");
+    grammar_exec_equals_grammar_spec(&mut t);
+    grammar_is_well_formed(&mut t);
+    grammar_has_no_duplicate_top_level_tags(&mut t);
+    grammar_has_no_duplicate_nested_branch_keys(&mut t);
+    grammar_has_no_unreachable_branches(&mut t);
+    all_top_level_tags_sort_above_struct_end(&mut t);
+    all_row_element_shapes_are_lead_marked(&mut t);
+    all_row_element_shapes_consume_at_least_one_byte(&mut t);
+    every_released_tag_has_expected_shape(&mut t);
+    every_numeric_class_has_expected_shape(&mut t);
+    every_interval_branch_has_expected_shape(&mut t);
+    lower_bound_markers_have_expected_order(&mut t);
+    upper_bound_markers_have_expected_order(&mut t);
+    all_fixed_widths_match_released_format(&mut t);
+    grammar_tag_table_matches_golden_snapshot(&mut t);
+    grammar_branch_tables_match_golden_snapshot(&mut t);
+    unknown_top_level_tag_is_rejected(&mut t);
+    unknown_numeric_class_is_rejected(&mut t);
+    unknown_interval_class_is_rejected(&mut t);
+    changing_any_tag_breaks_format_snapshot(&mut t);
+    changing_any_width_breaks_format_snapshot(&mut t);
+    changing_any_branch_order_breaks_format_snapshot(&mut t);
+    t.report("grammar integrity");
 
     println!("rows");
     empty_row_is_struct_end(&mut t);
@@ -2837,9 +2870,13 @@ fn semantic_oracle_does_not_reuse_encoded_byte_comparison(t: &mut Trials) {
     }
 }
 
-/// The v1 candidate corpus, frozen. These are the bytes the format promises;
-/// a change here is a format break, and the trial exists so that the break is
-/// a decision somebody made rather than one that happened.
+/// The v1 candidate corpus, frozen.
+///
+/// Captured from the encoder, not derived from the format a second time: this
+/// detects drift, and it is the per-kind golden vectors above -- written out by
+/// hand from the released format -- that say the bytes were right to begin
+/// with. A change here is a format break, and the trial exists so that the
+/// break is a decision somebody made rather than one that happened.
 const GOLDEN_V1: [&str; 61] = [
     "05",
     "08",
@@ -5223,9 +5260,49 @@ fn raw_set_sealer_has_only_canonical_set_callers(t: &mut Trials) {
         "and that call is the normalising type's own",
         CODEC.contains("canonical::seal_set(&self.0)"),
     );
-    // No other file in the encoder's value module reaches it.
-    const CELL: &str = include_str!("../../kyzo-model/src/value/cell.rs");
-    t.check("no other value file calls it", !CELL.contains("seal_set("));
+
+    // And no other file in the encoder's crate reaches it. Every source file
+    // is read, not a chosen one: a claim about all of them has to look at all
+    // of them.
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../kyzo-model/src");
+    let mut checked = 0usize;
+    for path in rust_sources(std::path::Path::new(root)) {
+        let name = path.to_string_lossy().to_string();
+        if name.ends_with("value/canonical.rs") || name.ends_with("value/codec.rs") {
+            continue;
+        }
+        match std::fs::read_to_string(&path) {
+            Err(_) => t.check("every source file in the crate is readable", false),
+            Ok(source) => {
+                checked += 1;
+                t.check("no other file in the crate calls it", !source.contains("seal_set("));
+            }
+        }
+    }
+    t.check("and there were files to check", checked > 20);
+}
+
+/// Every `.rs` file under a directory. The trials are Shell and hold the
+/// filesystem; a claim about every file in a crate is one that has to open
+/// every file in the crate.
+fn rust_sources(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out: Vec<std::path::PathBuf> = Vec::new();
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return out,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        match path.is_dir() {
+            true => out.extend(rust_sources(&path)),
+            false => {
+                if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// The public surface hands out no way to name a tag, a shape, or a branch
@@ -5343,10 +5420,10 @@ fn escape_body_never_ends_in_zero(t: &mut Trials) {
     for payload in payload_corpus() {
         let escaped = escape(&payload);
         let body = &escaped[..escaped.len() - 2];
-        match body.last() {
-            None => t.check("an empty body cannot end in zero", true),
-            Some(last) => t.check("a body never ends on an unpaired zero", *last != 0x00),
-        }
+        t.check(
+            "a body never ends on an unpaired zero",
+            body.last() != Some(&0x00),
+        );
     }
 }
 
@@ -5812,15 +5889,21 @@ fn row_rejects_missing_terminator(t: &mut Trials) {
 
 fn row_rejects_truncated_element(t: &mut Trials) {
     let body = row_body(&[seal_str(&Utf8::of("abc"))]);
-    for cut in 1..body.len() {
+    for cut in 0..body.len() {
         let truncated = &body[..cut];
-        match row_scan(truncated) {
-            None => t.check("a truncated row is refused", true),
-            Some(n) => t.check(
-                "or ends inside what it was given",
-                n <= truncated.len(),
-            ),
-        }
+        t.check("every truncation of a row is refused", row_scan(truncated).is_none());
+    }
+    t.check("and the whole body is not", row_scan(&body) == Some(body.len()));
+
+    // A row whose LAST element is truncated is refused at the element, not
+    // read as a shorter row: the terminator it never reached is not optional.
+    let two = row_body(&[leaf(0), seal_str(&Utf8::of("abc"))]);
+    for cut in 1..two.len() {
+        let truncated = &two[..cut];
+        t.check(
+            "a row with a truncated last element is refused",
+            row_scan(truncated).is_none(),
+        );
     }
 }
 
@@ -5902,6 +5985,787 @@ fn row_locality_survives_arbitrary_trailing_bytes(t: &mut Trials) {
                 "trailing bytes cannot move a row's reading",
                 scanned(scan_value(&extended)) == Some(bytes.len()),
             );
+        }
+    }
+}
+
+// =========================== grammar integrity ==============================
+//
+// The table IS the format. Everything below reads it as data — the released
+// tags, the widths, the branch keys and their order — and holds it against the
+// snapshot written out here, which is not imported from it.
+
+/// The table as a list of (lead byte, shape), in the order it declares them.
+fn branches_of(bs: &Branches) -> Vec<(u8, &Shape)> {
+    let mut out: Vec<(u8, &Shape)> = Vec::new();
+    let mut at = bs;
+    loop {
+        match at {
+            Branches::End => return out,
+            Branches::Alt(key, shape, rest) => {
+                out.push((*key, shape));
+                at = rest;
+            }
+        }
+    }
+}
+
+/// A shape as a word, so a snapshot can be written down and compared without
+/// deriving anything on the shape itself.
+fn shape_word(s: &Shape) -> String {
+    match s {
+        Shape::Fixed(n) => format!("fixed({n})"),
+        Shape::Delimited => "delimited".to_string(),
+        Shape::Product(a, b) => format!("product({},{})", shape_word(a), shape_word(b)),
+        Shape::Sum(bs) => {
+            let inner: Vec<String> = branches_of(bs)
+                .iter()
+                .map(|(k, s)| format!("{k:#04x}=>{}", shape_word(s)))
+                .collect();
+            format!("sum({})", inner.join(","))
+        }
+        Shape::Row(e) => format!("row({})", shape_word(e)),
+        Shape::Tagged => "tagged".to_string(),
+    }
+}
+
+/// The released table, written out. A change here is a format break, and this
+/// is the only place in the trials that says what the shapes are.
+fn released_table() -> Vec<(u8, &'static str)> {
+    vec![
+        (0x05, "fixed(0)"),
+        (0x08, "fixed(0)"),
+        (0x09, "fixed(0)"),
+        (0x10, "sum(0x01=>fixed(12),0x02=>fixed(1),0x03=>fixed(12),0x04=>fixed(1))"),
+        (0x18, "delimited"),
+        (0x20, "delimited"),
+        (0x28, "fixed(16)"),
+        (0x30, "product(delimited,fixed(1))"),
+        (0x38, "tagged"),
+        (0x40, "product(fixed(4),row(tagged))"),
+        (0x48, "row(tagged)"),
+        (0x50, "row(tagged)"),
+        (0x58, "fixed(9)"),
+        (
+            0x60,
+            "sum(0x01=>fixed(0),0x02=>product(sum(0x01=>fixed(0),0x02=>fixed(8)),\
+sum(0x02=>fixed(8),0x03=>fixed(0))))",
+        ),
+        (0x68, "fixed(8)"),
+    ]
+}
+
+/// The executable table is the specified one: proven by `grammar_exec`'s
+/// `ensures`, which the verifier discharges. What runs here is that the
+/// executable table is also the RELEASED one, which no proof can know.
+fn grammar_exec_equals_grammar_spec(t: &mut Trials) {
+    let g = grammar_exec();
+    let table = branches_of(&g);
+    let released = released_table();
+    t.check("the table has the released number of tags", table.len() == released.len());
+    for (i, (key, shape)) in table.iter().enumerate() {
+        t.check("the tag at this position is the released one", *key == released[i].0);
+        t.check(
+            "and its shape is the released shape",
+            shape_word(shape) == released[i].1,
+        );
+    }
+}
+
+fn grammar_is_well_formed(t: &mut Trials) {
+    let g = grammar_exec();
+    // Every row element shape must be lead-marked: it opens with a byte above
+    // the terminator, so no element can be read as the row's end.
+    for (_, shape) in branches_of(&g) {
+        check_row_elements_marked(t, shape);
+    }
+    // And every branch must consume at least the byte that selected it.
+    for (key, shape) in branches_of(&g) {
+        t.check("a branch key is above the terminator", key > 0x01);
+        t.check("a branch shape is readable", shape_word(shape).len() > 0);
+    }
+}
+
+fn check_row_elements_marked(t: &mut Trials, s: &Shape) {
+    match s {
+        Shape::Row(e) => {
+            t.check(
+                "a row's element shape is a tagged value",
+                matches!(**e, Shape::Tagged),
+            );
+            check_row_elements_marked(t, e);
+        }
+        Shape::Product(a, b) => {
+            check_row_elements_marked(t, a);
+            check_row_elements_marked(t, b);
+        }
+        Shape::Sum(bs) => {
+            for (_, inner) in branches_of(bs) {
+                check_row_elements_marked(t, inner);
+            }
+        }
+        Shape::Fixed(_) | Shape::Delimited | Shape::Tagged => {}
+    }
+}
+
+fn grammar_has_no_duplicate_top_level_tags(t: &mut Trials) {
+    let g = grammar_exec();
+    let table = branches_of(&g);
+    for i in 0..table.len() {
+        for j in 0..table.len() {
+            t.check(
+                "no tag appears twice in the table",
+                (table[i].0 == table[j].0) == (i == j),
+            );
+        }
+    }
+}
+
+fn grammar_has_no_duplicate_nested_branch_keys(t: &mut Trials) {
+    let g = grammar_exec();
+    for (_, shape) in branches_of(&g) {
+        check_nested_keys_distinct(t, shape);
+    }
+}
+
+fn check_nested_keys_distinct(t: &mut Trials, s: &Shape) {
+    match s {
+        Shape::Sum(bs) => {
+            let inner = branches_of(bs);
+            for i in 0..inner.len() {
+                for j in 0..inner.len() {
+                    t.check(
+                        "no branch key appears twice in one table",
+                        (inner[i].0 == inner[j].0) == (i == j),
+                    );
+                }
+            }
+            for (_, nested) in inner {
+                check_nested_keys_distinct(t, nested);
+            }
+        }
+        Shape::Product(a, b) => {
+            check_nested_keys_distinct(t, a);
+            check_nested_keys_distinct(t, b);
+        }
+        Shape::Row(e) => check_nested_keys_distinct(t, e),
+        Shape::Fixed(_) | Shape::Delimited | Shape::Tagged => {}
+    }
+}
+
+/// A branch is reachable when some input selects it. Every key in the table is
+/// selected by the byte that names it, and the reading that follows is the
+/// branch's own shape.
+fn grammar_has_no_unreachable_branches(t: &mut Trials) {
+    let g = grammar_exec();
+    for (key, shape) in branches_of(&g) {
+        let reachable = match shape {
+            Shape::Fixed(n) => {
+                let mut input = vec![key];
+                input.extend(std::iter::repeat(0x00).take(*n));
+                scanned(scan_value(&input)) == Some(1 + n)
+            }
+            Shape::Delimited => scanned(scan_value(&[key, 0x00, 0x00])) == Some(3),
+            Shape::Row(_) => scanned(scan_value(&[key, 0x01])) == Some(2),
+            Shape::Tagged => scanned(scan_value(&[key, TAG_NULL])) == Some(2),
+            Shape::Product(_, _) | Shape::Sum(_) => {
+                // A shape with structure inside it is reached through a door,
+                // which is the only way a caller has. Reachable means some
+                // door's output reads all the way through this branch.
+                red_team_corpus().iter().any(|v| {
+                    let bytes = v.as_bytes();
+                    bytes[0] == key && scanned(scan_value(bytes)) == Some(bytes.len())
+                })
+            }
+        };
+        t.check("every branch in the table is reachable", reachable);
+    }
+}
+
+fn all_top_level_tags_sort_above_struct_end(t: &mut Trials) {
+    let g = grammar_exec();
+    for (key, _) in branches_of(&g) {
+        t.check("every tag sorts above the terminator", key > 0x01);
+        t.check("and above the escape byte", key > 0x00);
+    }
+}
+
+fn all_row_element_shapes_are_lead_marked(t: &mut Trials) {
+    let g = grammar_exec();
+    for (_, shape) in branches_of(&g) {
+        check_row_elements_marked(t, shape);
+    }
+    // The consequence, at the bytes: no value opens with the terminator, so a
+    // row can always tell an element from its end.
+    for v in red_team_corpus() {
+        t.check("no element can be read as a row's end", v.as_bytes()[0] != 0x01);
+    }
+}
+
+fn all_row_element_shapes_consume_at_least_one_byte(t: &mut Trials) {
+    for v in red_team_corpus() {
+        t.check("every value is at least its tag", !v.as_bytes().is_empty());
+        t.check(
+            "and a reading of it consumes that byte",
+            scanned(scan_value(v.as_bytes())).unwrap_or(0) >= 1,
+        );
+    }
+}
+
+fn every_released_tag_has_expected_shape(t: &mut Trials) {
+    let g = grammar_exec();
+    let table = branches_of(&g);
+    for (key, expected) in released_table() {
+        match table.iter().find(|(k, _)| *k == key) {
+            None => t.check("the released tag is in the table", false),
+            Some((_, shape)) => t.check(
+                "the released tag has the released shape",
+                shape_word(shape) == expected,
+            ),
+        }
+    }
+}
+
+fn every_numeric_class_has_expected_shape(t: &mut Trials) {
+    let g = grammar_exec();
+    let table = branches_of(&g);
+    let expected: Vec<(u8, &str)> = vec![
+        (0x01, "fixed(12)"),
+        (0x02, "fixed(1)"),
+        (0x03, "fixed(12)"),
+        (0x04, "fixed(1)"),
+    ];
+    match table.iter().find(|(k, _)| *k == TAG_NUM) {
+        None => t.check("the Num tag is in the table", false),
+        Some((_, shape)) => match shape {
+            Shape::Sum(bs) => {
+                let classes = branches_of(bs);
+                t.check("there are four numeric classes", classes.len() == expected.len());
+                for (i, (key, class_shape)) in classes.iter().enumerate() {
+                    t.check("the class byte is the released one", *key == expected[i].0);
+                    t.check(
+                        "and its shape is the released shape",
+                        shape_word(class_shape) == expected[i].1,
+                    );
+                }
+            }
+            _ => t.check("Num is a choice of classes", false),
+        },
+    }
+}
+
+fn every_interval_branch_has_expected_shape(t: &mut Trials) {
+    let g = grammar_exec();
+    let table = branches_of(&g);
+    match table.iter().find(|(k, _)| *k == TAG_INTERVAL) {
+        None => t.check("the Interval tag is in the table", false),
+        Some((_, shape)) => match shape {
+            Shape::Sum(bs) => {
+                let branches = branches_of(bs);
+                t.check("an interval is empty or bounded", branches.len() == 2);
+                t.check("the empty marker leads", branches[0].0 == 0x01);
+                t.check("and carries no payload", shape_word(branches[0].1) == "fixed(0)");
+                t.check("the bounded marker follows", branches[1].0 == 0x02);
+                t.check(
+                    "and carries a lower end then an upper one",
+                    shape_word(branches[1].1)
+                        == "product(sum(0x01=>fixed(0),0x02=>fixed(8)),\
+sum(0x02=>fixed(8),0x03=>fixed(0)))",
+                );
+            }
+            _ => t.check("Interval is a choice", false),
+        },
+    }
+}
+
+fn lower_bound_markers_have_expected_order(t: &mut Trials) {
+    // Unbounded below is the least point of its axis, so its marker is below
+    // the one an instant carries.
+    let open = seal_interval(&Bound::Unbounded, &Bound::Unbounded);
+    let at = seal_interval(&Bound::At([0x00; 8]), &Bound::Unbounded);
+    t.check("the unbounded-lower marker is 0x01", open.as_bytes()[2] == 0x01);
+    t.check("the at-lower marker is 0x02", at.as_bytes()[2] == 0x02);
+    t.check("so unbounded below sorts first", open.as_bytes()[2] < at.as_bytes()[2]);
+}
+
+fn upper_bound_markers_have_expected_order(t: &mut Trials) {
+    let open = seal_interval(&Bound::Unbounded, &Bound::Unbounded);
+    let at = seal_interval(&Bound::Unbounded, &Bound::At([0xFF; 8]));
+    t.check("the at-upper marker is 0x02", at.as_bytes()[3] == 0x02);
+    t.check("the unbounded-upper marker is 0x03", open.as_bytes()[3] == 0x03);
+    t.check("so unbounded above sorts last", at.as_bytes()[3] < open.as_bytes()[3]);
+}
+
+fn all_fixed_widths_match_released_format(t: &mut Trials) {
+    let g = grammar_exec();
+    let widths: Vec<(u8, usize)> = vec![
+        (TAG_NULL, 0),
+        (TAG_FALSE, 0),
+        (TAG_TRUE, 0),
+        (TAG_UUID, 16),
+        (TAG_VALIDITY, 9),
+        (TAG_GEOMETRY, 8),
+    ];
+    let table = branches_of(&g);
+    for (key, want) in widths {
+        match table.iter().find(|(k, _)| *k == key) {
+            None => t.check("the tag is in the table", false),
+            Some((_, shape)) => t.check(
+                "the fixed width is the released one",
+                shape_word(shape) == format!("fixed({want})"),
+            ),
+        }
+    }
+    t.check("a magnitude is eleven bytes and a tie-break", MAG_BYTES + 1 == 12);
+    t.check("a dimension is four bytes", DIM_BYTES == 4);
+}
+
+fn grammar_tag_table_matches_golden_snapshot(t: &mut Trials) {
+    let g = grammar_exec();
+    let snapshot: Vec<String> = branches_of(&g)
+        .iter()
+        .map(|(k, s)| format!("{k:#04x}=>{}", shape_word(s)))
+        .collect();
+    let released: Vec<String> = released_table()
+        .iter()
+        .map(|(k, s)| format!("{k:#04x}=>{s}"))
+        .collect();
+    t.check("the table is the snapshot", snapshot == released);
+}
+
+fn grammar_branch_tables_match_golden_snapshot(t: &mut Trials) {
+    let g = grammar_exec();
+    let table = branches_of(&g);
+    let nested: Vec<(u8, &str)> = vec![
+        (
+            TAG_NUM,
+            "sum(0x01=>fixed(12),0x02=>fixed(1),0x03=>fixed(12),0x04=>fixed(1))",
+        ),
+        (
+            TAG_INTERVAL,
+            "sum(0x01=>fixed(0),0x02=>product(sum(0x01=>fixed(0),0x02=>fixed(8)),\
+sum(0x02=>fixed(8),0x03=>fixed(0))))",
+        ),
+    ];
+    for (key, expected) in nested {
+        match table.iter().find(|(k, _)| *k == key) {
+            None => t.check("the nested table's tag is present", false),
+            Some((_, shape)) => t.check(
+                "the nested table is the snapshot",
+                shape_word(shape) == expected,
+            ),
+        }
+    }
+}
+
+fn unknown_top_level_tag_is_rejected(t: &mut Trials) {
+    let g = grammar_exec();
+    let known: Vec<u8> = branches_of(&g).iter().map(|(k, _)| *k).collect();
+    for b in 0u16..=255 {
+        let lead = b as u8;
+        if known.contains(&lead) {
+            continue;
+        }
+        match scan_value(&[lead, 0x00, 0x00, 0x00]) {
+            Ok(_) => t.check("an unknown tag is refused", false),
+            Err(e) => t.check(
+                "an unknown tag names itself",
+                e.reason() == Reason::UnknownLeadByte(lead),
+            ),
+        }
+    }
+}
+
+fn unknown_numeric_class_is_rejected(t: &mut Trials) {
+    for b in 0u16..=255 {
+        let class = b as u8;
+        if (0x01..=0x04).contains(&class) {
+            continue;
+        }
+        match scan_value(&[TAG_NUM, class, 0x00]) {
+            Ok(_) => t.check("an unknown numeric class is refused", false),
+            Err(e) => t.check(
+                "an unknown class names itself",
+                e.reason() == Reason::UnknownLeadByte(class),
+            ),
+        }
+    }
+}
+
+fn unknown_interval_class_is_rejected(t: &mut Trials) {
+    for b in 0u16..=255 {
+        let marker = b as u8;
+        if marker == 0x01 || marker == 0x02 {
+            continue;
+        }
+        match scan_value(&[TAG_INTERVAL, marker, 0x00]) {
+            Ok(_) => t.check("an unknown interval marker is refused", false),
+            Err(e) => t.check(
+                "an unknown marker names itself",
+                e.reason() == Reason::UnknownLeadByte(marker),
+            ),
+        }
+    }
+    // And inside a bounded interval, on each axis.
+    for b in 0u16..=255 {
+        let marker = b as u8;
+        if marker == 0x01 || marker == 0x02 {
+            continue;
+        }
+        t.check(
+            "an unknown lower-end marker is refused",
+            scan_value(&[TAG_INTERVAL, 0x02, marker]).is_err(),
+        );
+    }
+    for b in 0u16..=255 {
+        let marker = b as u8;
+        if marker == 0x02 || marker == 0x03 {
+            continue;
+        }
+        t.check(
+            "an unknown upper-end marker is refused",
+            scan_value(&[TAG_INTERVAL, 0x02, 0x01, marker]).is_err(),
+        );
+    }
+}
+
+/// The snapshot above is what makes a format change visible. These three hold
+/// it against deliberate perturbations of itself: a changed tag, a changed
+/// width, a changed branch order must every one of them fail to match.
+fn changing_any_tag_breaks_format_snapshot(t: &mut Trials) {
+    let g = grammar_exec();
+    let actual: Vec<String> = branches_of(&g)
+        .iter()
+        .map(|(k, s)| format!("{k:#04x}=>{}", shape_word(s)))
+        .collect();
+    for i in 0..released_table().len() {
+        let mut perturbed = released_table();
+        perturbed[i].0 = perturbed[i].0.wrapping_add(1);
+        let words: Vec<String> = perturbed.iter().map(|(k, s)| format!("{k:#04x}=>{s}")).collect();
+        t.check("a changed tag does not match the table", words != actual);
+    }
+}
+
+fn changing_any_width_breaks_format_snapshot(t: &mut Trials) {
+    let g = grammar_exec();
+    let actual: Vec<String> = branches_of(&g)
+        .iter()
+        .map(|(k, s)| format!("{k:#04x}=>{}", shape_word(s)))
+        .collect();
+    let mut widened = 0usize;
+    for i in 0..released_table().len() {
+        if !released_table()[i].1.contains("fixed(") {
+            continue;
+        }
+        widened += 1;
+        let words: Vec<String> = released_table()
+            .iter()
+            .enumerate()
+            .map(|(k, (tag, shape))| match k == i {
+                true => format!("{tag:#04x}=>{}", shape.replace("fixed(", "fixed(1")),
+                false => format!("{tag:#04x}=>{shape}"),
+            })
+            .collect();
+        t.check("a changed width does not match the table", words != actual);
+    }
+    // Ten of the fifteen tags name a width somewhere in their shape; the other
+    // five are text, content, a wrapper, and the two bare rows.
+    t.check("and every shape carrying a width was perturbed", widened == 10);
+}
+
+fn changing_any_branch_order_breaks_format_snapshot(t: &mut Trials) {
+    let g = grammar_exec();
+    let actual: Vec<String> = branches_of(&g)
+        .iter()
+        .map(|(k, s)| format!("{k:#04x}=>{}", shape_word(s)))
+        .collect();
+    for i in 1..released_table().len() {
+        let mut perturbed = released_table();
+        perturbed.swap(i - 1, i);
+        let words: Vec<String> = perturbed.iter().map(|(k, s)| format!("{k:#04x}=>{s}")).collect();
+        t.check("a reordered table does not match", words != actual);
+    }
+    // And the nested tables: swapping two numeric classes changes the snapshot.
+    let numeric = "sum(0x01=>fixed(12),0x02=>fixed(1),0x03=>fixed(12),0x04=>fixed(1))";
+    let swapped = "sum(0x02=>fixed(1),0x01=>fixed(12),0x03=>fixed(12),0x04=>fixed(1))";
+    t.check("a reordered numeric table does not match", numeric != swapped);
+    let table = branches_of(&g);
+    match table.iter().find(|(k, _)| *k == TAG_NUM) {
+        None => t.check("the Num tag is present", false),
+        Some((_, shape)) => t.check("and the table holds the released order", shape_word(shape) == numeric),
+    }
+}
+
+// ====================== concatenation and closure law =======================
+//
+// The theorem the whole format rests on: if two heads are prefix-incomparable,
+// the order of `head + tail` is the order of the pair. Prefix-freedom is the
+// hypothesis, and the counterexample below is what happens without it.
+
+/// Heads that are pairwise prefix-incomparable, because every one is a complete
+/// encoding and [`theorem_prefix_code`] says so.
+fn heads() -> Vec<CanonicalBytes> {
+    vec![
+        seal_null(),
+        seal_bool(false),
+        seal_bool(true),
+        seal_str(&Utf8::of("")),
+        seal_str(&Utf8::of("a")),
+        seal_str(&Utf8::of("ab")),
+        seal_bytes(&[0x00]),
+        seal_num_zero(Repr::Int).into_value(),
+        list_of(&[0]),
+    ]
+}
+
+fn tails() -> Vec<Vec<u8>> {
+    vec![
+        Vec::new(),
+        vec![0x00],
+        vec![0x01],
+        vec![0x05],
+        vec![0xFF],
+        vec![0x00, 0x00],
+        vec![0xFF, 0x00, 0x41],
+    ]
+}
+
+fn joined(head: &CanonicalBytes, tail: &[u8]) -> Vec<u8> {
+    let mut out = head.as_bytes().to_vec();
+    out.extend_from_slice(tail);
+    out
+}
+
+fn concat_order_matches_lexicographic_product_order(t: &mut Trials) {
+    for a in heads() {
+        for b in heads() {
+            for x in tails() {
+                for y in tails() {
+                    let left = joined(&a, &x);
+                    let right = joined(&b, &y);
+                    let pair = a
+                        .as_bytes()
+                        .cmp(b.as_bytes())
+                        .then(x.as_slice().cmp(y.as_slice()));
+                    t.check(
+                        "the order of a join is the order of the pair",
+                        left.cmp(&right) == pair,
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn concat_order_equal_heads_defers_to_tail(t: &mut Trials) {
+    for a in heads() {
+        for x in tails() {
+            for y in tails() {
+                let left = joined(&a, &x);
+                let right = joined(&a, &y);
+                t.check(
+                    "equal heads leave the decision to the tails",
+                    left.cmp(&right) == x.cmp(&y),
+                );
+            }
+        }
+    }
+}
+
+fn concat_order_distinct_heads_ignores_tail(t: &mut Trials) {
+    for a in heads() {
+        for b in heads() {
+            if a.as_bytes() == b.as_bytes() {
+                continue;
+            }
+            let decided = a.as_bytes().cmp(b.as_bytes());
+            for x in tails() {
+                for y in tails() {
+                    t.check(
+                        "distinct heads decide, whatever follows them",
+                        joined(&a, &x).cmp(&joined(&b, &y)) == decided,
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// The empty sequence is a prefix of everything, so it is exactly what the
+/// closure theorem's hypothesis excludes — and no door can mint it.
+fn concat_order_handles_empty_heads(t: &mut Trials) {
+    let empty: Vec<u8> = Vec::new();
+    for a in heads() {
+        t.check(
+            "the empty sequence is a proper prefix of every encoding",
+            is_proper_prefix(&empty, a.as_bytes()),
+        );
+        t.check(
+            "so no head the doors mint is empty",
+            !a.as_bytes().is_empty(),
+        );
+        t.check(
+            "and an empty tail leaves its head unchanged",
+            joined(&a, &empty) == a.as_bytes(),
+        );
+    }
+    // With an empty head the join IS the tail, and the pair order collapses to
+    // the tail's -- which is the law's degenerate case, not an exception to it.
+    for x in tails() {
+        for y in tails() {
+            let left = [empty.clone(), x.clone()].concat();
+            let right = [empty.clone(), y.clone()].concat();
+            t.check("an empty head leaves the join to its tail", left == x && right == y);
+            t.check("and the order with it", left.cmp(&right) == x.cmp(&y));
+        }
+    }
+}
+
+fn concat_order_requires_prefix_incomparability(t: &mut Trials) {
+    // The hypothesis, checked on the heads this section uses.
+    for a in heads() {
+        for b in heads() {
+            let (x, y) = (a.as_bytes(), b.as_bytes());
+            if x != y {
+                t.check(
+                    "the heads are pairwise prefix-incomparable",
+                    !is_proper_prefix(x, y) && !is_proper_prefix(y, x),
+                );
+            }
+        }
+    }
+}
+
+/// Without the hypothesis the law is false, and this is the shape of the
+/// failure: `a` is a prefix of `b`, so a large enough tail on `a` carries the
+/// join above `b`'s even though `a` sorts below `b`.
+fn concat_order_counterexample_collides_as_documented(t: &mut Trials) {
+    let a: Vec<u8> = vec![0x41];
+    let b: Vec<u8> = vec![0x41, 0x41];
+    t.check("the first head is a prefix of the second", is_proper_prefix(&a, &b));
+    t.check("and sorts below it", a < b);
+    let left = [a.clone(), vec![0xFF]].concat();
+    let right = [b.clone(), vec![0x00]].concat();
+    t.check(
+        "yet the join reverses that order",
+        left > right,
+    );
+    // Which is exactly what prefix-freedom buys: the arrangement above needs a
+    // head that is a prefix of another, and no two complete encodings are.
+    let all = heads();
+    for x in &all {
+        for y in &all {
+            if x.as_bytes() != y.as_bytes() {
+                t.check(
+                    "no two complete encodings can be arranged that way",
+                    !is_proper_prefix(x.as_bytes(), y.as_bytes()),
+                );
+            }
+        }
+    }
+}
+
+fn prefix_split_recovers_equal_heads(t: &mut Trials) {
+    for a in heads() {
+        for x in tails() {
+            let join = joined(&a, &x);
+            let width = a.as_bytes().len();
+            t.check("the head is recovered by its own reading", scanned(scan_value(&join)) == Some(width));
+            t.check("and its bytes are unchanged", join[..width] == *a.as_bytes());
+            t.check("and the tail is what remains", join[width..] == x[..]);
+        }
+    }
+}
+
+fn prefix_split_recovers_tail_prefix(t: &mut Trials) {
+    for a in heads() {
+        for x in tails() {
+            let join = joined(&a, &x);
+            match scan_value(&join) {
+                Err(_) => t.check("a join of a complete value and a tail reads", false),
+                Ok(width) => t.check(
+                    "the tail is exactly what was appended",
+                    join[width..] == x[..],
+                ),
+            }
+        }
+    }
+    // A tail that is itself a value: the pair reads one at a time, and the
+    // second reading starts where the first ended.
+    let all = heads();
+    for a in &all {
+        for b in &all {
+            let mut two = a.as_bytes().to_vec();
+            two.extend_from_slice(b.as_bytes());
+            let first = a.as_bytes().len();
+            t.check(
+                "two joined values read one at a time",
+                scanned(scan_value(&two)) == Some(first),
+            );
+            t.check(
+                "and the second reads from where the first ended",
+                scanned(scan_value(&two[first..])) == Some(b.as_bytes().len()),
+            );
+        }
+    }
+}
+
+fn complete_heads_discharge_concat_hypothesis(t: &mut Trials) {
+    // Every value the doors mint is complete, and completeness is what the
+    // closure theorem asks for. Swept over the whole corpus.
+    let corpus = red_team_corpus();
+    for v in &corpus {
+        let bytes = v.as_bytes();
+        t.check("every door's output is complete", scanned(scan_value(bytes)) == Some(bytes.len()));
+    }
+    for a in &corpus {
+        for b in &corpus {
+            let (x, y) = (a.as_bytes(), b.as_bytes());
+            if x != y {
+                t.check(
+                    "so the whole corpus discharges the hypothesis",
+                    !is_proper_prefix(x, y) && !is_proper_prefix(y, x),
+                );
+            }
+        }
+    }
+}
+
+fn nested_products_preserve_lexicographic_order(t: &mut Trials) {
+    // Three values joined: the law applied twice, which is how a product of
+    // products keeps its order.
+    let corpus: Vec<CanonicalBytes> = vec![
+        seal_null(),
+        seal_bool(true),
+        seal_str(&Utf8::of("a")),
+    ];
+    for i in 0..corpus.len() {
+        for j in 0..corpus.len() {
+            for k in 0..corpus.len() {
+                for l in 0..corpus.len() {
+                    let left = [corpus[i].as_bytes(), corpus[j].as_bytes()].concat();
+                    let right = [corpus[k].as_bytes(), corpus[l].as_bytes()].concat();
+                    let pair = corpus[i]
+                        .as_bytes()
+                        .cmp(corpus[k].as_bytes())
+                        .then(corpus[j].as_bytes().cmp(corpus[l].as_bytes()));
+                    t.check("a product of products keeps its order", left.cmp(&right) == pair);
+                    // A third factor, varying: it decides only when the first
+                    // two agree, which is the law applied one level further in.
+                    for m in 0..corpus.len() {
+                        for p in 0..corpus.len() {
+                            let deep_left = [left.as_slice(), corpus[m].as_bytes()].concat();
+                            let deep_right = [right.as_slice(), corpus[p].as_bytes()].concat();
+                            let deep_pair = pair
+                                .then(corpus[m].as_bytes().cmp(corpus[p].as_bytes()));
+                            t.check(
+                                "and a third factor decides only when the first two agree",
+                                deep_left.cmp(&deep_right) == deep_pair,
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 }

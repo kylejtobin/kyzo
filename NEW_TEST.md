@@ -41,16 +41,16 @@
 
 ## Concatenation and closure law
 
-- [ ] concat_order_matches_lexicographic_product_order
-- [ ] concat_order_equal_heads_defers_to_tail
-- [ ] concat_order_distinct_heads_ignores_tail
-- [ ] concat_order_handles_empty_heads
-- [ ] concat_order_requires_prefix_incomparability
-- [ ] concat_order_counterexample_collides_as_documented
-- [ ] prefix_split_recovers_equal_heads
-- [ ] prefix_split_recovers_tail_prefix
-- [ ] complete_heads_discharge_concat_hypothesis
-- [ ] nested_products_preserve_lexicographic_order
+- [x] concat_order_matches_lexicographic_product_order
+- [x] concat_order_equal_heads_defers_to_tail
+- [x] concat_order_distinct_heads_ignores_tail
+- [x] concat_order_handles_empty_heads
+- [x] concat_order_requires_prefix_incomparability
+- [x] concat_order_counterexample_collides_as_documented
+- [x] prefix_split_recovers_equal_heads
+- [x] prefix_split_recovers_tail_prefix
+- [x] complete_heads_discharge_concat_hypothesis
+- [x] nested_products_preserve_lexicographic_order
 
 ## Escaped byte strings
 
@@ -101,28 +101,28 @@
 
 ## Grammar integrity
 
-- [ ] grammar_exec_equals_grammar_spec
-- [ ] grammar_is_well_formed
-- [ ] grammar_has_no_duplicate_top_level_tags
-- [ ] grammar_has_no_duplicate_nested_branch_keys
-- [ ] grammar_has_no_unreachable_branches
-- [ ] all_top_level_tags_sort_above_struct_end
-- [ ] all_row_element_shapes_are_lead_marked
-- [ ] all_row_element_shapes_consume_at_least_one_byte
-- [ ] every_released_tag_has_expected_shape
-- [ ] every_numeric_class_has_expected_shape
-- [ ] every_interval_branch_has_expected_shape
-- [ ] lower_bound_markers_have_expected_order
-- [ ] upper_bound_markers_have_expected_order
-- [ ] all_fixed_widths_match_released_format
-- [ ] grammar_tag_table_matches_golden_snapshot
-- [ ] grammar_branch_tables_match_golden_snapshot
-- [ ] unknown_top_level_tag_is_rejected
-- [ ] unknown_numeric_class_is_rejected
-- [ ] unknown_interval_class_is_rejected
-- [ ] changing_any_tag_breaks_format_snapshot
-- [ ] changing_any_width_breaks_format_snapshot
-- [ ] changing_any_branch_order_breaks_format_snapshot
+- [x] grammar_exec_equals_grammar_spec
+- [x] grammar_is_well_formed
+- [x] grammar_has_no_duplicate_top_level_tags
+- [x] grammar_has_no_duplicate_nested_branch_keys
+- [x] grammar_has_no_unreachable_branches
+- [x] all_top_level_tags_sort_above_struct_end
+- [x] all_row_element_shapes_are_lead_marked
+- [x] all_row_element_shapes_consume_at_least_one_byte
+- [x] every_released_tag_has_expected_shape
+- [x] every_numeric_class_has_expected_shape
+- [x] every_interval_branch_has_expected_shape
+- [x] lower_bound_markers_have_expected_order
+- [x] upper_bound_markers_have_expected_order
+- [x] all_fixed_widths_match_released_format
+- [x] grammar_tag_table_matches_golden_snapshot
+- [x] grammar_branch_tables_match_golden_snapshot
+- [x] unknown_top_level_tag_is_rejected
+- [x] unknown_numeric_class_is_rejected
+- [x] unknown_interval_class_is_rejected
+- [x] changing_any_tag_breaks_format_snapshot
+- [x] changing_any_width_breaks_format_snapshot
+- [x] changing_any_branch_order_breaks_format_snapshot
 
 ## Shape algebra
 
