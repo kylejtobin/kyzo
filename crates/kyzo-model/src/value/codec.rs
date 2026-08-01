@@ -31,7 +31,7 @@
 //! IS. So the raw door is `pub(crate)` and the only public way to seal a set is
 //! [`CanonicalSet`], whose one constructor sorts and dedups.
 
-use super::canonical::{self, CanonicalBytes, RowItem};
+use super::canonical::{self, CanonicalBytes, JsonEntry, JsonValue, RowItem};
 
 /// A set's elements in canonical form: ascending by their sealed bytes, no
 /// duplicates.
@@ -75,6 +75,74 @@ impl CanonicalSet {
 impl FromIterator<RowItem> for CanonicalSet {
     fn from_iter<I: IntoIterator<Item = RowItem>>(iter: I) -> CanonicalSet {
         CanonicalSet::of(iter)
+    }
+}
+
+/// A canonical JSON object: entries sorted by key bytes, keys unique.
+///
+/// The law is stated in [`super::kind::json`] and it is not the grammar's: two
+/// writings of one object would seal to two byte strings unless the entries are
+/// put in one order, and a document with a repeated key is not one value at all.
+/// So this sorts, and it REFUSES a duplicate rather than choosing last-wins or
+/// first-wins — an ambiguous document is not a value, and the refusal names the
+/// key that made it ambiguous.
+///
+/// Keys sort by their raw UTF-8 bytes. The grammar's escape is order-preserving
+/// over raw bytes, so the sealed entries are in the same order as the keys.
+pub struct CanonicalJsonObject(Vec<JsonEntry>);
+
+/// The typed refusal for an ambiguous document, carrying the key that appeared
+/// twice. A refusal is a finding about a document that was examined, so the
+/// only thing that mints one is the constructor that found the duplicate.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct DuplicateKey(Vec<u8>);
+
+impl DuplicateKey {
+    pub fn key_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+/// The typed refusal for a document the reader could not descend into.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct TooDeepForJson;
+
+impl CanonicalJsonObject {
+    /// Sort by key bytes and refuse a repeated key.
+    ///
+    /// Sorting is part of encoding an object, not a precondition on the caller.
+    /// Uniqueness is not: a document with two "a" keys denotes nothing, and
+    /// there is no order this could put it in that would make it denote
+    /// something.
+    pub fn of(mut entries: Vec<JsonEntry>) -> Result<CanonicalJsonObject, DuplicateKey> {
+        entries.sort_by(|a, b| a.key_bytes().cmp(b.key_bytes()));
+        for pair in entries.windows(2) {
+            if pair[0].key_bytes() == pair[1].key_bytes() {
+                return Err(DuplicateKey(pair[0].key_bytes().to_vec()));
+            }
+        }
+        Ok(CanonicalJsonObject(entries))
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// The object as a JSON value: a set of key-value pairs. One object, one
+    /// byte string, whatever order the entries arrived in.
+    pub fn into_value(self) -> Result<JsonValue, TooDeepForJson> {
+        let mut pairs: Vec<JsonValue> = Vec::new();
+        for entry in self.0 {
+            match entry.into_pair() {
+                Ok(pair) => pairs.push(pair),
+                Err(_) => return Err(TooDeepForJson),
+            }
+        }
+        canonical::seal_json_object(pairs).map_err(|_| TooDeepForJson)
     }
 }
 

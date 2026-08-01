@@ -1651,6 +1651,12 @@ impl RowItem {
     pub fn as_bytes(&self) -> (r: &[u8])
         ensures r@ =~= self.spec_view()
     { self.value.as_bytes() }
+
+    /// A member is a value. The mint proved it fits in a row; giving it back
+    /// forgets that proof and nothing else.
+    pub fn into_value(self) -> (r: CanonicalBytes)
+        ensures r.view() =~= self.spec_view()
+    { self.value }
 }
 
 /// Escape a variable-length payload into the order-preserving, self-delimiting
@@ -3138,11 +3144,190 @@ pub fn seal_regex(pattern: &Utf8, flags: &RegexFlags) -> (r: CanonicalBytes) {
 }
 
 /// A JSON value IS a value. There is no second grammar to keep in step.
-pub fn seal_json(v: &Wrapped) -> (r: CanonicalBytes)
+/// The raw wrapper door: the Json tag over any value at all.
+///
+/// `pub(crate)` because the tag's shape is `Tagged` — the grammar will carry
+/// any value under it, which is a fact about the grammar and not about JSON. A
+/// JSON document is null, a boolean, a finite number, text, an array or an
+/// object, and [`kind::json::Json`] says so with six constructors; a Uuid is
+/// not one of them. The public path is [`seal_json`], which takes a
+/// [`JsonValue`] and so cannot be handed anything else.
+pub(crate) fn seal_json_raw(v: &Wrapped) -> (r: CanonicalBytes)
     ensures r.view() =~= seq![TAG_JSON] + v.spec_view()
 {
     proof { lemma_tag_shapes(); use_type_invariant(v); }
     seal(TAG_JSON, Body::value(&v.value))
+}
+
+/// A number JSON can hold: signed and finite.
+///
+/// JSON has neither NaN nor infinity, so neither is a constructor here. That is
+/// `kind/json.rs`'s law — `JsonNum` refuses non-finite at construction — stated
+/// where the bytes are decided rather than checked again beside them.
+// CONSTRUCT: ClosedSum JsonNumber
+pub enum JsonNumber {
+    Zero(Repr),
+    Negative(FiniteMagnitude, Repr),
+    Positive(FiniteMagnitude, Repr),
+}
+
+/// A value that is JSON.
+///
+/// The constructor list IS the JSON domain. There is no seventh, so a Uuid, an
+/// interval, a vector or a NaN is not a JSON payload and cannot reach
+/// [`seal_json`] — not because a check refuses it, but because no argument
+/// carries it there.
+///
+/// An array is a row and an object is a set of entries, so the two can never
+/// collide: they carry different tags. Ordering and key-uniqueness are
+/// properties of what an object IS, not of the grammar, so the mint that
+/// enforces them is [`super::codec::CanonicalJsonObject`] and the door here is
+/// crate-private, exactly as the set door is.
+// CONSTRUCT: ValueObject JsonValue
+pub struct JsonValue {
+    value: CanonicalBytes,
+}
+
+impl JsonValue {
+    pub closed spec fn spec_view(&self) -> Seq<u8> { self.value.view() }
+
+    pub fn null() -> (r: JsonValue) { JsonValue { value: seal_null() } }
+
+    pub fn boolean(b: bool) -> (r: JsonValue) { JsonValue { value: seal_bool(b) } }
+
+    pub fn text(s: &Utf8) -> (r: JsonValue) { JsonValue { value: seal_str(s) } }
+
+    pub fn number(n: JsonNumber) -> (r: JsonValue) {
+        let sealed = match n {
+            JsonNumber::Zero(tie) => seal_num_zero(tie),
+            JsonNumber::Negative(m, tie) => seal_num_negative(&Magnitude::Finite(m), tie),
+            JsonNumber::Positive(m, tie) => seal_num_positive(&Magnitude::Finite(m), tie),
+        };
+        JsonValue { value: sealed.into_value() }
+    }
+
+    /// An array: a row, in the order given, duplicates and all. That is what a
+    /// JSON array is, and it is why an array is a row and an object is not.
+    ///
+    /// Refusing hands the items back: a tree too deep for the reader is still a
+    /// tree, and a refusal that consumed it would cost more than it reports.
+    pub fn array(items: Vec<JsonValue>) -> (r: Result<JsonValue, Vec<JsonValue>>) {
+        match json_members(items) {
+            Ok(members) => Ok(JsonValue { value: seal_list(&members) }),
+            Err(back) => Err(back),
+        }
+    }
+
+    pub fn as_bytes(&self) -> (r: &[u8])
+        ensures r@ =~= self.spec_view()
+    { self.value.as_bytes() }
+}
+
+/// One entry of a JSON object: a key and what it names.
+///
+/// The key is kept beside the value rather than sealed into it, because
+/// uniqueness is decided on keys and a sealed pair no longer has one to
+/// compare.
+// CONSTRUCT: ValueObject JsonEntry
+pub struct JsonEntry {
+    key: Utf8,
+    value: JsonValue,
+}
+
+impl JsonEntry {
+    pub fn new(key: Utf8, value: JsonValue) -> (r: JsonEntry) { JsonEntry { key, value } }
+
+    /// The key's raw UTF-8. Objects sort and dedup on exactly these bytes.
+    pub fn key_bytes(&self) -> (r: &[u8]) { self.key.as_slice() }
+
+    /// The entry as a pair: the key as text, then the value it names.
+    ///
+    /// A refusal hands the entry back whole. Only the value can be too deep --
+    /// a key is text, which is a leaf -- but the key's mint is asked rather
+    /// than assumed, and its refusal unwinds the same way.
+    pub(crate) fn into_pair(self) -> (r: Result<JsonValue, JsonEntry>) {
+        let key = self.key;
+        let key_member = match RowItem::of(JsonValue::text(&key).value) {
+            Ok(m) => m,
+            Err(_) => return Err(JsonEntry { key, value: self.value }),
+        };
+        let value_member = match RowItem::of(self.value.value) {
+            Ok(m) => m,
+            Err(back) => {
+                return Err(JsonEntry { key, value: JsonValue { value: back } });
+            }
+        };
+        let mut pair: Vec<RowItem> = Vec::new();
+        pair.push(key_member);
+        pair.push(value_member);
+        Ok(JsonValue { value: seal_list(&pair) })
+    }
+}
+
+/// The raw object door: a set of entries in the order given.
+///
+/// `pub(crate)` for the reason the set door is. Two writings of one object
+/// would seal to two byte strings unless the entries are sorted and the keys
+/// proven unique, and neither is a grammar property. The public path is
+/// [`super::codec::CanonicalJsonObject`], whose one constructor sorts by key
+/// bytes and refuses a duplicate rather than choosing a winner.
+pub(crate) fn seal_json_object(entries: Vec<JsonValue>) -> (r: Result<JsonValue, Vec<JsonValue>>) {
+    match json_members(entries) {
+        Ok(members) => Ok(JsonValue { value: seal_set(&members) }),
+        Err(back) => Err(back),
+    }
+}
+
+/// Every value as a row member, or every value back.
+///
+/// A refusal returns what it was given, in the order it was given: the members
+/// already minted are unwound rather than dropped, so a caller told "too deep"
+/// still holds its tree.
+fn json_members(values: Vec<JsonValue>) -> (r: Result<Vec<RowItem>, Vec<JsonValue>>) {
+    let mut rest = values;
+    let mut members: Vec<RowItem> = Vec::new();
+    while rest.len() > 0
+        decreases rest.len()
+    {
+        let head = rest.remove(0);
+        match RowItem::of(head.value) {
+            Ok(m) => members.push(m),
+            Err(refused) => {
+                // Unwind: the members already minted go back to being values,
+                // then the one that was refused, then what had not been read.
+                let mut back: Vec<JsonValue> = Vec::new();
+                let mut done = members;
+                while done.len() > 0
+                    decreases done.len()
+                {
+                    let m = done.remove(0);
+                    back.push(JsonValue { value: m.into_value() });
+                }
+                back.push(JsonValue { value: refused });
+                let mut tail = rest;
+                while tail.len() > 0
+                    decreases tail.len()
+                {
+                    let v = tail.remove(0);
+                    back.push(v);
+                }
+                return Err(back);
+            }
+        }
+    }
+    Ok(members)
+}
+
+/// A JSON document, sealed under its tag.
+///
+/// Total: every [`JsonValue`] is already a value, and the wrapper is one tag
+/// above it. There is nothing left to refuse because nothing that is not JSON
+/// can be named here.
+pub fn seal_json(v: JsonValue) -> (r: Result<CanonicalBytes, JsonValue>) {
+    match Wrapped::of(v.value) {
+        Ok(w) => Ok(seal_json_raw(&w)),
+        Err(back) => Err(JsonValue { value: back }),
+    }
 }
 
 /// A sealed value of the Num kind.

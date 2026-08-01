@@ -29,7 +29,7 @@
 mod reference;
 mod value;
 use value::canonical;
-use value::codec::CanonicalSet;
+use value::codec::{CanonicalJsonObject, CanonicalSet};
 
 use canonical::{
     Bound, Refusal, Utf8, NumericBytes, Branches, Reason, grammar_exec, CanonicalBytes, Shape, escape, scan_value, seal_bool, seal_bytes,
@@ -37,7 +37,7 @@ use canonical::{
     seal_num_negative, seal_num_nan, seal_num_positive, seal_num_zero, seal_regex, seal_set, seal_str,
     FiniteMagnitude, Magnitude, Repr, RegexFlags, EXP_INFINITE, DIM_BYTES, MAG_BYTES,
     seal_uuid, seal_validity, seal_vector, shape_scan, Components, Geometry, RowItem, Validity,
-    Wrapped, MAX_DIMENSION,
+    Wrapped, MAX_DIMENSION, JsonEntry, JsonNumber, JsonValue,
 };
 
 // The released format, written out here and nowhere else in this file. These
@@ -83,6 +83,13 @@ impl Checks {
     fn count(self) -> usize {
         self.0
     }
+
+    /// How many more than `earlier`. Saturating for the same reason
+    /// `one_more` is: a run that saturated its counter must not report a
+    /// section as having run more checks than it did.
+    fn since(self, earlier: Checks) -> Checks {
+        Checks(self.0.saturating_sub(earlier.0))
+    }
 }
 
 /// The name of a check that failed, as written at the call site.
@@ -90,12 +97,15 @@ struct FailedCheck(String);
 
 struct Trials {
     run: Checks,
+    /// The count when the last section reported, so a section reports its own
+    /// checks rather than every section's.
+    reported: Checks,
     failed: Vec<FailedCheck>,
 }
 
 impl Trials {
     fn new() -> Trials {
-        Trials { run: Checks::NONE, failed: Vec::new() }
+        Trials { run: Checks::NONE, reported: Checks::NONE, failed: Vec::new() }
     }
 
     fn check(&mut self, name: &str, ok: bool) {
@@ -105,8 +115,9 @@ impl Trials {
         }
     }
 
-    fn report(&self, section: &str) {
-        println!("  {section}: {} checks", self.run.count());
+    fn report(&mut self, section: &str) {
+        println!("  {section}: {} checks", self.run.since(self.reported).count());
+        self.reported = self.run;
     }
 }
 
@@ -160,6 +171,13 @@ fn member(v: CanonicalBytes) -> RowItem {
         Ok(m) => m,
         Err(refused) => harness_cannot_continue("row member", &refused),
     }
+}
+
+/// The Json tag over any value at all. That door is crate-private because the
+/// grammar carries any value under it while a JSON document is one of six
+/// kinds; the trials use it where the shape under test IS the wrapper.
+fn json_raw(v: CanonicalBytes) -> CanonicalBytes {
+    canonical::seal_json_raw(&wrap(v))
 }
 
 /// A wrapped value, minted the same way and for the same reason.
@@ -229,7 +247,7 @@ fn deepest_wrapped() -> (CanonicalBytes, usize) {
     let mut levels = 0usize;
     loop {
         match Wrapped::of(v) {
-            Ok(w) => { v = seal_json(&w); levels += 1; }
+            Ok(w) => { v = canonical::seal_json_raw(&w); levels += 1; }
             Err(back) => return (back, levels),
         }
     }
@@ -565,7 +583,7 @@ fn trial_grammar_table(t: &mut Trials) {
         (seal_bytes(&[0x00, 0xFF]), 6, "Bytes: tag, escaped content, terminator"),
         (seal_uuid(&[0x00; 16]), 17, "Uuid: tag, 16"),
         (seal_regex(&Utf8::of("ab"), &RegexFlags::new(true, true, true)), 6, "Regex: tag, pattern, terminator, flags"),
-        (seal_json(&wrap(seal_null())), 2, "Json: tag, a value"),
+        (json_raw((seal_null())), 2, "Json: tag, a value"),
         (seal_vector(components(vec![seal_num_zero(Repr::Int), seal_num_zero(Repr::Int)])), 12,
             "Vector: tag, 4 dimension, two components, terminator"),
         (seal_list(&Vec::new()), 2, "List: tag, terminator"),
@@ -598,7 +616,7 @@ fn trial_grammar_table(t: &mut Trials) {
         (seal_bytes(b""), TAG_BYTES, "Bytes tag"),
         (seal_uuid(&[0; 16]), TAG_UUID, "Uuid tag"),
         (seal_regex(&Utf8::of(""), &RegexFlags::new(false, false, false)), TAG_REGEX, "Regex tag"),
-        (seal_json(&wrap(seal_null())), TAG_JSON, "Json tag"),
+        (json_raw((seal_null())), TAG_JSON, "Json tag"),
         (seal_vector(components(Vec::new())), TAG_VECTOR, "Vector tag"),
         (seal_list(&Vec::new()), TAG_LIST, "List tag"),
         (seal_set(&Vec::new()), TAG_SET, "Set tag"),
@@ -795,7 +813,7 @@ fn attack_reader_agrees_with_writer(t: &mut Trials) {
         seal_str(&Utf8::of("")),
         seal_str(&Utf8::of("\u{0}\u{1}\u{ff}")),
         seal_num_zero(Repr::Int).into_value(),
-        seal_json(&wrap(seal_bool(true))),
+        json_raw((seal_bool(true))),
         seal_list(&Vec::new()),
         seal_list(&row(vec![bytes_val(&[0x01]), bytes_val(&[0x00])])),
         seal_list(&row(vec![seal_list(&row(vec![str_val("x")]))])),
@@ -1122,7 +1140,7 @@ fn canonical_writer_output_is_always_readable(t: &mut Trials) {
     loop {
         match Wrapped::of(v) {
             Ok(w) => {
-                v = seal_json(&w);
+                v = canonical::seal_json_raw(&w);
                 levels += 1;
                 let bytes = v.as_bytes();
                 t.check(
@@ -1381,7 +1399,7 @@ fn red_team_corpus() -> Vec<CanonicalBytes> {
         seal_uuid(&[0xFF; 16]),
         seal_regex(&Utf8::of(""), &RegexFlags::new(false, false, false)),
         seal_regex(&Utf8::of("a.*b"), &RegexFlags::new(true, false, true)),
-        seal_json(&wrap(seal_null())),
+        json_raw((seal_null())),
         seal_vector(components(Vec::new())),
         seal_vector(components(vec_of(3))),
         seal_list(&Vec::new()),
@@ -1832,6 +1850,14 @@ fn main() {
     uuid_golden_vectors_are_architecture_independent(&mut t);
     t.report("strings, regex, uuid");
 
+    println!("the json domain");
+    json_payload_is_json_domain_only(&mut t);
+    json_rejects_non_json_database_values(&mut t);
+    json_nested_objects_are_canonical(&mut t);
+    json_object_key_permutations_encode_identically(&mut t);
+    json_duplicate_object_keys_are_rejected_or_normalized(&mut t);
+    t.report("the json domain");
+
     println!("json");
     json_wraps_exactly_one_complete_value(&mut t);
     json_encoding_order_matches_inner_value_order(&mut t);
@@ -1971,7 +1997,7 @@ fn built(v: &reference::Sem) -> CanonicalBytes {
             &Utf8::of(pattern),
             &RegexFlags::new(*case_insensitive, *multi_line, *dot_matches_new_line),
         ),
-        Sem::Json(inner) => seal_json(&wrap(built(inner))),
+        Sem::Json(inner) => json_raw((built(inner))),
         Sem::Vector(parts) => {
             seal_vector(components(parts.iter().map(|c| built_num(*c)).collect()))
         }
@@ -2865,8 +2891,8 @@ fn nested_whole_domain_values_preserve_order(t: &mut Trials) {
     for (va, a) in &all {
         for (vb, b) in &all {
             let flat = a.as_bytes().cmp(b.as_bytes());
-            let wrapped_a = seal_json(&wrap(built(va)));
-            let wrapped_b = seal_json(&wrap(built(vb)));
+            let wrapped_a = json_raw((built(va)));
+            let wrapped_b = json_raw((built(vb)));
             t.check(
                 "wrapping preserves order",
                 wrapped_a.as_bytes().cmp(wrapped_b.as_bytes()) == flat,
@@ -3020,7 +3046,7 @@ fn mixed_container_nesting_boundary_is_exact(t: &mut Trials) {
     let mut levels = 0usize;
     loop {
         let wrapped = match Wrapped::of(v) {
-            Ok(w) => seal_json(&w),
+            Ok(w) => canonical::seal_json_raw(&w),
             Err(back) => {
                 v = back;
                 break;
@@ -3717,7 +3743,7 @@ fn nested_list_set_values_remain_prefix_free(t: &mut Trials) {
         values.push(set_of(&shape));
         values.push(seal_list(&row(vec![list_of(&shape)])));
         values.push(seal_list(&row(vec![set_of(&shape)])));
-        values.push(seal_json(&wrap(list_of(&shape))));
+        values.push(json_raw((list_of(&shape))));
     }
     for a in &values {
         for b in &values {
@@ -4080,7 +4106,7 @@ fn vector_golden_vectors_cover_dimension_boundaries(t: &mut Trials) {
 fn json_wraps_exactly_one_complete_value(t: &mut Trials) {
     for v in red_team_corpus() {
         let bare = v.as_bytes().to_vec();
-        let sealed = seal_json(&wrap(v));
+        let sealed = json_raw((v));
         let bytes = sealed.as_bytes();
         t.check("a wrapper is its tag and one value", bytes.len() == bare.len() + 1);
         t.check("a wrapper opens with the json tag", bytes[0] == TAG_JSON);
@@ -4100,8 +4126,8 @@ fn json_encoding_order_matches_inner_value_order(t: &mut Trials) {
     let all = domain();
     for (va, a) in &all {
         for (vb, b) in &all {
-            let wrapped_a = seal_json(&wrap(built(va)));
-            let wrapped_b = seal_json(&wrap(built(vb)));
+            let wrapped_a = json_raw((built(va)));
+            let wrapped_b = json_raw((built(vb)));
             t.check(
                 "wrapped values order as their contents do",
                 wrapped_a.as_bytes().cmp(wrapped_b.as_bytes())
@@ -4116,8 +4142,8 @@ fn json_encoding_is_injective(t: &mut Trials) {
     for (va, a) in &all {
         for (vb, b) in &all {
             let same_inner = a.as_bytes() == b.as_bytes();
-            let wrapped_a = seal_json(&wrap(built(va)));
-            let wrapped_b = seal_json(&wrap(built(vb)));
+            let wrapped_a = json_raw((built(va)));
+            let wrapped_b = json_raw((built(vb)));
             t.check(
                 "one wrapped value, one byte string",
                 (wrapped_a.as_bytes() == wrapped_b.as_bytes()) == same_inner,
@@ -4141,7 +4167,7 @@ fn nested_list_shapes() -> Vec<CanonicalBytes> {
 fn json_nested_lists_roundtrip(t: &mut Trials) {
     for (i, shape) in nested_list_shapes().into_iter().enumerate() {
         let bare = shape.as_bytes().to_vec();
-        let wrapped = seal_json(&wrap(shape));
+        let wrapped = json_raw((shape));
         let bytes = wrapped.as_bytes();
         t.check(
             "a wrapped list reads back whole",
@@ -4151,7 +4177,7 @@ fn json_nested_lists_roundtrip(t: &mut Trials) {
         let again = nested_list_shapes().remove(i);
         t.check(
             "wrapping is deterministic",
-            seal_json(&wrap(again)).as_bytes() == bytes,
+            json_raw((again)).as_bytes() == bytes,
         );
     }
 }
@@ -4189,28 +4215,28 @@ fn json_depth_boundary_matches_reader_policy(t: &mut Trials) {
 
 fn json_golden_vectors_cover_every_json_kind(t: &mut Trials) {
     let cases: Vec<(CanonicalBytes, Vec<u8>)> = vec![
-        (seal_json(&wrap(seal_null())), vec![0x38, 0x05]),
-        (seal_json(&wrap(seal_bool(false))), vec![0x38, 0x08]),
-        (seal_json(&wrap(seal_bool(true))), vec![0x38, 0x09]),
+        (json_raw((seal_null())), vec![0x38, 0x05]),
+        (json_raw((seal_bool(false))), vec![0x38, 0x08]),
+        (json_raw((seal_bool(true))), vec![0x38, 0x09]),
         (
-            seal_json(&wrap(seal_num_zero(Repr::Int).into_value())),
+            json_raw((seal_num_zero(Repr::Int).into_value())),
             vec![0x38, 0x10, 0x02, 0x00],
         ),
         (
-            seal_json(&wrap(seal_str(&Utf8::of("")))),
+            json_raw((seal_str(&Utf8::of("")))),
             vec![0x38, 0x18, 0x00, 0x00],
         ),
         (
-            seal_json(&wrap(seal_str(&Utf8::of("a")))),
+            json_raw((seal_str(&Utf8::of("a")))),
             vec![0x38, 0x18, 0x61, 0x00, 0x00],
         ),
-        (seal_json(&wrap(list_of(&[]))), vec![0x38, 0x48, 0x01]),
+        (json_raw((list_of(&[]))), vec![0x38, 0x48, 0x01]),
         (
-            seal_json(&wrap(list_of(&[0]))),
+            json_raw((list_of(&[0]))),
             vec![0x38, 0x48, 0x05, 0x01],
         ),
         (
-            seal_json(&wrap(seal_json(&wrap(seal_null())))),
+            json_raw((json_raw((seal_null())))),
             vec![0x38, 0x38, 0x05],
         ),
     ];
@@ -7551,7 +7577,7 @@ fn truncated_row_reports_exact_suffix(t: &mut Trials) {
 }
 
 fn truncated_nested_value_reports_exact_suffix(t: &mut Trials) {
-    let nested = seal_json(&wrap(seal_json(&wrap(seal_str(&Utf8::of("abc"))))));
+    let nested = json_raw((json_raw((seal_str(&Utf8::of("abc"))))));
     let bytes = nested.as_bytes();
     for cut in 1..bytes.len() {
         let truncated = &bytes[..cut];
@@ -7749,6 +7775,305 @@ fn non_too_deep_failure_implies_spec_rejection(t: &mut Trials) {
                     );
                 }
             },
+        }
+    }
+}
+
+// ============================ the json domain ===============================
+//
+// A JSON document is null, a boolean, a finite number, text, an array or an
+// object. `JsonValue` has exactly those six constructors, so the trials below
+// cannot even name a seventh; what they run is that the six behave as
+// kind/json.rs says they must — objects canonical, keys unique, arrays ordered.
+
+fn json_null() -> JsonValue {
+    JsonValue::null()
+}
+
+fn json_text(s: &str) -> JsonValue {
+    JsonValue::text(&Utf8::of(s))
+}
+
+fn json_int(n: u64) -> JsonValue {
+    match FiniteMagnitude::of(n, 0) {
+        Some(m) => JsonValue::number(JsonNumber::Positive(m, Repr::Int)),
+        None => JsonValue::number(JsonNumber::Zero(Repr::Int)),
+    }
+}
+
+fn json_array(items: Vec<JsonValue>) -> JsonValue {
+    match JsonValue::array(items) {
+        Ok(v) => v,
+        Err(back) => {
+            eprintln!("canonical-trials: an array of {} is too deep", back.len());
+            std::process::exit(2)
+        }
+    }
+}
+
+fn json_object(entries: Vec<(&str, JsonValue)>) -> JsonValue {
+    let built: Vec<JsonEntry> = entries
+        .into_iter()
+        .map(|(k, v)| JsonEntry::new(Utf8::of(k), v))
+        .collect();
+    match CanonicalJsonObject::of(built) {
+        Err(e) => {
+            eprintln!(
+                "canonical-trials: the object mint refused key {:?}",
+                std::str::from_utf8(e.key_bytes()),
+            );
+            std::process::exit(2)
+        }
+        Ok(object) => match object.into_value() {
+            Ok(v) => v,
+            Err(_) => {
+                eprintln!("canonical-trials: the object is too deep");
+                std::process::exit(2)
+            }
+        },
+    }
+}
+
+fn sealed_json(v: JsonValue) -> CanonicalBytes {
+    match seal_json(v) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            eprintln!("canonical-trials: the document is too deep to wrap");
+            std::process::exit(2)
+        }
+    }
+}
+
+/// The payload of a Json value is a JSON value. Not by a check — by the
+/// argument type, whose constructor list is the JSON domain.
+fn json_payload_is_json_domain_only(t: &mut Trials) {
+    // Every constructor seals, and every one reads back whole.
+    let documents = vec![
+        json_null(),
+        JsonValue::boolean(false),
+        JsonValue::boolean(true),
+        json_int(0),
+        json_int(1),
+        json_text(""),
+        json_text("a"),
+        json_array(Vec::new()),
+        json_array(vec![json_null(), json_int(2)]),
+        json_object(Vec::new()),
+        json_object(vec![("a", json_int(1))]),
+    ];
+    for document in documents {
+        let sealed = sealed_json(document);
+        let bytes = sealed.as_bytes();
+        t.check("a json document opens with the json tag", bytes[0] == TAG_JSON);
+        t.check(
+            "and reads back whole",
+            scanned(scan_value(bytes)) == Some(bytes.len()),
+        );
+        // What is under the tag is one of the six kinds the domain admits.
+        let inner = bytes[1];
+        t.check(
+            "and what it carries is a kind JSON has",
+            inner == TAG_NULL
+                || inner == TAG_FALSE
+                || inner == TAG_TRUE
+                || inner == TAG_NUM
+                || inner == TAG_STR
+                || inner == TAG_LIST
+                || inner == TAG_SET,
+        );
+    }
+}
+
+/// One document, and the tag of every node in it.
+///
+/// The census is taken while building, from each node's own sealed bytes, so it
+/// covers the whole tree and not just the root — a document that smuggled a
+/// vector in at depth four would show it here.
+fn some_json(g: &mut Seeded, budget: u32) -> (JsonValue, Vec<u8>) {
+    let leaf = budget == 0;
+    let pick = match leaf {
+        true => g.below(4),
+        false => g.below(6),
+    };
+    let built = match pick {
+        0 => json_null(),
+        1 => JsonValue::boolean(g.below(2) == 1),
+        2 => json_int(g.below(1000)),
+        3 => json_text(match g.below(3) {
+            0 => "",
+            1 => "key",
+            _ => "\u{0}\u{10FFFF}",
+        }),
+        4 => {
+            let n = g.below(4) as usize;
+            let mut items = Vec::new();
+            let mut tags = Vec::new();
+            for _ in 0..n {
+                let (item, inner) = some_json(g, budget - 1);
+                tags.extend(inner);
+                items.push(item);
+            }
+            let built = json_array(items);
+            tags.push(built.as_bytes()[0]);
+            return (built, tags);
+        }
+        _ => {
+            let names = ["a", "b", "c", "d"];
+            let n = g.below(4) as usize;
+            let mut entries = Vec::new();
+            let mut tags = Vec::new();
+            for k in 0..n {
+                let (value, inner) = some_json(g, budget - 1);
+                tags.extend(inner);
+                entries.push((names[k], value));
+            }
+            let built = json_object(entries);
+            tags.push(built.as_bytes()[0]);
+            return (built, tags);
+        }
+    };
+    let tag = built.as_bytes()[0];
+    (built, vec![tag])
+}
+
+/// A value that is not JSON cannot be handed to the door. That half is a
+/// compile-time fact and lives in `canonical-forgery`, where the compiler
+/// answers it. What runs here is the other half: that no document the domain
+/// can build carries a kind JSON does not have, at any depth.
+fn json_rejects_non_json_database_values(t: &mut Trials) {
+    let mut g = Seeded::new(0x1105_0117_2026);
+    for _ in 0..2000 {
+        let (document, tags) = some_json(&mut g, 3);
+        let carried_only_json_kinds = tags.iter().all(|tag| {
+            *tag == TAG_NULL
+                || *tag == TAG_FALSE
+                || *tag == TAG_TRUE
+                || *tag == TAG_NUM
+                || *tag == TAG_STR
+                || *tag == TAG_LIST
+                || *tag == TAG_SET
+        });
+        t.check(
+            "no node of a json document is a uuid, regex, vector, validity, interval or geometry",
+            carried_only_json_kinds,
+        );
+        let sealed = sealed_json(document);
+        t.check(
+            "and the whole document reads back",
+            scanned(scan_value(sealed.as_bytes())) == Some(sealed.as_bytes().len()),
+        );
+    }
+}
+
+fn json_nested_objects_are_canonical(t: &mut Trials) {
+    // The same document, written two ways at every level.
+    let one = json_object(vec![
+        ("b", json_object(vec![("y", json_int(2)), ("x", json_int(1))])),
+        ("a", json_array(vec![json_int(1), json_int(2)])),
+    ]);
+    let other = json_object(vec![
+        ("a", json_array(vec![json_int(1), json_int(2)])),
+        ("b", json_object(vec![("x", json_int(1)), ("y", json_int(2))])),
+    ]);
+    t.check(
+        "a nested object is canonical at every level",
+        sealed_json(one).as_bytes() == sealed_json(other).as_bytes(),
+    );
+    // An array is NOT canonicalised: its order is its meaning.
+    let forward = json_object(vec![("a", json_array(vec![json_int(1), json_int(2)]))]);
+    let backward = json_object(vec![("a", json_array(vec![json_int(2), json_int(1)]))]);
+    t.check(
+        "an array's order is its meaning and survives",
+        sealed_json(forward).as_bytes() != sealed_json(backward).as_bytes(),
+    );
+    // An object and an array of pairs are different values, and their tags say
+    // so: an object is a set, an array is a row.
+    let object = json_object(vec![("a", json_int(1))]);
+    let pairs = json_array(vec![json_array(vec![json_text("a"), json_int(1)])]);
+    t.check(
+        "an object is not an array of pairs",
+        sealed_json(object).as_bytes() != sealed_json(pairs).as_bytes(),
+    );
+    t.check(
+        "and the difference is in the tag, not the entries",
+        sealed_json(json_object(vec![("a", json_int(1))])).as_bytes()[1] == TAG_SET,
+    );
+    t.check(
+        "an array carries the row tag",
+        sealed_json(json_array(vec![json_int(1)])).as_bytes()[1] == TAG_LIST,
+    );
+}
+
+fn json_object_key_permutations_encode_identically(t: &mut Trials) {
+    let keys = ["a", "b", "c"];
+    let expected = sealed_json(json_object(vec![
+        ("a", json_int(1)),
+        ("b", json_int(2)),
+        ("c", json_int(3)),
+    ]));
+    let orders: [[usize; 3]; 6] = [
+        [0, 1, 2],
+        [0, 2, 1],
+        [1, 0, 2],
+        [1, 2, 0],
+        [2, 0, 1],
+        [2, 1, 0],
+    ];
+    for order in orders {
+        let entries: Vec<(&str, JsonValue)> = order
+            .iter()
+            .map(|k| (keys[*k], json_int(*k as u64 + 1)))
+            .collect();
+        t.check(
+            "an object encodes the same whatever order its keys arrived in",
+            sealed_json(json_object(entries)).as_bytes() == expected.as_bytes(),
+        );
+    }
+    // Keys sort by raw UTF-8 bytes, including keys carrying a zero byte.
+    let awkward = sealed_json(json_object(vec![
+        ("\u{0}", json_null()),
+        ("b", json_null()),
+        ("", json_null()),
+    ]));
+    let same = sealed_json(json_object(vec![
+        ("b", json_null()),
+        ("", json_null()),
+        ("\u{0}", json_null()),
+    ]));
+    t.check("including keys that carry the escape byte", awkward.as_bytes() == same.as_bytes());
+}
+
+/// A document with a repeated key denotes nothing, so it is refused rather
+/// than resolved. Not last-wins, not first-wins: the mint returns the key.
+fn json_duplicate_object_keys_are_rejected_or_normalized(t: &mut Trials) {
+    let duplicated = vec![
+        JsonEntry::new(Utf8::of("k"), json_int(1)),
+        JsonEntry::new(Utf8::of("k"), json_int(2)),
+    ];
+    match CanonicalJsonObject::of(duplicated) {
+        Ok(_) => t.check("a repeated key is refused", false),
+        Err(e) => t.check("and the refusal names the key", e.key_bytes() == b"k"),
+    }
+    // Even when the values are equal: the document is still ambiguous about
+    // how many entries it has.
+    let same_value = vec![
+        JsonEntry::new(Utf8::of("k"), json_int(1)),
+        JsonEntry::new(Utf8::of("k"), json_int(1)),
+    ];
+    t.check(
+        "a repeated key with equal values is refused too",
+        CanonicalJsonObject::of(same_value).is_err(),
+    );
+    // And distinct keys are not: the refusal is about repetition, not about
+    // keys that merely sort next to each other.
+    for keys in [vec!["a", "b"], vec!["a", "ab"], vec!["", "\u{0}"], vec!["k", "K"]] {
+        let entries: Vec<JsonEntry> = keys
+            .iter()
+            .map(|k| JsonEntry::new(Utf8::of(k), json_null()))
+            .collect();
+        match CanonicalJsonObject::of(entries) {
+            Err(_) => t.check("distinct keys are not a duplicate", false),
+            Ok(object) => t.check("and every one of them survives", object.len() == keys.len()),
         }
     }
 }

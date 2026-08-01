@@ -10,6 +10,11 @@
 #
 # Errors are matched to forgeries by line, not by error code. Codes repeat
 # across forgeries, so a set comparison passes while a forgery quietly compiles.
+#
+# "No errors" is not evidence either way until cargo's own exit code is read: a
+# build that never started emits no diagnostics, and so does a forgery that
+# compiled. They are told apart below and reported differently, because one is
+# a hole in the encoder and the other is a broken workspace.
 set -u
 
 cd "$(dirname "$0")/.."
@@ -22,14 +27,25 @@ for file in crates/canonical-forgery/src/bin/*.rs; do
     forgeries=$(grep -c 'FORGERY:' "$file")
     total=$((total + forgeries))
 
-    cargo build -p canonical-forgery --features compile-fail --bin "$name" \
-        --message-format short 2>&1 \
+    raw=$(cargo build -p canonical-forgery --features compile-fail --bin "$name" \
+        --message-format short 2>&1)
+    built=$?
+
+    printf '%s\n' "$raw" \
         | grep -o "${file}:[0-9]*:[0-9]*: error\[E[0-9]\{4\}\]" \
         | sed "s|${file}:||;s|:[0-9]*: error\[|:|;s|\]||" \
         | sort -t: -k1,1n > /tmp/compile-fail-errors.$$
 
-    if [ ! -s /tmp/compile-fail-errors.$$ ]; then
+    if [ "$built" -eq 0 ]; then
         echo "compile-fail: $name COMPILED. Construction authority is open."
+        rm -f /tmp/compile-fail-errors.$$
+        status=1
+        continue
+    fi
+
+    if [ ! -s /tmp/compile-fail-errors.$$ ]; then
+        echo "compile-fail: $name was not built, so no forgery was tested. cargo said:"
+        printf '%s\n' "$raw" | head -5
         rm -f /tmp/compile-fail-errors.$$
         status=1
         continue
@@ -83,5 +99,9 @@ for file in crates/canonical-forgery/src/bin/*.rs; do
     rm -f /tmp/compile-fail-errors.$$
 done
 
-echo "compile-fail: $total forgeries, all rejected"
+if [ "$status" -eq 0 ]; then
+    echo "compile-fail: $total forgeries, all rejected"
+else
+    echo "compile-fail: $total forgeries, and the run above is not clean"
+fi
 exit $status

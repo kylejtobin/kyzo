@@ -20,7 +20,7 @@
 - [x] set_duplicates_encode_identically
 - [x] vector_components_are_numeric_only
 - [x] string_payload_is_valid_utf8
-- [ ] json_payload_is_json_domain_only
+- [x] json_payload_is_json_domain_only
 - [x] validity_payload_cannot_be_arbitrary_bytes
 - [x] geometry_payload_cannot_be_arbitrary_bytes
 
@@ -289,11 +289,11 @@
 - [x] json_wraps_exactly_one_complete_value
 - [x] json_encoding_order_matches_inner_value_order
 - [x] json_encoding_is_injective
-- [ ] json_rejects_non_json_database_values
+- [x] json_rejects_non_json_database_values
 - [x] json_nested_lists_roundtrip
-- [ ] json_nested_objects_are_canonical
-- [ ] json_object_key_permutations_encode_identically
-- [ ] json_duplicate_object_keys_are_rejected_or_normalized
+- [x] json_nested_objects_are_canonical
+- [x] json_object_key_permutations_encode_identically
+- [x] json_duplicate_object_keys_are_rejected_or_normalized
 - [x] json_depth_boundary_matches_reader_policy
 - [x] json_golden_vectors_cover_every_json_kind
 

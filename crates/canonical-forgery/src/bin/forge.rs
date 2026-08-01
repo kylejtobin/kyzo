@@ -29,7 +29,9 @@
 //! without being tested.
 
 use canonical_trials::value;
-use value::canonical::{seal_null, seal_num_zero, seal_regex, RegexFlags, Repr, Validity};
+use value::canonical::{
+    seal_null, seal_num_zero, seal_regex, seal_uuid, RegexFlags, Repr, Utf8, Validity,
+};
 
 fn main() {
     // FORGERY: reach inside a sealed value and read its bytes directly.
@@ -118,4 +120,27 @@ fn main() {
     // FORGERY: scan with a depth counter of the forger's choosing.
     // EXPECT: E0603 function `sum_scan` is private
     let _ = value::canonical::sum_scan;
+
+    // FORGERY: put a database value that JSON has no kind for inside a JSON
+    // document.
+    // EXPECT: E0308 mismatched types
+    let _ = value::canonical::seal_json(seal_uuid(&[0u8; 16]));
+
+    // FORGERY: reach the raw wrapper, which does take any value.
+    // EXPECT: E0603 function `seal_json_raw` is private
+    let _ = value::canonical::seal_json_raw;
+
+    // FORGERY: build a JSON number that is not finite.
+    // EXPECT: E0599 no variant or associated item named `NotANumber` found for enum `JsonNumber`
+    let _ = value::canonical::JsonNumber::NotANumber(Repr::Float);
+
+    // FORGERY: build an object out of entries in the caller's own order,
+    // skipping the mint that sorts them and refuses a repeated key.
+    // EXPECT: E0603 function `seal_json_object` is private
+    let _ = value::canonical::seal_json_object;
+
+    // FORGERY: take an object entry apart to reach the pair it seals as.
+    // EXPECT: E0624 associated function `into_pair` is private
+    let _ = value::canonical::JsonEntry::new(Utf8::of("k"), value::canonical::JsonValue::null())
+        .into_pair();
 }
