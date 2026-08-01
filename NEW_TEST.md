@@ -4,12 +4,12 @@
 
 ## Immediate red-team
 
-- [ ] magnitude_all_significand_bits_affect_encoding
-- [ ] magnitude_encoding_is_injective_over_significand
-- [ ] finite_magnitude_cannot_equal_infinite_magnitude
-- [ ] negative_number_byte_order_matches_semantic_order
-- [ ] negative_infinity_sorts_below_every_finite_number
-- [ ] positive_infinity_sorts_above_every_finite_number
+- [x] magnitude_all_significand_bits_affect_encoding
+- [x] magnitude_encoding_is_injective_over_significand
+- [x] finite_magnitude_cannot_equal_infinite_magnitude
+- [x] negative_number_byte_order_matches_semantic_order
+- [x] negative_infinity_sorts_below_every_finite_number
+- [x] positive_infinity_sorts_above_every_finite_number
 - [ ] canonical_writer_output_is_always_readable
 - [ ] max_writer_nesting_never_exceeds_reader_capacity
 - [ ] scan_rejection_matches_spec_rejection_except_depth_limit

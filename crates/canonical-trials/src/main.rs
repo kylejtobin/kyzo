@@ -855,6 +855,152 @@ fn str_val(s: &[u8]) -> CanonicalBytes {
     seal_str(s)
 }
 
+
+// ============================== red team ====================================
+
+/// A larger magnitude is a smaller negative number, so its bytes must sort
+/// lower. Uncomplemented storage inverts this and the inversion is silent.
+fn negative_number_byte_order_matches_semantic_order(t: &mut Trials) {
+    let mut prev: Option<Vec<u8>> = None;
+    // Descending denotation: significand fixed, scale increasing, so each
+    // number is more negative than the last and must sort strictly below it.
+    for scale in 0u32..=400 {
+        let n = seal_num_negative(
+            &Magnitude::Finite { significand: 3, biased_scale: scale },
+            Repr::Int,
+        );
+        let cur = n.as_bytes().to_vec();
+        if let Some(before) = prev {
+            t.check(
+                "a more negative number sorts strictly below a less negative one",
+                lex_le_independent(&cur, &before) && cur != before,
+            );
+        }
+        prev = Some(cur);
+    }
+    // Same exponent, larger fraction: still more negative, still lower.
+    for sig in 1u64..=200 {
+        let a = seal_num_negative(
+            &Magnitude::Finite { significand: 256 + sig, biased_scale: 10 },
+            Repr::Int,
+        );
+        let b = seal_num_negative(
+            &Magnitude::Finite { significand: 256 + sig + 1, biased_scale: 10 },
+            Repr::Int,
+        );
+        t.check(
+            "within one exponent the larger fraction is the smaller negative",
+            lex_le_independent(b.as_bytes(), a.as_bytes()) && a.as_bytes() != b.as_bytes(),
+        );
+    }
+}
+
+fn negative_infinity_sorts_below_every_finite_number(t: &mut Trials) {
+    let ninf = seal_num_negative(&Magnitude::Infinite, Repr::Float);
+    for scale in [0u32, 1, 64, 1000, EXP_INFINITE - 66] {
+        for sig in [1u64, 2, 0xFFFF, u64::MAX] {
+            let m = Magnitude::Finite { significand: sig, biased_scale: scale };
+            let finite_neg = seal_num_negative(&m, Repr::Int);
+            t.check(
+                "negative infinity is below every finite negative",
+                lex_le_independent(ninf.as_bytes(), finite_neg.as_bytes())
+                    && ninf.as_bytes() != finite_neg.as_bytes(),
+            );
+            let finite_pos = seal_num_positive(&m, Repr::Int);
+            t.check(
+                "negative infinity is below every finite positive",
+                lex_le_independent(ninf.as_bytes(), finite_pos.as_bytes()),
+            );
+        }
+    }
+    let zero = seal_num_zero(Repr::Int);
+    t.check(
+        "negative infinity is below zero",
+        lex_le_independent(ninf.as_bytes(), zero.as_bytes()),
+    );
+}
+
+fn positive_infinity_sorts_above_every_finite_number(t: &mut Trials) {
+    let pinf = seal_num_positive(&Magnitude::Infinite, Repr::Float);
+    for scale in [0u32, 1, 64, 1000, EXP_INFINITE - 66] {
+        for sig in [1u64, 2, 0xFFFF, u64::MAX] {
+            let m = Magnitude::Finite { significand: sig, biased_scale: scale };
+            let finite_pos = seal_num_positive(&m, Repr::Int);
+            t.check(
+                "positive infinity is above every finite positive",
+                lex_le_independent(finite_pos.as_bytes(), pinf.as_bytes())
+                    && finite_pos.as_bytes() != pinf.as_bytes(),
+            );
+            let finite_neg = seal_num_negative(&m, Repr::Int);
+            t.check(
+                "positive infinity is above every finite negative",
+                lex_le_independent(finite_neg.as_bytes(), pinf.as_bytes()),
+            );
+        }
+    }
+}
+
+/// Every bit of the significand must reach the bytes. A constructor can take
+/// one value and still discard part of it.
+fn magnitude_all_significand_bits_affect_encoding(t: &mut Trials) {
+    for bit in 0u32..64 {
+        let base: u64 = u64::MAX;
+        let flipped: u64 = base ^ (1u64 << bit);
+        if flipped == 0 { continue; }
+        let a = seal_num_positive(
+            &Magnitude::Finite { significand: base, biased_scale: 0 },
+            Repr::Int,
+        );
+        let b = seal_num_positive(
+            &Magnitude::Finite { significand: flipped, biased_scale: 0 },
+            Repr::Int,
+        );
+        t.check(
+            "flipping any significand bit changes the encoding",
+            a.as_bytes() != b.as_bytes(),
+        );
+    }
+}
+
+/// Distinct denotations get distinct bytes; equal denotations get equal bytes.
+/// `1 x 2^1` and `2 x 2^0` are the same number and must collide on purpose.
+fn magnitude_encoding_is_injective_over_significand(t: &mut Trials) {
+    use std::collections::BTreeMap;
+    let mut seen: BTreeMap<Vec<u8>, u128> = BTreeMap::new();
+    for sig in 1u64..=300 {
+        for scale in 0u32..=40 {
+            let bytes = seal_num_positive(
+                &Magnitude::Finite { significand: sig, biased_scale: scale },
+                Repr::Int,
+            ).as_bytes().to_vec();
+            let value: u128 = (sig as u128) << scale;
+            match seen.get(&bytes) {
+                Some(prev) => t.check(
+                    "equal bytes only for equal denotation",
+                    *prev == value,
+                ),
+                None => { seen.insert(bytes, value); }
+            }
+        }
+    }
+}
+
+fn finite_magnitude_cannot_equal_infinite_magnitude(t: &mut Trials) {
+    let inf = seal_num_positive(&Magnitude::Infinite, Repr::Int);
+    // The greatest finite the type admits, plus a sweep near the ceiling.
+    for scale in (EXP_INFINITE - 80)..(EXP_INFINITE - 64) {
+        let fin = seal_num_positive(
+            &Magnitude::Finite { significand: u64::MAX, biased_scale: scale },
+            Repr::Int,
+        );
+        t.check(
+            "no finite magnitude reaches the infinity sentinel",
+            fin.as_bytes() != inf.as_bytes()
+                && lex_le_independent(fin.as_bytes(), inf.as_bytes()),
+        );
+    }
+}
+
 fn main() {
     println!("canonical-trials: adversarial campaign against the order law\n");
 
@@ -893,6 +1039,15 @@ fn main() {
     attack_json_is_the_value_grammar(&mut t);
     attack_high_bytes(&mut t);
     t.report("total");
+
+    println!("red team");
+    negative_number_byte_order_matches_semantic_order(&mut t);
+    negative_infinity_sorts_below_every_finite_number(&mut t);
+    positive_infinity_sorts_above_every_finite_number(&mut t);
+    magnitude_all_significand_bits_affect_encoding(&mut t);
+    magnitude_encoding_is_injective_over_significand(&mut t);
+    finite_magnitude_cannot_equal_infinite_magnitude(&mut t);
+    t.report("red team");
 
     if t.failed.is_empty() {
         println!("\nall {} checks passed", t.run.count());

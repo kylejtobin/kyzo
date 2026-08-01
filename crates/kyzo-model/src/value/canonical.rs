@@ -2867,6 +2867,31 @@ impl Magnitude {
         }
     }
 
+    /// The payload complemented, then the tie-break uncomplemented.
+    ///
+    /// ORDER_LAW: a larger magnitude is a smaller negative number, so the
+    /// negative class stores the complement and its order reverses. The
+    /// tie-break is not complemented, so `Int` sorts before `Float` in both
+    /// classes rather than flipping with the sign.
+    pub fn body_negated(&self, tie: Repr) -> (r: Vec<u8>)
+        requires match self {
+            Magnitude::Finite { significand, biased_scale } =>
+                *significand > 0 && *biased_scale + 64 < EXP_INFINITE,
+            Magnitude::Infinite => true,
+        }
+        ensures r@.len() == MAG_BYTES + 1
+    {
+        let p = be_bytes(self.packed(), MAG_BYTES);
+        let mut b: Vec<u8> = Vec::new();
+        let mut i: usize = 0;
+        while i < MAG_BYTES
+            invariant 0 <= i <= MAG_BYTES, b@.len() == i, p@.len() == MAG_BYTES
+            decreases MAG_BYTES - i
+        { b.push(!p[i]); i = i + 1; }
+        b.push(tie.byte());
+        b
+    }
+
     /// The payload, big-endian, `MAG_BYTES` wide, then the tie-break.
     pub fn body(&self, tie: Repr) -> (r: Vec<u8>)
         requires match self {
@@ -2892,7 +2917,7 @@ pub fn seal_num_negative(mag: &Magnitude, tie: Repr) -> (r: CanonicalBytes)
     }
 {
     proof { lemma_tag_shapes(); lemma_branch_shapes(); }
-    let inner = Body::fixed(mag.body(tie));
+    let inner = Body::fixed(mag.body_negated(tie));
     seal(TAG_NUM, Body::select(Ghost(num_branches()), 0x01, inner))
 }
 
