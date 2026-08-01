@@ -2295,68 +2295,146 @@ pub fn seal_num_zero(tie: Repr) -> (r: CanonicalBytes) {
 /// exponent above fraction above tie-break is what makes numeric order equal
 /// byte order. Reordering the fields is a format break.
 // CONSTRUCT: SealedProduct Magnitude
-pub struct Magnitude {
-    bytes: Vec<u8>,
+/// Bytes of exponent-and-fraction, before the tie-break.
+pub const MAG_BYTES: usize = 11;
+/// Bits of fraction. Every shift in `packed` derives from it.
+pub const FRAC_BITS: u32 = 72;
+/// A saturated fraction: every bit of the field set. `lemma_frac_mask` binds
+/// it to `FRAC_BITS`, so the two cannot drift apart silently.
+pub const FRAC_MASK: u128 = 0xFFFFFFFFFFFFFFFFFFu128;
+
+pub proof fn lemma_frac_mask()
+    ensures FRAC_MASK == (1u128 << FRAC_BITS) - 1
+{ assert(0xFFFFFFFFFFFFFFFFFFu128 == (1u128 << 72u32) - 1) by (bit_vector); }
+/// The exponent value no finite magnitude may take, so that `Infinite` sorts
+/// above every one of them.
+pub const EXP_INFINITE: u32 = 0xFFFF;
+
+// CONSTRUCT: ClosedSum Magnitude
+pub enum Magnitude {
+    /// `significand × 2^(biased_scale)`, the scale biased so the field is
+    /// unsigned and its numeric order is its byte order.
+    Finite { significand: u64, biased_scale: u32 },
+    Infinite,
+}
+
+/// Bit-length of a non-zero value: the width the significand occupies, which
+/// decides both the exponent and how far the fraction is left-aligned.
+pub fn bit_len(v: u64) -> (r: u32)
+    requires v > 0
+    ensures 1 <= r <= 64
+{
+    let mut n: u32 = 0;
+    let mut x: u64 = v;
+    while x > 0 && n < 64
+        invariant n <= 64
+        decreases 64 - n
+    { x = x / 2; n = n + 1; }
+    if n == 0 { 1 } else { n }
+}
+
+/// The one `as` in this file, at the one place it is proven lossless.
+fn low_byte(v: u128) -> (r: u8)
+    requires v < 256
+    ensures r as u128 == v
+{ v as u8 }
+
+/// `v` big-endian in exactly `width` bytes: the sole byte-order writer, so
+/// numeric order is byte order in one place rather than at each call site.
+pub fn be_bytes(v: u128, width: usize) -> (r: Vec<u8>)
+    requires width <= 16
+    ensures r@.len() == width
+{
+    let mut b: Vec<u8> = Vec::new();
+    let mut i: usize = 0;
+    while i < width
+        invariant 0 <= i <= width, b@.len() == i, width <= 16
+        decreases width - i
+    {
+        let shift: u32 = ((width - 1 - i) * 8) as u32;
+        let byte: u128 = (v >> shift) & 0xff;
+        proof { assert(((v >> shift) & 0xff) < 256) by (bit_vector); }
+        b.push(low_byte(byte));
+        i = i + 1;
+    }
+    b
 }
 
 impl Magnitude {
-    pub closed spec fn spec_bytes(&self) -> Seq<u8> { self.bytes@ }
-
-    #[verifier::type_invariant]
-    closed spec fn wf_magnitude(&self) -> bool { self.bytes@.len() == 12 }
-
-    /// `exponent` is biased; `fraction` is left-aligned in its 80 bits.
-    pub fn finite(exponent: u16, fraction_hi: u64, fraction_lo: u16, tie: Repr) -> (r: Magnitude)
-        ensures r.spec_bytes().len() == 12
+    /// The exponent this magnitude carries. `Infinite`'s is the reserved one.
+    pub fn exponent(&self) -> (r: u32)
+        requires match self {
+            Magnitude::Finite { significand, biased_scale } =>
+                *significand > 0 && *biased_scale + 64 < EXP_INFINITE,
+            Magnitude::Infinite => true,
+        }
+        ensures r <= EXP_INFINITE
     {
-        let mut b: Vec<u8> = Vec::new();
-        b.push(((exponent >> 8) & 0xff) as u8);
-        b.push((exponent & 0xff) as u8);
-        b.push(((fraction_hi >> 56) & 0xff) as u8);
-        b.push(((fraction_hi >> 48) & 0xff) as u8);
-        b.push(((fraction_hi >> 40) & 0xff) as u8);
-        b.push(((fraction_hi >> 32) & 0xff) as u8);
-        b.push(((fraction_hi >> 24) & 0xff) as u8);
-        b.push(((fraction_hi >> 16) & 0xff) as u8);
-        b.push(((fraction_hi >> 8) & 0xff) as u8);
-        b.push((fraction_hi & 0xff) as u8);
-        b.push(((fraction_lo >> 8) & 0xff) as u8);
-        b.push(tie.byte());
-        Magnitude { bytes: b }
+        match self {
+            Magnitude::Finite { significand, biased_scale } => bit_len(*significand) + *biased_scale,
+            Magnitude::Infinite => EXP_INFINITE,
+        }
     }
 
-    /// The greatest value the fields admit: exponent sentinel, saturated fraction.
-    pub fn infinite(tie: Repr) -> (r: Magnitude)
-        ensures r.spec_bytes().len() == 12
+    /// Exponent in the high 16 bits, fraction left-aligned below it. One
+    /// expression, so the layout has no second place to disagree with itself.
+    fn packed(&self) -> (r: u128)
+        requires match self {
+            Magnitude::Finite { significand, biased_scale } =>
+                *significand > 0 && *biased_scale + 64 < EXP_INFINITE,
+            Magnitude::Infinite => true,
+        }
     {
-        let mut b: Vec<u8> = Vec::new();
-        b.push(0xffu8);
-        b.push(0xffu8);
-        let mut i: usize = 0;
-        while i < 9
-            invariant 0 <= i <= 9, b@.len() == 2 + i
-            decreases 9 - i
-        { b.push(0xffu8); i = i + 1; }
-        b.push(tie.byte());
-        Magnitude { bytes: b }
+        match self {
+            Magnitude::Finite { significand, biased_scale } => {
+                let bits = bit_len(*significand);
+                let exponent: u128 = (bit_len(*significand) + *biased_scale) as u128;
+                (exponent << FRAC_BITS) | ((*significand as u128) << (FRAC_BITS - bits))
+            }
+            Magnitude::Infinite => {
+                ((EXP_INFINITE as u128) << FRAC_BITS) | FRAC_MASK
+            }
+        }
     }
 
-    fn as_slice(&self) -> (r: &[u8])
-        ensures r@ =~= self.spec_bytes()
-    { self.bytes.as_slice() }
+    /// The payload, big-endian, `MAG_BYTES` wide, then the tie-break.
+    pub fn body(&self, tie: Repr) -> (r: Vec<u8>)
+        requires match self {
+            Magnitude::Finite { significand, biased_scale } =>
+                *significand > 0 && *biased_scale + 64 < EXP_INFINITE,
+            Magnitude::Infinite => true,
+        }
+        ensures r@.len() == MAG_BYTES + 1
+    {
+        let mut b = be_bytes(self.packed(), MAG_BYTES);
+        b.push(tie.byte());
+        b
+    }
 }
 
 /// A signed magnitude. The class byte is not a parameter — the door the caller
 /// picks IS the class, so a magnitude cannot be filed under the wrong sign.
-pub fn seal_num_negative(mag: &Magnitude) -> (r: CanonicalBytes) {
-    proof { lemma_tag_shapes(); lemma_branch_shapes(); use_type_invariant(mag); }
-    let inner = Body::fixed(owned(mag.as_slice()));
+pub fn seal_num_negative(mag: &Magnitude, tie: Repr) -> (r: CanonicalBytes)
+    requires match mag {
+        Magnitude::Finite { significand, biased_scale } =>
+            *significand > 0 && *biased_scale + 64 < EXP_INFINITE,
+        Magnitude::Infinite => true,
+    }
+{
+    proof { lemma_tag_shapes(); lemma_branch_shapes(); }
+    let inner = Body::fixed(mag.body(tie));
     seal(TAG_NUM, Body::select(Ghost(num_branches()), 0x01, inner))
 }
 
-pub fn seal_num_positive(mag: &Magnitude) -> (r: CanonicalBytes) {
-    proof { lemma_tag_shapes(); lemma_branch_shapes(); use_type_invariant(mag); }
-    let inner = Body::fixed(owned(mag.as_slice()));
+pub fn seal_num_positive(mag: &Magnitude, tie: Repr) -> (r: CanonicalBytes)
+    requires match mag {
+        Magnitude::Finite { significand, biased_scale } =>
+            *significand > 0 && *biased_scale + 64 < EXP_INFINITE,
+        Magnitude::Infinite => true,
+    }
+{
+    proof { lemma_tag_shapes(); lemma_branch_shapes(); }
+    let inner = Body::fixed(mag.body(tie));
     seal(TAG_NUM, Body::select(Ghost(num_branches()), 0x03, inner))
 }
 
@@ -2419,23 +2497,19 @@ pub fn seal_json(v: &CanonicalBytes) -> (r: CanonicalBytes)
     ensures r.view() =~= seq![TAG_JSON] + v.view()
 { proof { lemma_tag_shapes(); } seal(TAG_JSON, Body::value(v)) }
 
+/// Width of the dimension field, in bytes.
+pub const DIM_BYTES: usize = 4;
+
 /// Dimension, then components.
 ///
-/// The dimension is written big-endian so numeric order is byte order: two
-/// vectors of different length order by length before either is examined, and
-/// a shorter one can never be a prefix of a longer one. There is no fixed
-/// width here on purpose — dimensionality is a per-row fact, and a door that
-/// pinned it would make that fact a property of the type.
+/// ORDER_LAW: the dimension sorts first, so two vectors of different length
+/// order by length before either is examined and a shorter one is never a
+/// prefix of a longer one.
 pub fn seal_vector(components: &Vec<CanonicalBytes>) -> (r: CanonicalBytes)
-    requires components.len() <= 0xFFFF_FFFFu32
+    requires components.len() < 0x1_0000_0000u64
 {
     proof { lemma_tag_shapes(); }
-    let dim: u32 = components.len() as u32;
-    let mut d: Vec<u8> = Vec::new();
-    d.push(((dim >> 24) & 0xff) as u8);
-    d.push(((dim >> 16) & 0xff) as u8);
-    d.push(((dim >> 8) & 0xff) as u8);
-    d.push((dim & 0xff) as u8);
+    let d = be_bytes(components.len() as u128, DIM_BYTES);
     seal(TAG_VECTOR, Body::product(Body::fixed(d), Body::row(components)))
 }
 
