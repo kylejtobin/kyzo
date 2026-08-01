@@ -2260,37 +2260,113 @@ pub fn seal_bool(v: bool) -> (r: CanonicalBytes)
     if v { seal(TAG_TRUE, b) } else { seal(TAG_FALSE, b) }
 }
 
+/// How a number was written. The tie-break every numeric body ends with, so
+/// `1` and `1.0` compare equal on magnitude and separate here.
+// CONSTRUCT: ClosedSum Repr
+pub enum Repr {
+    Int,
+    Float,
+}
+
+impl Repr {
+    pub open spec fn spec_byte(self) -> u8 {
+        match self { Repr::Int => 0x00u8, Repr::Float => 0x01u8 }
+    }
+
+    pub fn byte(self) -> (r: u8)
+        ensures r == self.spec_byte()
+    {
+        match self { Repr::Int => 0x00u8, Repr::Float => 0x01u8 }
+    }
+}
+
 /// Zero carries only the representation tie-break: there is no magnitude to
 /// write, so there is no door that takes one.
-pub fn seal_num_zero(tie: u8) -> (r: CanonicalBytes) {
+pub fn seal_num_zero(tie: Repr) -> (r: CanonicalBytes) {
     proof { lemma_tag_shapes(); lemma_branch_shapes(); }
-    let inner = Body::fixed(owned(&[tie]));
+    let inner = Body::fixed(owned(&[tie.byte()]));
     seal(TAG_NUM, Body::select(Ghost(num_branches()), 0x02, inner))
 }
 
-/// A signed magnitude: exponent, fraction and tie-break, twelve bytes of it.
-/// The class byte is not a parameter — the door the caller picks IS the class,
-/// so a magnitude cannot be filed under the wrong sign.
-pub fn seal_num_negative(mag: &[u8; 12]) -> (r: CanonicalBytes) {
-    proof { lemma_tag_shapes(); lemma_branch_shapes(); }
+/// A number's magnitude as stored: a 16-bit biased exponent, then an 80-bit
+/// fraction, then the representation tie-break, big-endian throughout.
+///
+/// ORDER_LAW: ascending, exponent first. The field order is the order law —
+/// exponent above fraction above tie-break is what makes numeric order equal
+/// byte order. Reordering the fields is a format break.
+// CONSTRUCT: SealedProduct Magnitude
+pub struct Magnitude {
+    bytes: Vec<u8>,
+}
+
+impl Magnitude {
+    pub closed spec fn spec_bytes(&self) -> Seq<u8> { self.bytes@ }
+
+    #[verifier::type_invariant]
+    closed spec fn wf_magnitude(&self) -> bool { self.bytes@.len() == 12 }
+
+    /// `exponent` is biased; `fraction` is left-aligned in its 80 bits.
+    pub fn finite(exponent: u16, fraction_hi: u64, fraction_lo: u16, tie: Repr) -> (r: Magnitude)
+        ensures r.spec_bytes().len() == 12
+    {
+        let mut b: Vec<u8> = Vec::new();
+        b.push(((exponent >> 8) & 0xff) as u8);
+        b.push((exponent & 0xff) as u8);
+        b.push(((fraction_hi >> 56) & 0xff) as u8);
+        b.push(((fraction_hi >> 48) & 0xff) as u8);
+        b.push(((fraction_hi >> 40) & 0xff) as u8);
+        b.push(((fraction_hi >> 32) & 0xff) as u8);
+        b.push(((fraction_hi >> 24) & 0xff) as u8);
+        b.push(((fraction_hi >> 16) & 0xff) as u8);
+        b.push(((fraction_hi >> 8) & 0xff) as u8);
+        b.push((fraction_hi & 0xff) as u8);
+        b.push(((fraction_lo >> 8) & 0xff) as u8);
+        b.push(tie.byte());
+        Magnitude { bytes: b }
+    }
+
+    /// The greatest value the fields admit: exponent sentinel, saturated fraction.
+    pub fn infinite(tie: Repr) -> (r: Magnitude)
+        ensures r.spec_bytes().len() == 12
+    {
+        let mut b: Vec<u8> = Vec::new();
+        b.push(0xffu8);
+        b.push(0xffu8);
+        let mut i: usize = 0;
+        while i < 9
+            invariant 0 <= i <= 9, b@.len() == 2 + i
+            decreases 9 - i
+        { b.push(0xffu8); i = i + 1; }
+        b.push(tie.byte());
+        Magnitude { bytes: b }
+    }
+
+    fn as_slice(&self) -> (r: &[u8])
+        ensures r@ =~= self.spec_bytes()
+    { self.bytes.as_slice() }
+}
+
+/// A signed magnitude. The class byte is not a parameter — the door the caller
+/// picks IS the class, so a magnitude cannot be filed under the wrong sign.
+pub fn seal_num_negative(mag: &Magnitude) -> (r: CanonicalBytes) {
+    proof { lemma_tag_shapes(); lemma_branch_shapes(); use_type_invariant(mag); }
     let inner = Body::fixed(owned(mag.as_slice()));
     seal(TAG_NUM, Body::select(Ghost(num_branches()), 0x01, inner))
 }
 
-pub fn seal_num_positive(mag: &[u8; 12]) -> (r: CanonicalBytes) {
-    proof { lemma_tag_shapes(); lemma_branch_shapes(); }
+pub fn seal_num_positive(mag: &Magnitude) -> (r: CanonicalBytes) {
+    proof { lemma_tag_shapes(); lemma_branch_shapes(); use_type_invariant(mag); }
     let inner = Body::fixed(owned(mag.as_slice()));
     seal(TAG_NUM, Body::select(Ghost(num_branches()), 0x03, inner))
 }
 
 /// Not a number, and above every number.
 ///
-/// Takes the representation byte rather than writing one, because the byte is
-/// `number.rs`'s and this door is only the frame. A caller that has a NaN got
-/// it from `Num`, so it has the byte `Num` would write.
-pub fn seal_num_nan(repr: u8) -> (r: CanonicalBytes) {
+/// NaN is reachable only from a float, so the representation tie-break has one
+/// admissible value and this door writes it.
+pub fn seal_num_nan() -> (r: CanonicalBytes) {
     proof { lemma_tag_shapes(); lemma_branch_shapes(); }
-    let inner = Body::fixed(owned(&[repr]));
+    let inner = Body::fixed(owned(&[Repr::Float.byte()]));
     seal(TAG_NUM, Body::select(Ghost(num_branches()), 0x04, inner))
 }
 
@@ -2308,11 +2384,33 @@ pub fn seal_uuid(id: &[u8; 16]) -> (r: CanonicalBytes) {
     seal(TAG_UUID, b)
 }
 
+/// The regex flags that survive into stored bytes. Bit 0 case-insensitive,
+/// bit 1 multi-line, bit 2 dot-matches-newline.
+// CONSTRUCT: ValueObject RegexFlags
+pub struct RegexFlags {
+    case_insensitive: bool,
+    multi_line: bool,
+    dot_matches_new_line: bool,
+}
+
+impl RegexFlags {
+    pub fn new(case_insensitive: bool, multi_line: bool, dot_matches_new_line: bool) -> (r: RegexFlags) {
+        RegexFlags { case_insensitive, multi_line, dot_matches_new_line }
+    }
+
+    pub fn byte(&self) -> (r: u8) {
+        let a: u8 = if self.case_insensitive { 1 } else { 0 };
+        let b: u8 = if self.multi_line { 2 } else { 0 };
+        let c: u8 = if self.dot_matches_new_line { 4 } else { 0 };
+        a | b | c
+    }
+}
+
 /// A regex is identified by its pattern, so the pattern sorts first and the
 /// flags break ties. The order of the two is the grammar's, not the caller's.
-pub fn seal_regex(pattern: &[u8], flags: u8) -> (r: CanonicalBytes) {
+pub fn seal_regex(pattern: &[u8], flags: &RegexFlags) -> (r: CanonicalBytes) {
     proof { lemma_tag_shapes(); }
-    let f = Body::fixed(owned(&[flags]));
+    let f = Body::fixed(owned(&[flags.byte()]));
     seal(TAG_REGEX, Body::product(Body::delimited(pattern), f))
 }
 
@@ -2328,10 +2426,11 @@ pub fn seal_json(v: &CanonicalBytes) -> (r: CanonicalBytes)
 /// a shorter one can never be a prefix of a longer one. There is no fixed
 /// width here on purpose — dimensionality is a per-row fact, and a door that
 /// pinned it would make that fact a property of the type.
-pub fn seal_vector(dim: u32, components: &Vec<CanonicalBytes>) -> (r: CanonicalBytes) {
+pub fn seal_vector(components: &Vec<CanonicalBytes>) -> (r: CanonicalBytes)
+    requires components.len() <= 0xFFFF_FFFFu32
+{
     proof { lemma_tag_shapes(); }
-    // Written out rather than `to_be_bytes` so the width is four by
-    // construction, which is the obligation `Body::fixed` discharges.
+    let dim: u32 = components.len() as u32;
     let mut d: Vec<u8> = Vec::new();
     d.push(((dim >> 24) & 0xff) as u8);
     d.push(((dim >> 16) & 0xff) as u8);
