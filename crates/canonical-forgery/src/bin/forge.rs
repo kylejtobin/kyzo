@@ -101,7 +101,7 @@ fn main() {
 
     // FORGERY: choose the marker byte an interval end is written with.
     // EXPECT: E0599 no variant named `Marker` found for enum `Bound`
-    let _ = value::canonical::Bound::Marker(0x01);
+    let _ = value::canonical::IntervalEnd::Marker(0x01);
 
     // FORGERY: write a row under the Set tag in the caller's own order.
     // EXPECT: E0603 function `seal_set` is private

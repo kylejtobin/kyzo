@@ -32,11 +32,11 @@ use value::canonical;
 use value::codec::{CanonicalJsonObject, CanonicalSet};
 
 use canonical::{
-    Bound, Refusal, Utf8, NumericBytes, Branches, Reason, grammar_exec, CanonicalBytes, Shape, escape, scan_value, seal_bool, seal_bytes,
+    IntervalEnd, Refusal, Utf8, NumericBytes, Branches, Reason, grammar_exec, CanonicalBytes, Shape, escape, scan_value, seal_bool, seal_bytes,
     seal_geometry, seal_interval, seal_interval_empty, seal_json, seal_list, seal_null,
     seal_num_negative, seal_num_nan, seal_num_positive, seal_num_zero, seal_regex, seal_set, seal_str,
     FiniteMagnitude, Magnitude, Repr, RegexFlag, RegexFlags, EXP_INFINITE, DIM_BYTES, MAG_BYTES,
-    seal_uuid, seal_validity, seal_vector, shape_scan, Components, Geometry, RowItem, Validity,
+    seal_uuid, seal_validity, seal_vector, shape_scan, Components, CurveIndex, RowItem, Validity,
     Wrapped, MAX_DIMENSION, JsonEntry, JsonNumber, JsonValue,
 };
 
@@ -590,9 +590,9 @@ fn trial_grammar_table(t: &mut Trials) {
         (seal_set(&Vec::new()), 2, "Set: tag, terminator"),
         (seal_validity(&validity(0, true)), 10, "Validity: tag, 9"),
         (seal_interval_empty(), 2, "Interval empty: tag, marker"),
-        (seal_interval(&Bound::Unbounded, &Bound::Unbounded), 4, "Interval: tag, marker, two ends"),
-        (seal_interval(&Bound::At([0x00; 8]), &Bound::Unbounded), 12, "Interval: lo at"),
-        (seal_geometry(&Geometry::new(0)), 9, "Geometry: tag, 8"),
+        (seal_interval(&IntervalEnd::Unbounded, &IntervalEnd::Unbounded), 4, "Interval: tag, marker, two ends"),
+        (seal_interval(&IntervalEnd::At([0x00; 8]), &IntervalEnd::Unbounded), 12, "Interval: lo at"),
+        (seal_geometry(&CurveIndex::new(0)), 9, "Geometry: tag, 8"),
     ];
     let g = grammar_exec();
     for (v, want, label) in &cases {
@@ -622,7 +622,7 @@ fn trial_grammar_table(t: &mut Trials) {
         (seal_set(&Vec::new()), TAG_SET, "Set tag"),
         (seal_validity(&validity(0, true)), TAG_VALIDITY, "Validity tag"),
         (seal_interval_empty(), TAG_INTERVAL, "Interval tag"),
-        (seal_geometry(&Geometry::new(0)), TAG_GEOMETRY, "Geometry tag"),
+        (seal_geometry(&CurveIndex::new(0)), TAG_GEOMETRY, "Geometry tag"),
     ];
     for (v, tag, label) in &leads {
         t.check(label, v.as_bytes()[0] == *tag);
@@ -758,16 +758,16 @@ fn attack_vector_dimension_leads(t: &mut Trials) {
 }
 
 fn attack_interval_infinities(t: &mut Trials) {
-    let lo_unbounded = seal_interval(&Bound::Unbounded, &Bound::At([0x00; 8]));
-    let lo_at_min = seal_interval(&Bound::At([0x00; 8]), &Bound::At([0x00; 8]));
+    let lo_unbounded = seal_interval(&IntervalEnd::Unbounded, &IntervalEnd::At([0x00; 8]));
+    let lo_at_min = seal_interval(&IntervalEnd::At([0x00; 8]), &IntervalEnd::At([0x00; 8]));
     t.check(
         "unbounded below sorts under every instant",
         lex_le_independent(lo_unbounded.as_bytes(), lo_at_min.as_bytes())
             && lo_unbounded.as_bytes() != lo_at_min.as_bytes(),
     );
 
-    let hi_at_max = seal_interval(&Bound::Unbounded, &Bound::At([0xFF; 8]));
-    let hi_unbounded = seal_interval(&Bound::Unbounded, &Bound::Unbounded);
+    let hi_at_max = seal_interval(&IntervalEnd::Unbounded, &IntervalEnd::At([0xFF; 8]));
+    let hi_unbounded = seal_interval(&IntervalEnd::Unbounded, &IntervalEnd::Unbounded);
     t.check(
         "unbounded above sorts over every instant",
         lex_le_independent(hi_at_max.as_bytes(), hi_unbounded.as_bytes())
@@ -776,19 +776,19 @@ fn attack_interval_infinities(t: &mut Trials) {
 
     // Exhaustive over each end, holding the other fixed so the comparison is
     // about the end under test and nothing else.
-    let lo_unb = seal_interval(&Bound::Unbounded, &Bound::Unbounded);
+    let lo_unb = seal_interval(&IntervalEnd::Unbounded, &IntervalEnd::Unbounded);
     for x in 0u16..=255 {
         let mut at = [0x00; 8];
         at[0] = x as u8;
 
-        let lo_bounded = seal_interval(&Bound::At(at), &Bound::Unbounded);
+        let lo_bounded = seal_interval(&IntervalEnd::At(at), &IntervalEnd::Unbounded);
         t.check(
             "unbounded below is strictly under every one of 256 lower ends",
             lex_le_independent(lo_unb.as_bytes(), lo_bounded.as_bytes())
                 && lo_unb.as_bytes() != lo_bounded.as_bytes(),
         );
 
-        let hi_bounded = seal_interval(&Bound::Unbounded, &Bound::At(at));
+        let hi_bounded = seal_interval(&IntervalEnd::Unbounded, &IntervalEnd::At(at));
         t.check(
             "unbounded above is strictly over every one of 256 upper ends",
             lex_le_independent(hi_bounded.as_bytes(), hi_unbounded.as_bytes())
@@ -1235,7 +1235,7 @@ fn inverted_interval_is_unconstructible(t: &mut Trials) {
     ];
     for (i, a) in points.iter().enumerate() {
         for b in points.iter().skip(i) {
-            let iv = seal_interval(&Bound::At(*a), &Bound::At(*b));
+            let iv = seal_interval(&IntervalEnd::At(*a), &IntervalEnd::At(*b));
             let bytes = iv.as_bytes();
             t.check(
                 "an ordered interval seals and reads back exactly",
@@ -1244,8 +1244,8 @@ fn inverted_interval_is_unconstructible(t: &mut Trials) {
         }
         // Hold the upper end fixed and vary the lower: unbounded must sort under
         // every point.
-        let open_lo = seal_interval(&Bound::Unbounded, &Bound::Unbounded);
-        let at_lo = seal_interval(&Bound::At(*a), &Bound::Unbounded);
+        let open_lo = seal_interval(&IntervalEnd::Unbounded, &IntervalEnd::Unbounded);
+        let at_lo = seal_interval(&IntervalEnd::At(*a), &IntervalEnd::Unbounded);
         t.check(
             "unbounded below sorts under a bounded lower end",
             lex_le_independent(open_lo.as_bytes(), at_lo.as_bytes())
@@ -1253,8 +1253,8 @@ fn inverted_interval_is_unconstructible(t: &mut Trials) {
         );
         // Hold the lower end fixed and vary the upper: unbounded must sort over
         // every point.
-        let at_hi = seal_interval(&Bound::At(*a), &Bound::At([0xFF; 8]));
-        let open_hi = seal_interval(&Bound::At(*a), &Bound::Unbounded);
+        let at_hi = seal_interval(&IntervalEnd::At(*a), &IntervalEnd::At([0xFF; 8]));
+        let open_hi = seal_interval(&IntervalEnd::At(*a), &IntervalEnd::Unbounded);
         t.check(
             "unbounded above sorts over a bounded upper end",
             lex_le_independent(at_hi.as_bytes(), open_hi.as_bytes())
@@ -1355,8 +1355,8 @@ fn validity_orders_latest_first(t: &mut Trials) {
 fn geometry_orders_by_curve_index(t: &mut Trials) {
     for a in [0u64, 1, 255, 256, 1 << 32, u64::MAX - 1] {
         for b in [0u64, 1, 255, 256, 1 << 32, u64::MAX - 1] {
-            let x = seal_geometry(&Geometry::new(a));
-            let y = seal_geometry(&Geometry::new(b));
+            let x = seal_geometry(&CurveIndex::new(a));
+            let y = seal_geometry(&CurveIndex::new(b));
             t.check(
                 "geometry byte order is curve-index order",
                 (x.as_bytes() < y.as_bytes()) == (a < b),
@@ -1406,10 +1406,10 @@ fn red_team_corpus() -> Vec<CanonicalBytes> {
         seal_list(&vec_of(2).into_iter().map(|n| n.into_row_item()).collect()),
         seal_set(&Vec::new()),
         seal_validity(&validity(0, true)),
-        seal_geometry(&Geometry::new(0)),
+        seal_geometry(&CurveIndex::new(0)),
         seal_interval_empty(),
-        seal_interval(&Bound::Unbounded, &Bound::Unbounded),
-        seal_interval(&Bound::At([0x00; 8]), &Bound::At([0xFF; 8])),
+        seal_interval(&IntervalEnd::Unbounded, &IntervalEnd::Unbounded),
+        seal_interval(&IntervalEnd::At([0x00; 8]), &IntervalEnd::At([0xFF; 8])),
     ]
 }
 
@@ -2014,14 +2014,14 @@ fn built(v: &reference::Sem) -> CanonicalBytes {
         }
         Sem::Interval(None) => seal_interval_empty(),
         Sem::Interval(Some((lo, hi))) => seal_interval(&bound_of(*lo), &bound_of(*hi)),
-        Sem::Geometry(curve_index) => seal_geometry(&Geometry::new(*curve_index)),
+        Sem::Geometry(curve_index) => seal_geometry(&CurveIndex::new(*curve_index)),
     }
 }
 
-fn bound_of(b: reference::Bound) -> Bound {
+fn bound_of(b: reference::Bound) -> IntervalEnd {
     match b {
-        reference::Bound::Unbounded => Bound::Unbounded,
-        reference::Bound::At(t) => Bound::At(t),
+        reference::Bound::Unbounded => IntervalEnd::Unbounded,
+        reference::Bound::At(t) => IntervalEnd::At(t),
     }
 }
 
@@ -2592,7 +2592,7 @@ fn validity_and_geometry_are_injective(t: &mut Trials) {
     }
     let mut points: Vec<(Vec<u8>, u64)> = Vec::new();
     for c in [0u64, 1, 2, 255, 256, 1 << 31, 1 << 32, u64::MAX - 1, u64::MAX] {
-        let bytes = seal_geometry(&Geometry::new(c)).as_bytes().to_vec();
+        let bytes = seal_geometry(&CurveIndex::new(c)).as_bytes().to_vec();
         for (other, oc) in &points {
             t.check(
                 "distinct curve indices encode distinctly",
@@ -2630,7 +2630,7 @@ fn geometry_golden_vectors_cover_spatial_boundaries(t: &mut Trials) {
         (u64::MAX, [0x68, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]),
     ];
     for (curve_index, expected) in &cases {
-        let sealed = seal_geometry(&Geometry::new(*curve_index));
+        let sealed = seal_geometry(&CurveIndex::new(*curve_index));
         t.check("a geometry encodes to its pinned bytes", sealed.as_bytes() == expected);
     }
 }
@@ -2639,7 +2639,7 @@ fn geometry_golden_vectors_cover_spatial_boundaries(t: &mut Trials) {
 /// 2^64 points has an encoding, and the payload is the index big-endian.
 fn geometry_payload_is_eight_bytes_of_index(t: &mut Trials) {
     for c in [0u64, 1, 0x0102_0304_0506_0708, u64::MAX] {
-        let sealed = seal_geometry(&Geometry::new(c));
+        let sealed = seal_geometry(&CurveIndex::new(c));
         let bytes = sealed.as_bytes();
         t.check("a geometry is a tag and eight payload bytes", bytes.len() == 9);
         t.check("a geometry opens with its tag", bytes[0] == TAG_GEOMETRY);
@@ -2656,7 +2656,7 @@ fn geometry_payload_is_eight_bytes_of_index(t: &mut Trials) {
 /// door takes a [`Geometry`], so there is no argument that could carry them.
 fn geometry_invalid_states_are_unconstructible(t: &mut Trials) {
     for c in [0u64, 1, u64::MAX] {
-        let from_meaning = seal_geometry(&Geometry::new(c));
+        let from_meaning = seal_geometry(&CurveIndex::new(c));
         t.check(
             "the only geometry payload is one a curve index produced",
             from_meaning.as_bytes()[1..] == c.to_be_bytes(),
@@ -3224,7 +3224,7 @@ fn empty_interval_has_exactly_one_encoding(t: &mut Trials) {
 
 fn unbounded_lower_sorts_before_every_bounded_lower(t: &mut Trials) {
     use reference::Bound as B;
-    let open = seal_interval(&Bound::Unbounded, &Bound::Unbounded);
+    let open = seal_interval(&IntervalEnd::Unbounded, &IntervalEnd::Unbounded);
     for (kind, bytes) in interval_corpus() {
         match kind {
             Some((B::At(_), _)) => t.check(
@@ -3241,7 +3241,7 @@ fn unbounded_upper_sorts_after_every_bounded_upper(t: &mut Trials) {
     for (kind, bytes) in interval_corpus() {
         match kind {
             Some((lo, B::At(_))) => {
-                let open_above = seal_interval(&bound_of(lo), &Bound::Unbounded);
+                let open_above = seal_interval(&bound_of(lo), &IntervalEnd::Unbounded);
                 t.check(
                     "an unbounded upper end sorts above every instant",
                     bytes.as_bytes() < open_above.as_bytes(),
@@ -3314,8 +3314,8 @@ fn cmp_bound_high(a: reference::Bound, b: reference::Bound) -> Ordering {
 }
 
 fn fully_unbounded_interval_is_canonical(t: &mut Trials) {
-    let open = seal_interval(&Bound::Unbounded, &Bound::Unbounded);
-    let again = seal_interval(&Bound::Unbounded, &Bound::Unbounded);
+    let open = seal_interval(&IntervalEnd::Unbounded, &IntervalEnd::Unbounded);
+    let again = seal_interval(&IntervalEnd::Unbounded, &IntervalEnd::Unbounded);
     let bytes = open.as_bytes();
     t.check("the open interval has one encoding", bytes == again.as_bytes());
     t.check(
@@ -3330,7 +3330,7 @@ fn fully_unbounded_interval_is_canonical(t: &mut Trials) {
 
 fn point_interval_is_canonical(t: &mut Trials) {
     for stamp in [[0x00u8; 8], [0x7F; 8], [0xFF; 8]] {
-        let point = seal_interval(&Bound::At(stamp), &Bound::At(stamp));
+        let point = seal_interval(&IntervalEnd::At(stamp), &IntervalEnd::At(stamp));
         let bytes = point.as_bytes();
         t.check(
             "a point interval reads back whole",
@@ -3342,7 +3342,7 @@ fn point_interval_is_canonical(t: &mut Trials) {
         );
         t.check(
             "a point interval has one encoding",
-            bytes == seal_interval(&Bound::At(stamp), &Bound::At(stamp)).as_bytes(),
+            bytes == seal_interval(&IntervalEnd::At(stamp), &IntervalEnd::At(stamp)).as_bytes(),
         );
     }
 }
@@ -3366,12 +3366,12 @@ fn empty_interval_cannot_collide_with_inhabited_interval(t: &mut Trials) {
 /// The marker that means "no lower bound" must not be a byte an instant can
 /// open with, or an unbounded end would read as a timestamp.
 fn lower_unbounded_marker_cannot_collide_with_timestamp(t: &mut Trials) {
-    let open = seal_interval(&Bound::Unbounded, &Bound::Unbounded);
+    let open = seal_interval(&IntervalEnd::Unbounded, &IntervalEnd::Unbounded);
     let marker = open.as_bytes()[2];
     for first in 0u16..=255 {
         let mut stamp = [0u8; 8];
         stamp[0] = first as u8;
-        let bounded = seal_interval(&Bound::At(stamp), &Bound::Unbounded);
+        let bounded = seal_interval(&IntervalEnd::At(stamp), &IntervalEnd::Unbounded);
         t.check(
             "an instant never opens with the unbounded-lower marker",
             bounded.as_bytes()[2] != marker,
@@ -3384,12 +3384,12 @@ fn lower_unbounded_marker_cannot_collide_with_timestamp(t: &mut Trials) {
 }
 
 fn upper_unbounded_marker_cannot_collide_with_timestamp(t: &mut Trials) {
-    let open = seal_interval(&Bound::Unbounded, &Bound::Unbounded);
+    let open = seal_interval(&IntervalEnd::Unbounded, &IntervalEnd::Unbounded);
     let marker = open.as_bytes()[3];
     for first in 0u16..=255 {
         let mut stamp = [0u8; 8];
         stamp[0] = first as u8;
-        let bounded = seal_interval(&Bound::Unbounded, &Bound::At(stamp));
+        let bounded = seal_interval(&IntervalEnd::Unbounded, &IntervalEnd::At(stamp));
         t.check(
             "an instant never opens with the unbounded-upper marker",
             bounded.as_bytes()[2] != marker,
@@ -3439,19 +3439,19 @@ fn interval_golden_vectors_cover_all_bound_combinations(t: &mut Trials) {
     let cases: Vec<(CanonicalBytes, Vec<u8>)> = vec![
         (seal_interval_empty(), vec![0x60, 0x01]),
         (
-            seal_interval(&Bound::Unbounded, &Bound::Unbounded),
+            seal_interval(&IntervalEnd::Unbounded, &IntervalEnd::Unbounded),
             vec![0x60, 0x02, 0x01, 0x03],
         ),
         (
-            seal_interval(&Bound::Unbounded, &Bound::At(zero)),
+            seal_interval(&IntervalEnd::Unbounded, &IntervalEnd::At(zero)),
             vec![0x60, 0x02, 0x01, 0x02, 0, 0, 0, 0, 0, 0, 0, 0],
         ),
         (
-            seal_interval(&Bound::At(zero), &Bound::Unbounded),
+            seal_interval(&IntervalEnd::At(zero), &IntervalEnd::Unbounded),
             vec![0x60, 0x02, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0x03],
         ),
         (
-            seal_interval(&Bound::At(zero), &Bound::At(ones)),
+            seal_interval(&IntervalEnd::At(zero), &IntervalEnd::At(ones)),
             vec![
                 0x60, 0x02, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0x02, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
                 0xFF, 0xFF, 0xFF,
@@ -6460,16 +6460,16 @@ sum(0x02=>fixed(8),0x03=>fixed(0)))",
 fn lower_bound_markers_have_expected_order(t: &mut Trials) {
     // Unbounded below is the least point of its axis, so its marker is below
     // the one an instant carries.
-    let open = seal_interval(&Bound::Unbounded, &Bound::Unbounded);
-    let at = seal_interval(&Bound::At([0x00; 8]), &Bound::Unbounded);
+    let open = seal_interval(&IntervalEnd::Unbounded, &IntervalEnd::Unbounded);
+    let at = seal_interval(&IntervalEnd::At([0x00; 8]), &IntervalEnd::Unbounded);
     t.check("the unbounded-lower marker is 0x01", open.as_bytes()[2] == 0x01);
     t.check("the at-lower marker is 0x02", at.as_bytes()[2] == 0x02);
     t.check("so unbounded below sorts first", open.as_bytes()[2] < at.as_bytes()[2]);
 }
 
 fn upper_bound_markers_have_expected_order(t: &mut Trials) {
-    let open = seal_interval(&Bound::Unbounded, &Bound::Unbounded);
-    let at = seal_interval(&Bound::Unbounded, &Bound::At([0xFF; 8]));
+    let open = seal_interval(&IntervalEnd::Unbounded, &IntervalEnd::Unbounded);
+    let at = seal_interval(&IntervalEnd::Unbounded, &IntervalEnd::At([0xFF; 8]));
     t.check("the at-upper marker is 0x02", at.as_bytes()[3] == 0x02);
     t.check("the unbounded-upper marker is 0x03", open.as_bytes()[3] == 0x03);
     t.check("so unbounded above sorts last", at.as_bytes()[3] < open.as_bytes()[3]);

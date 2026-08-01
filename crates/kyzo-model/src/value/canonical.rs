@@ -3539,24 +3539,28 @@ pub fn seal_validity(v: &Validity) -> (r: CanonicalBytes) {
     seal(TAG_VALIDITY, b)
 }
 
-/// A point on the space-filling curve.
+/// A point's index on the space-filling curve.
 ///
 /// ORDER_LAW: ascending by curve index, big-endian, so memcmp of the payload
 /// is curve order.
-// CONSTRUCT: ValueObject Geometry
-pub struct Geometry {
-    curve_index: u64,
+///
+/// Not a geometry: a geometry is a `(lat, lon)` pair and lives in
+/// [`kind::geometry`], which computes its index and hands it here. Naming this
+/// `Geometry` too made two different things look like one type.
+// CONSTRUCT: ValueObject CurveIndex
+pub struct CurveIndex {
+    index: u64,
 }
 
-impl Geometry {
-    pub fn new(curve_index: u64) -> (r: Geometry) { Geometry { curve_index } }
+impl CurveIndex {
+    pub fn new(index: u64) -> (r: CurveIndex) { CurveIndex { index } }
 
     pub fn body(&self) -> (r: Vec<u8>)
         ensures r@.len() == 8
-    { be_bytes(self.curve_index as u128, 8) }
+    { be_bytes(self.index as u128, 8) }
 }
 
-pub fn seal_geometry(g: &Geometry) -> (r: CanonicalBytes) {
+pub fn seal_geometry(g: &CurveIndex) -> (r: CanonicalBytes) {
     proof { lemma_tag_shapes(); }
     let b = Body::fixed(g.body());
     seal(TAG_GEOMETRY, b)
@@ -3577,22 +3581,29 @@ pub(crate) fn seal_set(elems: &Vec<RowItem>) -> (r: CanonicalBytes)
     ensures r.view() =~= seq![TAG_SET] + enc_row(elems@.map_values(|e: RowItem| e.spec_view()))
 { proof { lemma_tag_shapes(); } seal(TAG_SET, Body::row(elems)) }
 
-/// An interval endpoint. Unboundedness is a variant, never a sentinel instant:
-/// there is no `[u8; 8]` that means "no bound", so no caller can pick one and
-/// no reader has to know which one was picked.
-// CONSTRUCT: ClosedSum Bound
-pub enum Bound {
+/// A canonical interval end: the axis's infinity, or an instant already in the
+/// eight ascending bytes the format writes.
+///
+/// Unboundedness is a variant, never a sentinel instant: there is no `[u8; 8]`
+/// that means "no bound", so no caller can pick one and no reader has to know
+/// which one was picked.
+///
+/// Not [`kind::interval::Bound`], which is the user's vocabulary — closed, open
+/// or unbounded — and is normalised away before anything reaches here. Two
+/// types named `Bound` made the input and the normal form look like one.
+// CONSTRUCT: ClosedSum IntervalEnd
+pub enum IntervalEnd {
     Unbounded,
     At([u8; 8]),
 }
 
 /// One end is at or below the other. Unbounded below is the least point of its
 /// axis and unbounded above the greatest, so either makes the pair ordered.
-pub open spec fn bounds_ordered(lo: Bound, hi: Bound) -> bool {
+pub open spec fn bounds_ordered(lo: IntervalEnd, hi: IntervalEnd) -> bool {
     match (lo, hi) {
-        (Bound::Unbounded, _) => true,
-        (_, Bound::Unbounded) => true,
-        (Bound::At(a), Bound::At(b)) => lex_le(a@, b@),
+        (IntervalEnd::Unbounded, _) => true,
+        (_, IntervalEnd::Unbounded) => true,
+        (IntervalEnd::At(a), IntervalEnd::At(b)) => lex_le(a@, b@),
     }
 }
 
@@ -3607,26 +3618,26 @@ pub fn seal_interval_empty() -> (r: CanonicalBytes) {
 /// unbounded below is the least element of its axis and unbounded above is the
 /// greatest — one table would put an infinity on the wrong side of every
 /// instant. The caller names the ends; the markers are not its business.
-pub fn seal_interval(lo: &Bound, hi: &Bound) -> (r: CanonicalBytes)
+pub fn seal_interval(lo: &IntervalEnd, hi: &IntervalEnd) -> (r: CanonicalBytes)
     requires bounds_ordered(*lo, *hi)
 {
     proof { lemma_tag_shapes(); lemma_branch_shapes(); }
     let lo_body = match lo {
-        Bound::Unbounded => {
+        IntervalEnd::Unbounded => {
             let e = Body::fixed(Vec::new());
             Body::select(Ghost(lo_branches()), 0x01, e)
         }
-        Bound::At(t) => {
+        IntervalEnd::At(t) => {
             let e = Body::fixed(owned(t.as_slice()));
             Body::select(Ghost(lo_branches()), 0x02, e)
         }
     };
     let hi_body = match hi {
-        Bound::At(t) => {
+        IntervalEnd::At(t) => {
             let e = Body::fixed(owned(t.as_slice()));
             Body::select(Ghost(hi_branches()), 0x02, e)
         }
-        Bound::Unbounded => {
+        IntervalEnd::Unbounded => {
             let e = Body::fixed(Vec::new());
             Body::select(Ghost(hi_branches()), 0x03, e)
         }
