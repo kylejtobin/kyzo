@@ -83,47 +83,53 @@ mod tests {
     use super::*;
     use crate::value::canonical::{seal_null, seal_str, Utf8};
 
-    /// A member built from a leaf value. The mint is fallible because a deep
-    /// value is not a member; a leaf never is one.
-    fn member(v: CanonicalBytes) -> RowItem {
-        RowItem::of(v).expect("a leaf value is shallow enough to be a member")
+    /// Members from leaf values. The mint is fallible because a deep value is
+    /// not a member and a leaf never is one, so a refusal here drops a member
+    /// and every test below counts its members before it compares bytes.
+    fn members(values: Vec<CanonicalBytes>) -> Vec<RowItem> {
+        values.into_iter().filter_map(|v| RowItem::of(v).ok()).collect()
     }
 
-    fn text(s: &str) -> RowItem {
-        member(seal_str(&Utf8::of(s)))
+    fn texts(strings: &[&str]) -> Vec<RowItem> {
+        members(strings.iter().map(|s| seal_str(&Utf8::of(s))).collect())
     }
 
     /// The breach this file exists to close: one set value, one byte string,
     /// regardless of the order the elements were written in.
     #[test]
     fn a_set_has_one_encoding_whatever_order_it_arrives_in() {
-        let ab = CanonicalSet::of([text("a"), text("b")]).seal();
-        let ba = CanonicalSet::of([text("b"), text("a")]).seal();
+        assert_eq!(CanonicalSet::of(texts(&["a", "b"])).len(), 2);
+        let ab = CanonicalSet::of(texts(&["a", "b"])).seal();
+        let ba = CanonicalSet::of(texts(&["b", "a"])).seal();
         assert_eq!(ab.as_bytes(), ba.as_bytes());
     }
 
     #[test]
     fn duplicates_are_not_members_twice() {
-        let once = CanonicalSet::of([text("a")]).seal();
-        let twice = CanonicalSet::of([text("a"), text("a")]).seal();
+        assert_eq!(texts(&["a", "a"]).len(), 2);
+        let once = CanonicalSet::of(texts(&["a"])).seal();
+        let twice = CanonicalSet::of(texts(&["a", "a"])).seal();
         assert_eq!(once.as_bytes(), twice.as_bytes());
-        assert_eq!(CanonicalSet::of([text("a"), text("a")]).len(), 1);
+        assert_eq!(CanonicalSet::of(texts(&["a", "a"])).len(), 1);
     }
 
     /// Distinct elements are not silently merged: dedup is by whole bytes, not
     /// by a prefix or a hash.
     #[test]
     fn distinct_elements_all_survive() {
-        let s = CanonicalSet::of([text("a"), text("ab"), member(seal_null())]);
-        assert_eq!(s.len(), 3);
+        let mut given = texts(&["a", "ab"]);
+        given.extend(members(vec![seal_null()]));
+        assert_eq!(given.len(), 3);
+        assert_eq!(CanonicalSet::of(given).len(), 3);
     }
 
     /// Members come out ascending, which is what makes the sealed row's order
     /// the same order a reader would sort them into.
     #[test]
     fn members_are_ascending_by_their_bytes() {
-        let s = CanonicalSet::of([text("c"), text("a"), text("b")]);
-        let sealed = s.seal();
+        let given = texts(&["c", "a", "b"]);
+        assert_eq!(given.len(), 3);
+        let sealed = CanonicalSet::of(given).seal();
         let a = seal_str(&Utf8::of("a"));
         let c = seal_str(&Utf8::of("c"));
         let body = sealed.as_bytes();
