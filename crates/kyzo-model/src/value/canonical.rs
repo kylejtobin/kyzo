@@ -2380,21 +2380,98 @@ pub open spec fn spec_mag_body(m: Magnitude, tie: Repr) -> Seq<u8> {
     spec_be(spec_packed(m), MAG_BYTES as nat).push(tie.spec_byte())
 }
 
-// THE OPEN OBLIGATION — the magnitude order bridge.
-//
-// `mag_le` above is the semantic order and `spec_packed`/`spec_be` are the
-// encoding. Relating them needs two lemmas, neither of which is written:
-//
-//   lemma_be_order(x, y, width)
-//     ensures (x <= y) == lex_le(spec_be(x, width), spec_be(y, width))
-//
-//   lemma_packed_order(a, b)
-//     requires wf_mag(a), wf_mag(b)
-//     ensures mag_le(a, b) == (spec_packed(a) <= spec_packed(b))
-//
-// Until both exist, `theorem_value_order` proves that framing preserves an
-// order the scalar bytes were defined to have, not that the bytes preserve
-// the order of the numbers they encode.
+/// Lexicographic order on equal-length sequences is decided by the prefix
+/// when the prefixes differ, and by the last element when they do not.
+pub proof fn lemma_lex_snoc(s: Seq<u8>, t: Seq<u8>, a: u8, b: u8)
+    requires s.len() == t.len()
+    ensures
+        s == t ==> (lex_le(s.push(a), t.push(b)) == (a <= b)),
+        s != t ==> (lex_le(s.push(a), t.push(b)) == lex_le(s, t)),
+    decreases s.len()
+{
+    if s.len() == 0 {
+        assert(s =~= t);
+        assert(s.push(a) =~= seq![a]);
+        assert(t.push(b) =~= seq![b]);
+        assert(s.push(a).len() == 1 && t.push(b).len() == 1);
+        assert(s.push(a)[0] == a && t.push(b)[0] == b);
+        assert(s.push(a).drop_first() =~= Seq::<u8>::empty());
+        assert(t.push(b).drop_first() =~= Seq::<u8>::empty());
+        assert(lex_le(Seq::<u8>::empty(), Seq::<u8>::empty()));
+    } else {
+        assert(s.push(a).len() > 0 && t.push(b).len() > 0);
+        assert(s.push(a)[0] == s[0]);
+        assert(t.push(b)[0] == t[0]);
+        assert(s.push(a).drop_first() =~= s.drop_first().push(a));
+        assert(t.push(b).drop_first() =~= t.drop_first().push(b));
+        assert(s.drop_first().len() == t.drop_first().len());
+        lemma_lex_snoc(s.drop_first(), t.drop_first(), a, b);
+        assert(s =~= seq![s[0]] + s.drop_first());
+        assert(t =~= seq![t[0]] + t.drop_first());
+        if s == t {
+            assert(s[0] == t[0]);
+            assert(s.drop_first() =~= t.drop_first());
+        }
+        if s != t && s[0] == t[0] {
+            assert(s.drop_first() != t.drop_first()) by {
+                if s.drop_first() == t.drop_first() { assert(s =~= t); }
+            }
+        }
+    }
+}
+
+pub proof fn lemma_be_len(v: nat, width: nat)
+    ensures spec_be(v, width).len() == width
+    decreases width
+{ if width > 0 { lemma_be_len((v / 256) as nat, (width - 1) as nat); } }
+
+pub proof fn lemma_pow2_byte(n: nat)
+    ensures pow2((n + 8) as nat) == 256 * pow2(n)
+{
+    assert(pow2((n + 8) as nat) == 2 * pow2((n + 7) as nat));
+    assert(pow2((n + 7) as nat) == 2 * pow2((n + 6) as nat));
+    assert(pow2((n + 6) as nat) == 2 * pow2((n + 5) as nat));
+    assert(pow2((n + 5) as nat) == 2 * pow2((n + 4) as nat));
+    assert(pow2((n + 4) as nat) == 2 * pow2((n + 3) as nat));
+    assert(pow2((n + 3) as nat) == 2 * pow2((n + 2) as nat));
+    assert(pow2((n + 2) as nat) == 2 * pow2((n + 1) as nat));
+    assert(pow2((n + 1) as nat) == 2 * pow2(n));
+}
+
+/// Big-endian at a fixed width: byte order is numeric order. The half of the
+/// bridge that is about bytes.
+pub proof fn lemma_be_order(x: nat, y: nat, width: nat)
+    requires x < pow2((8 * width) as nat), y < pow2((8 * width) as nat)
+    ensures (x <= y) == lex_le(spec_be(x, width), spec_be(y, width))
+    decreases width
+{
+    if width == 0 {
+        assert(pow2(0nat) == 1);
+        assert(x == 0 && y == 0);
+        assert(spec_be(x, 0nat) =~= Seq::<u8>::empty());
+        assert(spec_be(y, 0nat) =~= Seq::<u8>::empty());
+    } else {
+        let w1 = (width - 1) as nat;
+        lemma_pow2_byte((8 * w1) as nat);
+        assert(8 * width == 8 * w1 + 8);
+        lemma_be_len((x / 256) as nat, w1);
+        lemma_be_len((y / 256) as nat, w1);
+        lemma_be_order((x / 256) as nat, (y / 256) as nat, w1);
+        lemma_be_order((y / 256) as nat, (x / 256) as nat, w1);
+        lemma_lex_snoc(
+            spec_be((x / 256) as nat, w1),
+            spec_be((y / 256) as nat, w1),
+            (x % 256) as u8, (y % 256) as u8);
+        assert(x == 256 * (x / 256) + x % 256);
+        assert(y == 256 * (y / 256) + y % 256);
+        assert(x % 256 < 256 && y % 256 < 256);
+        assert(x <= y <==> (x / 256 < y / 256
+            || (x / 256 == y / 256 && x % 256 <= y % 256))) by (nonlinear_arith)
+            requires x == 256 * (x / 256) + x % 256,
+                     y == 256 * (y / 256) + y % 256,
+                     x % 256 < 256, y % 256 < 256;
+    }
+}
 
 /// A magnitude the numeric doors accept.
 pub open spec fn wf_mag(m: Magnitude) -> bool {
