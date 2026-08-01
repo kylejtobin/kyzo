@@ -2473,6 +2473,148 @@ pub proof fn lemma_be_order(x: nat, y: nat, width: nat)
     }
 }
 
+/// `pow2` is monotone, which is what lets an exponent gap dominate any
+/// fraction difference.
+pub proof fn lemma_pow2_mono(m: nat, n: nat)
+    requires m <= n
+    ensures pow2(m) <= pow2(n)
+    decreases n
+{ if n > m { lemma_pow2_mono(m, (n - 1) as nat); } }
+
+pub proof fn lemma_pow2_pos(n: nat)
+    ensures pow2(n) >= 1
+    decreases n
+{ if n > 0 { lemma_pow2_pos((n - 1) as nat); } }
+
+/// THE BINADE BOUND. A value occupies exactly `spec_bit_len` bits, so it sits
+/// in `[2^(bits-1), 2^bits)`. This is what makes the left-aligned fraction
+/// normalized, and normalization is what makes the exponent dominate.
+pub proof fn lemma_binade(v: nat)
+    requires v > 0
+    ensures
+        pow2((spec_bit_len(v) - 1) as nat) <= v,
+        v < pow2(spec_bit_len(v)),
+        spec_bit_len(v) >= 1,
+    decreases v
+{
+    if v == 1 {
+        assert((1nat / 2) == 0nat);
+        assert(spec_bit_len(0nat) == 0);
+        assert(spec_bit_len(1nat) == 1);
+        assert(pow2(0nat) == 1);
+        assert(pow2(1nat) == 2);
+    } else {
+        lemma_binade((v / 2) as nat);
+        assert(spec_bit_len(v) == 1 + spec_bit_len((v / 2) as nat));
+        assert(v / 2 >= 1);
+        let k = spec_bit_len((v / 2) as nat);
+        assert(pow2((k - 1) as nat) <= v / 2);
+        assert(v / 2 < pow2(k));
+        assert(pow2(k) == 2 * pow2((k - 1) as nat));
+        assert(pow2((k + 1) as nat) == 2 * pow2(k));
+        assert(v >= 2 * (v / 2));
+        assert(v < 2 * (v / 2) + 2);
+    }
+}
+
+pub proof fn lemma_pow2_add(a: nat, b: nat)
+    ensures pow2(a) * pow2(b) == pow2((a + b) as nat)
+    decreases a
+{
+    if a == 0 {
+        assert(pow2(0nat) == 1);
+        assert((0 + b) as nat == b);
+    } else {
+        let pa1 = pow2((a - 1) as nat);
+        let pb = pow2(b);
+        lemma_pow2_add((a - 1) as nat, b);
+        assert(((a - 1) + b) as nat == (a + b - 1) as nat);
+        assert(pa1 * pb == pow2((a + b - 1) as nat));
+        assert(pow2(a) == 2 * pa1);
+        assert(pow2((a + b) as nat) == 2 * pow2((a + b - 1) as nat));
+        assert((2 * pa1) * pb == 2 * (pa1 * pb)) by (nonlinear_arith);
+        assert(pow2(a) * pb == (2 * pa1) * pb);
+        assert(2 * (pa1 * pb) == 2 * pow2((a + b - 1) as nat));
+    }
+}
+
+/// The exponent field a magnitude carries.
+pub open spec fn spec_exp(m: Magnitude) -> nat {
+    match m {
+        Magnitude::Finite { significand, biased_scale } =>
+            (spec_bit_len(significand as nat) + biased_scale as nat) as nat,
+        Magnitude::Infinite => EXP_INFINITE as nat,
+    }
+}
+
+/// The fraction field: the significand left-aligned in `FRAC_BITS` bits.
+pub open spec fn spec_frac(m: Magnitude) -> nat {
+    match m {
+        Magnitude::Finite { significand, biased_scale } =>
+            (significand as nat
+                * pow2((FRAC_BITS - spec_bit_len(significand as nat)) as nat)) as nat,
+        Magnitude::Infinite => (pow2(FRAC_BITS as nat) - 1) as nat,
+    }
+}
+
+pub proof fn lemma_packed_fields(m: Magnitude)
+    ensures spec_packed(m) == spec_exp(m) * pow2(FRAC_BITS as nat) + spec_frac(m)
+{ }
+
+/// NORMALIZATION. Every fraction lands in the same binade `[2^(F-1), 2^F)`,
+/// which is what lets a difference in exponent outweigh any difference in
+/// fraction.
+pub proof fn lemma_frac_normalized(m: Magnitude)
+    requires wf_mag(m)
+    ensures
+        pow2((FRAC_BITS - 1) as nat) <= spec_frac(m),
+        spec_frac(m) < pow2(FRAC_BITS as nat),
+{
+    match m {
+        Magnitude::Finite { significand, biased_scale } => {
+            let s = significand as nat;
+            let bits = spec_bit_len(s);
+            lemma_binade(s);
+            assert(pow2(64nat) == 18446744073709551616nat) by (compute);
+            lemma_bit_len_bound(s, 64nat);
+            assert(bits <= 64);
+            lemma_pow2_add((bits - 1) as nat, (FRAC_BITS - bits) as nat);
+            lemma_pow2_add(bits, (FRAC_BITS - bits) as nat);
+            lemma_pow2_pos((FRAC_BITS - bits) as nat);
+            assert(pow2((bits - 1) as nat) * pow2((FRAC_BITS - bits) as nat)
+                == pow2((FRAC_BITS - 1) as nat));
+            assert(pow2(bits) * pow2((FRAC_BITS - bits) as nat) == pow2(FRAC_BITS as nat));
+            let lo = pow2((bits - 1) as nat);
+            let hi = pow2(bits);
+            let shift = pow2((FRAC_BITS - bits) as nat);
+            assert(lo <= s);
+            assert(s < hi);
+            assert(lo * shift <= s * shift) by (nonlinear_arith)
+                requires lo <= s, shift >= 1;
+            assert(s * shift < hi * shift) by (nonlinear_arith)
+                requires s < hi, shift >= 1;
+        }
+        Magnitude::Infinite => {
+            lemma_pow2_mono((FRAC_BITS - 1) as nat, FRAC_BITS as nat);
+            lemma_pow2_pos((FRAC_BITS - 1) as nat);
+            assert(pow2(FRAC_BITS as nat) == 2 * pow2((FRAC_BITS - 1) as nat));
+        }
+    }
+}
+
+/// A value below `2^n` occupies at most `n` bits.
+pub proof fn lemma_bit_len_bound(v: nat, n: nat)
+    requires v < pow2(n)
+    ensures spec_bit_len(v) <= n
+    decreases n
+{
+    if v > 0 {
+        assert(n > 0) by { if n == 0 { assert(pow2(0nat) == 1); } }
+        assert(pow2(n) == 2 * pow2((n - 1) as nat));
+        lemma_bit_len_bound((v / 2) as nat, (n - 1) as nat);
+    }
+}
+
 /// A magnitude the numeric doors accept.
 pub open spec fn wf_mag(m: Magnitude) -> bool {
     match m {
