@@ -250,12 +250,12 @@ use crate::boundary::git::read_head as load_state;
 
 **Binds:** Proof, Core, Boundary, Shell
 **Rule:** Re-export only what this posture may itself reach.
-**Violation:** AliasEvasion
+**Violation:** ForbiddenDependencyEdge
 
-A re-export launders a path: callers import from a legal module and reach an illegal one. The edge exists at the re-export.
+A re-export launders a path: callers import from a legal module and reach an illegal one. The edge exists at the re-export, so the direction is what this clause is about. Renaming is RUST-U-08.
 
 ```rust allowed
-pub use crate::core::clause::Clause;
+pub use crate::clause::Clause;
 ```
 
 ```rust forbidden
@@ -720,9 +720,11 @@ pub struct Query {
 `Ord` defines the order every sort, range, and canonical encoding depends on. Unstated, the next reader infers one from the code and is wrong.
 
 ```rust allowed
+/// ORDER_LAW: byte order over the namespace. Total and stable.
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 pub struct Namespace(String);
 
+/// ORDER_LAW: byte order over the key. Total and stable.
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 pub struct KeyBytes(Vec<u8>);
 
@@ -736,9 +738,11 @@ pub struct StorageKey {
 ```
 
 ```rust forbidden
+/// ORDER_LAW: byte order over the namespace. Total and stable.
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 pub struct Namespace(String);
 
+/// ORDER_LAW: byte order over the key. Total and stable.
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 pub struct KeyBytes(Vec<u8>);
 
