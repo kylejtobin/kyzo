@@ -26,11 +26,12 @@
 //! escape, smuggle the structural bytes, collide two different values onto one
 //! byte string, truncate mid-escape, and nest until something overflows.
 
-#[path = "../../kyzo-model/src/value/canonical.rs"]
-mod canonical;
+mod value;
+use value::canonical;
+use value::codec::CanonicalSet;
 
 use canonical::{
-    Bound, Refusal, Branches, Reason, grammar_exec, CanonicalBytes, Shape, escape, scan_value, seal_bool, seal_bytes,
+    Bound, Refusal, Utf8, Branches, Reason, grammar_exec, CanonicalBytes, Shape, escape, scan_value, seal_bool, seal_bytes,
     seal_geometry, seal_interval, seal_interval_empty, seal_json, seal_list, seal_null,
     seal_num_negative, seal_num_nan, seal_num_positive, seal_num_zero, seal_regex, seal_set, seal_str,
     Magnitude, Repr, RegexFlags, MAG_BYTES, EXP_INFINITE, DIM_BYTES,
@@ -307,8 +308,8 @@ fn attack_concatenation_collision(t: &mut Trials) {
 fn attack_structural_smuggling(t: &mut Trials) {
 
     // An element whose content starts with the sequence terminator.
-    let one = seal_list(&vec![str_val(&[0x01, 0x41])]);
-    let two = seal_list(&vec![str_val(&[0x01, 0x41]), str_val(&[0x41])]);
+    let one = seal_list(&vec![bytes_val(&[0x01, 0x41])]);
+    let two = seal_list(&vec![bytes_val(&[0x01, 0x41]), bytes_val(&[0x41])]);
 
     // Every element opens with its tag byte, which is >= 0x05, so the smuggled
     // 0x01 sits inside a payload and can never be read as the terminator.
@@ -328,7 +329,7 @@ fn attack_structural_smuggling(t: &mut Trials) {
 fn attack_empty_confusion(t: &mut Trials) {
 
     let empty_seq = seal_list(&Vec::new());
-    let seq_of_empty = seal_list(&vec![str_val(&[])]);
+    let seq_of_empty = seal_list(&vec![bytes_val(&[])]);
 
     t.check("empty seq != seq of empty", empty_seq.as_bytes() != seq_of_empty.as_bytes());
     t.check(
@@ -347,15 +348,15 @@ fn attack_empty_confusion(t: &mut Trials) {
 fn attack_cross_type_order(t: &mut Trials) {
     let null = seal_null();
     let bool_hi = seal_bool(false);
-    let str_lo = seal_str(&[]);
+    let str_lo = seal_str(&Utf8::of(""));
     let bytes_lo = seal_bytes(&[]);
 
     t.check("null < bool", lex_le_independent(null.as_bytes(), bool_hi.as_bytes()));
     t.check("bool < str", lex_le_independent(bool_hi.as_bytes(), str_lo.as_bytes()));
     t.check("str < bytes", lex_le_independent(str_lo.as_bytes(), bytes_lo.as_bytes()));
-    // A Str whose content is all 0xFF still sorts under Bytes: the tag decides,
+    // The highest text a Str can carry still sorts under Bytes: the tag decides,
     // and no payload reaches across it.
-    let str_hi = seal_str(&[0xFF; 8]);
+    let str_hi = seal_str(&Utf8::of("\u{10ffff}\u{10ffff}"));
     t.check(
         "max payload cannot cross a tag",
         lex_le_independent(str_hi.as_bytes(), bytes_lo.as_bytes()),
@@ -367,8 +368,8 @@ fn attack_cross_type_order(t: &mut Trials) {
 fn attack_prefix_sequence_exhaustive(t: &mut Trials) {
     for x in 0u16..=255 {
         let byte = x as u8;
-        let short = seal_list(&vec![str_val(b"a")]);
-        let long = seal_list(&vec![str_val(b"a"), str_val(&[byte])]);
+        let short = seal_list(&vec![str_val("a")]);
+        let long = seal_list(&vec![str_val("a"), bytes_val(&[byte])]);
         t.check(
             "prefix sequence sorts first, all 256 extensions",
             lex_le_independent(short.as_bytes(), long.as_bytes())
@@ -380,7 +381,7 @@ fn attack_prefix_sequence_exhaustive(t: &mut Trials) {
 /// ATTACK: nesting. Sequences nest without a length prefix, so a deeply nested
 /// value must still be exactly self-delimiting.
 fn attack_deep_nesting(t: &mut Trials) {
-    let mut inner = str_val(b"leaf");
+    let mut inner = str_val("leaf");
     for _ in 0..512 {
         inner = seal_list(&vec![inner]);
     }
@@ -445,7 +446,7 @@ fn trial_grammar_table(t: &mut Trials) {
         (seal_num_zero(Repr::Int), 3, "Num zero: tag, class, repr tie-break"),
         (seal_num_negative(&mag_min(), Repr::Int), 14, "Num negative: tag, class, 12"),
         (seal_num_positive(&mag_min(), Repr::Int), 14, "Num positive: tag, class, 12"),
-        (seal_str(b"hello"), 8, "Str: tag, content, terminator"),
+        (seal_str(&Utf8::of("hello")), 8, "Str: tag, content, terminator"),
         (seal_bytes(&[0x00, 0xFF]), 6, "Bytes: tag, escaped content, terminator"),
         (seal_uuid(&[0x00; 16]), 17, "Uuid: tag, 16"),
         (seal_regex(b"ab", &RegexFlags::new(true, true, true)), 6, "Regex: tag, pattern, terminator, flags"),
@@ -478,7 +479,7 @@ fn trial_grammar_table(t: &mut Trials) {
         (seal_bool(false), TAG_FALSE, "False tag"),
         (seal_bool(true), TAG_TRUE, "True tag"),
         (seal_num_zero(Repr::Int), TAG_NUM, "Num tag"),
-        (seal_str(b""), TAG_STR, "Str tag"),
+        (seal_str(&Utf8::of("")), TAG_STR, "Str tag"),
         (seal_bytes(b""), TAG_BYTES, "Bytes tag"),
         (seal_uuid(&[0; 16]), TAG_UUID, "Uuid tag"),
         (seal_regex(b"", &RegexFlags::new(false, false, false)), TAG_REGEX, "Regex tag"),
@@ -676,13 +677,13 @@ fn attack_interval_infinities(t: &mut Trials) {
 fn attack_reader_agrees_with_writer(t: &mut Trials) {
     let values: Vec<CanonicalBytes> = vec![
         seal_null(),
-        seal_str(&[]),
-        seal_str(&[0x00, 0x01, 0xFF]),
+        seal_str(&Utf8::of("")),
+        seal_str(&Utf8::of("\u{0}\u{1}\u{ff}")),
         seal_num_zero(Repr::Int),
         seal_json(&seal_bool(true)),
         seal_list(&Vec::new()),
-        seal_list(&vec![str_val(&[0x01]), str_val(&[0x00])]),
-        seal_list(&vec![seal_list(&vec![str_val(b"x")])]),
+        seal_list(&vec![bytes_val(&[0x01]), bytes_val(&[0x00])]),
+        seal_list(&vec![seal_list(&vec![str_val("x")])]),
     ];
     for v in &values {
         let bytes = v.as_bytes();
@@ -737,7 +738,7 @@ fn attack_reader_totality(t: &mut Trials) {
     }
 
     // Nesting past the bound is refused, never followed.
-    let mut deep = str_val(b"leaf");
+    let mut deep = str_val("leaf");
     for _ in 0..40 {
         deep = seal_list(&vec![deep]);
     }
@@ -800,7 +801,7 @@ fn attack_json_is_the_value_grammar(t: &mut Trials) {
         seal_null(),
         seal_bool(true),
         seal_num_zero(Repr::Int),
-        seal_str(b"k"),
+        seal_str(&Utf8::of("k")),
         seal_list(&Vec::new()),
     ];
     for v in &inner {
@@ -851,15 +852,18 @@ fn trial_all_single_bytes(t: &mut Trials) {
 
 /// Mint a fresh string value. The witness has no `Clone` by design, so the
 /// trials rebuild each value through the public door rather than fabricate one.
-fn str_val(s: &[u8]) -> CanonicalBytes {
-    seal_str(s)
+/// Arbitrary content under the Bytes tag. The smuggling attacks carry
+/// structural bytes, which `Str` does not admit.
+fn bytes_val(s: &[u8]) -> CanonicalBytes { seal_bytes(s) }
+
+fn str_val(s: &str) -> CanonicalBytes {
+    seal_str(&Utf8::of(s))
 }
 
 
 // ============================== red team ====================================
 
-/// A larger magnitude is a smaller negative number, so its bytes must sort
-/// lower. Uncomplemented storage inverts this and the inversion is silent.
+/// A larger magnitude is a smaller negative number, so its bytes sort lower.
 fn negative_number_byte_order_matches_semantic_order(t: &mut Trials) {
     let mut prev: Option<Vec<u8>> = None;
     // Descending denotation: significand fixed, scale increasing, so each
@@ -940,8 +944,7 @@ fn positive_infinity_sorts_above_every_finite_number(t: &mut Trials) {
     }
 }
 
-/// Every bit of the significand must reach the bytes. A constructor can take
-/// one value and still discard part of it.
+/// Every bit of the significand reaches the bytes.
 fn magnitude_all_significand_bits_affect_encoding(t: &mut Trials) {
     for bit in 0u32..64 {
         let base: u64 = u64::MAX;
@@ -1002,8 +1005,7 @@ fn finite_magnitude_cannot_equal_infinite_magnitude(t: &mut Trials) {
 }
 
 
-/// Every value the writer can mint must be readable by the reader that ships
-/// with it. A writer with no depth bound and a reader with one breaks this.
+/// Every value the writer can mint is readable by the reader that ships with it.
 fn canonical_writer_output_is_always_readable(t: &mut Trials) {
     for depth in [1usize, 8, 64, 126, 127, 128, 129, 200] {
         let mut v = seal_null();
@@ -1080,15 +1082,41 @@ fn refusal_position_is_suffix_of_original_input(t: &mut Trials) {
     }
 }
 
+/// `seal_interval` requires `bounds_ordered(lo, hi)`, so an inverted pair is a
+/// proof obligation rather than a value. What runs here is every pair the door
+/// admits: unbounded below under every point, unbounded above over every point.
 fn inverted_interval_is_unconstructible(t: &mut Trials) {
-    let hi = [0xFFu8; 8];
-    let lo = [0x00u8; 8];
-    let inverted = seal_interval(&Bound::At(hi), &Bound::At(lo));
-    let proper = seal_interval(&Bound::At(lo), &Bound::At(hi));
-    t.check(
-        "an interval whose lower end is above its upper end cannot be sealed",
-        inverted.as_bytes() == proper.as_bytes(),
-    );
+    let points: Vec<[u8; 8]> = vec![
+        [0x00; 8], [0x00, 0, 0, 0, 0, 0, 0, 1], [0x7F; 8], [0x80; 8], [0xFF; 8],
+    ];
+    for (i, a) in points.iter().enumerate() {
+        for b in points.iter().skip(i) {
+            let iv = seal_interval(&Bound::At(*a), &Bound::At(*b));
+            let bytes = iv.as_bytes();
+            t.check(
+                "an ordered interval seals and reads back exactly",
+                scanned(scan_value(bytes)) == Some(bytes.len()),
+            );
+        }
+        // Hold the upper end fixed and vary the lower: unbounded must sort under
+        // every point.
+        let open_lo = seal_interval(&Bound::Unbounded, &Bound::Unbounded);
+        let at_lo = seal_interval(&Bound::At(*a), &Bound::Unbounded);
+        t.check(
+            "unbounded below sorts under a bounded lower end",
+            lex_le_independent(open_lo.as_bytes(), at_lo.as_bytes())
+                && open_lo.as_bytes() != at_lo.as_bytes(),
+        );
+        // Hold the lower end fixed and vary the upper: unbounded must sort over
+        // every point.
+        let at_hi = seal_interval(&Bound::At(*a), &Bound::At([0xFF; 8]));
+        let open_hi = seal_interval(&Bound::At(*a), &Bound::Unbounded);
+        t.check(
+            "unbounded above sorts over a bounded upper end",
+            lex_le_independent(at_hi.as_bytes(), open_hi.as_bytes())
+                && at_hi.as_bytes() != open_hi.as_bytes(),
+        );
+    }
 }
 
 fn set_permutations_encode_identically(t: &mut Trials) {
@@ -1100,7 +1128,7 @@ fn set_permutations_encode_identically(t: &mut Trials) {
                 Repr::Int,
             ))
             .collect();
-        seal_set(&parts)
+        CanonicalSet::of(parts).seal()
     };
     let a = build([0, 1, 2]);
     for order in [[0usize, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]] {
@@ -1115,15 +1143,15 @@ fn set_duplicates_encode_identically(t: &mut Trials) {
         &Magnitude::Finite { significand: 1, biased_scale: 0 }, Repr::Int);
     let two = || seal_num_positive(
         &Magnitude::Finite { significand: 1, biased_scale: 1 }, Repr::Int);
-    let plain = seal_set(&vec![one(), two()]);
-    let dup = seal_set(&vec![one(), two(), one()]);
+    let plain = CanonicalSet::of(vec![one(), two()]).seal();
+    let dup = CanonicalSet::of(vec![one(), two(), one()]).seal();
     t.check("a repeated element does not change a set", plain.as_bytes() == dup.as_bytes());
 }
 
 fn vector_components_are_numeric_only(t: &mut Trials) {
     let mixed = seal_vector(&vec![
         seal_num_zero(Repr::Int),
-        seal_str(b"not a number"),
+        seal_str(&Utf8::of("not a number")),
     ]);
     let numeric = seal_vector(&vec![seal_num_zero(Repr::Int), seal_num_zero(Repr::Int)]);
     t.check(
@@ -1132,15 +1160,18 @@ fn vector_components_are_numeric_only(t: &mut Trials) {
     );
 }
 
+/// `seal_str` takes `Utf8`, whose only mint is a `&str`, so an invalid payload
+/// is not a value the door can be handed. What runs here is that every payload
+/// it does produce survives the round trip as text.
 fn string_payload_is_valid_utf8(t: &mut Trials) {
-    // Lone continuation byte, unpaired surrogate lead, and an overlong form.
-    for bad in [vec![0x80u8], vec![0xEDu8, 0xA0, 0x80], vec![0xC0u8, 0xAF], vec![0xFFu8]] {
-        let sealed = seal_str(&bad);
+    for s in ["", "a", "hello", "\u{0}", "\u{7f}", "\u{80}", "\u{7ff}", "\u{800}",
+              "\u{ffff}", "\u{10000}", "\u{10ffff}", "e\u{301}", "\u{1f600}",
+              "\u{0}\u{0}\u{0}", "a\u{0}b"] {
+        let sealed = seal_str(&Utf8::of(s));
         let body = &sealed.as_bytes()[1..];
-        t.check(
-            "a Str payload is valid UTF-8",
-            std::str::from_utf8(&unescape(body)).is_ok(),
-        );
+        let back = unescape(body);
+        t.check("a Str payload is valid UTF-8", std::str::from_utf8(&back).is_ok());
+        t.check("a Str payload is the text it was given", back == s.as_bytes());
     }
 }
 
@@ -1188,9 +1219,9 @@ fn red_team_corpus() -> Vec<CanonicalBytes> {
         seal_num_positive(&mag_max(), Repr::Float),
         seal_num_positive(&Magnitude::Infinite, Repr::Float),
         seal_num_negative(&Magnitude::Infinite, Repr::Float),
-        seal_str(b""),
-        seal_str(b"hello"),
-        seal_str(&[0x00, 0x01, 0xFF]),
+        seal_str(&Utf8::of("")),
+        seal_str(&Utf8::of("hello")),
+        seal_str(&Utf8::of("\u{0}\u{1}\u{ff}")),
         seal_bytes(b""),
         seal_bytes(&[0x00, 0x00, 0xFF]),
         seal_uuid(&[0x00; 16]),

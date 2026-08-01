@@ -15,11 +15,11 @@
 - [ ] scan_rejection_matches_spec_rejection_except_depth_limit
 - [x] accepted_scan_prefix_is_complete
 - [x] refusal_position_is_suffix_of_original_input
-- [ ] inverted_interval_is_unconstructible
-- [ ] set_permutations_encode_identically
-- [ ] set_duplicates_encode_identically
+- [x] inverted_interval_is_unconstructible
+- [x] set_permutations_encode_identically
+- [x] set_duplicates_encode_identically
 - [ ] vector_components_are_numeric_only
-- [ ] string_payload_is_valid_utf8
+- [x] string_payload_is_valid_utf8
 - [ ] json_payload_is_json_domain_only
 - [ ] validity_payload_cannot_be_arbitrary_bytes
 - [ ] geometry_payload_cannot_be_arbitrary_bytes

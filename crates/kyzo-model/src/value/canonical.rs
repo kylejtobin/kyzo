@@ -2943,9 +2943,33 @@ pub fn seal_num_nan() -> (r: CanonicalBytes) {
     seal(TAG_NUM, Body::select(Ghost(num_branches()), 0x04, inner))
 }
 
-pub fn seal_str(content: &[u8]) -> (r: CanonicalBytes)
-    ensures r.view() =~= seq![TAG_STR] + enc_bytes(content@)
-{ proof { lemma_tag_shapes(); } seal(TAG_STR, Body::delimited(content)) }
+/// Text. `Bytes` is the kind for content that is not text.
+pub fn seal_str(content: &Utf8) -> (r: CanonicalBytes)
+    ensures r.view() =~= seq![TAG_STR] + enc_bytes(content.spec_bytes())
+{ proof { lemma_tag_shapes(); } seal(TAG_STR, Body::delimited(content.as_slice())) }
+
+/// Text whose bytes are valid UTF-8.
+///
+/// The invariant is Rust's, not Verus's: `of` is `external_body` because Verus
+/// does not model `&str`, so the guarantee comes from `str`'s own construction
+/// and is not visible to the verifier.
+// CONSTRUCT: ValueObject Utf8
+pub struct Utf8 {
+    bytes: Vec<u8>,
+}
+
+impl Utf8 {
+    pub closed spec fn spec_bytes(&self) -> Seq<u8> { self.bytes@ }
+
+    #[verifier::external_body]
+    pub fn of(text: &str) -> (r: Utf8) {
+        Utf8 { bytes: text.as_bytes().to_vec() }
+    }
+
+    pub fn as_slice(&self) -> (r: &[u8])
+        ensures r@ =~= self.spec_bytes()
+    { self.bytes.as_slice() }
+}
 
 pub fn seal_bytes(content: &[u8]) -> (r: CanonicalBytes)
     ensures r.view() =~= seq![TAG_BYTES] + enc_bytes(content@)
@@ -3044,6 +3068,16 @@ pub enum Bound {
     At([u8; 8]),
 }
 
+/// One end is at or below the other. Unbounded below is the least point of its
+/// axis and unbounded above the greatest, so either makes the pair ordered.
+pub open spec fn bounds_ordered(lo: Bound, hi: Bound) -> bool {
+    match (lo, hi) {
+        (Bound::Unbounded, _) => true,
+        (_, Bound::Unbounded) => true,
+        (Bound::At(a), Bound::At(b)) => lex_le(a@, b@),
+    }
+}
+
 /// The empty interval: the one value below every inhabited one.
 pub fn seal_interval_empty() -> (r: CanonicalBytes) {
     proof { lemma_tag_shapes(); lemma_branch_shapes(); }
@@ -3055,7 +3089,9 @@ pub fn seal_interval_empty() -> (r: CanonicalBytes) {
 /// unbounded below is the least element of its axis and unbounded above is the
 /// greatest — one table would put an infinity on the wrong side of every
 /// instant. The caller names the ends; the markers are not its business.
-pub fn seal_interval(lo: &Bound, hi: &Bound) -> (r: CanonicalBytes) {
+pub fn seal_interval(lo: &Bound, hi: &Bound) -> (r: CanonicalBytes)
+    requires bounds_ordered(*lo, *hi)
+{
     proof { lemma_tag_shapes(); lemma_branch_shapes(); }
     let lo_body = match lo {
         Bound::Unbounded => {
