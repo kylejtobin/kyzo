@@ -37,45 +37,13 @@
 //!   values, that is a new kind or format version, not a field slipped
 //!   into today's payload.
 
-/// The v1 flag bitset (closed; reserved bits refuse at decode). The
-/// constants are typed `RegexFlags`, composed with [`RegexFlags::union`]
-/// and probed with [`RegexFlags::contains`] — no loose `u8` bit passing.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-#[repr(transparent)]
-pub struct RegexFlags(u8);
-
-impl RegexFlags {
-    pub const NONE: RegexFlags = RegexFlags(0);
-    pub const CASE_INSENSITIVE: RegexFlags = RegexFlags(0x01);
-    pub const MULTI_LINE: RegexFlags = RegexFlags(0x02);
-    pub const DOT_MATCHES_NEWLINE: RegexFlags = RegexFlags(0x04);
-    pub const SWAP_GREED: RegexFlags = RegexFlags(0x08);
-    pub const IGNORE_WHITESPACE: RegexFlags = RegexFlags(0x10);
-    pub const UNICODE_DISABLED: RegexFlags = RegexFlags(0x20);
-
-    const MASK: u8 = 0x3F;
-
-    /// Total: unknown bits are `None`, never a panic.
-    pub fn from_bits(bits: u8) -> Option<RegexFlags> {
-        if bits & !Self::MASK == 0 {
-            Some(RegexFlags(bits))
-        } else {
-            None
-        }
-    }
-
-    pub const fn union(self, other: RegexFlags) -> RegexFlags {
-        RegexFlags(self.0 | other.0)
-    }
-
-    pub const fn contains(self, other: RegexFlags) -> bool {
-        self.0 & other.0 == other.0
-    }
-
-    pub fn bits(self) -> u8 {
-        self.0
-    }
-}
+/// The flag set and the six flags are declared in [`crate::value::canonical`],
+/// where the stored byte is decided. They are re-exported here because a regex
+/// value is `(flags, pattern)` and this is where that is said — but there is
+/// one declaration, not two. There used to be two, and they disagreed: this
+/// file named six flags while the encoder named three, so two regexes differing
+/// only in `SwapGreed` sealed to one byte string.
+pub use crate::value::canonical::{RegexFlag, RegexFlags};
 
 /// The regex **storage identity**: `(flags, pattern text)`. Two mints,
 /// each saying exactly what it proves: [`RegexSource::validated`] (the
@@ -143,12 +111,12 @@ impl RegexSource {
     pub fn validated(flags: RegexFlags, pattern: String) -> Result<RegexSource, InvalidRegex> {
         let mut parser = regex_syntax::ParserBuilder::new();
         parser
-            .case_insensitive(flags.contains(RegexFlags::CASE_INSENSITIVE))
-            .multi_line(flags.contains(RegexFlags::MULTI_LINE))
-            .dot_matches_new_line(flags.contains(RegexFlags::DOT_MATCHES_NEWLINE))
-            .swap_greed(flags.contains(RegexFlags::SWAP_GREED))
-            .ignore_whitespace(flags.contains(RegexFlags::IGNORE_WHITESPACE))
-            .unicode(!flags.contains(RegexFlags::UNICODE_DISABLED));
+            .case_insensitive(flags.contains(RegexFlag::CaseInsensitive))
+            .multi_line(flags.contains(RegexFlag::MultiLine))
+            .dot_matches_new_line(flags.contains(RegexFlag::DotMatchesNewLine))
+            .swap_greed(flags.contains(RegexFlag::SwapGreed))
+            .ignore_whitespace(flags.contains(RegexFlag::IgnoreWhitespace))
+            .unicode(!flags.contains(RegexFlag::UnicodeDisabled));
         match parser.build().parse(&pattern) {
             Ok(_) => Ok(RegexSource { flags, pattern }),
             Err(_) => Err(InvalidRegex(RegexParseRefusal::Syntax { pattern })),
@@ -167,12 +135,12 @@ impl RegexSource {
     /// receive hostile or stale sources refuse through this door's error.
     pub fn compile(&self) -> Result<CompiledRegexV1, InvalidRegex> {
         regex::RegexBuilder::new(&self.pattern)
-            .case_insensitive(self.flags.contains(RegexFlags::CASE_INSENSITIVE))
-            .multi_line(self.flags.contains(RegexFlags::MULTI_LINE))
-            .dot_matches_new_line(self.flags.contains(RegexFlags::DOT_MATCHES_NEWLINE))
-            .swap_greed(self.flags.contains(RegexFlags::SWAP_GREED))
-            .ignore_whitespace(self.flags.contains(RegexFlags::IGNORE_WHITESPACE))
-            .unicode(!self.flags.contains(RegexFlags::UNICODE_DISABLED))
+            .case_insensitive(self.flags.contains(RegexFlag::CaseInsensitive))
+            .multi_line(self.flags.contains(RegexFlag::MultiLine))
+            .dot_matches_new_line(self.flags.contains(RegexFlag::DotMatchesNewLine))
+            .swap_greed(self.flags.contains(RegexFlag::SwapGreed))
+            .ignore_whitespace(self.flags.contains(RegexFlag::IgnoreWhitespace))
+            .unicode(!self.flags.contains(RegexFlag::UnicodeDisabled))
             .build()
             .map(CompiledRegexV1)
             .map_err(|_| {
@@ -239,31 +207,31 @@ mod tests {
         assert!(RegexFlags::from_bits(0x3F).is_some());
         assert!(RegexFlags::from_bits(0x40).is_none());
         assert!(RegexFlags::from_bits(0x80).is_none());
-        assert_eq!(RegexFlags::NONE.bits(), 0);
-        let combo = RegexFlags::CASE_INSENSITIVE.union(RegexFlags::MULTI_LINE);
-        assert!(combo.contains(RegexFlags::CASE_INSENSITIVE));
-        assert!(!combo.contains(RegexFlags::UNICODE_DISABLED));
+        assert_eq!(RegexFlags::none().bits(), 0);
+        let combo = RegexFlags::none().with(RegexFlag::CaseInsensitive).with(RegexFlag::MultiLine);
+        assert!(combo.contains(RegexFlag::CaseInsensitive));
+        assert!(!combo.contains(RegexFlag::UnicodeDisabled));
     }
 
     #[test]
     fn writer_door_refuses_nonsense_at_construction() {
-        assert!(RegexSource::validated(RegexFlags::NONE, "a+".into()).is_ok());
-        assert!(RegexSource::validated(RegexFlags::NONE, "(?i)foo".into()).is_ok());
-        assert!(RegexSource::validated(RegexFlags::NONE, "(".into()).is_err());
-        assert!(RegexSource::validated(RegexFlags::NONE, "a{2,1}".into()).is_err());
+        assert!(RegexSource::validated(RegexFlags::none(), "a+".into()).is_ok());
+        assert!(RegexSource::validated(RegexFlags::none(), "(?i)foo".into()).is_ok());
+        assert!(RegexSource::validated(RegexFlags::none(), "(".into()).is_err());
+        assert!(RegexSource::validated(RegexFlags::none(), "a{2,1}".into()).is_err());
     }
 
     #[test]
     fn execution_witness_carries_flag_semantics_and_refuses_bad_sources() -> Result<()> {
-        let ci = RegexSource::validated(RegexFlags::CASE_INSENSITIVE, "foo".into())
+        let ci = RegexSource::validated(RegexFlags::none().with(RegexFlag::CaseInsensitive), "foo".into())
             .into_diagnostic()?;
         assert!(ci.compile().into_diagnostic()?.is_match("FOO"));
-        let cs = RegexSource::validated(RegexFlags::NONE, "foo".into()).into_diagnostic()?;
+        let cs = RegexSource::validated(RegexFlags::none(), "foo".into()).into_diagnostic()?;
         assert!(!cs.compile().into_diagnostic()?.is_match("FOO"));
         // A stored-identity source that does not parse (hostile bytes, or
         // a pattern from an older accepted grammar) refuses at the
         // execution door instead of matching garbage.
-        let hostile = RegexSource::from_stored(RegexFlags::NONE, "(".into());
+        let hostile = RegexSource::from_stored(RegexFlags::none(), "(".into());
         assert!(hostile.compile().is_err());
         Ok(())
     }
@@ -274,23 +242,23 @@ mod tests {
         // `(` is commented out and the pattern parses; without the flag
         // it refuses. The pair is the value; the pair is what validates.
         let pattern = "a#(";
-        assert!(RegexSource::validated(RegexFlags::IGNORE_WHITESPACE, pattern.into()).is_ok());
-        assert!(RegexSource::validated(RegexFlags::NONE, pattern.into()).is_err());
+        assert!(RegexSource::validated(RegexFlags::none().with(RegexFlag::IgnoreWhitespace), pattern.into()).is_ok());
+        assert!(RegexSource::validated(RegexFlags::none(), pattern.into()).is_err());
     }
 
     #[test]
     fn flag_and_inline_pattern_are_distinct_identities() -> Result<()> {
         use super::super::super::canonical::{Datum, encode};
-        let flagged = RegexSource::validated(RegexFlags::CASE_INSENSITIVE, "foo".into())
+        let flagged = RegexSource::validated(RegexFlags::none().with(RegexFlag::CaseInsensitive), "foo".into())
             .into_diagnostic()?;
         let inlined =
-            RegexSource::validated(RegexFlags::NONE, "(?i)foo".into()).into_diagnostic()?;
+            RegexSource::validated(RegexFlags::none(), "(?i)foo".into()).into_diagnostic()?;
         assert_ne!(
             encode(Datum::Regex(&flagged)),
             encode(Datum::Regex(&inlined))
         );
         // Storage order: flags byte first, then pattern bytes.
-        let plain = RegexSource::validated(RegexFlags::NONE, "zzz".into()).into_diagnostic()?;
+        let plain = RegexSource::validated(RegexFlags::none(), "zzz".into()).into_diagnostic()?;
         assert!(encode(Datum::Regex(&plain)) < encode(Datum::Regex(&flagged)));
         Ok(())
     }

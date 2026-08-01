@@ -107,7 +107,7 @@ fn test_regex() -> Result<()> {
             DataValue::Str("abcdef".into()),
             DataValue::Regex(
                 kyzo_model::value::RegexSource::validated(
-                    kyzo_model::value::RegexFlags::NONE,
+                    kyzo_model::value::RegexFlags::none(),
                     "c.e".into()
                 )
                 .map_err(|e| miette!("{e}"))?
@@ -121,7 +121,7 @@ fn test_regex() -> Result<()> {
             DataValue::Str("abcdef".into()),
             DataValue::Regex(
                 kyzo_model::value::RegexSource::validated(
-                    kyzo_model::value::RegexFlags::NONE,
+                    kyzo_model::value::RegexFlags::none(),
                     "c.ef$".into()
                 )
                 .map_err(|e| miette!("{e}"))?
@@ -135,7 +135,7 @@ fn test_regex() -> Result<()> {
             DataValue::Str("abcdef".into()),
             DataValue::Regex(
                 kyzo_model::value::RegexSource::validated(
-                    kyzo_model::value::RegexFlags::NONE,
+                    kyzo_model::value::RegexFlags::none(),
                     "c.e$".into()
                 )
                 .map_err(|e| miette!("{e}"))?
@@ -149,7 +149,7 @@ fn test_regex() -> Result<()> {
             DataValue::Str("abcdef".into()),
             DataValue::Regex(
                 kyzo_model::value::RegexSource::validated(
-                    kyzo_model::value::RegexFlags::NONE,
+                    kyzo_model::value::RegexFlags::none(),
                     "[be]".into()
                 )
                 .map_err(|e| miette!("{e}"))?
@@ -164,7 +164,7 @@ fn test_regex() -> Result<()> {
             DataValue::Str("abcdef".into()),
             DataValue::Regex(
                 kyzo_model::value::RegexSource::validated(
-                    kyzo_model::value::RegexFlags::NONE,
+                    kyzo_model::value::RegexFlags::none(),
                     "[be]".into()
                 )
                 .map_err(|e| miette!("{e}"))?
@@ -178,7 +178,7 @@ fn test_regex() -> Result<()> {
             DataValue::Str("abCDefGH".into()),
             DataValue::Regex(
                 kyzo_model::value::RegexSource::validated(
-                    kyzo_model::value::RegexFlags::NONE,
+                    kyzo_model::value::RegexFlags::none(),
                     "[xayef]|(GH)".into()
                 )
                 .map_err(|e| miette!("{e}"))?
@@ -196,7 +196,7 @@ fn test_regex() -> Result<()> {
             DataValue::Str("abCDefGH".into()),
             DataValue::Regex(
                 kyzo_model::value::RegexSource::validated(
-                    kyzo_model::value::RegexFlags::NONE,
+                    kyzo_model::value::RegexFlags::none(),
                     "[xayef]|(GH)".into()
                 )
                 .map_err(|e| miette!("{e}"))?
@@ -209,7 +209,7 @@ fn test_regex() -> Result<()> {
             DataValue::Str("abCDefGH".into()),
             DataValue::Regex(
                 kyzo_model::value::RegexSource::validated(
-                    kyzo_model::value::RegexFlags::NONE,
+                    kyzo_model::value::RegexFlags::none(),
                     "xyz".into()
                 )
                 .map_err(|e| miette!("{e}"))?
@@ -223,7 +223,7 @@ fn test_regex() -> Result<()> {
             DataValue::Str("abCDefGH".into()),
             DataValue::Regex(
                 kyzo_model::value::RegexSource::validated(
-                    kyzo_model::value::RegexFlags::NONE,
+                    kyzo_model::value::RegexFlags::none(),
                     "xyz".into()
                 )
                 .map_err(|e| miette!("{e}"))?

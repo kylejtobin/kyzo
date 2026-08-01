@@ -633,7 +633,7 @@ impl NullableColType {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::value::{RegexFlags, RegexSource, ValidityTs};
+    use crate::value::{RegexFlag, RegexFlags, RegexSource, ValidityTs};
     use miette::Result;
 
     #[test]
@@ -641,10 +641,10 @@ mod tests {
         let col = NullableColType::required(ColType::Json);
         let cur = ValidityTs::of_micros(0);
         let ci = DataValue::Regex(
-            RegexSource::validated(RegexFlags::CASE_INSENSITIVE, "foo".into())?,
+            RegexSource::validated(RegexFlags::none().with(RegexFlag::CaseInsensitive), "foo".into())?,
         );
         let cs = DataValue::Regex(
-            RegexSource::validated(RegexFlags::NONE, "foo".into())?,
+            RegexSource::validated(RegexFlags::none(), "foo".into())?,
         );
         let j_ci = col.coerce(ci, cur)?;
         let j_cs = col.coerce(cs, cur)?;

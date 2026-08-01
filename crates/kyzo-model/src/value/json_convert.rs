@@ -189,7 +189,7 @@ mod tests {
     use miette::{IntoDiagnostic, Result, miette};
 
     use super::*;
-    use crate::value::{RegexFlags, RegexSource, UuidWrapper, Vector};
+    use crate::value::{RegexFlag, RegexFlags, RegexSource, UuidWrapper, Vector};
 
     fn rt(v: DataValue) -> DataValue {
         json2val(to_json(&v))
@@ -198,11 +198,11 @@ mod tests {
     #[test]
     fn regex_flags_participate_in_json_identity() -> Result<()> {
         let ci = DataValue::Regex(
-            RegexSource::validated(RegexFlags::CASE_INSENSITIVE, "foo".into())
+            RegexSource::validated(RegexFlags::none().with(RegexFlag::CaseInsensitive), "foo".into())
                 .into_diagnostic()?,
         );
         let cs = DataValue::Regex(
-            RegexSource::validated(RegexFlags::NONE, "foo".into()).into_diagnostic()?,
+            RegexSource::validated(RegexFlags::none(), "foo".into()).into_diagnostic()?,
         );
         assert_ne!(
             to_json(&ci),

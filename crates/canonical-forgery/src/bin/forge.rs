@@ -30,7 +30,7 @@
 
 use canonical_trials::value;
 use value::canonical::{
-    seal_null, seal_num_zero, seal_regex, seal_uuid, RegexFlags, Repr, Utf8, Validity,
+    seal_null, seal_num_zero, seal_regex, seal_uuid, RegexFlag, RegexFlags, Repr, Utf8, Validity,
 };
 
 fn main() {
@@ -72,14 +72,20 @@ fn main() {
         let _ = f.significand;
     }
 
-    // FORGERY: read the flags byte's bits as a field.
-    // EXPECT: E0616 field `case_insensitive` of struct `RegexFlags` is private
-    let flags = RegexFlags::new(true, false, false);
-    let _ = flags.case_insensitive;
+    // FORGERY: read the flag set's bits as a field, which is the whole of its
+    // representation.
+    // EXPECT: E0616 field `bits` of struct `RegexFlags` is private
+    let flags = RegexFlags::none().with(RegexFlag::CaseInsensitive);
+    let _ = flags.bits;
 
-    // FORGERY: set a flag bit the type has no field for.
-    // EXPECT: E0061 this function takes 3 arguments but 4 arguments were supplied
-    let _ = RegexFlags::new(true, true, true, true);
+    // FORGERY: name a seventh flag.
+    // EXPECT: E0599 no variant or associated item named `Reserved` found for enum `RegexFlag`
+    let _ = RegexFlags::none().with(RegexFlag::Reserved);
+
+    // FORGERY: take a flag set from a byte holding a reserved bit, without
+    // asking the mint whether it is one.
+    // EXPECT: E0308 mismatched types
+    let _: RegexFlags = RegexFlags::from_bits(0xFF);
 
     // FORGERY: name a representation that is neither integer nor float.
     // EXPECT: E0599 no variant or associated item named `Decimal` found for enum `Repr`
@@ -103,7 +109,7 @@ fn main() {
 
     // FORGERY: hand the regex door a pattern that is not text.
     // EXPECT: E0308 mismatched types
-    let _ = seal_regex(b"not text", &RegexFlags::new(false, false, false));
+    let _ = seal_regex(b"not text", &RegexFlags::none());
 
     // FORGERY: assert a validity without asking whether it is one.
     // EXPECT: E0308 mismatched types

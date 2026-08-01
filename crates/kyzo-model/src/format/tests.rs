@@ -62,8 +62,8 @@ fn corpus() -> Result<Vec<DataValue>> {
         DataValue::Uuid(UuidWrapper::new(uuid::Uuid::from_u128(
             0x1234_5678_9abc_def0_1234_5678_9abc_def0,
         ))),
-        DataValue::Regex(RegexSource::validated(RegexFlags::NONE, "^a.*b$".into()).into_diagnostic()?),
-        DataValue::Regex(RegexSource::validated(RegexFlags::NONE, "x+".into()).into_diagnostic()?),
+        DataValue::Regex(RegexSource::validated(RegexFlags::none(), "^a.*b$".into()).into_diagnostic()?),
+        DataValue::Regex(RegexSource::validated(RegexFlags::none(), "x+".into()).into_diagnostic()?),
         DataValue::Vector(Vector::try_new(vec![0.0, -0.0, 1.0]).ok_or_else(|| miette!("vector"))?),
         DataValue::Vector(Vector::try_new(vec![-1.5, 2.5]).ok_or_else(|| miette!("vector"))?),
         DataValue::Validity(ValiditySlot::from_stored(ValidityTs::of_micros(0), true)),

@@ -317,12 +317,7 @@ pub enum Sem {
     Text(String),
     Blob(Vec<u8>),
     Uuid([u8; 16]),
-    Regex {
-        pattern: String,
-        case_insensitive: bool,
-        multi_line: bool,
-        dot_matches_new_line: bool,
-    },
+    Regex { pattern: String, flags: RefFlags },
     Json(Box<Sem>),
     Vector(Vec<Num>),
     List(Vec<Sem>),
@@ -413,22 +408,9 @@ impl Sem {
             (Sem::Blob(a), Sem::Blob(b)) => a.cmp(b),
             (Sem::Uuid(a), Sem::Uuid(b)) => a.cmp(b),
             (
-                Sem::Regex {
-                    pattern: pa,
-                    case_insensitive: ia,
-                    multi_line: ma,
-                    dot_matches_new_line: da,
-                },
-                Sem::Regex {
-                    pattern: pb,
-                    case_insensitive: ib,
-                    multi_line: mb,
-                    dot_matches_new_line: db,
-                },
-            ) => pa
-                .as_bytes()
-                .cmp(pb.as_bytes())
-                .then(flag_byte(*ia, *ma, *da).cmp(&flag_byte(*ib, *mb, *db))),
+                Sem::Regex { pattern: pa, flags: fa },
+                Sem::Regex { pattern: pb, flags: fb },
+            ) => pa.as_bytes().cmp(pb.as_bytes()).then(fa.byte().cmp(&fb.byte())),
             (Sem::Json(a), Sem::Json(b)) => a.cmp_sem(b),
             (Sem::Vector(a), Sem::Vector(b)) => a
                 .len()
@@ -472,11 +454,28 @@ fn cmp_seq<T>(a: &[T], b: &[T], each: impl Fn(&T, &T) -> Ordering) -> Ordering {
     a.len().cmp(&b.len())
 }
 
-fn flag_byte(case_insensitive: bool, multi_line: bool, dot_matches_new_line: bool) -> u8 {
-    let a = if case_insensitive { 1u8 } else { 0 };
-    let b = if multi_line { 2u8 } else { 0 };
-    let c = if dot_matches_new_line { 4u8 } else { 0 };
-    a | b | c
+/// The flag set as this file states it: the six bits KyzoRegexV1 has, written
+/// out from the format rather than imported from the encoder.
+///
+/// The reserved bits are 0xC0, and a byte holding one is not a flag set. The
+/// mint is what makes that true here, exactly as it is over there — but nothing
+/// is shared, which is the point of this file.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct RefFlags(u8);
+
+impl RefFlags {
+    pub const RESERVED: u8 = 0xC0;
+
+    pub fn of(bits: u8) -> Option<RefFlags> {
+        match bits & RefFlags::RESERVED == 0 {
+            true => Some(RefFlags(bits)),
+            false => None,
+        }
+    }
+
+    pub fn byte(self) -> u8 {
+        self.0
+    }
 }
 
 /// `v` in `width` bytes, most significant first.
@@ -527,19 +526,10 @@ pub fn encode(v: &Sem) -> Vec<u8> {
             out.extend_from_slice(id);
             out
         }
-        Sem::Regex {
-            pattern,
-            case_insensitive,
-            multi_line,
-            dot_matches_new_line,
-        } => {
+        Sem::Regex { pattern, flags } => {
             let mut out = vec![TAG_REGEX];
             out.extend_from_slice(&escaped(pattern.as_bytes()));
-            out.push(flag_byte(
-                *case_insensitive,
-                *multi_line,
-                *dot_matches_new_line,
-            ));
+            out.push(flags.byte());
             out
         }
         Sem::Json(inner) => {

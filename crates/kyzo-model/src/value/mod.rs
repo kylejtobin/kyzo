@@ -85,7 +85,7 @@ pub use tag::Tag;
 // dissolves — no second copy under data/value.
 pub use crate::value::kind::interval::{Bound, Interval};
 pub use crate::value::kind::json::{Json, JsonNum, JsonObj, NonFiniteJsonNumber};
-pub use crate::value::kind::regex::{CompiledRegexV1, RegexFlags, RegexSource};
+pub use crate::value::kind::regex::{CompiledRegexV1, RegexFlag, RegexFlags, RegexSource};
 pub use crate::value::kind::validity::{
     AsOf, MAX_VALIDITY_TS, StoredValiditySlot, TERMINAL_VALIDITY, Validity, ValiditySeekBound,
     ValiditySlot, ValidityTs,
@@ -921,7 +921,7 @@ mod facade_tests {
                 b
             })),
             8 => DataValue::Regex(
-                RegexSource::validated(RegexFlags::NONE, ["a", "b+", ""][rng.below(3)].into())
+                RegexSource::validated(RegexFlags::none(), ["a", "b+", ""][rng.below(3)].into())
                     .into_diagnostic()?,
             ),
             9 => DataValue::Vector(

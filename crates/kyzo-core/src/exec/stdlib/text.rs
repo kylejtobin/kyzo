@@ -86,7 +86,7 @@ pub(crate) fn op_regex(args: &[DataValue]) -> Result<DataValue> {
     Ok(match &args[0] {
         r @ DataValue::Regex(_) => r.clone(),
         DataValue::Str(s) => DataValue::Regex(
-            RegexSource::validated(RegexFlags::NONE, s.clone())
+            RegexSource::validated(RegexFlags::none(), s.clone())
                 .map_err(|err| miette!("The string cannot be interpreted as regex: {err:?}"))?,
         ),
         DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("'regex' requires strings"),

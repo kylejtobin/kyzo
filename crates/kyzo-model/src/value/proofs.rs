@@ -268,7 +268,7 @@ mod tests {
             (
                 Tag::Regex,
                 DataValue::Regex(
-                    RegexSource::validated(RegexFlags::NONE, "a".into()).into_diagnostic()?,
+                    RegexSource::validated(RegexFlags::none(), "a".into()).into_diagnostic()?,
                 ),
             ),
             (Tag::Json, DataValue::Json(Json::Null)),

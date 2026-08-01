@@ -3109,25 +3109,89 @@ pub fn seal_uuid(id: &[u8; 16]) -> (r: CanonicalBytes) {
     seal(TAG_UUID, b)
 }
 
-/// The regex flags that survive into stored bytes. Bit 0 case-insensitive,
-/// bit 1 multi-line, bit 2 dot-matches-newline.
+/// The regex flags, and the whole of them: the six the KyzoRegexV1 dialect has.
+///
+/// ORDER_LAW: ascending over the bitset byte. Total and stable across releases.
+/// The flags are the tiebreak after the pattern, so this is the order two
+/// regexes with one pattern are read in.
+///
+/// A flag set IS its byte. There is no second representation to derive the byte
+/// from, and that is the whole point: [`kind::regex`] declared six flags while
+/// this declared three, so a regex with `SWAP_GREED` sealed to the same bytes
+/// as one without it. Two values, one byte string — the invariant breached in
+/// the direction that reads back a wrong answer instead of refusing.
+///
+/// The set is closed. Bits 6 and 7 are reserved, and [`RegexFlags::from_bits`]
+/// is the only way in from raw bits, so a byte carrying one is not a flag set.
 // CONSTRUCT: ValueObject RegexFlags
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Structural)]
 pub struct RegexFlags {
-    case_insensitive: bool,
-    multi_line: bool,
-    dot_matches_new_line: bool,
+    bits: u8,
+}
+
+/// The six flags, one constructor each.
+///
+/// A closed sum rather than six constants, so the bit layout below is one
+/// exhaustive match: a seventh flag does not compile until someone decides
+/// which bit it takes, which is the format decision it is.
+// CONSTRUCT: ClosedSum RegexFlag
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Structural)]
+pub enum RegexFlag {
+    CaseInsensitive,
+    MultiLine,
+    DotMatchesNewLine,
+    SwapGreed,
+    IgnoreWhitespace,
+    UnicodeDisabled,
+}
+
+impl RegexFlag {
+    /// Where this flag sits in the stored byte. The released layout, decided
+    /// here and read nowhere else.
+    pub fn bit(self) -> (r: u8) {
+        match self {
+            RegexFlag::CaseInsensitive => 0x01,
+            RegexFlag::MultiLine => 0x02,
+            RegexFlag::DotMatchesNewLine => 0x04,
+            RegexFlag::SwapGreed => 0x08,
+            RegexFlag::IgnoreWhitespace => 0x10,
+            RegexFlag::UnicodeDisabled => 0x20,
+        }
+    }
 }
 
 impl RegexFlags {
-    pub fn new(case_insensitive: bool, multi_line: bool, dot_matches_new_line: bool) -> (r: RegexFlags) {
-        RegexFlags { case_insensitive, multi_line, dot_matches_new_line }
+    /// The bits the six flags occupy. Everything outside it is reserved.
+    pub const MASK: u8 = 0x3F;
+
+    /// No flags. The only flag set that needs no flag to build.
+    pub fn none() -> (r: RegexFlags) {
+        RegexFlags { bits: 0x00 }
     }
 
-    pub fn byte(&self) -> (r: u8) {
-        let a: u8 = if self.case_insensitive { 1 } else { 0 };
-        let b: u8 = if self.multi_line { 2 } else { 0 };
-        let c: u8 = if self.dot_matches_new_line { 4 } else { 0 };
-        a | b | c
+    /// This set and that flag. Every flag set is built this way, so no set can
+    /// hold a bit no flag names.
+    pub fn with(self, flag: RegexFlag) -> (r: RegexFlags) {
+        RegexFlags { bits: self.bits | flag.bit() }
+    }
+
+    pub fn contains(self, flag: RegexFlag) -> (r: bool) {
+        self.bits & flag.bit() != 0
+    }
+
+    /// The mint from raw bits: a byte with a reserved bit set is not a flag
+    /// set, and saying so here is what keeps the reserved space reserved.
+    pub fn from_bits(bits: u8) -> (r: Option<RegexFlags>) {
+        match bits & !RegexFlags::MASK == 0 {
+            true => Some(RegexFlags { bits }),
+            false => None,
+        }
+    }
+
+    /// The stored byte. One home for the representation, so nothing can carry
+    /// fewer flags than the value has.
+    pub fn bits(&self) -> (r: u8) {
+        self.bits
     }
 }
 
@@ -3139,7 +3203,7 @@ impl RegexFlags {
 /// rather than in a check.
 pub fn seal_regex(pattern: &Utf8, flags: &RegexFlags) -> (r: CanonicalBytes) {
     proof { lemma_tag_shapes(); }
-    let f = Body::fixed(owned(&[flags.byte()]));
+    let f = Body::fixed(owned(&[flags.bits()]));
     seal(TAG_REGEX, Body::product(Body::delimited(pattern.as_slice()), f))
 }
 

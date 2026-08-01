@@ -35,7 +35,7 @@ use canonical::{
     Bound, Refusal, Utf8, NumericBytes, Branches, Reason, grammar_exec, CanonicalBytes, Shape, escape, scan_value, seal_bool, seal_bytes,
     seal_geometry, seal_interval, seal_interval_empty, seal_json, seal_list, seal_null,
     seal_num_negative, seal_num_nan, seal_num_positive, seal_num_zero, seal_regex, seal_set, seal_str,
-    FiniteMagnitude, Magnitude, Repr, RegexFlags, EXP_INFINITE, DIM_BYTES, MAG_BYTES,
+    FiniteMagnitude, Magnitude, Repr, RegexFlag, RegexFlags, EXP_INFINITE, DIM_BYTES, MAG_BYTES,
     seal_uuid, seal_validity, seal_vector, shape_scan, Components, Geometry, RowItem, Validity,
     Wrapped, MAX_DIMENSION, JsonEntry, JsonNumber, JsonValue,
 };
@@ -582,7 +582,7 @@ fn trial_grammar_table(t: &mut Trials) {
         (seal_str(&Utf8::of("hello")), 8, "Str: tag, content, terminator"),
         (seal_bytes(&[0x00, 0xFF]), 6, "Bytes: tag, escaped content, terminator"),
         (seal_uuid(&[0x00; 16]), 17, "Uuid: tag, 16"),
-        (seal_regex(&Utf8::of("ab"), &RegexFlags::new(true, true, true)), 6, "Regex: tag, pattern, terminator, flags"),
+        (seal_regex(&Utf8::of("ab"), &flags_of(0x3F)), 6, "Regex: tag, pattern, terminator, flags"),
         (json_raw((seal_null())), 2, "Json: tag, a value"),
         (seal_vector(components(vec![seal_num_zero(Repr::Int), seal_num_zero(Repr::Int)])), 12,
             "Vector: tag, 4 dimension, two components, terminator"),
@@ -615,7 +615,7 @@ fn trial_grammar_table(t: &mut Trials) {
         (seal_str(&Utf8::of("")), TAG_STR, "Str tag"),
         (seal_bytes(b""), TAG_BYTES, "Bytes tag"),
         (seal_uuid(&[0; 16]), TAG_UUID, "Uuid tag"),
-        (seal_regex(&Utf8::of(""), &RegexFlags::new(false, false, false)), TAG_REGEX, "Regex tag"),
+        (seal_regex(&Utf8::of(""), &RegexFlags::none()), TAG_REGEX, "Regex tag"),
         (json_raw((seal_null())), TAG_JSON, "Json tag"),
         (seal_vector(components(Vec::new())), TAG_VECTOR, "Vector tag"),
         (seal_list(&Vec::new()), TAG_LIST, "List tag"),
@@ -1397,8 +1397,8 @@ fn red_team_corpus() -> Vec<CanonicalBytes> {
         seal_bytes(&[0x00, 0x00, 0xFF]),
         seal_uuid(&[0x00; 16]),
         seal_uuid(&[0xFF; 16]),
-        seal_regex(&Utf8::of(""), &RegexFlags::new(false, false, false)),
-        seal_regex(&Utf8::of("a.*b"), &RegexFlags::new(true, false, true)),
+        seal_regex(&Utf8::of(""), &RegexFlags::none()),
+        seal_regex(&Utf8::of("a.*b"), &flags_of(0x05)),
         json_raw((seal_null())),
         seal_vector(components(Vec::new())),
         seal_vector(components(vec_of(3))),
@@ -1834,8 +1834,9 @@ fn main() {
     bytes_all_values_roundtrip(&mut t);
     string_golden_vectors_cover_utf8_boundaries(&mut t);
     bytes_golden_vectors_cover_zero_and_ff(&mut t);
-    regex_all_eight_flag_combinations_are_unique(&mut t);
-    regex_unknown_flag_bits_are_unconstructible(&mut t);
+    regex_all_sixty_four_flag_combinations_are_unique(&mut t);
+    regex_every_flag_changes_the_bytes(&mut t);
+    regex_reserved_flag_bits_are_refused(&mut t);
     regex_pattern_is_primary_sort_key(&mut t);
     regex_flags_are_secondary_sort_key(&mut t);
     regex_flag_bit_layout_matches_released_format(&mut t);
@@ -1993,9 +1994,9 @@ fn built(v: &reference::Sem) -> CanonicalBytes {
         Sem::Text(s) => seal_str(&Utf8::of(s)),
         Sem::Blob(b) => seal_bytes(b),
         Sem::Uuid(id) => seal_uuid(id),
-        Sem::Regex { pattern, case_insensitive, multi_line, dot_matches_new_line } => seal_regex(
+        Sem::Regex { pattern, flags } => seal_regex(
             &Utf8::of(pattern),
-            &RegexFlags::new(*case_insensitive, *multi_line, *dot_matches_new_line),
+            &flags_of(flags.byte()),
         ),
         Sem::Json(inner) => json_raw((built(inner))),
         Sem::Vector(parts) => {
@@ -2148,9 +2149,7 @@ fn some_value(g: &mut Seeded, fuel: u32) -> reference::Sem {
         6 => Sem::Regex {
             pattern: String::from_utf8(g.bytes(5).into_iter().map(|b| b & 0x7F).collect())
                 .unwrap_or_default(),
-            case_insensitive: g.below(2) == 0,
-            multi_line: g.below(2) == 0,
-            dot_matches_new_line: g.below(2) == 0,
+            flags: ref_flags(g.byte() & 0x3F),
         },
         7 => {
             let is_assert = g.below(2) == 0;
@@ -2243,9 +2242,12 @@ fn semantic_corpus() -> Vec<reference::Sem> {
         Sem::Blob(vec![0xFF]),
         Sem::Uuid([0x00; 16]),
         Sem::Uuid([0xFF; 16]),
-        Sem::Regex { pattern: String::new(), case_insensitive: false, multi_line: false, dot_matches_new_line: false },
-        Sem::Regex { pattern: String::new(), case_insensitive: true, multi_line: true, dot_matches_new_line: true },
-        Sem::Regex { pattern: "a".to_string(), case_insensitive: false, multi_line: false, dot_matches_new_line: false },
+        Sem::Regex { pattern: String::new(), flags: ref_flags(0x00) },
+        Sem::Regex { pattern: String::new(), flags: ref_flags(0x07) },
+        Sem::Regex { pattern: String::new(), flags: ref_flags(0x3F) },
+        Sem::Regex { pattern: String::new(), flags: ref_flags(0x08) },
+        Sem::Regex { pattern: "a".to_string(), flags: ref_flags(0x00) },
+        Sem::Regex { pattern: "a".to_string(), flags: ref_flags(0x20) },
         Sem::Json(Box::new(Sem::Null)),
         Sem::Json(Box::new(Sem::Bool(true))),
         Sem::Json(Box::new(Sem::Json(Box::new(Sem::Null)))),
@@ -2963,7 +2965,7 @@ fn semantic_oracle_does_not_reuse_encoded_byte_comparison(t: &mut Trials) {
 /// hand from the released format -- that say the bytes were right to begin
 /// with. A change here is a format break, and the trial exists so that the
 /// break is a decision somebody made rather than one that happened.
-const GOLDEN_V1: [&str; 61] = [
+const GOLDEN_V1: [&str; 64] = [
     "05",
     "08",
     "09",
@@ -2995,7 +2997,10 @@ const GOLDEN_V1: [&str; 61] = [
     "28ffffffffffffffffffffffffffffffff",
     "30000000",
     "30000007",
+    "3000003f",
+    "30000008",
     "3061000000",
+    "3061000020",
     "3805",
     "3809",
     "383805",
@@ -3035,7 +3040,10 @@ fn freeze_v1_candidate_golden_corpus(t: &mut Trials) {
     );
     for (i, (_, bytes)) in all.iter().enumerate() {
         let hex: String = bytes.as_bytes().iter().map(|b| format!("{b:02x}")).collect();
-        t.check("every value still encodes to its frozen bytes", hex == GOLDEN_V1[i]);
+        match GOLDEN_V1.get(i) {
+            Some(frozen) => t.check("every value still encodes to its frozen bytes", &hex == frozen),
+            None => t.check("the corpus grew past its frozen bytes", false),
+        }
     }
 }
 
@@ -4531,13 +4539,42 @@ fn bytes_golden_vectors_cover_zero_and_ff(t: &mut Trials) {
 
 // ================================= regex ====================================
 
-fn flags_of(bits: u8) -> RegexFlags {
-    RegexFlags::new(bits & 1 != 0, bits & 2 != 0, bits & 4 != 0)
+/// A flag set for the oracle, or the harness stops. The oracle's own mint,
+/// which refuses the same reserved bits by its own statement of them.
+fn ref_flags(bits: u8) -> reference::RefFlags {
+    match reference::RefFlags::of(bits) {
+        Some(f) => f,
+        None => {
+            eprintln!("canonical-trials: {bits:#04x} is not a flag set");
+            std::process::exit(2)
+        }
+    }
 }
 
-fn regex_all_eight_flag_combinations_are_unique(t: &mut Trials) {
+/// A flag set, or the harness stops: a byte with a reserved bit set is not one,
+/// and the mint is where that is decided.
+fn flags_of(bits: u8) -> RegexFlags {
+    match RegexFlags::from_bits(bits) {
+        Some(f) => f,
+        None => {
+            eprintln!("canonical-trials: {bits:#04x} is not a flag set");
+            std::process::exit(2)
+        }
+    }
+}
+
+const EVERY_FLAG: [RegexFlag; 6] = [
+    RegexFlag::CaseInsensitive,
+    RegexFlag::MultiLine,
+    RegexFlag::DotMatchesNewLine,
+    RegexFlag::SwapGreed,
+    RegexFlag::IgnoreWhitespace,
+    RegexFlag::UnicodeDisabled,
+];
+
+fn regex_all_sixty_four_flag_combinations_are_unique(t: &mut Trials) {
     let mut seen: Vec<(u8, Vec<u8>)> = Vec::new();
-    for bits in 0u8..8 {
+    for bits in 0u8..0x40 {
         let sealed = seal_regex(&Utf8::of("a"), &flags_of(bits));
         let bytes = sealed.as_bytes().to_vec();
         for (other_bits, other) in &seen {
@@ -4548,18 +4585,64 @@ fn regex_all_eight_flag_combinations_are_unique(t: &mut Trials) {
         }
         seen.push((bits, bytes));
     }
-    t.check("all eight combinations are present", seen.len() == 8);
+    t.check("all sixty-four combinations are present", seen.len() == 64);
 }
 
-/// The flags type has three fields and no fourth, so bit 3 and above are not a
-/// value a caller can name. What runs here is that no combination it can name
-/// ever sets one.
-fn regex_unknown_flag_bits_are_unconstructible(t: &mut Trials) {
-    for bits in 0u8..8 {
-        let sealed = seal_regex(&Utf8::of(""), &flags_of(bits));
-        let bytes = sealed.as_bytes();
-        let written = bytes[bytes.len() - 1];
-        t.check("the flags byte holds only the three known bits", written < 8);
+/// The defect this trial exists for: the encoder declared three flags while
+/// `kind/regex.rs` declared six, so a regex with `SwapGreed`, `IgnoreWhitespace`
+/// or `UnicodeDisabled` sealed to the same bytes as one without it. Two values,
+/// one byte string.
+///
+/// Every one of the six is checked, not the three that used to work.
+fn regex_every_flag_changes_the_bytes(t: &mut Trials) {
+    for pattern in ["", "a", "a.*b", "\u{0}"] {
+        let bare = seal_regex(&Utf8::of(pattern), &RegexFlags::none());
+        for flag in EVERY_FLAG {
+            let set = seal_regex(&Utf8::of(pattern), &RegexFlags::none().with(flag));
+            t.check(
+                "setting a flag changes the sealed bytes",
+                set.as_bytes() != bare.as_bytes(),
+            );
+            t.check(
+                "and the flag reads back set",
+                RegexFlags::none().with(flag).contains(flag),
+            );
+            t.check(
+                "and no other flag reads back set with it",
+                EVERY_FLAG
+                    .iter()
+                    .filter(|other| RegexFlags::none().with(flag).contains(**other))
+                    .count()
+                    == 1,
+            );
+        }
+    }
+}
+
+/// Bits 6 and 7 are reserved, and the only way in from raw bits refuses them.
+/// A flag set built from flags cannot reach them either: `with` unions a bit
+/// the closed sum names, and none of the six names one.
+fn regex_reserved_flag_bits_are_refused(t: &mut Trials) {
+    for bits in 0u8..=0xFF {
+        let minted = RegexFlags::from_bits(bits);
+        t.check(
+            "a byte is a flag set exactly when it holds no reserved bit",
+            minted.is_some() == (bits & 0xC0 == 0),
+        );
+    }
+    // And what the six flags can build stays inside the mask, at every size of
+    // combination -- 0x40 of them, which is every subset of six.
+    for bits in 0u8..0x40 {
+        let mut built = RegexFlags::none();
+        for (i, flag) in EVERY_FLAG.iter().enumerate() {
+            if bits >> i & 1 == 1 {
+                built = built.with(*flag);
+            }
+        }
+        t.check("a set built from flags is the bits asked for", built.bits() == bits);
+        let sealed = seal_regex(&Utf8::of(""), &built);
+        let written = sealed.as_bytes()[sealed.as_bytes().len() - 1];
+        t.check("the flags byte holds no reserved bit", written & 0xC0 == 0);
         t.check("the flags byte is the combination asked for", written == bits);
     }
 }
@@ -4573,7 +4656,7 @@ fn regex_pattern_is_primary_sort_key(t: &mut Trials) {
             }
             // The lower pattern with every flag set still sorts below the
             // higher pattern with none: the pattern decides first.
-            let low = seal_regex(&Utf8::of(a), &flags_of(7));
+            let low = seal_regex(&Utf8::of(a), &flags_of(0x3F));
             let high = seal_regex(&Utf8::of(b), &flags_of(0));
             t.check(
                 "the pattern decides before the flags are read",
@@ -4585,8 +4668,8 @@ fn regex_pattern_is_primary_sort_key(t: &mut Trials) {
 
 fn regex_flags_are_secondary_sort_key(t: &mut Trials) {
     for pattern in ["", "a", "a.*b"] {
-        for x in 0u8..8 {
-            for y in 0u8..8 {
+        for x in 0u8..0x40 {
+            for y in 0u8..0x40 {
                 let a = seal_regex(&Utf8::of(pattern), &flags_of(x));
                 let b = seal_regex(&Utf8::of(pattern), &flags_of(y));
                 t.check(
@@ -4599,20 +4682,27 @@ fn regex_flags_are_secondary_sort_key(t: &mut Trials) {
 }
 
 fn regex_flag_bit_layout_matches_released_format(t: &mut Trials) {
-    let cases: [(bool, bool, bool, u8); 4] = [
-        (true, false, false, 0x01),
-        (false, true, false, 0x02),
-        (false, false, true, 0x04),
-        (true, true, true, 0x07),
+    // The released layout, written out here and not read from the encoder.
+    let cases: [(RegexFlag, u8); 6] = [
+        (RegexFlag::CaseInsensitive, 0x01),
+        (RegexFlag::MultiLine, 0x02),
+        (RegexFlag::DotMatchesNewLine, 0x04),
+        (RegexFlag::SwapGreed, 0x08),
+        (RegexFlag::IgnoreWhitespace, 0x10),
+        (RegexFlag::UnicodeDisabled, 0x20),
     ];
-    for (ci, ml, dot, expected) in cases {
-        let sealed = seal_regex(&Utf8::of(""), &RegexFlags::new(ci, ml, dot));
+    for (flag, expected) in cases {
+        let sealed = seal_regex(&Utf8::of(""), &RegexFlags::none().with(flag));
         let bytes = sealed.as_bytes();
         t.check(
             "the flag bits sit where the format puts them",
             bytes[bytes.len() - 1] == expected,
         );
     }
+    let all = cases
+        .iter()
+        .fold(RegexFlags::none(), |set, (flag, _)| set.with(*flag));
+    t.check("and all six together fill the mask", all.bits() == 0x3F);
 }
 
 fn regex_empty_pattern_is_canonical(t: &mut Trials) {
@@ -4659,7 +4749,7 @@ fn regex_encoding_is_injective(t: &mut Trials) {
     let patterns = ["", "a", "ab", "b", "\u{0}"];
     let mut seen: Vec<((usize, u8), Vec<u8>)> = Vec::new();
     for (i, p) in patterns.iter().enumerate() {
-        for bits in 0u8..8 {
+        for bits in 0u8..0x40 {
             let bytes = seal_regex(&Utf8::of(p), &flags_of(bits)).as_bytes().to_vec();
             for (key, other) in &seen {
                 t.check(
@@ -4675,11 +4765,14 @@ fn regex_encoding_is_injective(t: &mut Trials) {
 fn regex_golden_vectors_cover_all_flags(t: &mut Trials) {
     let cases: Vec<(&str, u8, Vec<u8>)> = vec![
         ("", 0, vec![0x30, 0x00, 0x00, 0x00]),
-        ("", 7, vec![0x30, 0x00, 0x00, 0x07]),
+        ("", 0x3F, vec![0x30, 0x00, 0x00, 0x3F]),
         ("a", 0, vec![0x30, 0x61, 0x00, 0x00, 0x00]),
         ("a", 1, vec![0x30, 0x61, 0x00, 0x00, 0x01]),
         ("a", 2, vec![0x30, 0x61, 0x00, 0x00, 0x02]),
         ("a", 4, vec![0x30, 0x61, 0x00, 0x00, 0x04]),
+        ("a", 8, vec![0x30, 0x61, 0x00, 0x00, 0x08]),
+        ("a", 0x10, vec![0x30, 0x61, 0x00, 0x00, 0x10]),
+        ("a", 0x20, vec![0x30, 0x61, 0x00, 0x00, 0x20]),
         ("\u{0}", 0, vec![0x30, 0x00, 0xFF, 0x00, 0x00, 0x00]),
     ];
     for (pattern, bits, expected) in &cases {
@@ -7530,7 +7623,7 @@ fn truncated_delimited_body_reports_eof_suffix(t: &mut Trials) {
 fn truncated_product_first_factor_reports_exact_suffix(t: &mut Trials) {
     // A regex is a delimited pattern then a flags byte; cutting inside the
     // pattern is a refusal in the first factor.
-    let sealed = seal_regex(&Utf8::of("ab"), &RegexFlags::new(false, false, false));
+    let sealed = seal_regex(&Utf8::of("ab"), &RegexFlags::none());
     let bytes = sealed.as_bytes();
     for cut in 1..bytes.len() - 1 {
         let truncated = &bytes[..cut];
@@ -7546,7 +7639,7 @@ fn truncated_product_first_factor_reports_exact_suffix(t: &mut Trials) {
 
 fn truncated_product_second_factor_reports_exact_suffix(t: &mut Trials) {
     // The flags byte is the second factor: everything but it is present.
-    let sealed = seal_regex(&Utf8::of("ab"), &RegexFlags::new(true, true, true));
+    let sealed = seal_regex(&Utf8::of("ab"), &flags_of(0x3F));
     let bytes = sealed.as_bytes();
     let without_flags = &bytes[..bytes.len() - 1];
     match scan_value(without_flags) {
