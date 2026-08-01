@@ -1627,6 +1627,53 @@ fn main() {
     fuzz_mutated_valid_encodings_never_have_two_readings(&mut t);
     t.report("independent reference");
 
+    println!("rows");
+    empty_row_is_struct_end(&mut t);
+    single_element_row_scans_exactly(&mut t);
+    multi_element_row_scans_exactly(&mut t);
+    row_scanner_stops_before_trailing_bytes(&mut t);
+    row_order_empty_before_nonempty(&mut t);
+    row_order_strict_prefix_before_extension(&mut t);
+    row_order_first_differing_element_decides(&mut t);
+    row_order_ignores_later_elements_after_difference(&mut t);
+    row_order_matches_encoded_byte_order(&mut t);
+    row_encodings_are_prefix_free(&mut t);
+    row_element_cannot_equal_terminator(&mut t);
+    row_element_cannot_sort_below_terminator(&mut t);
+    row_rejects_missing_terminator(&mut t);
+    row_rejects_truncated_element(&mut t);
+    row_rejects_unknown_element_tag(&mut t);
+    wide_row_is_stack_safe(&mut t);
+    deeply_nested_rows_respect_depth_policy(&mut t);
+    row_of_complete_values_is_complete(&mut t);
+    row_locality_survives_arbitrary_trailing_bytes(&mut t);
+    t.report("rows");
+
+    println!("escaped byte strings");
+    escape_empty_is_double_zero(&mut t);
+    escape_zero_is_zero_ff(&mut t);
+    escape_nonzero_bytes_are_unchanged(&mut t);
+    escape_multiple_zeroes_are_unambiguous(&mut t);
+    escape_body_never_contains_terminator(&mut t);
+    escape_body_never_ends_in_zero(&mut t);
+    escape_terminator_occurs_exactly_once_at_end(&mut t);
+    escape_is_injective_exhaustive(&mut t);
+    escape_preserves_order_exhaustive(&mut t);
+    escaped_encodings_are_prefix_free_exhaustive(&mut t);
+    escaped_prefix_payload_sorts_before_extension(&mut t);
+    escaped_ff_boundary_preserves_order(&mut t);
+    escaped_long_zero_runs_preserve_order(&mut t);
+    delim_scan_accepts_every_escape_output(&mut t);
+    delim_scan_stops_before_trailing_bytes(&mut t);
+    delim_scan_rejects_empty_input(&mut t);
+    delim_scan_rejects_single_zero(&mut t);
+    delim_scan_rejects_zero_followed_by_invalid_companion(&mut t);
+    delim_scan_reports_bad_escape_at_invalid_companion(&mut t);
+    delim_scan_reports_truncation_at_end(&mut t);
+    delim_scan_matches_delim_end_exhaustive(&mut t);
+    delim_scan_never_panics_on_arbitrary_bytes(&mut t);
+    t.report("escaped byte strings");
+
     println!("construction authority");
     raw_set_sealer_has_only_canonical_set_callers(&mut t);
     public_api_does_not_expose_raw_grammar_authority(&mut t);
@@ -5210,4 +5257,651 @@ fn public_api_does_not_expose_raw_grammar_authority(t: &mut Trials) {
         "the tag constants are the format, not a door taking one",
         !CANONICAL.contains("pub fn seal(tag"),
     );
+}
+
+// =========================== escaped byte strings ===========================
+//
+// One payload shape carries every byte string: `0x00` doubles into `0x00 0xFF`,
+// `0x00 0x00` ends it, and nothing else is structure. The escape is where a
+// smuggled terminator would have to get in, so it is swept exhaustively.
+
+/// The byte strings the escape trials sweep: the structural bytes, their
+/// neighbours, and runs of them.
+fn payload_corpus() -> Vec<Vec<u8>> {
+    let mut out: Vec<Vec<u8>> = vec![Vec::new()];
+    for b in 0u16..=255 {
+        out.push(vec![b as u8]);
+    }
+    for a in [0x00u8, 0x01, 0x02, 0xFE, 0xFF] {
+        for b in [0x00u8, 0x01, 0x02, 0xFE, 0xFF] {
+            out.push(vec![a, b]);
+            out.push(vec![a, b, a]);
+        }
+    }
+    out.push(vec![0x00; 8]);
+    out.push(vec![0x00, 0xFF, 0x00, 0xFF]);
+    out.push(vec![0xFF, 0x00, 0xFF, 0x00]);
+    out
+}
+
+fn escape_empty_is_double_zero(t: &mut Trials) {
+    t.check("the empty payload is the terminator alone", escape(&[]) == vec![0x00, 0x00]);
+}
+
+fn escape_zero_is_zero_ff(t: &mut Trials) {
+    t.check("a zero byte doubles", escape(&[0x00]) == vec![0x00, 0xFF, 0x00, 0x00]);
+    t.check(
+        "two zero bytes double twice",
+        escape(&[0x00, 0x00]) == vec![0x00, 0xFF, 0x00, 0xFF, 0x00, 0x00],
+    );
+}
+
+fn escape_nonzero_bytes_are_unchanged(t: &mut Trials) {
+    for b in 1u16..=255 {
+        let escaped = escape(&[b as u8]);
+        t.check(
+            "a byte that is not zero passes through",
+            escaped == vec![b as u8, 0x00, 0x00],
+        );
+    }
+}
+
+fn escape_multiple_zeroes_are_unambiguous(t: &mut Trials) {
+    let mut seen: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+    for n in 0usize..6 {
+        for tail in [Vec::new(), vec![0x41u8], vec![0xFF]] {
+            let mut payload = vec![0x00u8; n];
+            payload.extend_from_slice(&tail);
+            let escaped = escape(&payload);
+            for (other_payload, other) in &seen {
+                t.check(
+                    "runs of zeroes stay distinct through the escape",
+                    (other == &escaped) == (other_payload == &payload),
+                );
+            }
+            seen.push((payload, escaped));
+        }
+    }
+}
+
+fn escape_body_never_contains_terminator(t: &mut Trials) {
+    for payload in payload_corpus() {
+        let escaped = escape(&payload);
+        let body = &escaped[..escaped.len() - 2];
+        let mut i = 0usize;
+        while i + 1 < body.len() {
+            t.check(
+                "the terminator never occurs inside the body",
+                !(body[i] == 0x00 && body[i + 1] == 0x00),
+            );
+            i += 1;
+        }
+    }
+}
+
+fn escape_body_never_ends_in_zero(t: &mut Trials) {
+    for payload in payload_corpus() {
+        let escaped = escape(&payload);
+        let body = &escaped[..escaped.len() - 2];
+        match body.last() {
+            None => t.check("an empty body cannot end in zero", true),
+            Some(last) => t.check("a body never ends on an unpaired zero", *last != 0x00),
+        }
+    }
+}
+
+fn escape_terminator_occurs_exactly_once_at_end(t: &mut Trials) {
+    for payload in payload_corpus() {
+        let escaped = escape(&payload);
+        let mut terminators = 0usize;
+        let mut i = 0usize;
+        while i + 1 < escaped.len() {
+            match (escaped[i], escaped[i + 1]) {
+                (0x00, 0x00) => {
+                    terminators += 1;
+                    i += 2;
+                }
+                (0x00, _) => i += 2,
+                _ => i += 1,
+            }
+        }
+        t.check("exactly one terminator", terminators == 1);
+        t.check(
+            "and it is the last two bytes",
+            escaped[escaped.len() - 2..] == [0x00, 0x00],
+        );
+    }
+}
+
+fn escape_is_injective_exhaustive(t: &mut Trials) {
+    let corpus = payload_corpus();
+    let escaped: Vec<Vec<u8>> = corpus.iter().map(|p| escape(p)).collect();
+    for i in 0..corpus.len() {
+        for j in 0..corpus.len() {
+            t.check(
+                "one payload, one escaped form",
+                (escaped[i] == escaped[j]) == (corpus[i] == corpus[j]),
+            );
+        }
+    }
+}
+
+fn escape_preserves_order_exhaustive(t: &mut Trials) {
+    let corpus = payload_corpus();
+    for a in &corpus {
+        for b in &corpus {
+            t.check(
+                "the escape preserves order",
+                escape(a).cmp(&escape(b)) == a.cmp(b),
+            );
+        }
+    }
+}
+
+fn escaped_encodings_are_prefix_free_exhaustive(t: &mut Trials) {
+    let corpus = payload_corpus();
+    for a in &corpus {
+        for b in &corpus {
+            if a == b {
+                continue;
+            }
+            let (x, y) = (escape(a), escape(b));
+            t.check(
+                "no escaped payload is a prefix of another",
+                !is_proper_prefix(&x, &y) && !is_proper_prefix(&y, &x),
+            );
+        }
+    }
+}
+
+fn escaped_prefix_payload_sorts_before_extension(t: &mut Trials) {
+    for base in payload_corpus() {
+        for extra in 0u16..=255 {
+            let mut longer = base.clone();
+            longer.push(extra as u8);
+            t.check(
+                "a payload sorts before its own extension",
+                escape(&base) < escape(&longer),
+            );
+        }
+    }
+}
+
+fn escaped_ff_boundary_preserves_order(t: &mut Trials) {
+    // 0xFF is the escape companion, so a payload byte of 0xFF must not be read
+    // as one, and must keep its place at the top of the byte range.
+    for base in [vec![], vec![0x00u8], vec![0xFFu8], vec![0x00, 0xFF]] {
+        let mut with_ff = base.clone();
+        with_ff.push(0xFF);
+        let mut with_fe = base.clone();
+        with_fe.push(0xFE);
+        t.check("0xFE sorts below 0xFF after escaping", escape(&with_fe) < escape(&with_ff));
+        let mut with_zero = base.clone();
+        with_zero.push(0x00);
+        t.check("a zero byte sorts below every other", escape(&with_zero) < escape(&with_fe));
+    }
+}
+
+fn escaped_long_zero_runs_preserve_order(t: &mut Trials) {
+    for n in 0usize..24 {
+        let short = vec![0x00u8; n];
+        let long = vec![0x00u8; n + 1];
+        t.check(
+            "a shorter run of zeroes sorts first",
+            escape(&short) < escape(&long),
+        );
+        let mut run_then_high = vec![0x00u8; n];
+        run_then_high.push(0xFF);
+        t.check(
+            "a run followed by a high byte sorts above the run alone",
+            escape(&short) < escape(&run_then_high),
+        );
+    }
+}
+
+fn delim_scan_accepts_every_escape_output(t: &mut Trials) {
+    for payload in payload_corpus() {
+        let escaped = escape(&payload);
+        t.check(
+            "the delimiter reader accepts what the escape writes",
+            scanned(canonical::delim_scan(&escaped)) == Some(escaped.len()),
+        );
+    }
+}
+
+fn delim_scan_stops_before_trailing_bytes(t: &mut Trials) {
+    for payload in payload_corpus() {
+        let escaped = escape(&payload);
+        for trailer in [vec![0x00u8], vec![0x00, 0x00], vec![0xFF; 3], vec![0x41]] {
+            let mut extended = escaped.clone();
+            extended.extend_from_slice(&trailer);
+            t.check(
+                "the reading ends where the payload does",
+                scanned(canonical::delim_scan(&extended)) == Some(escaped.len()),
+            );
+        }
+    }
+}
+
+fn delim_scan_rejects_empty_input(t: &mut Trials) {
+    match canonical::delim_scan(&[]) {
+        Ok(_) => t.check("an empty input is not a payload", false),
+        Err(e) => {
+            t.check("an empty input is truncated", e.reason() == Reason::Truncated);
+            t.check("and the refusal points at the end", e.at().is_empty());
+        }
+    }
+}
+
+fn delim_scan_rejects_single_zero(t: &mut Trials) {
+    match canonical::delim_scan(&[0x00]) {
+        Ok(_) => t.check("a lone escape is not a payload", false),
+        Err(e) => t.check("a lone escape is truncated", e.reason() == Reason::Truncated),
+    }
+}
+
+fn delim_scan_rejects_zero_followed_by_invalid_companion(t: &mut Trials) {
+    for b in 0u16..=255 {
+        let companion = b as u8;
+        if companion == 0x00 || companion == 0xFF {
+            continue;
+        }
+        let input = vec![0x00, companion];
+        match canonical::delim_scan(&input) {
+            Ok(_) => t.check("only 0x00 and 0xFF may follow an escape", false),
+            Err(e) => t.check(
+                "any other companion is a bad escape",
+                e.reason() == Reason::BadEscape(companion),
+            ),
+        }
+    }
+}
+
+fn delim_scan_reports_bad_escape_at_invalid_companion(t: &mut Trials) {
+    for prefix_len in 0usize..4 {
+        let mut input = vec![0x41u8; prefix_len];
+        input.push(0x00);
+        input.push(0x41);
+        input.extend_from_slice(&[0x00, 0x00]);
+        match canonical::delim_scan(&input) {
+            Ok(_) => t.check("a bad escape is refused", false),
+            Err(e) => {
+                t.check("named as a bad escape", e.reason() == Reason::BadEscape(0x41));
+                t.check(
+                    "and stopped at the companion",
+                    stopped_at(&input, &e) == prefix_len + 1,
+                );
+            }
+        }
+    }
+}
+
+fn delim_scan_reports_truncation_at_end(t: &mut Trials) {
+    for payload in payload_corpus() {
+        let escaped = escape(&payload);
+        for cut in 0..escaped.len() {
+            let truncated = &escaped[..cut];
+            match canonical::delim_scan(truncated) {
+                Ok(n) => t.check("a truncated payload is not a payload", n == 0),
+                Err(e) => t.check(
+                    "a refusal never points past the end",
+                    stopped_at(truncated, &e) <= truncated.len(),
+                ),
+            }
+        }
+    }
+}
+
+/// The spec side of this equivalence is proven, not tested: `delim_scan`'s
+/// `ensures` ties its success to `delim_end` and its refusal to `delim_end`
+/// being `None`, and the verifier discharges both. What runs here is the
+/// executable half against an independently written reader.
+fn delim_scan_matches_delim_end_exhaustive(t: &mut Trials) {
+    let mut inputs: Vec<Vec<u8>> = Vec::new();
+    for payload in payload_corpus() {
+        inputs.push(escape(&payload));
+    }
+    for a in 0u16..=255 {
+        inputs.push(vec![a as u8]);
+        for b in [0x00u8, 0x01, 0xFE, 0xFF] {
+            inputs.push(vec![a as u8, b]);
+            inputs.push(vec![b, a as u8]);
+        }
+    }
+    for input in &inputs {
+        let theirs = reference_delim(input);
+        let ours = scanned(canonical::delim_scan(input));
+        t.check("both delimiter readers agree", theirs == ours);
+    }
+}
+
+/// An escaped payload's length, read independently of the encoder.
+fn reference_delim(p: &[u8]) -> Option<usize> {
+    let mut i = 0usize;
+    loop {
+        match (p.get(i), p.get(i + 1)) {
+            (None, _) => return None,
+            (Some(0x00), None) => return None,
+            (Some(0x00), Some(0x00)) => return Some(i + 2),
+            (Some(0x00), Some(0xFF)) => i += 2,
+            (Some(0x00), Some(_)) => return None,
+            (Some(_), _) => i += 1,
+        }
+    }
+}
+
+fn delim_scan_never_panics_on_arbitrary_bytes(t: &mut Trials) {
+    let mut g = Seeded::new(0x5EED_0100);
+    for _ in 0..4000 {
+        let input = g.bytes(10);
+        let survived =
+            std::panic::catch_unwind(|| canonical::delim_scan(&input).is_ok()).is_ok();
+        t.check("the delimiter reader returns on every input", survived);
+        let theirs = reference_delim(&input);
+        t.check(
+            "and agrees with the independent reader on it",
+            theirs == scanned(canonical::delim_scan(&input)),
+        );
+    }
+}
+
+// ================================== rows ====================================
+//
+// A row decides "another element or the end" from the byte in front of it. That
+// is the whole of its structure, and it is why every element must open above
+// the terminator.
+
+/// The row shape, read directly, so a trial can hand it a body no door would
+/// have written.
+fn row_scan(body: &[u8]) -> Option<usize> {
+    let g = grammar_exec();
+    scanned(shape_scan(&g, &Shape::Row(Box::new(Shape::Tagged)), body, 0))
+}
+
+/// A row body: the elements, then the terminator.
+fn row_body(elements: &[CanonicalBytes]) -> Vec<u8> {
+    let mut out: Vec<u8> = Vec::new();
+    for e in elements {
+        out.extend_from_slice(e.as_bytes());
+    }
+    out.push(0x01);
+    out
+}
+
+fn empty_row_is_struct_end(t: &mut Trials) {
+    t.check("an empty row is the terminator alone", row_scan(&[0x01]) == Some(1));
+    let empty = seal_list(&Vec::new());
+    t.check("and the list door writes exactly that", empty.as_bytes() == [TAG_LIST, 0x01]);
+}
+
+fn single_element_row_scans_exactly(t: &mut Trials) {
+    for i in 0..8usize {
+        let element = leaf(i);
+        let body = row_body(&[leaf(i)]);
+        t.check(
+            "a row of one ends after its element and the terminator",
+            row_scan(&body) == Some(element.as_bytes().len() + 1),
+        );
+    }
+}
+
+fn multi_element_row_scans_exactly(t: &mut Trials) {
+    for n in 0usize..8 {
+        let elements: Vec<CanonicalBytes> = (0..n).map(|k| leaf(k % 8)).collect();
+        let width: usize = elements.iter().map(|e| e.as_bytes().len()).sum();
+        let body = row_body(&elements);
+        t.check(
+            "a row ends after its last element and the terminator",
+            row_scan(&body) == Some(width + 1),
+        );
+    }
+}
+
+fn row_scanner_stops_before_trailing_bytes(t: &mut Trials) {
+    let elements = vec![leaf(0), leaf(4)];
+    let width: usize = elements.iter().map(|e| e.as_bytes().len()).sum();
+    let body = row_body(&elements);
+    for trailer in [vec![0x01u8], vec![0x05], vec![0xFF; 4], vec![0x00, 0x00]] {
+        let mut extended = body.clone();
+        extended.extend_from_slice(&trailer);
+        t.check(
+            "the row ends at its terminator, whatever follows",
+            row_scan(&extended) == Some(width + 1),
+        );
+    }
+}
+
+fn row_order_empty_before_nonempty(t: &mut Trials) {
+    let empty = list_of(&[]);
+    for i in 0..8usize {
+        t.check(
+            "the empty row sorts below every inhabited one",
+            empty.as_bytes() < list_of(&[i]).as_bytes(),
+        );
+    }
+}
+
+fn row_order_strict_prefix_before_extension(t: &mut Trials) {
+    for i in 0..8usize {
+        for j in 0..8usize {
+            let short = list_of(&[i]);
+            let long = list_of(&[i, j]);
+            t.check("a row sorts below its extension", short.as_bytes() < long.as_bytes());
+        }
+    }
+}
+
+fn row_order_first_differing_element_decides(t: &mut Trials) {
+    for i in 0..8usize {
+        for j in 0..8usize {
+            if i == j {
+                continue;
+            }
+            let a = list_of(&[3, i, 0]);
+            let b = list_of(&[3, j, 7]);
+            t.check(
+                "the first element that differs decides",
+                (a.as_bytes() < b.as_bytes()) == (leaf(i).as_bytes() < leaf(j).as_bytes()),
+            );
+        }
+    }
+}
+
+fn row_order_ignores_later_elements_after_difference(t: &mut Trials) {
+    for tail_a in 0..8usize {
+        for tail_b in 0..8usize {
+            // The second element differs; nothing after it may change the order.
+            let a = list_of(&[0, 1, tail_a]);
+            let b = list_of(&[0, 2, tail_b]);
+            t.check(
+                "elements after the first difference do not matter",
+                a.as_bytes() < b.as_bytes(),
+            );
+        }
+    }
+}
+
+fn row_order_matches_encoded_byte_order(t: &mut Trials) {
+    let shapes: Vec<Vec<usize>> = vec![
+        vec![],
+        vec![0],
+        vec![0, 0],
+        vec![0, 1],
+        vec![1],
+        vec![1, 0],
+        vec![4, 5],
+        vec![5],
+    ];
+    for a in &shapes {
+        for b in &shapes {
+            // Element-wise, then by length: the row's own order, computed on the
+            // elements rather than on the row's bytes.
+            let mut semantic = Ordering::Equal;
+            let mut k = 0usize;
+            while k < a.len() && k < b.len() && semantic == Ordering::Equal {
+                semantic = leaf(a[k]).as_bytes().cmp(leaf(b[k]).as_bytes());
+                k += 1;
+            }
+            if semantic == Ordering::Equal {
+                semantic = a.len().cmp(&b.len());
+            }
+            t.check(
+                "row order is element order, then length",
+                list_of(a).as_bytes().cmp(list_of(b).as_bytes()) == semantic,
+            );
+        }
+    }
+}
+
+fn row_encodings_are_prefix_free(t: &mut Trials) {
+    let mut rows: Vec<CanonicalBytes> = Vec::new();
+    for shape in [vec![], vec![0usize], vec![0, 0], vec![0, 1], vec![1], vec![4, 5, 6]] {
+        rows.push(list_of(&shape));
+        rows.push(seal_list(&row(vec![list_of(&shape)])));
+    }
+    for a in &rows {
+        for b in &rows {
+            let (x, y) = (a.as_bytes(), b.as_bytes());
+            if x != y {
+                t.check(
+                    "no row encoding is a prefix of another",
+                    !is_proper_prefix(x, y) && !is_proper_prefix(y, x),
+                );
+            }
+        }
+    }
+}
+
+fn row_element_cannot_equal_terminator(t: &mut Trials) {
+    for v in red_team_corpus() {
+        t.check(
+            "no value opens with the terminator",
+            v.as_bytes()[0] != 0x01,
+        );
+    }
+    // A row whose body opens with the terminator IS the empty row: there is no
+    // element that could be confused with it.
+    t.check("a body opening with the terminator is empty", row_scan(&[0x01, 0x05, 0x01]) == Some(1));
+}
+
+fn row_element_cannot_sort_below_terminator(t: &mut Trials) {
+    for v in red_team_corpus() {
+        t.check(
+            "every element's lead byte sorts above the terminator",
+            v.as_bytes()[0] > 0x01,
+        );
+    }
+    for tag in [
+        TAG_NULL, TAG_FALSE, TAG_TRUE, TAG_NUM, TAG_STR, TAG_BYTES, TAG_UUID, TAG_REGEX,
+        TAG_JSON, TAG_VECTOR, TAG_LIST, TAG_SET, TAG_VALIDITY, TAG_INTERVAL, TAG_GEOMETRY,
+    ] {
+        t.check("every released tag sorts above the terminator", tag > 0x01);
+    }
+}
+
+fn row_rejects_missing_terminator(t: &mut Trials) {
+    for n in 0usize..5 {
+        let elements: Vec<CanonicalBytes> = (0..n).map(|k| leaf(k % 8)).collect();
+        let mut body: Vec<u8> = Vec::new();
+        for e in &elements {
+            body.extend_from_slice(e.as_bytes());
+        }
+        t.check("a row without a terminator is not a row", row_scan(&body).is_none());
+    }
+}
+
+fn row_rejects_truncated_element(t: &mut Trials) {
+    let body = row_body(&[seal_str(&Utf8::of("abc"))]);
+    for cut in 1..body.len() {
+        let truncated = &body[..cut];
+        match row_scan(truncated) {
+            None => t.check("a truncated row is refused", true),
+            Some(n) => t.check(
+                "or ends inside what it was given",
+                n <= truncated.len(),
+            ),
+        }
+    }
+}
+
+fn row_rejects_unknown_element_tag(t: &mut Trials) {
+    for b in 0u16..=255 {
+        let lead = b as u8;
+        let known = [
+            TAG_NULL, TAG_FALSE, TAG_TRUE, TAG_NUM, TAG_STR, TAG_BYTES, TAG_UUID, TAG_REGEX,
+            TAG_JSON, TAG_VECTOR, TAG_LIST, TAG_SET, TAG_VALIDITY, TAG_INTERVAL, TAG_GEOMETRY,
+        ];
+        if lead == 0x01 || known.contains(&lead) {
+            continue;
+        }
+        let body = vec![lead, 0x01];
+        t.check("a row refuses an element it has no shape for", row_scan(&body).is_none());
+    }
+}
+
+fn wide_row_is_stack_safe(t: &mut Trials) {
+    for width in [1000usize, 20_000, 100_000] {
+        let members: Vec<RowItem> = (0..width).map(|_| member(seal_null())).collect();
+        let wide = seal_list(&members);
+        let bytes = wide.as_bytes();
+        t.check(
+            "a wide row reads back whole",
+            scanned(scan_value(bytes)) == Some(bytes.len()),
+        );
+        t.check(
+            "the reference reads it too",
+            reference::scan(bytes).map(|r| r.end).ok() == Some(bytes.len()),
+        );
+    }
+}
+
+fn deeply_nested_rows_respect_depth_policy(t: &mut Trials) {
+    let (deepest, levels) = deepest_nested_row();
+    t.check("rows nest until the reader's bound", levels > 0);
+    t.check("the deepest row is within the bound", deepest.descent() <= 127);
+    let bytes = deepest.as_bytes();
+    t.check(
+        "and reads back whole",
+        scanned(scan_value(bytes)) == Some(bytes.len()),
+    );
+    let forged = forged_nest(bytes, 1);
+    match scan_value(&forged) {
+        Ok(_) => t.check("one row past the bound is refused", false),
+        Err(e) => t.check(
+            "one row past the bound is refused as TooDeep",
+            e.reason() == Reason::TooDeep,
+        ),
+    }
+}
+
+fn row_of_complete_values_is_complete(t: &mut Trials) {
+    let mut g = Seeded::new(0x5EED_0200);
+    for _ in 0..500 {
+        let width = g.below(5) as usize;
+        let members: Vec<RowItem> = (0..width)
+            .map(|_| member(built(&some_value(&mut g, 2))))
+            .collect();
+        let listed = seal_list(&members);
+        let bytes = listed.as_bytes();
+        t.check(
+            "a row of complete values is a complete value",
+            scanned(scan_value(bytes)) == Some(bytes.len()),
+        );
+    }
+}
+
+fn row_locality_survives_arbitrary_trailing_bytes(t: &mut Trials) {
+    let mut g = Seeded::new(0x5EED_0201);
+    for _ in 0..500 {
+        let listed = seal_list(&row(vec![built(&some_value(&mut g, 2))]));
+        let bytes = listed.as_bytes().to_vec();
+        for _ in 0..4 {
+            let mut extended = bytes.clone();
+            extended.extend(g.bytes(5));
+            t.check(
+                "trailing bytes cannot move a row's reading",
+                scanned(scan_value(&extended)) == Some(bytes.len()),
+            );
+        }
+    }
 }

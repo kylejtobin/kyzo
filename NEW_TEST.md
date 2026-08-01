@@ -10,8 +10,8 @@
 - [x] negative_number_byte_order_matches_semantic_order
 - [x] negative_infinity_sorts_below_every_finite_number
 - [x] positive_infinity_sorts_above_every_finite_number
-- [ ] canonical_writer_output_is_always_readable
-- [ ] max_writer_nesting_never_exceeds_reader_capacity
+- [x] canonical_writer_output_is_always_readable
+- [x] max_writer_nesting_never_exceeds_reader_capacity
 - [ ] scan_rejection_matches_spec_rejection_except_depth_limit
 - [x] accepted_scan_prefix_is_complete
 - [x] refusal_position_is_suffix_of_original_input
@@ -21,8 +21,8 @@
 - [x] vector_components_are_numeric_only
 - [x] string_payload_is_valid_utf8
 - [ ] json_payload_is_json_domain_only
-- [ ] validity_payload_cannot_be_arbitrary_bytes
-- [ ] geometry_payload_cannot_be_arbitrary_bytes
+- [x] validity_payload_cannot_be_arbitrary_bytes
+- [x] geometry_payload_cannot_be_arbitrary_bytes
 
 ## Independent byte-order oracle
 
@@ -54,50 +54,50 @@
 
 ## Escaped byte strings
 
-- [ ] escape_empty_is_double_zero
-- [ ] escape_zero_is_zero_ff
-- [ ] escape_nonzero_bytes_are_unchanged
-- [ ] escape_multiple_zeroes_are_unambiguous
-- [ ] escape_body_never_contains_terminator
-- [ ] escape_body_never_ends_in_zero
-- [ ] escape_terminator_occurs_exactly_once_at_end
-- [ ] escape_is_injective_exhaustive
-- [ ] escape_preserves_order_exhaustive
-- [ ] escaped_encodings_are_prefix_free_exhaustive
-- [ ] escaped_prefix_payload_sorts_before_extension
-- [ ] escaped_ff_boundary_preserves_order
-- [ ] escaped_long_zero_runs_preserve_order
-- [ ] delim_scan_accepts_every_escape_output
-- [ ] delim_scan_stops_before_trailing_bytes
-- [ ] delim_scan_rejects_empty_input
-- [ ] delim_scan_rejects_single_zero
-- [ ] delim_scan_rejects_zero_followed_by_invalid_companion
-- [ ] delim_scan_reports_bad_escape_at_invalid_companion
-- [ ] delim_scan_reports_truncation_at_end
-- [ ] delim_scan_matches_delim_end_exhaustive
-- [ ] delim_scan_never_panics_on_arbitrary_bytes
+- [x] escape_empty_is_double_zero
+- [x] escape_zero_is_zero_ff
+- [x] escape_nonzero_bytes_are_unchanged
+- [x] escape_multiple_zeroes_are_unambiguous
+- [x] escape_body_never_contains_terminator
+- [x] escape_body_never_ends_in_zero
+- [x] escape_terminator_occurs_exactly_once_at_end
+- [x] escape_is_injective_exhaustive
+- [x] escape_preserves_order_exhaustive
+- [x] escaped_encodings_are_prefix_free_exhaustive
+- [x] escaped_prefix_payload_sorts_before_extension
+- [x] escaped_ff_boundary_preserves_order
+- [x] escaped_long_zero_runs_preserve_order
+- [x] delim_scan_accepts_every_escape_output
+- [x] delim_scan_stops_before_trailing_bytes
+- [x] delim_scan_rejects_empty_input
+- [x] delim_scan_rejects_single_zero
+- [x] delim_scan_rejects_zero_followed_by_invalid_companion
+- [x] delim_scan_reports_bad_escape_at_invalid_companion
+- [x] delim_scan_reports_truncation_at_end
+- [x] delim_scan_matches_delim_end_exhaustive
+- [x] delim_scan_never_panics_on_arbitrary_bytes
 
 ## Rows
 
-- [ ] empty_row_is_struct_end
-- [ ] single_element_row_scans_exactly
-- [ ] multi_element_row_scans_exactly
-- [ ] row_scanner_stops_before_trailing_bytes
-- [ ] row_order_empty_before_nonempty
-- [ ] row_order_strict_prefix_before_extension
-- [ ] row_order_first_differing_element_decides
-- [ ] row_order_ignores_later_elements_after_difference
-- [ ] row_order_matches_encoded_byte_order
-- [ ] row_encodings_are_prefix_free
-- [ ] row_element_cannot_equal_terminator
-- [ ] row_element_cannot_sort_below_terminator
-- [ ] row_rejects_missing_terminator
-- [ ] row_rejects_truncated_element
-- [ ] row_rejects_unknown_element_tag
-- [ ] wide_row_is_stack_safe
-- [ ] deeply_nested_rows_respect_depth_policy
-- [ ] row_of_complete_values_is_complete
-- [ ] row_locality_survives_arbitrary_trailing_bytes
+- [x] empty_row_is_struct_end
+- [x] single_element_row_scans_exactly
+- [x] multi_element_row_scans_exactly
+- [x] row_scanner_stops_before_trailing_bytes
+- [x] row_order_empty_before_nonempty
+- [x] row_order_strict_prefix_before_extension
+- [x] row_order_first_differing_element_decides
+- [x] row_order_ignores_later_elements_after_difference
+- [x] row_order_matches_encoded_byte_order
+- [x] row_encodings_are_prefix_free
+- [x] row_element_cannot_equal_terminator
+- [x] row_element_cannot_sort_below_terminator
+- [x] row_rejects_missing_terminator
+- [x] row_rejects_truncated_element
+- [x] row_rejects_unknown_element_tag
+- [x] wide_row_is_stack_safe
+- [x] deeply_nested_rows_respect_depth_policy
+- [x] row_of_complete_values_is_complete
+- [x] row_locality_survives_arbitrary_trailing_bytes
 
 ## Grammar integrity
 
