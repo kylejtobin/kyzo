@@ -26,7 +26,7 @@ use std::sync::Arc;
 use kyzo_model::program::span::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::convert::i128_approx_f64;
-use kyzo_model::value::{DataValue, Num, NumRepr};
+use kyzo_model::value::{DataValue, Num, Repr};
 
 pub use eval::{
     AggrFail, Bindings, BudgetAxis, BudgetExceeded, FixedRule, HeadAggr, HeadClass, Literal, Name,
@@ -205,7 +205,7 @@ impl RunningTotal {
 
     fn absorb(self, n: Num) -> Self {
         match (self, n.repr()) {
-            (RunningTotal::Exact(acc), NumRepr::Int(i)) => {
+            (RunningTotal::Exact(acc), Repr::Int(i)) => {
                 let addend = i128::from(i);
                 match acc.checked_add(addend) {
                     Some(sum) => RunningTotal::Exact(sum),
@@ -214,13 +214,13 @@ impl RunningTotal {
                     ),
                 }
             }
-            (RunningTotal::Exact(acc), NumRepr::Float(f)) => {
+            (RunningTotal::Exact(acc), Repr::Float(f)) => {
                 RunningTotal::Approx(i128_approx_f64(acc) + f)
             }
-            (RunningTotal::Approx(acc), NumRepr::Int(i)) => {
+            (RunningTotal::Approx(acc), Repr::Int(i)) => {
                 RunningTotal::Approx(acc + Num::int(i).to_f64())
             }
-            (RunningTotal::Approx(acc), NumRepr::Float(f)) => RunningTotal::Approx(acc + f),
+            (RunningTotal::Approx(acc), Repr::Float(f)) => RunningTotal::Approx(acc + f),
         }
     }
 

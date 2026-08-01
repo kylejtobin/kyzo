@@ -42,7 +42,7 @@ pub use value::validity_coerce::{
 };
 pub use value::{
     Admission, Arity, AsOf, Bound, CompiledRegexV1, DataValue, DecodeError, Denial, Interval, Json,
-    JsonNum, JsonObj, MAX_VALIDITY_TS, NonFiniteJsonNumber, Num, NumRepr, NumericOrd, RegexFlags,
+    JsonNum, JsonObj, MAX_VALIDITY_TS, NonFiniteJsonNumber, Num, Repr, NumericOrd, RegexFlags,
     RegexSource, RelationId, SearchHits, StorageKey, StoredValiditySlot, TERMINAL_VALIDITY, Tag,
     TupleKey, TupleT, UuidWrapper, Validity, ValiditySeekBound, ValiditySlot, ValidityTs, Vector,
     VectorComponent, VectorDimension, append_canonical, decode, encode_owned,

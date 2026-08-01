@@ -8,3 +8,5 @@
 #
 # Remove a line when the work is done. A path left here is a standing grant.
 
+.claude/hooks/pester-switch.sh
+.claude/hooks/rust-scan-guard.sh

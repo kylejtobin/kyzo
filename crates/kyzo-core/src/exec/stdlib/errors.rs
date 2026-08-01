@@ -12,7 +12,7 @@ use miette::{Diagnostic, Result, bail, miette};
 use thiserror::Error;
 
 use kyzo_model::HostText;
-use kyzo_model::value::{DataValue, Num, NumRepr, Vector};
+use kyzo_model::value::{DataValue, Num, Repr, Vector};
 
 /// Named stdlib refuse variants (move_plan sealed names).
 #[derive(Debug, Error, Diagnostic)]
@@ -124,7 +124,7 @@ pub(crate) fn no_nan_vec(op: &'static str, v: Vec<f64>) -> Result<DataValue> {
 
 pub(crate) fn result_has_nan(v: &DataValue) -> bool {
     match v {
-        DataValue::Num(n) => matches!(n.repr(), NumRepr::Float(x) if x.is_nan()),
+        DataValue::Num(n) => matches!(n.repr(), Repr::Float(x) if x.is_nan()),
         DataValue::Vector(v) => v.to_f64s().iter().any(|x| x.is_nan()),
         DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => false,
     }

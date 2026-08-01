@@ -74,7 +74,7 @@ pub mod validity_coerce;
 pub use admission::{Admission, Denial};
 pub use arity::Arity;
 pub use canonical::{DecodeError, append_canonical, decode, encode_owned};
-pub use number::{Num, NumRepr, NumericOrd};
+pub use number::{Num, Repr, NumericOrd};
 pub use row::{
     RelationId, StorageKey, TupleKey, TupleT, encode_key_with_suffix, scan_key_lower,
     scan_key_lower_projected, scan_key_upper, scan_key_upper_projected,
@@ -461,8 +461,8 @@ impl std::fmt::Display for DataValue {
             DataValue::Null => write!(f, "null"),
             DataValue::Bool(b) => write!(f, "{b}"),
             DataValue::Num(n) => match n.repr() {
-                NumRepr::Int(i) => write!(f, "{i}"),
-                NumRepr::Float(x) => write!(f, "{x:?}"),
+                Repr::Int(i) => write!(f, "{i}"),
+                Repr::Float(x) => write!(f, "{x:?}"),
             },
             DataValue::Str(s) => write!(f, "{s:?}"),
             DataValue::Bytes(b) => {

@@ -52,6 +52,15 @@ When you work on KyzoDB:
 
 Always explain your type-level reasoning before emitting final code edits. 
 
+Purity, always, not only when stuck:
+
+- Shrink every type until nothing illegal fits.
+- The constructor list is the design.
+- A parser returns a type too narrow to hold bad input. If you are writing code that inspects input
+  and decides whether to accept it, that decision belongs in the type instead.
+  A validator body with branching is a shape you have not finished declaring.
+
+
 ***
 
 ## Required Communication Style

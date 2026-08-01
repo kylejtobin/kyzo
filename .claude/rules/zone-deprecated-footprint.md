@@ -12,19 +12,450 @@ purity:
 capabilities: []
 ---
 
-# Deprecated: a vocabulary inside the admission path
+# Deprecated: boundary
 
-`session/footprint.rs` is 580 lines exporting seventeen public types, and its own
-header states what it owns: `AskShape`, `Footprint`, `Frontier`, `EdgePredicate`,
-the accelerator contract, the footprint index, overlap adjudication, and
-`FootprintClearEvidence` with a sole mint through
-`LiveFootprintTable::prove_epoch_clear`.
+Write the allowed construct. Anything that is not will always cause you to fail code review.
 
-That is a vocabulary and its constructors, which is Proof. It reaches no
-capability. It carries Boundary's clause set today because it sits in the one
-admission path and adjudicates what may be admitted; the destination is Proof,
-and the migration is extracting the types and their mints from the adjudication
-that uses them.
+**Current posture:** Boundary. **Destination:** Proof.
 
-Deprecated is not a softer posture: Boundary's full clause set governs it now, and
-the destination suppresses nothing on the way.
+Deprecated is not a softer posture. The clause set below is this zone's in full; the destination suppresses nothing on the way, and the correct change is migration rather than extension.
+
+---
+
+## Posture: Boundary
+
+**Responsible for:** converting unproven input into proven values, and performing declared effects.
+
+**Requires:** the module names its **entry points**. An entry point takes unproven input and returns a proven type or a typed error. Everything in a Boundary module that is not an entry point is held to Core.
+
+This is the one place in the model where a primitive is correct in a parameter position, and the reason is precise: an entry point's parameters are not domain positions. They are unproven input, which is exactly what the entry point exists to convert. Requiring proven types there would only move the boundary somewhere with no law. The obligation is unchanged, not reduced: primitives on return types, on struct fields, and on anything passed inward still fire.
+
+**Declares:** the capabilities named in the zone's law file, and no others. Declaring one is an addition to the zone's obligations, not a removal of the rest.
+
+**May depend on:** Proof, Core, Boundary.
+
+## Destination posture: Proof
+
+**Responsible for:** establishing proof. Types, their constructors, their ordering, their representation.
+
+**Requires:** every exported type is constructible only through a proof. A Proof module exporting a type with no constructor has exported a shape, not a vocabulary.
+
+**Declares:** no capabilities.
+
+**May depend on:** nothing. Not the standard library beyond core vocabulary, not other crates in the workspace, not other postures. This is stricter than Core, and it is the reason Proof is separate: the vocabulary both consumers bind to cannot bind to either.
+
+---
+
+### RUST-U-01
+
+**Rule:** Propagate the failure with `?`.
+
+```rust allowed
+pub struct Route;
+pub struct RouteMissing;
+
+pub fn first(routes: &[Route]) -> Result<&Route, RouteMissing> {
+    routes.first().ok_or(RouteMissing)
+}
+```
+
+```rust forbidden
+pub struct Route;
+pub struct RouteMissing;
+
+pub fn first(routes: &[Route]) -> &Route {
+    routes.first().unwrap()
+}
+```
+
+### RUST-U-02
+
+**Rule:** Return a typed error.
+
+```rust allowed
+pub struct Route;
+pub struct RouteMissing;
+
+pub fn first(routes: &[Route]) -> Result<&Route, RouteMissing> {
+    routes.first().ok_or(RouteMissing)
+}
+```
+
+```rust forbidden
+pub struct Route;
+pub struct RouteMissing;
+
+pub fn first(routes: &[Route]) -> &Route {
+    routes.first().expect("routes are never empty")
+}
+```
+
+### RUST-U-03
+
+**Rule:** Name the unhandled case in the return type.
+
+```rust allowed
+pub enum Tag { Data, Control, Reserved }
+pub struct Frame;
+pub struct ReservedTag;
+
+pub fn decode(tag: Tag) -> Result<Frame, ReservedTag> {
+    match tag {
+        Tag::Data => Ok(Frame),
+        Tag::Control => Ok(Frame),
+        Tag::Reserved => Err(ReservedTag),
+    }
+}
+```
+
+```rust forbidden
+pub enum Tag { Data, Control, Reserved }
+pub struct Frame;
+pub struct ReservedTag;
+
+pub fn decode(tag: Tag) -> Frame {
+    match tag {
+        Tag::Data => Frame,
+        Tag::Control => Frame,
+        Tag::Reserved => panic!("reserved tag"),
+    }
+}
+```
+
+### RUST-U-04
+
+**Rule:** Use `get` and return the miss.
+
+```rust allowed
+pub struct Truncated;
+pub const HEADER_LEN: usize = 8;
+
+pub fn header(frame: &[u8]) -> Result<&[u8], Truncated> {
+    frame.get(..HEADER_LEN).ok_or(Truncated)
+}
+```
+
+```rust forbidden
+pub struct Truncated;
+pub const HEADER_LEN: usize = 8;
+
+pub fn header(frame: &[u8]) -> &[u8] {
+    &frame[..HEADER_LEN]
+}
+```
+
+### RUST-U-05
+
+**Rule:** Use the checked arithmetic form and name the overflow.
+
+```rust allowed
+pub struct Cents(i64);
+pub struct Quantity(i64);
+pub struct Overflow;
+
+pub fn total(unit: Cents, quantity: Quantity) -> Result<Cents, Overflow> {
+    unit.0.checked_mul(quantity.0).map(Cents).ok_or(Overflow)
+}
+```
+
+```rust forbidden
+pub struct Cents(i64);
+pub struct Quantity(i64);
+pub struct Overflow;
+
+pub fn total(unit: Cents, quantity: Quantity) -> Result<Cents, Overflow> {
+    Ok(Cents(unit.0 * quantity.0))
+}
+```
+
+### RUST-U-06
+
+**Rule:** Convert with `TryFrom` and handle the failure.
+
+```rust allowed
+pub struct Slot(u16);
+pub struct OutOfRange;
+
+pub fn to_slot(raw: u32) -> Result<Slot, OutOfRange> {
+    u16::try_from(raw).map(Slot).map_err(|_| OutOfRange)
+}
+```
+
+```rust forbidden
+pub struct Slot(u16);
+pub struct OutOfRange;
+
+pub fn to_slot(raw: u32) -> Result<Slot, OutOfRange> {
+    Ok(Slot(raw as u16))
+}
+```
+
+### RUST-U-07
+
+**Rule:** Handle or propagate every `Result`.
+
+```rust allowed
+pub struct Sink;
+pub struct FlushFailed;
+
+impl Sink {
+    pub fn write_all(&mut self) -> Result<(), FlushFailed> {
+        Ok(())
+    }
+}
+
+pub fn flush(sink: &mut Sink) -> Result<(), FlushFailed> {
+    sink.write_all()
+}
+```
+
+```rust forbidden
+pub struct Sink;
+pub struct FlushFailed;
+
+impl Sink {
+    pub fn write_all(&mut self) -> Result<(), FlushFailed> {
+        Ok(())
+    }
+}
+
+pub fn flush(sink: &mut Sink) {
+    let _ = sink.write_all();
+}
+```
+
+### RUST-U-08
+
+**Rule:** Import a path under its own name.
+
+```rust allowed
+use crate::boundary::git::read_head;
+```
+
+```rust forbidden
+use crate::boundary::git::read_head as load_state;
+```
+
+### RUST-U-09
+
+**Rule:** Re-export only what this posture may itself reach.
+
+```rust allowed
+pub use crate::core::clause::Clause;
+```
+
+```rust forbidden
+pub use crate::boundary::git::read_head;
+```
+
+### RUST-U-10
+
+**Rule:** Return a typed verdict upward; the process exit lives only in its declared home.
+
+```rust allowed
+pub enum Verdict { Passed, Failed }
+pub struct ExitCode(u8);
+
+pub fn report(verdict: Verdict) -> ExitCode {
+    match verdict {
+        Verdict::Passed => ExitCode(0),
+        Verdict::Failed => ExitCode(2),
+    }
+}
+```
+
+```rust forbidden
+pub enum Verdict { Passed, Failed }
+pub struct ExitCode(u8);
+
+pub fn report(verdict: Verdict) {
+    match verdict {
+        Verdict::Passed => {}
+        Verdict::Failed => std::process::exit(2),
+    }
+}
+```
+
+### RUST-B-01
+
+**Rule:** Return `Result` from every entry point.
+
+```rust allowed
+use std::num::NonZeroU16;
+
+pub struct Port(NonZeroU16);
+pub struct NotAPort;
+
+pub fn parse_port(raw: &str) -> Result<Port, NotAPort> {
+    raw.parse::<NonZeroU16>().map(Port).map_err(|_| NotAPort)
+}
+```
+
+```rust forbidden
+use std::num::NonZeroU16;
+
+pub struct Port(NonZeroU16);
+pub struct NotAPort;
+
+pub fn parse_port(raw: &str) -> Port {
+    Port(raw.parse::<NonZeroU16>().unwrap_or(NonZeroU16::MIN))
+}
+```
+
+### RUST-B-02
+
+**Rule:** Return proven types from entry points.
+
+```rust allowed
+// zone declares: filesystem
+pub struct Config(String);
+pub struct Unreadable;
+
+pub fn read_config(path: &str) -> Result<Config, Unreadable> {
+    std::fs::read_to_string(path).map(Config).map_err(|_| Unreadable)
+}
+```
+
+```rust forbidden
+// zone declares: filesystem
+pub struct Config(String);
+pub struct Unreadable;
+
+pub fn read_config(path: &str) -> Result<String, Unreadable> {
+    std::fs::read_to_string(path).map_err(|_| Unreadable)
+}
+```
+
+### RUST-B-03
+
+**Rule:** Keep the wire type distinct from the domain type, and convert between them explicitly.
+
+```rust allowed
+use serde::Deserialize;
+use std::num::NonZeroU16;
+
+#[derive(Deserialize)]
+struct WireConfig {
+    port: u16,
+}
+
+pub struct Config {
+    port: NonZeroU16,
+}
+
+pub struct BadConfig;
+
+pub fn decode(bytes: &[u8]) -> Result<Config, BadConfig> {
+    let wire: WireConfig = serde_json::from_slice(bytes).map_err(|_| BadConfig)?;
+    NonZeroU16::new(wire.port).map(|port| Config { port }).ok_or(BadConfig)
+}
+```
+
+```rust forbidden
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+pub struct Config {
+    port: u16,
+}
+
+pub struct BadConfig;
+
+pub fn decode(bytes: &[u8]) -> Result<Config, BadConfig> {
+    serde_json::from_slice(bytes).map_err(|_| BadConfig)
+}
+```
+
+### RUST-B-04
+
+**Rule:** Prove once at construction.
+
+```rust allowed
+use std::num::NonZeroU16;
+
+pub struct Port(NonZeroU16);
+pub struct Listener;
+pub struct BindFailed;
+
+pub fn bind(port: Port) -> Result<Listener, BindFailed> {
+    let _ = port;
+    Ok(Listener)
+}
+```
+
+```rust forbidden
+use std::num::NonZeroU16;
+
+pub struct Port(NonZeroU16);
+pub struct Listener;
+pub struct BindFailed;
+
+pub fn bind(port: Port) -> Result<Listener, BindFailed> {
+    if port.0.get() < 1024 {
+        return Err(BindFailed);
+    }
+    Ok(Listener)
+}
+```
+
+### RUST-B-05
+
+**Rule:** Reach only the capabilities this zone's law file declares.
+
+```rust allowed
+// zone declares: filesystem
+pub struct RawConfig { body: String }
+pub struct Unreadable;
+
+pub fn read_config(path: &str) -> Result<RawConfig, Unreadable> {
+    let body = std::fs::read_to_string(path).map_err(|_| Unreadable)?;
+    Ok(RawConfig { body })
+}
+```
+
+```rust forbidden
+// zone declares: filesystem
+pub struct RawConfig { body: String, read_at: std::time::SystemTime }
+pub struct Unreadable;
+
+pub fn read_config(path: &str) -> Result<RawConfig, Unreadable> {
+    let body = std::fs::read_to_string(path).map_err(|_| Unreadable)?;
+    Ok(RawConfig { body, read_at: std::time::SystemTime::now() })
+}
+```
+
+### RUST-B-06
+
+**Rule:** Parse raw input at the entry point.
+
+```rust allowed
+pub struct Uri(String);
+pub enum Method { Get, Post }
+
+pub struct Request {
+    target: Uri,
+    method: Method,
+}
+```
+
+```rust forbidden
+pub struct Uri(String);
+pub enum Method { Get, Post }
+
+pub struct Request {
+    target: String,
+    method: String,
+}
+```
+
+### RUST-B-07
+
+**Rule:** Import from Proof, Core, and Boundary.
+
+```rust allowed
+use crate::core::plan::Plan;
+```
+
+```rust forbidden
+use crate::shell::render::Renderer;
+```

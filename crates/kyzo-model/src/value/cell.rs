@@ -163,15 +163,6 @@ impl Value {
         self.bytes[1] != LEN_OUT_OF_LINE
     }
 
-    /// The inline canonical payload (the bytes after the tag), if inline.
-    pub fn inline_payload(&self) -> Option<&[u8]> {
-        if self.is_inline() {
-            Some(&self.bytes[2..2 + usize::from(self.bytes[1])])
-        } else {
-            None
-        }
-    }
-
     /// Reconstruct the full canonical bytes of an inline value.
     pub fn inline_canonical(&self) -> Option<Vec<u8>> {
         self.inline_payload().map(|p| {

@@ -11,7 +11,7 @@
 
 use miette::{Result, bail, miette};
 
-use kyzo_model::value::{DataValue, NumRepr, NumericOrd};
+use kyzo_model::value::{DataValue, Repr, NumericOrd};
 
 use crate::exec::stdlib::errors::StdlibRefuse;
 
@@ -58,8 +58,8 @@ pub(crate) fn op_is_bytes(args: &[DataValue]) -> Result<DataValue> {
 pub(crate) fn op_is_finite(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(match &args[0] {
         DataValue::Num(n) => match n.repr() {
-            NumRepr::Int(_) => true,
-            NumRepr::Float(f) => f.is_finite(),
+            Repr::Int(_) => true,
+            Repr::Float(f) => f.is_finite(),
         },
         DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => false,
     }))
@@ -67,7 +67,7 @@ pub(crate) fn op_is_finite(args: &[DataValue]) -> Result<DataValue> {
 
 pub(crate) fn op_is_float(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(
-        matches!(&args[0], DataValue::Num(n) if matches!(n.repr(), NumRepr::Float(_))),
+        matches!(&args[0], DataValue::Num(n) if matches!(n.repr(), Repr::Float(_))),
     ))
 }
 
@@ -81,13 +81,13 @@ pub(crate) fn op_is_in(args: &[DataValue]) -> Result<DataValue> {
 
 pub(crate) fn op_is_infinite(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(
-        matches!(&args[0], DataValue::Num(n) if matches!(n.repr(), NumRepr::Float(f) if f.is_infinite())),
+        matches!(&args[0], DataValue::Num(n) if matches!(n.repr(), Repr::Float(f) if f.is_infinite())),
     ))
 }
 
 pub(crate) fn op_is_int(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(
-        matches!(&args[0], DataValue::Num(n) if matches!(n.repr(), NumRepr::Int(_))),
+        matches!(&args[0], DataValue::Num(n) if matches!(n.repr(), Repr::Int(_))),
     ))
 }
 
@@ -104,7 +104,7 @@ pub(crate) fn op_is_list(args: &[DataValue]) -> Result<DataValue> {
 
 pub(crate) fn op_is_nan(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(
-        matches!(&args[0], DataValue::Num(n) if matches!(n.repr(), NumRepr::Float(f) if f.is_nan())),
+        matches!(&args[0], DataValue::Num(n) if matches!(n.repr(), Repr::Float(f) if f.is_nan())),
     ))
 }
 

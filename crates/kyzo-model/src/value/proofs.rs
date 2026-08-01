@@ -390,13 +390,27 @@ mod tests {
             );
         }
 
-        // Exhaustive over every byte: only the 14 pinned tags decode.
-        let mut seen = 0u32;
+        // Exhaustive over every byte: exactly the 15 legal lead bytes decode,
+        // onto the 14 kinds. Bool leads with 0x08 (false) or 0x09 (true) —
+        // the grammar orders the booleans by tag and gives neither a payload —
+        // so a decoded byte need only land in the kind the table files it
+        // under, and `pinned_tag_byte` names that kind's least byte.
+        //
+        // This oracle previously asserted `pinned_tag_byte(t) == b`, the same
+        // bijection the implementation assumed. Being an independent oracle on
+        // the VALUES did not help: it shared the wrong SHAPE of the claim, so
+        // 0x09 was outside what either could express and neither could fail.
+        let mut lead_bytes = 0u32;
         for b in 0u8..=255 {
             match Tag::from_byte(b) {
                 Some(t) => {
-                    assert_eq!(pinned_tag_byte(t)?, b);
-                    seen += 1;
+                    let least = pinned_tag_byte(t)?;
+                    assert!(
+                        least <= b,
+                        "{t:?} decoded from {b:#04x}, below its pinned least byte {least:#04x}"
+                    );
+                    assert_eq!(Tag::from_byte(least), Some(t), "{t:?} left its own kind");
+                    lead_bytes += 1;
                 }
                 None => {
                     assert!(
@@ -406,7 +420,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(seen, 14);
+        assert_eq!(lead_bytes, 15, "fifteen legal lead bytes over fourteen kinds");
         Ok(())
     }
 

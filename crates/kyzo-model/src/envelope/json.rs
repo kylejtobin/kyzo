@@ -25,7 +25,7 @@ pub use serde_json::Value as JsonValue;
 use serde_json::json;
 
 use crate::value::kind::interval::{Hi, Lo};
-use crate::value::{DataValue, Json, JsonNum, JsonObj, NonFiniteJsonNumber, Num, NumRepr};
+use crate::value::{DataValue, Json, JsonNum, JsonObj, NonFiniteJsonNumber, Num, Repr};
 
 /// The serde bridge value: engine-side JSON carried as `serde_json`
 /// until it crosses into the value plane's identity-lawful [`Json`].
@@ -156,8 +156,8 @@ pub fn serde_from_json(j: &Json) -> JsonValue {
         Json::Null => JsonValue::Null,
         Json::Bool(b) => JsonValue::Bool(*b),
         Json::Num(n) => match n.num().repr() {
-            NumRepr::Int(i) => JsonValue::Number(i.into()),
-            NumRepr::Float(f) => json!(f),
+            Repr::Int(i) => JsonValue::Number(i.into()),
+            Repr::Float(f) => json!(f),
         },
         Json::Str(s) => JsonValue::String(s.clone()),
         Json::Arr(a) => JsonValue::Array(a.iter().map(serde_from_json).collect()),
@@ -221,8 +221,8 @@ impl TryFrom<&DataValue> for JsonValue {
             DataValue::Null => Ok(JsonValue::Null),
             DataValue::Bool(b) => Ok(JsonValue::Bool(*b)),
             DataValue::Num(n) => match n.repr() {
-                NumRepr::Int(i) => Ok(JsonValue::Number(i.into())),
-                NumRepr::Float(f) => json_number_from_finite_f64(f),
+                Repr::Int(i) => Ok(JsonValue::Number(i.into())),
+                Repr::Float(f) => json_number_from_finite_f64(f),
             },
             DataValue::Str(s) => Ok(JsonValue::String(s.to_string())),
             DataValue::Bytes(bytes) => Ok(JsonValue::String(STANDARD.encode(bytes))),

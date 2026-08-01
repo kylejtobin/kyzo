@@ -47,32 +47,6 @@ pub enum PrefixCmp {
     NeedPayload,
 }
 
-/// Compare two values by `(prefix, len)` alone.
-///
-/// Decides everything the prefix can possibly decide:
-/// - unequal prefixes decide bytewise;
-/// - equal prefixes where *either* length is within the prefix width
-///   decide by length, because that value's entire payload is inside its
-///   prefix, making it a strict prefix (or equal) of the other.
-///
-/// Only equal prefixes with both lengths past the width need payload
-/// bytes.
-#[inline]
-pub fn cmp_prefixed(pa: [u8; 4], la: u32, pb: [u8; 4], lb: u32) -> PrefixCmp {
-    match pa.cmp(&pb) {
-        Ordering::Equal => {
-            if crate::value::convert::usize_from_u32(la) <= PREFIX_LEN
-                || crate::value::convert::usize_from_u32(lb) <= PREFIX_LEN
-            {
-                PrefixCmp::Decided(la.cmp(&lb))
-            } else {
-                PrefixCmp::NeedPayload
-            }
-        }
-        decided @ Ordering::Less | decided @ Ordering::Greater => PrefixCmp::Decided(decided),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

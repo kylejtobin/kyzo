@@ -13,7 +13,7 @@ use std::ops::{Div, Rem};
 use itertools::Itertools;
 use miette::{Result, bail, ensure, miette};
 
-use kyzo_model::value::{DataValue, Num, NumRepr, NumericOrd};
+use kyzo_model::value::{DataValue, Num, Repr, NumericOrd};
 
 use crate::exec::stdlib::errors::{
     DivisionByZero, DomainError, IntegerOverflow, VecOpEmptyArgs, no_nan, no_nan_vec, vec_value,
@@ -88,8 +88,8 @@ fn unary_num_vec(
 ) -> Result<DataValue> {
     Ok(match &args[0] {
         DataValue::Num(n) => match n.repr() {
-            NumRepr::Int(i) => DataValue::Num(Num::int(on_int(i)?)),
-            NumRepr::Float(f) => DataValue::Num(Num::float(on_float(f))),
+            Repr::Int(i) => DataValue::Num(Num::int(on_int(i)?)),
+            Repr::Float(f) => DataValue::Num(Num::float(on_float(f))),
         },
         DataValue::Vector(v) => {
             DataValue::Vector(vec_value(v.to_f64s().iter().map(|x| on_vec(*x)).collect())?)
@@ -106,8 +106,8 @@ fn unary_int_id_float(
 ) -> Result<DataValue> {
     Ok(match &args[0] {
         DataValue::Num(n) => match n.repr() {
-            NumRepr::Int(i) => DataValue::Num(Num::int(i)),
-            NumRepr::Float(f) => DataValue::Num(Num::float(on_float(f))),
+            Repr::Int(i) => DataValue::Num(Num::int(i)),
+            Repr::Float(f) => DataValue::Num(Num::float(on_float(f))),
         },
         DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("'{op}' requires numbers"),
     })
@@ -166,8 +166,8 @@ where
     for arg in args {
         match arg {
             DataValue::Num(n) => match n.repr() {
-                NumRepr::Int(i) => i_accum = on_int(i_accum, i)?,
-                NumRepr::Float(f) => f_accum = on_float(f_accum, f),
+                Repr::Int(i) => i_accum = on_int(i_accum, i)?,
+                Repr::Float(f) => f_accum = on_float(f_accum, f),
             },
             DataValue::Vector(_) => return vecs(args),
             DataValue::Null | DataValue::Bool(_) | DataValue::Num(_) | DataValue::Str(_) | DataValue::Bytes(_) | DataValue::Uuid(_) | DataValue::Regex(_) | DataValue::Json(_) | DataValue::Vector(_) | DataValue::List(_) | DataValue::Set(_) | DataValue::Validity(_) | DataValue::Interval(_) | DataValue::Geometry(_) => bail!("{require_msg}"),
@@ -388,7 +388,7 @@ pub(crate) fn op_minus(args: &[DataValue]) -> Result<DataValue> {
 pub(crate) fn op_mod(args: &[DataValue]) -> Result<DataValue> {
     Ok(match (&args[0], &args[1]) {
         (DataValue::Num(na), DataValue::Num(nb)) => match (na.repr(), nb.repr()) {
-            (NumRepr::Int(a), NumRepr::Int(b)) => {
+            (Repr::Int(a), Repr::Int(b)) => {
                 if b == 0 {
                     bail!(DivisionByZero::new("mod"))
                 }
@@ -404,9 +404,9 @@ pub(crate) fn op_mod(args: &[DataValue]) -> Result<DataValue> {
             }
             // Mixed and float pairs: Rust remainder semantics (result
             // takes the dividend's sign), zero divisor refused.
-            (NumRepr::Int(_), NumRepr::Float(_))
-            | (NumRepr::Float(_), NumRepr::Int(_))
-            | (NumRepr::Float(_), NumRepr::Float(_)) => {
+            (Repr::Int(_), Repr::Float(_))
+            | (Repr::Float(_), Repr::Int(_))
+            | (Repr::Float(_), Repr::Float(_)) => {
                 let (a, b) = (na.to_f64(), nb.to_f64());
                 if b == 0.0 {
                     bail!(DivisionByZero::new("mod"))
@@ -506,8 +506,8 @@ pub(crate) fn op_round(args: &[DataValue]) -> Result<DataValue> {
 pub(crate) fn op_signum(args: &[DataValue]) -> Result<DataValue> {
     Ok(match &args[0] {
         DataValue::Num(n) => match n.repr() {
-            NumRepr::Int(i) => DataValue::Num(Num::int(i.signum())),
-            NumRepr::Float(f) => {
+            Repr::Int(i) => DataValue::Num(Num::int(i.signum())),
+            Repr::Float(f) => {
                 if f.signum() < 0. {
                     DataValue::from(-1)
                 } else if f == 0. {
@@ -538,15 +538,15 @@ pub(crate) fn op_sqrt(args: &[DataValue]) -> Result<DataValue> {
 pub(crate) fn op_sub(args: &[DataValue]) -> Result<DataValue> {
     Ok(match (&args[0], &args[1]) {
         (DataValue::Num(na), DataValue::Num(nb)) => match (na.repr(), nb.repr()) {
-            (NumRepr::Int(a), NumRepr::Int(b)) => match a.checked_sub(b) {
+            (Repr::Int(a), Repr::Int(b)) => match a.checked_sub(b) {
                 Some(v) => DataValue::Num(Num::int(v)),
                 None => bail!(IntegerOverflow::new("sub")),
             },
-            (NumRepr::Float(a), NumRepr::Float(b)) => DataValue::Num(Num::float(a - b)),
-            (NumRepr::Int(a), NumRepr::Float(b)) => {
+            (Repr::Float(a), Repr::Float(b)) => DataValue::Num(Num::float(a - b)),
+            (Repr::Int(a), Repr::Float(b)) => {
                 DataValue::Num(Num::float(Num::int(a).to_f64() - b))
             }
-            (NumRepr::Float(a), NumRepr::Int(b)) => {
+            (Repr::Float(a), Repr::Int(b)) => {
                 DataValue::Num(Num::float(a - Num::int(b).to_f64()))
             }
         },

@@ -1641,74 +1641,48 @@ pub enum Reason {
     TooDeep,
 }
 
-/// A byte offset into the input a reader was handed.
+/// A reader's typed refusal: what was wrong, and where it stopped.
 ///
-/// A newtype and not a `usize` because an offset is a fact about one buffer.
-/// Bare integers add to lengths, compare against offsets into other buffers,
-/// and read as capacities — all silently. The only way in is `Offset::at`,
-/// inside this module, on the path that actually did the reading.
-// CONSTRUCT: ValueObject Offset
-#[derive(Clone, Copy, PartialEq, Eq, Structural)]
-pub struct Offset(usize);
-
-impl Offset {
-    /// The offset as a number, in spec. `closed` because the field is private:
-    /// a postcondition on a public function has to be well-formed for callers
-    /// that cannot see inside, so the view is what they get to reason about.
-    pub closed spec fn spec_get(&self) -> usize { self.0 }
-
-    /// Where the reader stopped, for a caller that wants to point at it.
-    pub fn get(&self) -> (n: usize)
-        ensures n == self.spec_get()
-    { self.0 }
-}
-
-/// A reader's typed refusal: what was wrong, and where.
+/// Both seats are private and only the scan path mints one, so a caller cannot
+/// place a refusal somewhere the reader never reached.
 ///
-/// Both seats are private. A refusal is a claim about where a reading stopped,
-/// so a caller that can mint one can put any offset in a log or a test
-/// expectation and have it read as the reader's own finding. Only the scan
-/// path in this module produces them; everyone else reads them.
+/// `at` is a [`Stopped`] and not a number. It was `Offset(usize)`, which is
+/// what forced the composition to be an addition: moving a nested reading's
+/// position into its container was `base + inner`, a sum that can overflow, so
+/// the body saturated to `usize::MAX` and named a position no buffer has. A
+/// suffix of a sub-slice is already a suffix of the outer slice, so there is
+/// no composition left to perform.
 // CONSTRUCT: ValueObject Refusal
-#[derive(Clone, Copy, PartialEq, Eq, Structural)]
-pub struct Refusal {
+pub struct Refusal<'a> {
     reason: Reason,
-    at: Offset,
+    at: Stopped<'a>,
 }
 
-impl Refusal {
+// CONSTRUCT: ImplBlock Refusal
+impl<'a> Refusal<'a> {
     pub closed spec fn spec_reason(&self) -> Reason { self.reason }
-    pub closed spec fn spec_at(&self) -> Offset { self.at }
+    pub closed spec fn spec_at(&self) -> Seq<u8> { self.at.spec_rest() }
 
     pub fn reason(&self) -> (r: Reason)
         ensures r == self.spec_reason()
     { self.reason }
 
-    /// The offset the reading stopped at.
-    pub fn at(&self) -> (o: Offset)
-        ensures o == self.spec_at()
-    { self.at }
+    /// The bytes the reading had not consumed when it stopped.
+    pub fn at(&self) -> (r: &'a [u8])
+        ensures r@ =~= self.spec_at()
+    { self.at.rest() }
 }
 
 /// The one constructor, module-private.
-fn refuse(reason: Reason, at: usize) -> (r: Refusal)
-    ensures r.spec_reason() == reason, r.spec_at().spec_get() == at
+fn refuse<'a>(reason: Reason, at: &'a [u8]) -> (r: Refusal<'a>)
+    ensures r.spec_reason() == reason, r.spec_at() =~= at@
 {
-    Refusal { reason, at: Offset(at) }
-}
-
-/// Move a refusal out from a sub-reading into the reading that contains it.
-fn deeper(e: Refusal, base: usize) -> (r: Refusal)
-    ensures r.spec_reason() == e.spec_reason()
-{
-    let inner = e.at.0;
-    let at = if base <= usize::MAX - inner { base + inner } else { usize::MAX };
-    refuse(e.reason, at)
+    Refusal { reason, at: Stopped { rest: at } }
 }
 
 /// Where the escaped body at the front of `p` ends. Total over every
 /// byte sequence: no panic, no unbounded read.
-pub(crate) fn delim_scan(p: &[u8]) -> (r: Result<usize, Refusal>)
+pub(crate) fn delim_scan<'a>(p: &'a [u8]) -> (r: Result<usize, Refusal<'a>>)
     ensures
         match r {
             Ok(n) => delim_end(p@) == n as int && n <= p.len(),
@@ -1727,7 +1701,7 @@ pub(crate) fn delim_scan(p: &[u8]) -> (r: Result<usize, Refusal>)
         proof { assert(p@.skip(i as int)[0] == p@[i as int]); }
         if i + 1 >= p.len() {
             proof { assert(p@.skip(i as int).len() < 2); }
-            return Err(refuse(Reason::Truncated, p.len()));
+            return Err(refuse(Reason::Truncated, vstd::slice::slice_subrange(p, p.len(), p.len())));
         }
         proof { assert(p@.skip(i as int)[1] == p@[i as int + 1]); }
         if p[i] == STRUCT_ESC {
@@ -1736,7 +1710,7 @@ pub(crate) fn delim_scan(p: &[u8]) -> (r: Result<usize, Refusal>)
                 return Ok(i + 2);
             }
             if p[i + 1] != 0xFF {
-                return Err(refuse(Reason::BadEscape(p[i + 1]), i + 1));
+                return Err(refuse(Reason::BadEscape(p[i + 1]), vstd::slice::slice_subrange(p, i + 1, p.len())));
             }
             proof { assert(p@.skip(i as int).skip(2) =~= p@.skip(i as int + 2)); }
             i = i + 2;
@@ -1746,7 +1720,7 @@ pub(crate) fn delim_scan(p: &[u8]) -> (r: Result<usize, Refusal>)
         }
     }
     proof { assert(p@.skip(i as int).len() < 2); }
-    Err(refuse(Reason::Truncated, p.len()))
+    Err(refuse(Reason::Truncated, vstd::slice::slice_subrange(p, p.len(), p.len())))
 }
 
 /// Nesting a reader will descend. Deeper input is refused, never followed: the
@@ -1758,7 +1732,7 @@ pub const MAX_DEPTH: u32 = 128;
 
 /// Where the shape at the front of `p` ends, or `None` if `p` does not open
 /// with one. One function; the whole grammar. Total over every byte sequence.
-pub(crate) fn shape_scan(g: &Branches, s: &Shape, p: &[u8], depth: u32) -> (r: Result<usize, Refusal>)
+pub(crate) fn shape_scan<'a>(g: &Branches, s: &Shape, p: &'a [u8], depth: u32) -> (r: Result<usize, Refusal<'a>>)
     ensures
         match r {
             Ok(n) => shape_end(*g, *s, p@) == n as int && n <= p.len(),
@@ -1767,13 +1741,13 @@ pub(crate) fn shape_scan(g: &Branches, s: &Shape, p: &[u8], depth: u32) -> (r: R
     decreases p@.len(), shape_sz(*s)
 {
     if depth >= MAX_DEPTH {
-        return Err(refuse(Reason::TooDeep, 0));
+        return Err(refuse(Reason::TooDeep, p));
     }
     match s {
         Shape::Fixed(n) => if p.len() >= *n {
             Ok(*n)
         } else {
-            Err(refuse(Reason::Truncated, p.len()))
+            Err(refuse(Reason::Truncated, vstd::slice::slice_subrange(p, p.len(), p.len())))
         },
         Shape::Delimited => delim_scan(p),
         Shape::Product(a, b) => {
@@ -1785,7 +1759,7 @@ pub(crate) fn shape_scan(g: &Branches, s: &Shape, p: &[u8], depth: u32) -> (r: R
             proof { assert(rest@ =~= p@.skip(j as int)); }
             match shape_scan(g, &**b, rest, depth) {
                 Ok(k) => Ok(j + k),
-                Err(e) => Err(deeper(e, j)),
+                Err(e) => Err(e),
             }
         }
         Shape::Sum(bs) => sum_scan(g, &**bs, p, depth),
@@ -1807,7 +1781,7 @@ pub(crate) fn shape_scan(g: &Branches, s: &Shape, p: &[u8], depth: u32) -> (r: R
             {
                 if at >= p.len() {
                     proof { assert(p@.skip(at as int).len() == 0); }
-                    return Err(refuse(Reason::Truncated, at));
+                    return Err(refuse(Reason::Truncated, vstd::slice::slice_subrange(p, at, p.len())));
                 }
                 let tail = vstd::slice::slice_subrange(p, at, p.len());
                 proof {
@@ -1819,10 +1793,10 @@ pub(crate) fn shape_scan(g: &Branches, s: &Shape, p: &[u8], depth: u32) -> (r: R
                 }
                 let j = match shape_scan(g, &**e, tail, depth + 1) {
                     Ok(n) => n,
-                    Err(err) => return Err(deeper(err, at)),
+                    Err(err) => return Err(err),
                 };
                 if j == 0 {
-                    return Err(refuse(Reason::Truncated, at));
+                    return Err(refuse(Reason::Truncated, vstd::slice::slice_subrange(p, at, p.len())));
                 }
                 proof { assert(p@.skip(at as int).skip(j as int) =~= p@.skip(at as int + j as int)); }
                 at = at + j;
@@ -1832,7 +1806,7 @@ pub(crate) fn shape_scan(g: &Branches, s: &Shape, p: &[u8], depth: u32) -> (r: R
 }
 
 /// One lead byte selects a branch of `bs`, which reads what follows it.
-pub(crate) fn sum_scan(g: &Branches, bs: &Branches, p: &[u8], depth: u32) -> (r: Result<usize, Refusal>)
+pub(crate) fn sum_scan<'a>(g: &Branches, bs: &Branches, p: &'a [u8], depth: u32) -> (r: Result<usize, Refusal<'a>>)
     ensures
         match r {
             Ok(n) => sum_end(*g, *bs, p@) == n as int && n <= p.len(),
@@ -1841,25 +1815,25 @@ pub(crate) fn sum_scan(g: &Branches, bs: &Branches, p: &[u8], depth: u32) -> (r:
     decreases p@.len(), 0nat
 {
     if depth >= MAX_DEPTH {
-        return Err(refuse(Reason::TooDeep, 0));
+        return Err(refuse(Reason::TooDeep, p));
     }
     if p.len() == 0 {
-        return Err(refuse(Reason::Truncated, 0));
+        return Err(refuse(Reason::Truncated, p));
     }
     let t = match branch_lookup(bs, p[0]) {
         Some(sh) => sh,
-        None => return Err(refuse(Reason::UnknownLeadByte(p[0]), 0)),
+        None => return Err(refuse(Reason::UnknownLeadByte(p[0]), p)),
     };
     let body = vstd::slice::slice_subrange(p, 1, p.len());
     proof { assert(body@ =~= p@.skip(1)); }
     match shape_scan(g, t, body, depth + 1) {
         Ok(n) => Ok(1 + n),
-        Err(e) => Err(deeper(e, 1)),
+        Err(e) => Err(e),
     }
 }
 
 /// Where the complete encoding at the front of `p` ends.
-pub fn scan_value(p: &[u8]) -> (r: Result<usize, Refusal>)
+pub fn scan_value<'a>(p: &'a [u8]) -> (r: Result<usize, Refusal<'a>>)
     ensures
         match r {
             Ok(n) => scan(p@) == n as int && n <= p.len(),
@@ -1868,6 +1842,67 @@ pub fn scan_value(p: &[u8]) -> (r: Result<usize, Refusal>)
 {
     let g = grammar_exec();
     sum_scan(&g, &g, p, 0)
+}
+
+/// Where a reading stopped: the bytes it had not consumed.
+///
+/// A position in a byte string is a suffix of that byte string, so this carries
+/// no number. [`Offset`] carries one, and that is why composing a nested
+/// reading's position into its container needed an addition that could
+/// overflow, and why the deleted `deeper` saturated to `usize::MAX` — a
+/// position no buffer has. A suffix of a sub-slice is already a suffix of the
+/// outer slice, so the composition is identity and there is nothing to add.
+///
+/// The seat is private and only the scan path mints one, so a caller cannot
+/// point a refusal somewhere the reader did not stop.
+// CONSTRUCT: ValueObject Stopped
+pub struct Stopped<'a> {
+    rest: &'a [u8],
+}
+
+// CONSTRUCT: ImplBlock Stopped
+impl<'a> Stopped<'a> {
+    pub closed spec fn spec_rest(&self) -> Seq<u8> { self.rest@ }
+
+    /// The unconsumed bytes. How far in that is depends on the buffer the
+    /// caller handed over, which is the caller's fact and not this type's.
+    pub fn rest(&self) -> (r: &'a [u8])
+        ensures r@ =~= self.spec_rest()
+    { self.rest }
+}
+
+/// One complete encoding at the front of a buffer, and the bytes after it.
+///
+/// The reader's result. [`CanonicalBytes`] carries `complete` because a writer
+/// established it; this carries the same invariant because a scan found it, and
+/// the two are the same claim reached from opposite directions.
+///
+/// Both seats are private and the only constructor is [`read`], so a `Reading`
+/// whose first seat is not a complete encoding is not a `Reading` that was
+/// built wrongly — it cannot be written down. That is what makes the result
+/// narrower than the input: `read` accepts every byte string, and this type
+/// admits only the ones the grammar gives a reading.
+// CONSTRUCT: SealedProduct Reading
+pub struct Reading<'a> {
+    value: &'a [u8],
+    rest: &'a [u8],
+}
+
+// CONSTRUCT: ImplBlock Reading
+impl<'a> Reading<'a> {
+    pub closed spec fn spec_value(&self) -> Seq<u8> { self.value@ }
+    pub closed spec fn spec_rest(&self) -> Seq<u8> { self.rest@ }
+
+    #[verifier::type_invariant]
+    closed spec fn wf_reading(&self) -> bool { complete(self.spec_value()) }
+
+    pub fn value(&self) -> (r: &'a [u8])
+        ensures r@ =~= self.spec_value()
+    { self.value }
+
+    pub fn rest(&self) -> (r: &'a [u8])
+        ensures r@ =~= self.spec_rest()
+    { self.rest }
 }
 
 /// A tag's body: bytes, and the shape that reads them exactly.

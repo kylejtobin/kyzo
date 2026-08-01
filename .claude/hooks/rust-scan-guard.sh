@@ -18,7 +18,17 @@
 # Findings are sticky. A file that scanned dirty stays on an outstanding list
 # and is re-scanned on EVERY subsequent tool call until it comes back clean, so
 # the block cannot be waited out or stepped around by doing something else.
+#
+# OPERATOR CONTROL: crates/bs-detector/pester-hook.txt owns this hook, the same
+# switch gate-stop-guard.sh obeys, read through the one parse in
+# pester-switch.sh. The check comes before both modes: while disarmed this
+# hashes nothing and pins nothing, so arming it later does not dump a whole
+# session of stale findings at once.
 set -uo pipefail
+
+# shellcheck source=pester-switch.sh
+. "$(dirname "${BASH_SOURCE[0]}")/pester-switch.sh"
+pester_armed || exit 0
 
 mode="${1:-after}"
 root="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || echo .)}"
@@ -98,14 +108,6 @@ Read them: crates/xtask/gate.log, or aim the detector at one path —
     cargo run -q --release -p bs-detector -- <path>
 </findings>
 
-<why_this_is_a_pointer_and_not_the_list>
-The full dump was reprinted on EVERY tool call, including reads, for as long as
-a file stayed dirty. On a file with 87 findings that is ninety lines of
-identical text per call, which is how a check trains its reader to skip it.
-gate.log carries every finding from line 3 onward; this block carries the count
-and the files, which is what decides what to do next.
-</why_this_is_a_pointer_and_not_the_list>
-
 <scope>
 These are yours because you touched these files, not because they were your
 task. Violations that survive because they predate the editor are how the
@@ -121,14 +123,6 @@ If your change makes no illegal state unconstructible, it is a workaround.
 A runtime check where a private constructor belongs is worse than the
 finding, because it is now labelled fixed.
 </what_counts_as_fixed>
-
-<how_this_check_works>
-Files under crates/ are content-hashed before and after every tool call and
-diffs are scanned. The tool used is irrelevant: Edit, sed, heredoc, and
-generated scripts all reach this identically. Findings persist and re-scan
-on every call until clean. There is no route around this that is shorter
-than fixing the shape.
-</how_this_check_works>
 
 <if_the_rule_is_wrong>
 Say so in chat: rule, mishandled input, correct shape. Rules live in

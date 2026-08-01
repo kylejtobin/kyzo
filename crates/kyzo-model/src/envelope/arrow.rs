@@ -56,7 +56,7 @@
 use flatbuffers::{FlatBufferBuilder, UOffsetT, WIPOffset};
 use miette::{Result, bail};
 
-use crate::value::{DataValue, NumRepr, Tuple};
+use crate::value::{DataValue, Repr, Tuple};
 
 /// One export column, decided once from its values: a uniform typed
 /// vector when every value fits one of the four Arrow-mappable kinds,
@@ -84,8 +84,8 @@ impl ColumnVec {
         for v in &values {
             let this = match v {
                 DataValue::Num(n) => match n.repr() {
-                    NumRepr::Int(_) => Fit::Int,
-                    NumRepr::Float(_) => Fit::Float,
+                    Repr::Int(_) => Fit::Int,
+                    Repr::Float(_) => Fit::Float,
                 },
                 DataValue::Bool(_) => Fit::Bool,
                 DataValue::Str(_) => Fit::Str,
@@ -472,8 +472,8 @@ fn plan_mixed_column(values: &[DataValue]) -> Result<PlannedColumn> {
         let this = match v {
             DataValue::Null => continue,
             DataValue::Num(n) => match n.repr() {
-                NumRepr::Int(_) => Kind::Int,
-                NumRepr::Float(_) => Kind::Float,
+                Repr::Int(_) => Kind::Int,
+                Repr::Float(_) => Kind::Float,
             },
             DataValue::Bool(_) => Kind::Bool,
             DataValue::Str(_) => Kind::Str,

@@ -35,7 +35,7 @@ use miette::{Result, bail, ensure, miette};
 use crate::exec::stdlib::convert::i128_approx_f64;
 
 use kyzo_model::program::aggregate::Aggregation;
-use kyzo_model::value::{DataValue, Num, NumRepr};
+use kyzo_model::value::{DataValue, Num, Repr};
 
 use crate::exec::fold::sketch::aggr::{
     AggrCountMin, AggrHll, AggrHllSketch, AggrHllUnion, AggrQuantile, AggrTDigest, MeetAggrHllUnion,
@@ -1097,14 +1097,14 @@ impl NumAccum {
         float_op: fn(f64, f64) -> f64,
     ) -> Self {
         match (self, n.repr()) {
-            (NumAccum::Int(acc), NumRepr::Int(i)) => match int_op(acc, i128::from(i)) {
+            (NumAccum::Int(acc), Repr::Int(i)) => match int_op(acc, i128::from(i)) {
                 Some(acc) => NumAccum::Int(acc),
                 None => NumAccum::Float(float_op(
                     i128_approx_f64(acc),
                     kyzo_model::value::Num::int(i).to_f64(),
                 )),
             },
-            (NumAccum::Int(acc), NumRepr::Float(f)) => {
+            (NumAccum::Int(acc), Repr::Float(f)) => {
                 NumAccum::Float(float_op(i128_approx_f64(acc), f))
             }
             (NumAccum::Float(acc), _) => NumAccum::Float(float_op(acc, n.to_f64())),

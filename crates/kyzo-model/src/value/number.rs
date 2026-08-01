@@ -67,21 +67,139 @@
 //! comparator, both directions.
 
 use std::cmp::Ordering;
-
-/// Class bytes of the numeric key.
-const CLASS_NEG: u8 = 0x01;
-const CLASS_ZERO: u8 = 0x02;
-const CLASS_POS: u8 = 0x03;
-const CLASS_NAN: u8 = 0x04;
+use std::num::NonZeroU64;
 
 /// Repr tie-break bytes.
 const REPR_INT: u8 = 0x00;
 const REPR_FLOAT: u8 = 0x01;
 
-/// Exponent offset: E ∈ [-1073, 1024] for finite values → stored E+1080.
-const EXP_OFFSET: i32 = 1080;
-/// Infinity sentinel exponent bytes (beyond every finite offset).
-const EXP_INF: u16 = 0xFFFF;
+/// Which representation a number was written as, as the tie-break between two
+/// equal reals.
+///
+/// ORDER_LAW: `Int < Float`, which is the order of the bytes they encode to
+/// (`0x00 < 0x01`). The tie-break is type order, not value order: it separates
+/// `1` from `1.0` in storage, and says nothing about which is the larger number.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum ReprTag {
+    Int,
+    Float,
+}
+
+/// The eleven payload bytes of a magnitude: two of exponent, nine of fraction.
+
+const MAG_BYTES: usize = 11;
+
+/// Exponent offset: a finite `E` runs from -1073 to 1024, and biased by this
+/// the whole range is [7, 2104], which is below `0xFFFF`.
+const EXP_OFFSET: u32 = 1080;
+
+/// Bits of fraction a magnitude carries.
+const FRAC_BITS: u32 = 72;
+
+/// How far above zero a number is, and nothing about which side of zero.
+///
+/// ORDER_LAW: `Finite < Infinite`, from `0xFFFF` being above every biased
+/// exponent a finite magnitude carries.
+#[derive(Clone, Copy, Debug)]
+enum Mag {
+    /// `significand × 2^(scale - EXP_OFFSET)`, biased so the field is unsigned.
+    Finite(NonZeroU64, u32),
+    Infinite,
+}
+
+impl Mag {
+    /// The eleven payload bytes: biased exponent, then the fraction.
+    fn bytes(self) -> [u8; MAG_BYTES] {
+        let packed: u128 = match self {
+            Mag::Finite(significand, biased_scale) => {
+                let bits = significand.ilog2() + 1;
+                let exponent = bits + biased_scale;
+                (u128::from(exponent) << FRAC_BITS)
+                    | (u128::from(significand.get()) << (FRAC_BITS - bits))
+            }
+            Mag::Infinite => (u128::from(u16::MAX) << FRAC_BITS) | ((1u128 << FRAC_BITS) - 1),
+        };
+        let be = packed.to_be_bytes();
+        std::array::from_fn(|i| be[i + (16 - MAG_BYTES)])
+    }
+}
+
+/// The eleven payload bytes of a magnitude, oriented so that `derive(Ord)` on
+/// the class that holds them is that class's order.
+
+///
+/// ORDER_LAW: `[u8; MAG_BYTES]`'s own `Ord`, which is `memcmp`.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub struct Payload([u8; MAG_BYTES]);
+
+/// A number in key form: which of the four classes it falls in, and the payload
+/// that class carries.
+///
+/// The class is not a field. The variant *is* the class, so a magnitude cannot
+/// be filed under the wrong sign — there is no byte to set incorrectly. The four
+/// variants are the four branches of `num_table!()` in
+/// [`crate::value::canonical`], which owns the selector bytes `0x01..=0x04`;
+/// this type names them and nothing here repeats them.
+///
+/// `Nan` carries no payload. An integer is never NaN, so the representation byte
+/// under that class has exactly one legal value, and a payload with one legal
+/// value is a constant rather than a field. The grammar still writes its byte.
+///
+/// ORDER_LAW: declaration order across variants — `Negative < Zero < Positive <
+/// Nan` — then the payload's own order. This is not *matched to* the encoded
+/// order, it *is* the encoded order: the payloads are the bytes canonical
+/// writes, so the derived `Ord` compares exactly what a `memcmp` of the encoding
+/// compares. `key_order_is_byte_order` holds the variant order against the
+/// selector bytes, which are the one part this type does not carry.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum Real {
+    /// A magnitude, complemented — which is what being negative is. XOR
+    /// reverses lexicographic order, so `derive(Ord)` on these bytes gives the
+    /// backwards order directly; there is no hand-written `.reverse()` and no
+    /// `Complement` wrapper to hold one.
+    Negative(Payload),
+    /// No magnitude at all.
+    Zero,
+    /// A magnitude.
+    Positive(Payload),
+    /// Not a number, and above every number.
+    Nan,
+}
+
+impl Real {
+    /// The complement is the class: applied here and nowhere else.
+    fn negative(m: Mag) -> Real {
+        Real::Negative(Payload(m.bytes().map(|b| !b)))
+    }
+
+    fn positive(m: Mag) -> Real {
+        Real::Positive(Payload(m.bytes()))
+    }
+}
+
+/// A number in key form: the real it names, then how it was written.
+///
+/// The two are separate fields because the two orders this engine needs differ
+/// in exactly one of them. Storage order is the pair; query-semantic numeric
+/// order is [`Real`] alone. Both are `derive`d — the numeric order does not
+/// compute the storage order and then remove the tie-break, it never adds it.
+///
+/// That is why `1` and `1.0` need no special case anywhere. Normalization
+/// already gives them the same [`Real`] (exponent 1081, fraction 2^71), so
+/// `Real`'s own `Ord` answers `Equal` with nothing written to make it.
+///
+/// ORDER_LAW: field order — `real`, then `repr`. That is the order of the bytes:
+/// canonical writes the class selector and magnitude first and the
+/// representation byte last, so the derived `Ord` compares exactly what a
+/// `memcmp` of the encoding compares. The four [`Real`] variants are the four
+/// branches of `num_table!()` in [`crate::value::canonical`], which owns the
+/// selector bytes `0x01..=0x04`; this type names them and nothing here repeats
+/// them.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub struct NumKey {
+    real: Real,
+    repr: ReprTag,
+}
 
 /// One canonical NaN bit pattern (positive quiet NaN).
 const CANON_NAN_BITS: u64 = 0x7FF8_0000_0000_0000;
@@ -96,8 +214,16 @@ const CANON_NAN_BITS: u64 = 0x7FF8_0000_0000_0000;
 #[derive(Clone, Copy, Debug)]
 pub struct Num(Repr);
 
+/// The representation a [`Num`] holds: exactly an `i64` or an `f64`.
+///
+/// Public for pattern matching, and that costs nothing: `Num`'s field is
+/// private and there is no constructor from this type, so the identity law
+/// (`-0.0` collapsed, one NaN) cannot be bypassed by naming a variant. There
+/// used to be a second copy of this enum, `NumRepr`, existing only to be the
+/// public one — the same constructor list twice with an identity mapping
+/// between them.
 #[derive(Clone, Copy, Debug)]
-enum Repr {
+pub enum Repr {
     Int(i64),
     Float(f64),
 }
@@ -125,22 +251,19 @@ impl Num {
     /// for math kernels, never an identity claim (beyond 2^53 the conversion
     /// rounds).
     pub fn to_f64(self) -> f64 {
-        match self.repr() {
-            NumRepr::Int(i) => i64_to_f64(i),
-            NumRepr::Float(f) => f,
+        match self.0 {
+            Repr::Int(i) => i64_to_f64(i),
+            Repr::Float(f) => f,
         }
     }
 
     /// The read-only representation view: pattern-matching ergonomics
-    /// WITHOUT construction authority — `NumRepr` cannot be turned back
+    /// WITHOUT construction authority — `Repr` cannot be turned back
     /// into a `Num` except through the normalizing constructors, so the
     /// identity law (`-0.0` collapsed, one NaN) cannot be bypassed by a
     /// public variant.
-    pub fn repr(self) -> NumRepr {
-        match self.0 {
-            Repr::Int(v) => NumRepr::Int(v),
-            Repr::Float(v) => NumRepr::Float(v),
-        }
+    pub fn repr(self) -> Repr {
+        self.0
     }
 
     pub fn as_int(self) -> Option<i64> {
@@ -163,15 +286,6 @@ impl Num {
     pub fn to_int_coerced(self) -> Option<i64> {
         match self.0 {
             Repr::Int(v) => Some(v),
-            Repr::Float(f) => {
-                const I64_MAX_BOUND_EXCLUSIVE: f64 = 9223372036854775808.0; // 2^63
-                const I64_MIN_F64: f64 = -9223372036854775808.0; // exactly -2^63
-                if f.round() == f && f >= I64_MIN_F64 && f < I64_MAX_BOUND_EXCLUSIVE {
-                    Some(f64_integral_in_i64_range_to_i64(f))
-                } else {
-                    None
-                }
-            }
         }
     }
 
@@ -182,264 +296,39 @@ impl Num {
         }
     }
 
-    fn repr_byte(self) -> u8 {
+    fn repr_tag(self) -> ReprTag {
         match self.0 {
-            Repr::Int(_) => REPR_INT,
-            Repr::Float(_) => REPR_FLOAT,
+            Repr::Int(_) => ReprTag::Int,
+            Repr::Float(_) => ReprTag::Float,
         }
     }
 
-    /// Append the order-preserving key.
-    pub fn encode_key(self, out: &mut Vec<u8>) {
-        match self.0 {
-            Repr::Int(0) => {
-                out.push(CLASS_ZERO);
-                out.push(REPR_INT);
-            }
-            Repr::Float(v) if v.to_bits() == 0 => {
-                out.push(CLASS_ZERO);
-                out.push(REPR_FLOAT);
-            }
-            Repr::Float(v) if v.is_nan() => {
-                out.push(CLASS_NAN);
-                out.push(REPR_FLOAT);
-            }
-            Repr::Int(_) | Repr::Float(_) => {
-                let (neg, mag) = self.sign_magnitude();
-                out.push(if neg { CLASS_NEG } else { CLASS_POS });
-                let start = out.len();
-                match mag {
-                    Magnitude::Inf => {
-                        out.extend_from_slice(&EXP_INF.to_be_bytes());
-                        out.extend_from_slice(&[0xFF; 9]);
-                    }
-                    Magnitude::Finite { exp_key, frac72 } => {
-                        // exp_key was proven at Magnitude construction
-                        // (E ∈ [-1073, 1024] ⇒ biased ∈ [7, 2104] ⊂ u16).
-                        out.extend_from_slice(&exp_key.to_be_bytes());
-                        let fb = frac72.to_be_bytes(); // 16 bytes; the low 9 hold the 72-bit field
-                        out.extend_from_slice(&fb[7..16]);
-                    }
-                }
-                if neg {
-                    for b in &mut out[start..] {
-                        *b = !*b;
-                    }
-                }
-                out.push(self.repr_byte());
-            }
+    /// This number in key form.
+    ///
+    /// Total: every `Num` has a key, so there is nothing here to refuse.
+    /// Produces the payload; the class selector and the frame are
+    /// [`crate::value::canonical`]'s, which is why no byte of either appears
+    /// here. `Num::encode_key` used to write both, so the tag bytes existed in
+    /// two files that had to agree.
+    ///
+    /// The three finite forms — an integer, a normal double, a subnormal double
+    /// — are one derivation, not three. Each is `significand × 2^scale` for some
+    /// nonzero significand, which is [`Mag::Finite`]; the arms below differ only
+    /// in which significand and scale they name, and the normalizing shift and
+    /// the exponent bias are written once, in [`Mag::bytes`].
+    ///
+    /// Zero is not tested for. It is the significand being zero, so it arrives
+    /// as the `None` arm of the same `NonZeroU64` that the derivation needs —
+    /// which is also why [`Real::Zero`] carries no exponent and no fraction.
+    pub fn key(self) -> NumKey {
+        NumKey {
+            real: self.real(),
+            repr: self.repr_tag(),
         }
     }
 
-    /// Decode a key from the front of `bytes`, returning the value and
-    /// the number of bytes consumed. Total: malformed input is a typed
-    /// error, never a panic.
-    pub fn decode_key(bytes: &[u8]) -> Result<(Num, usize), NumDecodeError> {
-        let class = *bytes.first().ok_or(NumDecodeError::Truncated)?;
-        match class {
-            CLASS_ZERO => match bytes.get(1) {
-                Some(&REPR_INT) => Ok((Num::int(0), 2)),
-                Some(&REPR_FLOAT) => Ok((Num::float(0.0), 2)),
-                Some(_) => Err(NumDecodeError::BadRepr),
-                None => Err(NumDecodeError::Truncated),
-            },
-            CLASS_NAN => match bytes.get(1) {
-                Some(&REPR_FLOAT) => Ok((Num::float(f64::NAN), 2)),
-                Some(_) => Err(NumDecodeError::BadRepr),
-                None => Err(NumDecodeError::Truncated),
-            },
-            CLASS_NEG | CLASS_POS => {
-                if bytes.len() < 13 {
-                    return Err(NumDecodeError::Truncated);
-                }
-                let neg = class == CLASS_NEG;
-                let mut body = [0u8; 11];
-                body.copy_from_slice(&bytes[1..12]);
-                if neg {
-                    for b in &mut body {
-                        *b = !*b;
-                    }
-                }
-                let repr = bytes[12];
-                let exp = u16::from_be_bytes([body[0], body[1]]);
-                let mut frac_bytes = [0u8; 16];
-                frac_bytes[7..16].copy_from_slice(&body[2..11]);
-                let frac72 = u128::from_be_bytes(frac_bytes);
-                let value = if exp == EXP_INF {
-                    if frac72 != (1u128 << 72) - 1 || repr != REPR_FLOAT {
-                        return Err(NumDecodeError::BadInfinity);
-                    }
-                    Num::float(if neg {
-                        f64::NEG_INFINITY
-                    } else {
-                        f64::INFINITY
-                    })
-                } else {
-                    let e = i32::from(exp) - EXP_OFFSET;
-                    if frac72 >> 71 != 1 {
-                        return Err(NumDecodeError::Denormalized);
-                    }
-                    match repr {
-                        REPR_INT => Self::rebuild_int(neg, e, frac72)?,
-                        REPR_FLOAT => Self::rebuild_float(neg, e, frac72)?,
-                        _other => return Err(NumDecodeError::BadRepr),
-                    }
-                };
-                Ok((value, 13))
-            }
-            _other => Err(NumDecodeError::BadClass),
-        }
-    }
-
-    fn rebuild_int(neg: bool, e: i32, frac72: u128) -> Result<Num, NumDecodeError> {
-        if !(1..=64).contains(&e) {
-            return Err(NumDecodeError::IntRange);
-        }
-        let shift = u32::try_from(72 - e).map_err(|_| NumDecodeError::IntRange)?;
-        if frac72.trailing_zeros() < shift {
-            return Err(NumDecodeError::IntRange);
-        }
-        let m = u64::try_from(frac72 >> shift).map_err(|_| NumDecodeError::IntRange)?;
-        if neg {
-            if m > 1u64 << 63 {
-                return Err(NumDecodeError::IntRange);
-            }
-            // Magnitude already range-checked: 2^63 → i64::MIN; else negate.
-            if m == (1u64 << 63) {
-                Ok(Num::int(i64::MIN))
-            } else {
-                match i64::try_from(m) {
-                    Ok(p) => Ok(Num::int(-p)),
-                    Err(_) => Err(NumDecodeError::IntRange),
-                }
-            }
-        } else {
-            if m > i64::MAX.cast_unsigned() {
-                return Err(NumDecodeError::IntRange);
-            }
-            match i64::try_from(m) {
-                Ok(p) => Ok(Num::int(p)),
-                Err(_) => Err(NumDecodeError::IntRange),
-            }
-        }
-    }
-
-    fn rebuild_float(neg: bool, e: i32, frac72: u128) -> Result<Num, NumDecodeError> {
-        // Normal floats: value = 0.1xxx… × 2^E with 53 significant bits.
-        if e >= -1021 {
-            if e > 1024 {
-                return Err(NumDecodeError::FloatRange);
-            }
-            if frac72.trailing_zeros() < 19 {
-                return Err(NumDecodeError::FloatRange);
-            }
-            let sig53 = u64::try_from(frac72 >> 19).map_err(|_| NumDecodeError::FloatRange)?;
-            let expf = u64::try_from(e - 1 + 1023).map_err(|_| NumDecodeError::FloatRange)?;
-            let bits = (expf << 52) | (sig53 & ((1u64 << 52) - 1));
-            let v = f64::from_bits(bits);
-            Ok(Num::float(if neg { -v } else { v }))
-        } else {
-            // Subnormal: value = frac52 × 2^-1074, E = bitlen(frac52) - 1074.
-            let bl = e + 1074;
-            if !(1..=52).contains(&bl) {
-                return Err(NumDecodeError::FloatRange);
-            }
-            let shift = u32::try_from(72 - bl).map_err(|_| NumDecodeError::FloatRange)?;
-            if frac72.trailing_zeros() < shift {
-                return Err(NumDecodeError::FloatRange);
-            }
-            let frac52 = u64::try_from(frac72 >> shift).map_err(|_| NumDecodeError::FloatRange)?;
-            let v = f64::from_bits(frac52);
-            Ok(Num::float(if neg { -v } else { v }))
-        }
-    }
-
-    /// Sign and normalized magnitude of a nonzero, non-NaN number.
-    fn sign_magnitude(self) -> (bool, Magnitude) {
-        match self.0 {
-            Repr::Int(0) => (false, Magnitude::finite(0, 0)),
-            Repr::Int(v) => {
-                let neg = v < 0;
-                let m = v.unsigned_abs();
-                // Nonzero i64 magnitude ⇒ bit length ∈ 1..=64.
-                let bl = 64 - m.leading_zeros();
-                let e = i32_from_u32_bitlen(bl);
-                let frac72 = u128::from(m) << (72 - bl);
-                (neg, Magnitude::finite(e, frac72))
-            }
-            Repr::Float(v) if v == 0.0 || v.is_nan() => (false, Magnitude::finite(0, 0)),
-            Repr::Float(v) => {
-                let neg = v < 0.0;
-                if v.is_infinite() {
-                    return (neg, Magnitude::Inf);
-                }
-                let bits = v.abs().to_bits();
-                // IEEE unbiased field after abs: bits[62:52] ∈ 0..=0x7FF.
-                let expf = i32_from_u11(bits >> 52);
-                let frac52 = bits & ((1u64 << 52) - 1);
-                if expf > 0 {
-                    // Normal: 1.frac × 2^(expf-1023) = 0.1frac × 2^E.
-                    let sig53 = (1u64 << 52) | frac52;
-                    let e = expf - 1023 + 1;
-                    let frac72 = u128::from(sig53) << 19;
-                    (neg, Magnitude::finite(e, frac72))
-                } else {
-                    // Subnormal: frac52 × 2^-1074. Nonzero (zeros handled above)
-                    // ⇒ bit length ∈ 1..=52.
-                    let bl = 64 - frac52.leading_zeros();
-                    let e = i32_from_u32_bitlen(bl) - 1074;
-                    let frac72 = u128::from(frac52) << (72 - bl);
-                    (neg, Magnitude::finite(e, frac72))
-                }
-            }
-        }
-    }
-
-    fn class(self) -> u8 {
-        match self.0 {
-            Repr::Int(0) => CLASS_ZERO,
-            Repr::Float(v) if v.is_nan() => CLASS_NAN,
-            Repr::Float(v) if v.to_bits() == 0 => CLASS_ZERO,
-            Repr::Int(v) => {
-                if v < 0 {
-                    CLASS_NEG
-                } else {
-                    CLASS_POS
-                }
-            }
-            Repr::Float(v) => {
-                if v < 0.0 {
-                    CLASS_NEG
-                } else {
-                    CLASS_POS
-                }
-            }
-        }
-    }
 }
 
-enum Magnitude {
-    /// Biased exponent already in key form: `E + EXP_OFFSET` as `u16`.
-    /// Constructed only via [`Magnitude::finite`], which proves the range
-    /// so [`Num::encode_key`] never re-checks with expect.
-    Finite {
-        exp_key: u16,
-        frac72: u128,
-    },
-    Inf,
-}
-
-impl Magnitude {
-    /// Finite magnitude door: `e ∈ [-1073, 1024]` from int/float bit math
-    /// ⇒ biased exponent fits `u16` and sits strictly below [`EXP_INF`].
-    fn finite(e: i32, frac72: u128) -> Self {
-        // INVARIANT(NumExpBias): e ∈ [-1073, 1024] by the finite-magnitude door;
-        // wrap adds EXP_OFFSET into [7, 2104] ⊂ u16, strictly below EXP_INF.
-        let biased = (std::num::Wrapping(e) + std::num::Wrapping(EXP_OFFSET)).0;
-        let exp_key = u16_from_i32_nonneg(biased);
-        Magnitude::Finite { exp_key, frac72 }
-    }
-}
 
 impl PartialEq for Num {
     fn eq(&self, other: &Self) -> bool {
@@ -456,38 +345,9 @@ impl PartialOrd for Num {
 }
 
 impl Ord for Num {
-    /// Storage / identity order: exact real order, `Int < Float` on equal
-    /// reals, NaN greatest and equal to itself. Matches the order-preserving
-    /// key. Query-semantic numeric order is [`NumericOrd`].
+    /// ORDER_LAW: exact real order, `Int < Float` on equal reals, NaN greatest.
     fn cmp(&self, other: &Self) -> Ordering {
-        let (ca, cb) = (self.class(), other.class());
-        if ca != cb {
-            return ca.cmp(&cb);
-        }
-        match ca {
-            CLASS_ZERO | CLASS_NAN => self.repr_byte().cmp(&other.repr_byte()),
-            _other => {
-                let (neg, ma) = self.sign_magnitude();
-                let (_, mb) = other.sign_magnitude();
-                let mag = match (ma, mb) {
-                    (Magnitude::Inf, Magnitude::Inf) => Ordering::Equal,
-                    (Magnitude::Inf, Magnitude::Finite { .. }) => Ordering::Greater,
-                    (Magnitude::Finite { .. }, Magnitude::Inf) => Ordering::Less,
-                    (
-                        Magnitude::Finite {
-                            exp_key: ea,
-                            frac72: fa,
-                        },
-                        Magnitude::Finite {
-                            exp_key: eb,
-                            frac72: fb,
-                        },
-                    ) => ea.cmp(&eb).then(fa.cmp(&fb)),
-                };
-                let real = if neg { mag.reverse() } else { mag };
-                real.then(self.repr_byte().cmp(&other.repr_byte()))
-            }
-        }
+        self.key().cmp(&other.key())
     }
 }
 
@@ -517,6 +377,14 @@ impl NumericOrd {
     }
 }
 
+impl Ord for NumericOrd {
+    /// ORDER_LAW: [`Real`] alone, so equal reals are `Equal` whatever they were
+    /// written as.
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.key().real.cmp(&other.0.key().real)
+    }
+}
+
 impl PartialEq for NumericOrd {
     fn eq(&self, other: &Self) -> bool {
         self.cmp(other) == Ordering::Equal
@@ -529,42 +397,6 @@ impl PartialOrd for NumericOrd {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
-}
-
-impl Ord for NumericOrd {
-    fn cmp(&self, other: &Self) -> Ordering {
-        // Storage order is (real value, repr tie-break); stripping the
-        // tie-break yields the numeric order exactly.
-        match self.0.cmp(&other.0) {
-            Ordering::Equal => Ordering::Equal,
-            o @ Ordering::Less | o @ Ordering::Greater => {
-                if self.0.repr_byte() != other.0.repr_byte() {
-                    let same = matches!(
-                        (self.0.as_int(), other.0.as_float()),
-                        (Some(i), Some(f)) if int_float_eq(i, f)
-                    ) || matches!(
-                        (self.0.as_float(), other.0.as_int()),
-                        (Some(f), Some(i)) if int_float_eq(i, f)
-                    );
-                    if same { Ordering::Equal } else { o }
-                } else {
-                    o
-                }
-            }
-        }
-    }
-}
-
-/// Exact int/float real-value equality (no lossy casts): true iff the
-/// float is integral, in range, and equal.
-fn int_float_eq(i: i64, f: f64) -> bool {
-    if !f.is_finite() || f.fract() != 0.0 {
-        return false;
-    }
-    if !(-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(&f) {
-        return false;
-    }
-    f64_integral_in_i64_range_to_i64(f) == i
 }
 
 /// Bit-exact IEEE `i64 → f64` (sitofp), without a numeric `as` cast.
@@ -616,77 +448,6 @@ fn u64_to_f64(n: u64) -> f64 {
     f64::from_bits((exp << 52) | frac)
 }
 
-/// Convert an integral f64 known to lie in `[-2^63, 2^63)` to `i64`.
-///
-/// Precondition: `f` is finite, `f.round() == f`, and
-/// `-2^63 <= f < 2^63`. Callers that have not proved this must not use it.
-fn f64_integral_in_i64_range_to_i64(f: f64) -> i64 {
-    let bits = f.to_bits();
-    let sign = (bits >> 63) != 0;
-    let biased = (bits >> 52) & 0x7FF;
-    if biased == 0 {
-        return 0;
-    }
-    // biased ∈ 1..=0x7FF by the mask above.
-    let biased_u = u16_from_u11(biased);
-    let unbiased = i32::from(biased_u) - 1023;
-    let frac = bits & ((1u64 << 52) - 1);
-    let mant = (1u64 << 52) | frac;
-    // Precondition ⇒ |f| < 2^63 ⇒ unbiased ≤ 62; each branch's delta is ≥ 0.
-    let mag = if unbiased >= 52 {
-        mant << u32_from_i32_nonneg(unbiased - 52)
-    } else {
-        mant >> u32_from_i32_nonneg(52 - unbiased)
-    };
-    if !sign {
-        // Precondition ⇒ mag < 2^63 ⇒ same bit pattern as positive i64.
-        i64_from_u64_below_2pow63(mag)
-    } else if mag == (1u64 << 63) {
-        i64::MIN
-    } else {
-        // Precondition ⇒ mag < 2^63.
-        -i64_from_u64_below_2pow63(mag)
-    }
-}
-
-/// Bit length / small count (`u32` proven ≤ 64) → `i32` without try/Err costume.
-#[inline]
-fn i32_from_u32_bitlen(n: u32) -> i32 {
-    i32::from(super::convert::u8_from_u64_low(u64::from(n)))
-}
-
-/// IEEE 11-bit field in a `u64` word → `i32` (value ∈ 0..=0x7FF).
-#[inline]
-fn i32_from_u11(n: u64) -> i32 {
-    i32::from(u16_from_u11(n))
-}
-
-/// IEEE 11-bit field in a `u64` word → `u16`.
-#[inline]
-fn u16_from_u11(n: u64) -> u16 {
-    let b = n.to_le_bytes();
-    u16::from_le_bytes([b[0], b[1]])
-}
-
-/// Non-negative `i32` (proven by NumExpBias / shift-branch) → `u16` via LE bytes.
-#[inline]
-fn u16_from_i32_nonneg(n: i32) -> u16 {
-    let b = n.to_le_bytes();
-    u16::from_le_bytes([b[0], b[1]])
-}
-
-/// Non-negative `i32` (proven by branch) → `u32` via LE bit reinterpret.
-#[inline]
-fn u32_from_i32_nonneg(n: i32) -> u32 {
-    u32::from_le_bytes(n.to_le_bytes())
-}
-
-/// `u64` proven `< 2^63` → `i64` via LE bit reinterpret (sign bit clear).
-#[inline]
-fn i64_from_u64_below_2pow63(n: u64) -> i64 {
-    i64::from_le_bytes(n.to_le_bytes())
-}
-
 impl std::hash::Hash for Num {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         match self.0 {
@@ -700,26 +461,6 @@ impl std::hash::Hash for Num {
             }
         }
     }
-}
-
-/// The read-only view of a `Num`'s representation (see [`Num::repr`]):
-/// match on it freely; mint through the normalizing constructors only.
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum NumRepr {
-    Int(i64),
-    Float(f64),
-}
-
-/// Typed decode failures: total input handling, never a panic.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum NumDecodeError {
-    Truncated,
-    BadClass,
-    BadRepr,
-    BadInfinity,
-    Denormalized,
-    IntRange,
-    FloatRange,
 }
 
 #[cfg(test)]
@@ -749,10 +490,45 @@ mod tests {
         }
     }
 
+    /// The bytes canonical writes for a key: selector, then payload.
+    ///
+    /// The selectors are restated here on purpose. `NumKey`'s `Ord` claims to be
+    /// the encoded order; a test that took the selectors from the same place the
+    /// encoder does could not catch that claim being false. This is the oracle,
+    /// so it says independently what the bytes are, and every order law below
+    /// runs against it rather than against another derivation.
+    fn key_bytes(n: Num) -> Vec<u8> {
+        let k = n.key();
+        // Restated, never read back from `ReprTag`: an oracle that asks the
+        // encoder what the tie-break byte is cannot catch the encoder
+        // answering wrong. Same reason the four selectors are literals here.
+        let repr = match k.repr {
+            ReprTag::Int => 0x00,
+            ReprTag::Float => 0x01,
+        };
+        let mut v = Vec::new();
+        // Selector, then the payload the class carries — and the tie-break
+        // last, for every class alike. It is not complemented under
+        // `Negative`: the tie-break is type order, not value order, so
+        // reversing it would sort `-1` and `-1.0` backwards from `1` and `1.0`.
+        match k.real {
+            Real::Negative(m) => {
+                v.push(0x01);
+                v.extend_from_slice(&m.0);
+            }
+            Real::Zero => v.push(0x02),
+            Real::Positive(m) => {
+                v.push(0x03);
+                v.extend_from_slice(&m.0);
+            }
+            Real::Nan => v.push(0x04),
+        }
+        v.push(repr);
+        v
+    }
+
     fn hunt_enc(v: HuntV) -> Vec<u8> {
-        let mut o = Vec::new();
-        hunt_num(v).encode_key(&mut o);
-        o
+        key_bytes(hunt_num(v))
     }
 
     fn hunt_is_nan(v: HuntV) -> bool {
@@ -982,18 +758,6 @@ mod tests {
         }
     }
 
-    fn key(n: Num) -> Vec<u8> {
-        let mut v = Vec::new();
-        n.encode_key(&mut v);
-        v
-    }
-
-    // ------------------------------------------------------------------
-    // Laws.
-    // ------------------------------------------------------------------
-
-    /// Ord (the decomposition path) agrees with the oracle (the floor
-    /// path) on every pair.
     #[test]
     fn law_semantic_order_matches_independent_oracle() -> Result<()> {
         let mut c = corpus();
@@ -1011,43 +775,6 @@ mod tests {
     }
 
     /// Key byte order equals semantic order on every pair.
-    #[test]
-    fn law_key_order_embeds_semantic_order() {
-        let mut c = corpus();
-        extend_random(&mut c, 400, 0xB0B);
-        let keys: Vec<Vec<u8>> = c.iter().map(|&n| key(n)).collect();
-        for i in 0..c.len() {
-            for j in 0..c.len() {
-                assert_eq!(
-                    keys[i].cmp(&keys[j]),
-                    c[i].cmp(&c[j]),
-                    "key order diverged for {:?} vs {:?}",
-                    c[i],
-                    c[j]
-                );
-            }
-        }
-    }
-
-    /// Total round-trip: identity-exact (repr and bits), with the
-    /// normalizations applied at construction.
-    #[test]
-    fn law_round_trip_total() -> Result<()> {
-        let mut c = corpus();
-        extend_random(&mut c, 4000, 0x5EED);
-        for &n in &c {
-            let k = key(n);
-            let (back, used) = Num::decode_key(&k)
-                .map_err(|e| miette!("decode own encoding: {e:?}"))?;
-            assert_eq!(used, k.len());
-            assert_eq!(back, n, "round-trip changed identity for {n:?}");
-            assert_eq!(back.repr_byte(), n.repr_byte(), "repr changed for {n:?}");
-        }
-        Ok(())
-    }
-
-    /// Query-semantic numeric order: ties equal, exact beyond 2^53, typed
-    /// apart from storage order on [`Num`].
     #[test]
     fn numeric_ord_is_value_order_with_ties_equal() {
         assert_eq!(
@@ -1097,7 +824,7 @@ mod tests {
     fn identity_law_edges() -> Result<()> {
         // -0.0 collapses at construction (not a distinct stored identity).
         assert_eq!(Num::float(-0.0), Num::float(0.0));
-        assert_eq!(key(Num::float(-0.0)), key(Num::float(0.0)));
+        assert_eq!(key_bytes(Num::float(-0.0)), key_bytes(Num::float(0.0)));
         assert_eq!(
             Num::float(-0.0)
                 .as_float()
@@ -1108,7 +835,7 @@ mod tests {
         // All NaN payloads are one canonical NaN, equal to itself, greatest.
         let weird_nan = f64::from_bits(0xFFF8_DEAD_BEEF_0001);
         assert_eq!(Num::float(weird_nan), Num::float(f64::NAN));
-        assert_eq!(key(Num::float(weird_nan)), key(Num::float(f64::NAN)));
+        assert_eq!(key_bytes(Num::float(weird_nan)), key_bytes(Num::float(f64::NAN)));
         assert!(Num::float(f64::NAN) > Num::float(f64::INFINITY));
         // Int and Float of equal real are adjacent, Int first, both signs.
         assert!(Num::int(1) < Num::float(1.0));
@@ -1173,7 +900,7 @@ mod tests {
             (Num::float(f64::NAN), "0401"),
         ];
         for (n, hex) in cases {
-            let k = key(n);
+            let k = key_bytes(n);
             let got: String = k.iter().map(|b| format!("{b:02x}")).collect();
             assert_eq!(got, hex, "golden vector moved for {n:?}");
         }
@@ -1181,72 +908,6 @@ mod tests {
 
     /// Decode totality: arbitrary bytes are Ok or a typed error, never a
     /// panic; truncations of valid keys are errors.
-    #[test]
-    fn decode_is_total() {
-        let mut rng = Rng(0xF00D);
-        for _ in 0..20_000 {
-            // `% 16` fits usize; low byte of `u64` is total.
-            let len = crate::value::convert::usize_from_u64_fitting(rng.next() % 16);
-            let bytes: Vec<u8> = (0..len)
-                .map(|_| crate::value::convert::u8_from_u64_low(rng.next()))
-                .collect();
-            match Num::decode_key(&bytes) {
-        // must not panic
-        Ok(v) => core::mem::drop(v),
-        Err(e) => core::mem::drop(e),
-    }
-        }
-        let k = key(Num::int(12345));
-        for cut in 0..k.len() {
-            assert!(
-                Num::decode_key(&k[..cut]).is_err(),
-                "truncation at {cut} accepted"
-            );
-        }
-    }
-
-    /// Every [`NumDecodeError`] variant is reachable through
-    /// [`Num::decode_key`] — not merely "is_err" against random bytes.
-    #[test]
-    fn num_decode_error_variants_deliberately_constructed() {
-        assert_eq!(Num::decode_key(&[]), Err(NumDecodeError::Truncated));
-        assert_eq!(Num::decode_key(&[0x02]), Err(NumDecodeError::Truncated));
-        assert_eq!(Num::decode_key(&[0x00]), Err(NumDecodeError::BadClass));
-        assert_eq!(Num::decode_key(&[0x02, 0x7F]), Err(NumDecodeError::BadRepr));
-        assert_eq!(Num::decode_key(&[0x04, 0x00]), Err(NumDecodeError::BadRepr));
-
-        // POS + INF exp + wrong fraction → BadInfinity
-        let mut bad_inf = vec![0x03, 0xFF, 0xFF];
-        bad_inf.extend_from_slice(&[0x00; 9]); // frac not all-ones
-        bad_inf.push(0x01); // float repr
-        assert_eq!(Num::decode_key(&bad_inf), Err(NumDecodeError::BadInfinity));
-
-        // POS + finite exp + leading bit clear → Denormalized
-        let mut denorm = vec![0x03, 0x04, 0x38]; // exp for ~0.5 range
-        denorm.extend_from_slice(&[0x00; 9]); // leading 1 missing
-        denorm.push(0x01);
-        assert_eq!(Num::decode_key(&denorm), Err(NumDecodeError::Denormalized));
-
-        // Int labeled with e=0 (out of 1..=64) → IntRange via rebuild after
-        // setting a leading-1 fraction at an illegal exponent.
-        // Use a lawful float key and flip the repr byte to Int with an
-        // exponent that floats use but ints refuse (e.g. e for 0.5 → e=0
-        // after offset decode is negative / out of int range).
-        let mut half = key(Num::float(0.5));
-        let last = half.len() - 1;
-        half[last] = 0x00; // force Int repr on a fractional magnitude
-        assert_eq!(Num::decode_key(&half), Err(NumDecodeError::IntRange));
-
-        // Float with e > 1024 (beyond finite): take INF exp with float
-        // repr but truncate fraction so BadInfinity already covers INF;
-        // FloatRange: subnormal path with bl out of 1..=52.
-        // Craft: POS, exp = 0 (stored) → e = -1080, subnormal bl = -6 → FloatRange.
-        let mut far = vec![0x03, 0x00, 0x00];
-        far.push(0x80); // leading 1 at bit 71
-        far.extend_from_slice(&[0x00; 8]);
-        far.push(0x01);
-        assert_eq!(Num::decode_key(&far), Err(NumDecodeError::FloatRange));
-    }
 
     /// Adversary, staged ahead of Wave 3's `as_cast` sweep on this file:
     /// `to_int_coerced` has NO other test anywhere in the tree (checked:

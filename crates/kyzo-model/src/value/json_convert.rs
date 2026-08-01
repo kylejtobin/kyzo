@@ -29,7 +29,7 @@ use serde_json::{Map, Value, json};
 use crate::envelope::{json_from_serde, serde_from_json};
 use crate::value::kind::interval::{Hi, Lo};
 use crate::value::kind::regex::{RegexFlags, RegexSource};
-use crate::value::{DataValue, Interval, NumRepr, Vector};
+use crate::value::{DataValue, Interval, Repr, Vector};
 
 /// Reserved discriminant for kind-preserving JSON tags. Objects carrying
 /// this key are interpreted by [`json2val`]; do not use it in ordinary
@@ -53,10 +53,10 @@ pub fn to_json(d: &DataValue) -> JsonValue {
             json!(b)
         }
         DataValue::Num(n) => match n.repr() {
-            NumRepr::Int(i) => {
+            Repr::Int(i) => {
                 json!(i)
             }
-            NumRepr::Float(f) => {
+            Repr::Float(f) => {
                 json!(f)
             }
         },
