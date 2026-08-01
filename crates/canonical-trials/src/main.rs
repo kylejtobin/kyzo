@@ -26,6 +26,7 @@
 //! escape, smuggle the structural bytes, collide two different values onto one
 //! byte string, truncate mid-escape, and nest until something overflows.
 
+mod reference;
 mod value;
 use value::canonical;
 use value::codec::CanonicalSet;
@@ -154,6 +155,18 @@ fn wrap(v: CanonicalBytes) -> Wrapped {
     match Wrapped::of(v) {
         Ok(w) => w,
         Err(refused) => harness_cannot_continue("wrapper", &refused),
+    }
+}
+
+/// A validity the harness asserts is representable. Assert at the terminal
+/// tick is not, and the trial that says so asks the mint directly.
+fn validity(ts_micros: i64, is_assert: bool) -> Validity {
+    match Validity::new(ts_micros, is_assert) {
+        Some(v) => v,
+        None => {
+            eprintln!("canonical-trials: the validity mint refused ({ts_micros}, {is_assert})");
+            std::process::exit(2)
+        }
     }
 }
 
@@ -531,7 +544,7 @@ fn trial_grammar_table(t: &mut Trials) {
             "Vector: tag, 4 dimension, two components, terminator"),
         (seal_list(&Vec::new()), 2, "List: tag, terminator"),
         (seal_set(&Vec::new()), 2, "Set: tag, terminator"),
-        (seal_validity(&Validity::new(0, true)), 10, "Validity: tag, 9"),
+        (seal_validity(&validity(0, true)), 10, "Validity: tag, 9"),
         (seal_interval_empty(), 2, "Interval empty: tag, marker"),
         (seal_interval(&Bound::Unbounded, &Bound::Unbounded), 4, "Interval: tag, marker, two ends"),
         (seal_interval(&Bound::At([0x00; 8]), &Bound::Unbounded), 12, "Interval: lo at"),
@@ -563,7 +576,7 @@ fn trial_grammar_table(t: &mut Trials) {
         (seal_vector(Vec::new()), TAG_VECTOR, "Vector tag"),
         (seal_list(&Vec::new()), TAG_LIST, "List tag"),
         (seal_set(&Vec::new()), TAG_SET, "Set tag"),
-        (seal_validity(&Validity::new(0, true)), TAG_VALIDITY, "Validity tag"),
+        (seal_validity(&validity(0, true)), TAG_VALIDITY, "Validity tag"),
         (seal_interval_empty(), TAG_INTERVAL, "Interval tag"),
         (seal_geometry(&Geometry::new(0)), TAG_GEOMETRY, "Geometry tag"),
     ];
@@ -1270,33 +1283,33 @@ fn string_payload_is_valid_utf8(t: &mut Trials) {
 }
 
 fn validity_orders_latest_first(t: &mut Trials) {
-    let later = seal_validity(&Validity::new(2, true));
-    let earlier = seal_validity(&Validity::new(1, true));
+    let later = seal_validity(&validity(2, true));
+    let earlier = seal_validity(&validity(1, true));
     t.check(
         "a later valid instant sorts before an earlier one",
         later.as_bytes() < earlier.as_bytes(),
     );
-    let neg = seal_validity(&Validity::new(-1, true));
+    let neg = seal_validity(&validity(-1, true));
     t.check(
         "instant zero sorts before instant minus one",
-        seal_validity(&Validity::new(0, true)).as_bytes() < neg.as_bytes(),
+        seal_validity(&validity(0, true)).as_bytes() < neg.as_bytes(),
     );
-    let max = seal_validity(&Validity::new(i64::MAX, true));
-    let min = seal_validity(&Validity::new(i64::MIN, true));
+    let max = seal_validity(&validity(i64::MAX, false));
+    let min = seal_validity(&validity(i64::MIN, false));
     t.check(
         "the greatest instant sorts before the least",
         max.as_bytes() < min.as_bytes(),
     );
-    let assert_at = seal_validity(&Validity::new(7, true));
-    let retract_at = seal_validity(&Validity::new(7, false));
+    let assert_at = seal_validity(&validity(7, true));
+    let retract_at = seal_validity(&validity(7, false));
     t.check(
         "at one instant an assert sorts before a retract",
         assert_at.as_bytes() < retract_at.as_bytes(),
     );
     t.check(
         "a validity payload is a temporal value, not nine free bytes",
-        seal_validity(&Validity::new(0, true)).as_bytes()
-            == seal_validity(&Validity::new(0, true)).as_bytes(),
+        seal_validity(&validity(0, true)).as_bytes()
+            == seal_validity(&validity(0, true)).as_bytes(),
     );
 }
 
@@ -1353,7 +1366,7 @@ fn red_team_corpus() -> Vec<CanonicalBytes> {
         seal_list(&Vec::new()),
         seal_list(&vec_of(2).into_iter().map(|n| n.into_row_item()).collect()),
         seal_set(&Vec::new()),
-        seal_validity(&Validity::new(0, true)),
+        seal_validity(&validity(0, true)),
         seal_geometry(&Geometry::new(0)),
         seal_interval_empty(),
         seal_interval(&Bound::Unbounded, &Bound::Unbounded),
@@ -1563,6 +1576,57 @@ fn main() {
     geometry_orders_by_curve_index(&mut t);
     t.report("red team");
 
+    validity_payload_is_nine_bytes_of_meaning(&mut t);
+    validity_invalid_states_are_unconstructible(&mut t);
+    validity_and_geometry_are_injective(&mut t);
+    validity_golden_vectors_cover_temporal_boundaries(&mut t);
+    geometry_golden_vectors_cover_spatial_boundaries(&mut t);
+    geometry_payload_is_eight_bytes_of_index(&mut t);
+    geometry_invalid_states_are_unconstructible(&mut t);
+    t.report("validity and geometry");
+
+    println!("independent reference");
+    differential_encoder_matches_independent_reference(&mut t);
+    differential_scanner_matches_independent_reference(&mut t);
+    exhaustive_all_byte_strings_up_to_small_bound(&mut t);
+    exhaustive_all_small_semantic_values(&mut t);
+    property_random_nested_values_are_complete(&mut t);
+    property_random_nested_values_are_prefix_free(&mut t);
+    property_random_semantic_pairs_preserve_order(&mut t);
+    property_random_semantic_values_are_injective(&mut t);
+    fuzz_scan_value_never_panics(&mut t);
+    fuzz_shape_scan_never_panics(&mut t);
+    fuzz_delim_scan_never_panics(&mut t);
+    fuzz_mutated_valid_encodings_never_overread(&mut t);
+    fuzz_mutated_valid_encodings_never_have_two_readings(&mut t);
+    t.report("independent reference");
+
+    println!("depth");
+    mixed_container_nesting_boundary_is_exact(&mut t);
+    wide_structure_does_not_consume_depth_budget(&mut t);
+    depth_limit_prevents_stack_overflow(&mut t);
+    canonical_bytes_invariant_implies_executable_readability(&mut t);
+    t.report("depth");
+
+    println!("whole domain");
+    every_public_mint_produces_complete_encoding(&mut t);
+    every_public_mint_produces_executable_reading(&mut t);
+    every_pair_of_canonical_encodings_is_prefix_incomparable(&mut t);
+    every_semantically_equal_pair_has_identical_bytes(&mut t);
+    every_semantically_distinct_pair_has_distinct_bytes(&mut t);
+    every_semantic_order_pair_matches_lexicographic_bytes(&mut t);
+    cross_kind_order_matches_tag_order(&mut t);
+    whole_domain_order_is_reflexive(&mut t);
+    whole_domain_order_is_antisymmetric(&mut t);
+    whole_domain_order_is_transitive(&mut t);
+    whole_domain_order_is_total(&mut t);
+    whole_domain_encoding_is_injective(&mut t);
+    whole_domain_encoding_is_deterministic(&mut t);
+    nested_whole_domain_values_preserve_order(&mut t);
+    semantic_oracle_does_not_reuse_encoded_byte_comparison(&mut t);
+    freeze_v1_candidate_golden_corpus(&mut t);
+    t.report("whole domain");
+
     println!("byte-order oracle");
     lex_le_matches_independent_slice_comparator_exhaustive(&mut t);
     lex_le_reflexive_exhaustive(&mut t);
@@ -1590,5 +1654,1171 @@ fn main() {
             }
         }
         std::process::exit(1);
+    }
+}
+
+// ======================= the independent reference ==========================
+//
+// Everything below judges the encoder against `reference`, which states the
+// format a second time and shares no line with it. A trial here fails when the
+// two disagree; which one is wrong is then a question for a person.
+
+/// Build the encoder's value for a semantic one. This is the only bridge
+/// between the two statements of the format, and it carries no format
+/// knowledge of its own: it names doors, and the doors decide bytes.
+fn built(v: &reference::Sem) -> CanonicalBytes {
+    use reference::Sem;
+    match v {
+        Sem::Null => seal_null(),
+        Sem::Bool(b) => seal_bool(*b),
+        Sem::Number(n) => built_num(*n).into_value(),
+        Sem::Text(s) => seal_str(&Utf8::of(s)),
+        Sem::Blob(b) => seal_bytes(b),
+        Sem::Uuid(id) => seal_uuid(id),
+        Sem::Regex { pattern, case_insensitive, multi_line, dot_matches_new_line } => seal_regex(
+            pattern,
+            &RegexFlags::new(*case_insensitive, *multi_line, *dot_matches_new_line),
+        ),
+        Sem::Json(inner) => seal_json(&wrap(built(inner))),
+        Sem::Vector(components) => {
+            seal_vector(components.iter().map(|c| built_num(*c)).collect())
+        }
+        Sem::List(elems) => seal_list(&row(elems.iter().map(built).collect())),
+        Sem::Set(_) => match v.normalized() {
+            Sem::Set(members) => {
+                CanonicalSet::of(members.iter().map(|e| member(built(e)))).seal()
+            }
+            _ => seal_null(),
+        },
+        Sem::Validity { ts_micros, is_assert } => {
+            seal_validity(&validity(*ts_micros, *is_assert))
+        }
+        Sem::Interval(None) => seal_interval_empty(),
+        Sem::Interval(Some((lo, hi))) => seal_interval(&bound_of(*lo), &bound_of(*hi)),
+        Sem::Geometry(curve_index) => seal_geometry(&Geometry::new(*curve_index)),
+    }
+}
+
+fn bound_of(b: reference::Bound) -> Bound {
+    match b {
+        reference::Bound::Unbounded => Bound::Unbounded,
+        reference::Bound::At(t) => Bound::At(t),
+    }
+}
+
+fn repr_of(r: reference::Repr) -> Repr {
+    match r {
+        reference::Repr::Int => Repr::Int,
+        reference::Repr::Float => Repr::Float,
+    }
+}
+
+fn mag_of(m: reference::Mag) -> Magnitude {
+    match m {
+        reference::Mag::Infinite => Magnitude::Infinite,
+        reference::Mag::Finite { significand, scale } => Magnitude::Finite {
+            significand,
+            biased_scale: scale,
+        },
+    }
+}
+
+fn built_num(n: reference::Num) -> NumericBytes {
+    match n {
+        reference::Num::Negative(m, t) => seal_num_negative(&mag_of(m), repr_of(t)),
+        reference::Num::Zero(t) => seal_num_zero(repr_of(t)),
+        reference::Num::Positive(m, t) => seal_num_positive(&mag_of(m), repr_of(t)),
+        reference::Num::NotANumber => seal_num_nan(),
+    }
+}
+
+/// A seeded generator. Randomness is declared here and it is reproducible: an
+/// unreproducible failure is not evidence.
+struct Seeded(u64);
+
+impl Seeded {
+    fn new(seed: u64) -> Seeded {
+        Seeded(seed | 1)
+    }
+
+    fn next(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.0 = x;
+        x
+    }
+
+    fn below(&mut self, n: u64) -> u64 {
+        self.next() % n
+    }
+
+    fn byte(&mut self) -> u8 {
+        (self.next() & 0xFF) as u8
+    }
+
+    fn bytes(&mut self, max_len: usize) -> Vec<u8> {
+        let n = self.below(max_len as u64 + 1) as usize;
+        (0..n).map(|_| self.byte()).collect()
+    }
+}
+
+/// One magnitude the doors will accept.
+fn some_mag(g: &mut Seeded) -> reference::Mag {
+    match g.below(8) {
+        0 => reference::Mag::Infinite,
+        _ => {
+            let sig = 1 + g.below(1 << 20);
+            let scale = g.below(64) as u32;
+            match reference::Mag::finite(sig, scale) {
+                Some(m) => m,
+                None => reference::Mag::Infinite,
+            }
+        }
+    }
+}
+
+fn some_repr(g: &mut Seeded) -> reference::Repr {
+    match g.below(2) {
+        0 => reference::Repr::Int,
+        _ => reference::Repr::Float,
+    }
+}
+
+fn some_num(g: &mut Seeded) -> reference::Num {
+    match g.below(4) {
+        0 => reference::Num::Negative(some_mag(g), some_repr(g)),
+        1 => reference::Num::Zero(some_repr(g)),
+        2 => reference::Num::Positive(some_mag(g), some_repr(g)),
+        _ => reference::Num::NotANumber,
+    }
+}
+
+fn some_bound(g: &mut Seeded) -> reference::Bound {
+    match g.below(3) {
+        0 => reference::Bound::Unbounded,
+        _ => {
+            let mut t = [0u8; 8];
+            for b in t.iter_mut() {
+                *b = g.byte();
+            }
+            reference::Bound::At(t)
+        }
+    }
+}
+
+/// A random value. `fuel` bounds the nesting, so the generator cannot ask for a
+/// value deeper than the writer will mint.
+fn some_value(g: &mut Seeded, fuel: u32) -> reference::Sem {
+    use reference::Sem;
+    let leaf = fuel == 0;
+    let pick = g.below(if leaf { 11 } else { 15 });
+    match pick {
+        0 => Sem::Null,
+        1 => Sem::Bool(g.below(2) == 0),
+        2 => Sem::Number(some_num(g)),
+        3 => Sem::Text(
+            String::from_utf8(g.bytes(6).into_iter().map(|b| b & 0x7F).collect())
+                .unwrap_or_default(),
+        ),
+        4 => Sem::Blob(g.bytes(6)),
+        5 => {
+            let mut id = [0u8; 16];
+            for b in id.iter_mut() {
+                *b = g.byte();
+            }
+            Sem::Uuid(id)
+        }
+        6 => Sem::Regex {
+            pattern: g.bytes(5),
+            case_insensitive: g.below(2) == 0,
+            multi_line: g.below(2) == 0,
+            dot_matches_new_line: g.below(2) == 0,
+        },
+        7 => {
+            let is_assert = g.below(2) == 0;
+            let ts_micros = g.next() as i64;
+            // Assert at the terminal tick is not a validity, so the generator
+            // does not ask for one: it moves the instant, never the flag.
+            let moved = match (is_assert, ts_micros == i64::MAX) {
+                (true, true) => i64::MAX - 1,
+                _ => ts_micros,
+            };
+            Sem::Validity { ts_micros: moved, is_assert }
+        }
+        8 => Sem::Geometry(g.next()),
+        9 => Sem::Interval(None),
+        10 => {
+            let lo = some_bound(g);
+            let hi = some_bound(g);
+            // The door takes ordered ends, so the pair is put in order here
+            // rather than handed over backwards.
+            match ordered_pair(lo, hi) {
+                Some(pair) => Sem::Interval(Some(pair)),
+                None => Sem::Interval(None),
+            }
+        }
+        11 => Sem::Vector((0..g.below(4)).map(|_| some_num(g)).collect()),
+        12 => Sem::Json(Box::new(some_value(g, fuel - 1))),
+        13 => Sem::List(
+            (0..g.below(3))
+                .map(|_| some_value(g, fuel - 1))
+                .collect(),
+        ),
+        _ => Sem::Set(
+            (0..g.below(3))
+                .map(|_| some_value(g, fuel - 1))
+                .collect(),
+        ),
+    }
+}
+
+/// Put two ends in the order the interval door requires, or refuse the pair
+/// when neither ordering is the one asked for.
+fn ordered_pair(
+    lo: reference::Bound,
+    hi: reference::Bound,
+) -> Option<(reference::Bound, reference::Bound)> {
+    use reference::Bound as B;
+    match (lo, hi) {
+        (B::Unbounded, _) | (_, B::Unbounded) => Some((lo, hi)),
+        (B::At(a), B::At(b)) => match a <= b {
+            true => Some((B::At(a), B::At(b))),
+            false => Some((B::At(b), B::At(a))),
+        },
+    }
+}
+
+/// Every kind, at its edges, as semantic values. The whole-domain trials sweep
+/// this corpus pairwise, so it is small on purpose and wide on purpose.
+fn semantic_corpus() -> Vec<reference::Sem> {
+    use reference::{Bound as B, Mag, Num, Repr as R, Sem};
+    let big = Mag::finite(u64::MAX, 0).unwrap_or(Mag::Infinite);
+    let small = Mag::finite(1, 0).unwrap_or(Mag::Infinite);
+    let mid = Mag::finite(3, 17).unwrap_or(Mag::Infinite);
+    vec![
+        Sem::Null,
+        Sem::Bool(false),
+        Sem::Bool(true),
+        Sem::Number(Num::Negative(Mag::Infinite, R::Float)),
+        Sem::Number(Num::Negative(big, R::Int)),
+        Sem::Number(Num::Negative(mid, R::Float)),
+        Sem::Number(Num::Negative(small, R::Int)),
+        Sem::Number(Num::Zero(R::Int)),
+        Sem::Number(Num::Zero(R::Float)),
+        Sem::Number(Num::Positive(small, R::Int)),
+        Sem::Number(Num::Positive(small, R::Float)),
+        Sem::Number(Num::Positive(mid, R::Int)),
+        Sem::Number(Num::Positive(big, R::Float)),
+        Sem::Number(Num::Positive(Mag::Infinite, R::Float)),
+        Sem::Number(Num::NotANumber),
+        Sem::Text(String::new()),
+        Sem::Text("a".to_string()),
+        Sem::Text("ab".to_string()),
+        Sem::Text("b".to_string()),
+        Sem::Text("\u{0}".to_string()),
+        Sem::Text("\u{10ffff}".to_string()),
+        Sem::Blob(Vec::new()),
+        Sem::Blob(vec![0x00]),
+        Sem::Blob(vec![0x00, 0x00]),
+        Sem::Blob(vec![0x00, 0xFF]),
+        Sem::Blob(vec![0x01]),
+        Sem::Blob(vec![0xFF]),
+        Sem::Uuid([0x00; 16]),
+        Sem::Uuid([0xFF; 16]),
+        Sem::Regex { pattern: Vec::new(), case_insensitive: false, multi_line: false, dot_matches_new_line: false },
+        Sem::Regex { pattern: Vec::new(), case_insensitive: true, multi_line: true, dot_matches_new_line: true },
+        Sem::Regex { pattern: vec![0x61], case_insensitive: false, multi_line: false, dot_matches_new_line: false },
+        Sem::Json(Box::new(Sem::Null)),
+        Sem::Json(Box::new(Sem::Bool(true))),
+        Sem::Json(Box::new(Sem::Json(Box::new(Sem::Null)))),
+        Sem::Vector(Vec::new()),
+        Sem::Vector(vec![Num::Zero(R::Int)]),
+        Sem::Vector(vec![Num::Zero(R::Int), Num::Positive(small, R::Int)]),
+        Sem::Vector(vec![Num::Negative(small, R::Int), Num::Zero(R::Int)]),
+        Sem::List(Vec::new()),
+        Sem::List(vec![Sem::Null]),
+        Sem::List(vec![Sem::Null, Sem::Null]),
+        Sem::List(vec![Sem::Bool(false)]),
+        Sem::List(vec![Sem::List(vec![Sem::Null])]),
+        Sem::Set(Vec::new()),
+        Sem::Set(vec![Sem::Null]),
+        Sem::Set(vec![Sem::Null, Sem::Bool(true)]),
+        Sem::Validity { ts_micros: i64::MIN, is_assert: true },
+        Sem::Validity { ts_micros: -1, is_assert: true },
+        Sem::Validity { ts_micros: 0, is_assert: true },
+        Sem::Validity { ts_micros: 0, is_assert: false },
+        Sem::Validity { ts_micros: 1, is_assert: true },
+        Sem::Validity { ts_micros: i64::MAX, is_assert: false },
+        Sem::Interval(None),
+        Sem::Interval(Some((B::Unbounded, B::Unbounded))),
+        Sem::Interval(Some((B::Unbounded, B::At([0x00; 8])))),
+        Sem::Interval(Some((B::At([0x00; 8]), B::At([0xFF; 8])))),
+        Sem::Interval(Some((B::At([0xFF; 8]), B::Unbounded))),
+        Sem::Geometry(0),
+        Sem::Geometry(1),
+        Sem::Geometry(u64::MAX),
+    ]
+}
+
+fn differential_encoder_matches_independent_reference(t: &mut Trials) {
+    for v in semantic_corpus() {
+        t.check(
+            "the encoder writes what the reference writes",
+            built(&v).as_bytes() == reference::encode(&v).as_slice(),
+        );
+    }
+    let mut g = Seeded::new(0x5EED_0001);
+    for _ in 0..4000 {
+        let v = some_value(&mut g, 3);
+        t.check(
+            "the encoder writes what the reference writes, at random",
+            built(&v).as_bytes() == reference::encode(&v).as_slice(),
+        );
+    }
+}
+
+/// The two readings agree on every input: same acceptance, same end.
+fn differential_scanner_matches_independent_reference(t: &mut Trials) {
+    let mut inputs: Vec<Vec<u8>> = Vec::new();
+    for v in semantic_corpus() {
+        let bytes = reference::encode(&v);
+        inputs.push(bytes.clone());
+        let mut extended = bytes.clone();
+        extended.push(0x00);
+        inputs.push(extended);
+        for cut in 0..bytes.len() {
+            inputs.push(bytes[..cut].to_vec());
+        }
+    }
+    let mut g = Seeded::new(0x5EED_0002);
+    for _ in 0..3000 {
+        inputs.push(g.bytes(12));
+    }
+    for p in &inputs {
+        let theirs = reference::scan(p).map(|r| r.end).ok();
+        let ours = scanned(scan_value(p));
+        t.check("both readings accept the same inputs", theirs.is_some() == ours.is_some());
+        t.check("both readings end in the same place", theirs == ours);
+    }
+}
+
+/// Every byte string up to two bytes, and a wide sample of three, read the same
+/// way in both statements of the format.
+fn exhaustive_all_byte_strings_up_to_small_bound(t: &mut Trials) {
+    let mut buf: Vec<u8> = Vec::new();
+    t.check(
+        "the empty input reads the same in both",
+        reference::scan(&buf).map(|r| r.end).ok() == scanned(scan_value(&buf)),
+    );
+    for a in 0u16..=255 {
+        buf = vec![a as u8];
+        t.check(
+            "every one-byte input reads the same in both",
+            reference::scan(&buf).map(|r| r.end).ok() == scanned(scan_value(&buf)),
+        );
+        for b in 0u16..=255 {
+            buf = vec![a as u8, b as u8];
+            t.check(
+                "every two-byte input reads the same in both",
+                reference::scan(&buf).map(|r| r.end).ok() == scanned(scan_value(&buf)),
+            );
+        }
+    }
+    let alphabet: [u8; 8] = [0x00, 0x01, 0x05, 0x10, 0x18, 0x48, 0x60, 0xFF];
+    for a in alphabet {
+        for b in alphabet {
+            for c in alphabet {
+                let p = [a, b, c];
+                t.check(
+                    "every three-byte input over the structural alphabet agrees",
+                    reference::scan(&p).map(|r| r.end).ok() == scanned(scan_value(&p)),
+                );
+            }
+        }
+    }
+}
+
+fn exhaustive_all_small_semantic_values(t: &mut Trials) {
+    for v in semantic_corpus() {
+        let bytes = built(&v);
+        let p = bytes.as_bytes();
+        t.check("every small value reads back whole", scanned(scan_value(p)) == Some(p.len()));
+        t.check(
+            "every small value reads back whole in the reference",
+            reference::scan(p).map(|r| r.end).ok() == Some(p.len()),
+        );
+        t.check(
+            "the reference agrees on how deep every small value is",
+            reference::scan(p).map(|r| r.descent).ok() == Some(bytes.descent()),
+        );
+    }
+}
+
+fn property_random_nested_values_are_complete(t: &mut Trials) {
+    let mut g = Seeded::new(0x5EED_0003);
+    for _ in 0..3000 {
+        let v = some_value(&mut g, 4);
+        let bytes = built(&v);
+        let p = bytes.as_bytes();
+        t.check("a random value reads back whole", scanned(scan_value(p)) == Some(p.len()));
+    }
+}
+
+fn property_random_nested_values_are_prefix_free(t: &mut Trials) {
+    let mut g = Seeded::new(0x5EED_0004);
+    let values: Vec<CanonicalBytes> = (0..120).map(|_| built(&some_value(&mut g, 3))).collect();
+    for a in &values {
+        for b in &values {
+            let (x, y) = (a.as_bytes(), b.as_bytes());
+            if x != y {
+                t.check(
+                    "no random encoding is a prefix of another",
+                    !is_proper_prefix(x, y) && !is_proper_prefix(y, x),
+                );
+            }
+        }
+    }
+}
+
+fn property_random_semantic_pairs_preserve_order(t: &mut Trials) {
+    let mut g = Seeded::new(0x5EED_0005);
+    for _ in 0..3000 {
+        let a = some_value(&mut g, 3).normalized();
+        let b = some_value(&mut g, 3).normalized();
+        let (x, y) = (built(&a), built(&b));
+        t.check(
+            "semantic order is byte order, at random",
+            (a.cmp_sem(&b) == std::cmp::Ordering::Less)
+                == (x.as_bytes() < y.as_bytes()),
+        );
+    }
+}
+
+fn property_random_semantic_values_are_injective(t: &mut Trials) {
+    let mut g = Seeded::new(0x5EED_0006);
+    let values: Vec<reference::Sem> = (0..200)
+        .map(|_| some_value(&mut g, 3).normalized())
+        .collect();
+    for a in &values {
+        for b in &values {
+            let same_value = a.cmp_sem(b) == std::cmp::Ordering::Equal;
+            let same_bytes = built(a).as_bytes() == built(b).as_bytes();
+            t.check("equal values encode equal, distinct values distinct", same_value == same_bytes);
+        }
+    }
+}
+
+/// A corpus of hostile bytes: valid encodings, their mutations, and noise.
+fn hostile_inputs(seed: u64, count: usize) -> Vec<Vec<u8>> {
+    let mut g = Seeded::new(seed);
+    let mut out: Vec<Vec<u8>> = Vec::new();
+    let corpus: Vec<Vec<u8>> = semantic_corpus().iter().map(reference::encode).collect();
+    for base in &corpus {
+        out.push(base.clone());
+    }
+    while out.len() < count {
+        let base = &corpus[g.below(corpus.len() as u64) as usize];
+        let mut p = base.clone();
+        match g.below(4) {
+            0 => {
+                if !p.is_empty() {
+                    let at = g.below(p.len() as u64) as usize;
+                    p[at] = g.byte();
+                }
+            }
+            1 => {
+                if !p.is_empty() {
+                    let at = g.below(p.len() as u64) as usize;
+                    p.truncate(at);
+                }
+            }
+            2 => {
+                let at = g.below(p.len() as u64 + 1) as usize;
+                p.insert(at, g.byte());
+            }
+            _ => p.extend(g.bytes(4)),
+        }
+        out.push(p);
+    }
+    out
+}
+
+fn fuzz_scan_value_never_panics(t: &mut Trials) {
+    for p in hostile_inputs(0x5EED_0007, 4000) {
+        let survived = std::panic::catch_unwind(|| scan_value(&p).is_ok()).is_ok();
+        t.check("scan_value returns on every input", survived);
+    }
+}
+
+fn fuzz_shape_scan_never_panics(t: &mut Trials) {
+    let g = grammar_exec();
+    for p in hostile_inputs(0x5EED_0008, 2000) {
+        let shapes = [Shape::Tagged, Shape::Delimited, Shape::Fixed(8), Shape::Row(Box::new(Shape::Tagged))];
+        for s in &shapes {
+            let survived = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                shape_scan(&g, s, &p, 0).is_ok()
+            }))
+            .is_ok();
+            t.check("shape_scan returns on every input and shape", survived);
+        }
+    }
+}
+
+fn fuzz_delim_scan_never_panics(t: &mut Trials) {
+    for p in hostile_inputs(0x5EED_0009, 2000) {
+        let survived = std::panic::catch_unwind(|| canonical::delim_scan(&p).is_ok()).is_ok();
+        t.check("delim_scan returns on every input", survived);
+    }
+}
+
+fn fuzz_mutated_valid_encodings_never_overread(t: &mut Trials) {
+    for p in hostile_inputs(0x5EED_000A, 4000) {
+        match scan_value(&p) {
+            Ok(n) => {
+                t.check("a reading never claims more than it was given", n <= p.len());
+                t.check(
+                    "the bytes a reading claimed are a complete value on their own",
+                    scanned(scan_value(&p[..n])) == Some(n),
+                );
+            }
+            Err(e) => t.check(
+                "a refusal names an offset inside the input",
+                stopped_at(&p, &e) <= p.len(),
+            ),
+        }
+    }
+}
+
+fn fuzz_mutated_valid_encodings_never_have_two_readings(t: &mut Trials) {
+    for p in hostile_inputs(0x5EED_000B, 3000) {
+        let first = scanned(scan_value(&p));
+        let second = scanned(scan_value(&p));
+        t.check("a reading is a function of its input", first == second);
+        if let Some(n) = first {
+            for shorter in 0..n {
+                t.check(
+                    "no shorter prefix is also a complete value",
+                    scanned(scan_value(&p[..shorter])) != Some(shorter),
+                );
+            }
+        }
+    }
+}
+
+/// The nine bytes are a temporal value: eight for the instant, one for the
+/// flag, and no room for anything else.
+fn validity_payload_is_nine_bytes_of_meaning(t: &mut Trials) {
+    for ts in [i64::MIN, -2, -1, 0, 1, 2, i64::MAX] {
+        for is_assert in [true, false] {
+            match Validity::new(ts, is_assert) {
+                None => t.check(
+                    "only assert at the terminal tick has no encoding",
+                    is_assert && ts == i64::MAX,
+                ),
+                Some(v) => {
+                    let sealed = seal_validity(&v);
+                    let bytes = sealed.as_bytes();
+                    t.check("a validity is a tag and nine payload bytes", bytes.len() == 10);
+                    t.check("a validity opens with its tag", bytes[0] == TAG_VALIDITY);
+                    t.check(
+                        "the flag byte is assert-low",
+                        bytes[9] == if is_assert { 0x00 } else { 0x01 },
+                    );
+                    t.check(
+                        "a validity reads back whole",
+                        scanned(scan_value(bytes)) == Some(bytes.len()),
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Assert at the terminal tick is the one state the type refuses, and it
+/// refuses it rather than encoding something else in its place.
+fn validity_invalid_states_are_unconstructible(t: &mut Trials) {
+    t.check(
+        "assert at the terminal tick is not a validity",
+        Validity::new(i64::MAX, true).is_none(),
+    );
+    t.check(
+        "retract at the terminal tick is a validity",
+        Validity::new(i64::MAX, false).is_some(),
+    );
+    for ts in [i64::MIN, -1, 0, 1, i64::MAX - 1] {
+        t.check(
+            "every other instant asserts",
+            Validity::new(ts, true).is_some(),
+        );
+    }
+}
+
+fn validity_and_geometry_are_injective(t: &mut Trials) {
+    let mut seen: Vec<(Vec<u8>, i64, bool)> = Vec::new();
+    for ts in [i64::MIN, i64::MIN + 1, -1, 0, 1, i64::MAX - 1, i64::MAX] {
+        for is_assert in [true, false] {
+            if let Some(v) = Validity::new(ts, is_assert) {
+                let bytes = seal_validity(&v).as_bytes().to_vec();
+                for (other, ots, oassert) in &seen {
+                    let same_value = *ots == ts && *oassert == is_assert;
+                    t.check(
+                        "distinct validities encode distinctly",
+                        (other == &bytes) == same_value,
+                    );
+                }
+                seen.push((bytes, ts, is_assert));
+            }
+        }
+    }
+    let mut points: Vec<(Vec<u8>, u64)> = Vec::new();
+    for c in [0u64, 1, 2, 255, 256, 1 << 31, 1 << 32, u64::MAX - 1, u64::MAX] {
+        let bytes = seal_geometry(&Geometry::new(c)).as_bytes().to_vec();
+        for (other, oc) in &points {
+            t.check(
+                "distinct curve indices encode distinctly",
+                (other == &bytes) == (*oc == c),
+            );
+        }
+        points.push((bytes, c));
+    }
+}
+
+/// The temporal boundaries, pinned: the ends of the instant axis, the tick
+/// either side of zero, and both flags at one instant.
+fn validity_golden_vectors_cover_temporal_boundaries(t: &mut Trials) {
+    let cases: Vec<(i64, bool, [u8; 10])> = vec![
+        (i64::MIN, true, [0x58, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00]),
+        (i64::MIN, false, [0x58, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01]),
+        (-1, true, [0x58, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]),
+        (0, true, [0x58, 0x7F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00]),
+        (0, false, [0x58, 0x7F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01]),
+        (1, true, [0x58, 0x7F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE, 0x00]),
+        (i64::MAX, false, [0x58, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01]),
+    ];
+    for (ts, is_assert, expected) in &cases {
+        let sealed = seal_validity(&validity(*ts, *is_assert));
+        t.check("a validity encodes to its pinned bytes", sealed.as_bytes() == expected);
+    }
+}
+
+fn geometry_golden_vectors_cover_spatial_boundaries(t: &mut Trials) {
+    let cases: Vec<(u64, [u8; 9])> = vec![
+        (0, [0x68, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]),
+        (1, [0x68, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01]),
+        (256, [0x68, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00]),
+        (1 << 32, [0x68, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00]),
+        (u64::MAX, [0x68, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]),
+    ];
+    for (curve_index, expected) in &cases {
+        let sealed = seal_geometry(&Geometry::new(*curve_index));
+        t.check("a geometry encodes to its pinned bytes", sealed.as_bytes() == expected);
+    }
+}
+
+/// A curve index is eight bytes of index and nothing else: every one of the
+/// 2^64 points has an encoding, and the payload is the index big-endian.
+fn geometry_payload_is_eight_bytes_of_index(t: &mut Trials) {
+    for c in [0u64, 1, 0x0102_0304_0506_0708, u64::MAX] {
+        let sealed = seal_geometry(&Geometry::new(c));
+        let bytes = sealed.as_bytes();
+        t.check("a geometry is a tag and eight payload bytes", bytes.len() == 9);
+        t.check("a geometry opens with its tag", bytes[0] == TAG_GEOMETRY);
+        t.check("the payload is the index big-endian", bytes[1..] == c.to_be_bytes());
+        t.check(
+            "a geometry reads back whole",
+            scanned(scan_value(bytes)) == Some(bytes.len()),
+        );
+    }
+}
+
+/// Geometry has no unconstructible state to exhibit: every `u64` is a point on
+/// the curve. What IS forbidden is a caller supplying the eight bytes, and the
+/// door takes a [`Geometry`], so there is no argument that could carry them.
+fn geometry_invalid_states_are_unconstructible(t: &mut Trials) {
+    for c in [0u64, 1, u64::MAX] {
+        let from_meaning = seal_geometry(&Geometry::new(c));
+        t.check(
+            "the only geometry payload is one a curve index produced",
+            from_meaning.as_bytes()[1..] == c.to_be_bytes(),
+        );
+    }
+}
+
+// ========================== the whole domain ================================
+//
+// One corpus, every kind, swept pairwise and in triples. The law under test is
+// the foundational one: semantic order IS byte order, equal values ARE equal
+// bytes, and no encoding is a prefix of another.
+
+use std::cmp::Ordering;
+
+/// The corpus as both statements at once: what a value means, and the bytes
+/// the encoder produced for it.
+fn domain() -> Vec<(reference::Sem, CanonicalBytes)> {
+    semantic_corpus()
+        .into_iter()
+        .map(|v| {
+            let normal = v.normalized();
+            let bytes = built(&normal);
+            (normal, bytes)
+        })
+        .collect()
+}
+
+fn every_public_mint_produces_complete_encoding(t: &mut Trials) {
+    for v in red_team_corpus() {
+        let p = v.as_bytes();
+        t.check("every door mints a complete encoding", scanned(scan_value(p)) == Some(p.len()));
+    }
+    for (_, bytes) in domain() {
+        let p = bytes.as_bytes();
+        t.check("every corpus value is a complete encoding", scanned(scan_value(p)) == Some(p.len()));
+    }
+}
+
+fn every_public_mint_produces_executable_reading(t: &mut Trials) {
+    for v in red_team_corpus() {
+        let p = v.as_bytes();
+        t.check(
+            "the reference reads every door's output",
+            reference::scan(p).map(|r| r.end).ok() == Some(p.len()),
+        );
+        let g = grammar_exec();
+        t.check(
+            "the grammar reads every door's output",
+            scanned(shape_scan(&g, &Shape::Tagged, p, 0)) == Some(p.len()),
+        );
+    }
+}
+
+fn every_pair_of_canonical_encodings_is_prefix_incomparable(t: &mut Trials) {
+    let all = domain();
+    for (_, a) in &all {
+        for (_, b) in &all {
+            let (x, y) = (a.as_bytes(), b.as_bytes());
+            if x != y {
+                t.check(
+                    "no encoding in the domain is a prefix of another",
+                    !is_proper_prefix(x, y) && !is_proper_prefix(y, x),
+                );
+            }
+        }
+    }
+}
+
+fn every_semantically_equal_pair_has_identical_bytes(t: &mut Trials) {
+    let all = domain();
+    for (va, a) in &all {
+        for (vb, b) in &all {
+            if va.cmp_sem(vb) == Ordering::Equal {
+                t.check("equal values encode identically", a.as_bytes() == b.as_bytes());
+            }
+        }
+    }
+    // Written differently, meaning the same: the encoder must not be able to
+    // tell these apart, because nothing else in the system can.
+    let same: Vec<(reference::Sem, reference::Sem)> = vec![
+        (
+            reference::Sem::Number(reference::Num::Positive(
+                reference::Mag::finite(2, 0).unwrap_or(reference::Mag::Infinite),
+                reference::Repr::Int,
+            )),
+            reference::Sem::Number(reference::Num::Positive(
+                reference::Mag::finite(1, 1).unwrap_or(reference::Mag::Infinite),
+                reference::Repr::Int,
+            )),
+        ),
+        (
+            reference::Sem::Set(vec![reference::Sem::Null, reference::Sem::Bool(true)]),
+            reference::Sem::Set(vec![reference::Sem::Bool(true), reference::Sem::Null]),
+        ),
+        (
+            reference::Sem::Set(vec![reference::Sem::Null]),
+            reference::Sem::Set(vec![reference::Sem::Null, reference::Sem::Null]),
+        ),
+    ];
+    for (a, b) in &same {
+        t.check(
+            "two writings of one value are one byte string",
+            built(&a.normalized()).as_bytes() == built(&b.normalized()).as_bytes(),
+        );
+    }
+}
+
+fn every_semantically_distinct_pair_has_distinct_bytes(t: &mut Trials) {
+    let all = domain();
+    for (va, a) in &all {
+        for (vb, b) in &all {
+            if va.cmp_sem(vb) != Ordering::Equal {
+                t.check("distinct values encode distinctly", a.as_bytes() != b.as_bytes());
+            }
+        }
+    }
+}
+
+fn every_semantic_order_pair_matches_lexicographic_bytes(t: &mut Trials) {
+    let all = domain();
+    for (va, a) in &all {
+        for (vb, b) in &all {
+            t.check(
+                "semantic order is byte order across the whole domain",
+                va.cmp_sem(vb) == a.as_bytes().cmp(b.as_bytes()),
+            );
+        }
+    }
+}
+
+/// Every kind's tag decides order against every other kind's, whatever the two
+/// payloads are.
+fn cross_kind_order_matches_tag_order(t: &mut Trials) {
+    let all = domain();
+    for (_, a) in &all {
+        for (_, b) in &all {
+            let (x, y) = (a.as_bytes(), b.as_bytes());
+            if x[0] != y[0] {
+                t.check(
+                    "a payload never reaches across a tag",
+                    (x < y) == (x[0] < y[0]),
+                );
+            }
+        }
+    }
+}
+
+fn whole_domain_order_is_reflexive(t: &mut Trials) {
+    for (v, bytes) in domain() {
+        t.check("every value equals itself semantically", v.cmp_sem(&v) == Ordering::Equal);
+        t.check(
+            "every value equals itself in bytes",
+            bytes.as_bytes().cmp(bytes.as_bytes()) == Ordering::Equal,
+        );
+    }
+}
+
+fn whole_domain_order_is_antisymmetric(t: &mut Trials) {
+    let all = domain();
+    for (va, a) in &all {
+        for (vb, b) in &all {
+            let forward = va.cmp_sem(vb);
+            let backward = vb.cmp_sem(va);
+            t.check("the order reverses when its arguments do", forward == backward.reverse());
+            if forward == Ordering::Equal {
+                t.check("mutual order means equal bytes", a.as_bytes() == b.as_bytes());
+            }
+        }
+    }
+}
+
+fn whole_domain_order_is_transitive(t: &mut Trials) {
+    let all = domain();
+    for (va, _) in &all {
+        for (vb, _) in &all {
+            if va.cmp_sem(vb) != Ordering::Greater {
+                for (vc, _) in &all {
+                    if vb.cmp_sem(vc) != Ordering::Greater {
+                        t.check(
+                            "the order is transitive over the whole domain",
+                            va.cmp_sem(vc) != Ordering::Greater,
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn whole_domain_order_is_total(t: &mut Trials) {
+    let all = domain();
+    for (va, a) in &all {
+        for (vb, b) in &all {
+            t.check(
+                "every pair is comparable one way or the other",
+                va.cmp_sem(vb) != Ordering::Greater || vb.cmp_sem(va) != Ordering::Greater,
+            );
+            t.check(
+                "every pair of encodings is comparable",
+                a.as_bytes() <= b.as_bytes() || b.as_bytes() <= a.as_bytes(),
+            );
+        }
+    }
+}
+
+fn whole_domain_encoding_is_injective(t: &mut Trials) {
+    let all = domain();
+    for (va, a) in &all {
+        for (vb, b) in &all {
+            t.check(
+                "one byte string means one value",
+                (a.as_bytes() == b.as_bytes()) == (va.cmp_sem(vb) == Ordering::Equal),
+            );
+        }
+    }
+}
+
+fn whole_domain_encoding_is_deterministic(t: &mut Trials) {
+    for (v, once) in domain() {
+        for _ in 0..3 {
+            t.check(
+                "sealing a value twice gives one byte string",
+                built(&v).as_bytes() == once.as_bytes(),
+            );
+        }
+    }
+}
+
+/// Order survives being carried: inside a wrapper and inside a row, two values
+/// keep the order they had on their own.
+fn nested_whole_domain_values_preserve_order(t: &mut Trials) {
+    let all = domain();
+    for (va, a) in &all {
+        for (vb, b) in &all {
+            let flat = a.as_bytes().cmp(b.as_bytes());
+            let wrapped_a = seal_json(&wrap(built(va)));
+            let wrapped_b = seal_json(&wrap(built(vb)));
+            t.check(
+                "wrapping preserves order",
+                wrapped_a.as_bytes().cmp(wrapped_b.as_bytes()) == flat,
+            );
+            let listed_a = seal_list(&row(vec![built(va)]));
+            let listed_b = seal_list(&row(vec![built(vb)]));
+            t.check(
+                "a row of one preserves order",
+                listed_a.as_bytes().cmp(listed_b.as_bytes()) == flat,
+            );
+        }
+    }
+}
+
+/// The oracle is checked against arithmetic, not against the bytes it is
+/// supposed to be independent of. A magnitude small enough to hold in an `i128`
+/// is compared as a number; the oracle must agree.
+fn semantic_oracle_does_not_reuse_encoded_byte_comparison(t: &mut Trials) {
+    use reference::{Mag, Num, Repr as R, Sem};
+    let pairs: Vec<(u64, u32)> = vec![
+        (1, 0), (2, 0), (3, 0), (1, 1), (1, 2), (5, 3), (3, 17), (255, 8),
+        (1 << 20, 0), (1, 20), (7, 40), (u32::MAX as u64, 1),
+    ];
+    let value = |sig: u64, scale: u32| (sig as i128) << scale;
+    for (sa, ka) in &pairs {
+        for (sb, kb) in &pairs {
+            let (ma, mb) = (Mag::finite(*sa, *ka), Mag::finite(*sb, *kb));
+            match (ma, mb) {
+                (Some(x), Some(y)) => {
+                    let arithmetic = value(*sa, *ka).cmp(&value(*sb, *kb));
+                    let positive = Sem::Number(Num::Positive(x, R::Int))
+                        .cmp_sem(&Sem::Number(Num::Positive(y, R::Int)));
+                    t.check("the oracle orders positives as arithmetic does", positive == arithmetic);
+                    let negative = Sem::Number(Num::Negative(x, R::Int))
+                        .cmp_sem(&Sem::Number(Num::Negative(y, R::Int)));
+                    t.check(
+                        "the oracle orders negatives as arithmetic reversed",
+                        negative == arithmetic.reverse(),
+                    );
+                }
+                _ => t.check("a magnitude in range is a magnitude", false),
+            }
+        }
+    }
+    // The classes, in the order the number line puts them.
+    let line = vec![
+        Sem::Number(Num::Negative(Mag::Infinite, R::Int)),
+        Sem::Number(Num::Negative(Mag::finite(1, 0).unwrap_or(Mag::Infinite), R::Int)),
+        Sem::Number(Num::Zero(R::Int)),
+        Sem::Number(Num::Positive(Mag::finite(1, 0).unwrap_or(Mag::Infinite), R::Int)),
+        Sem::Number(Num::Positive(Mag::Infinite, R::Int)),
+        Sem::Number(Num::NotANumber),
+    ];
+    for i in 0..line.len() {
+        for j in 0..line.len() {
+            t.check(
+                "the oracle puts the number classes on the line in order",
+                line[i].cmp_sem(&line[j]) == i.cmp(&j),
+            );
+        }
+    }
+}
+
+/// The v1 candidate corpus, frozen. These are the bytes the format promises;
+/// a change here is a format break, and the trial exists so that the break is
+/// a decision somebody made rather than one that happened.
+const GOLDEN_V1: [&str; 61] = [
+    "05",
+    "08",
+    "09",
+    "1001000000000000000000000001",
+    "1001ffbf0000000000000000ff00",
+    "1001ffec3fffffffffffffffff01",
+    "1001fffe7fffffffffffffffff00",
+    "100200",
+    "100201",
+    "1003000180000000000000000000",
+    "1003000180000000000000000001",
+    "10030013c0000000000000000000",
+    "10030040ffffffffffffffff0001",
+    "1003ffffffffffffffffffffff01",
+    "100401",
+    "180000",
+    "18610000",
+    "1861620000",
+    "18620000",
+    "1800ff0000",
+    "18f48fbfbf0000",
+    "200000",
+    "2000ff0000",
+    "2000ff00ff0000",
+    "2000ffff0000",
+    "20010000",
+    "20ff0000",
+    "2800000000000000000000000000000000",
+    "28ffffffffffffffffffffffffffffffff",
+    "30000000",
+    "30000007",
+    "3061000000",
+    "3805",
+    "3809",
+    "383805",
+    "400000000001",
+    "400000000110020001",
+    "4000000002100200100300018000000000000000000001",
+    "40000000021001fffe7fffffffffffffffff0010020001",
+    "4801",
+    "480501",
+    "48050501",
+    "480801",
+    "4848050101",
+    "5001",
+    "500501",
+    "50050901",
+    "58ffffffffffffffff00",
+    "58800000000000000000",
+    "587fffffffffffffff00",
+    "587fffffffffffffff01",
+    "587ffffffffffffffe00",
+    "58000000000000000001",
+    "6001",
+    "60020103",
+    "600201020000000000000000",
+    "600202000000000000000002ffffffffffffffff",
+    "600202ffffffffffffffff03",
+    "680000000000000000",
+    "680000000000000001",
+    "68ffffffffffffffff",
+];
+
+fn freeze_v1_candidate_golden_corpus(t: &mut Trials) {
+    let all = domain();
+    t.check(
+        "the frozen corpus covers the domain corpus exactly",
+        all.len() == GOLDEN_V1.len(),
+    );
+    for (i, (_, bytes)) in all.iter().enumerate() {
+        let hex: String = bytes.as_bytes().iter().map(|b| format!("{b:02x}")).collect();
+        t.check("every value still encodes to its frozen bytes", hex == GOLDEN_V1[i]);
+    }
+}
+
+/// Wrappers and rows spend from the same budget, so alternating them lands on
+/// the same bound as either alone.
+fn mixed_container_nesting_boundary_is_exact(t: &mut Trials) {
+    let mut v = seal_null();
+    let mut levels = 0usize;
+    loop {
+        let wrapped = match Wrapped::of(v) {
+            Ok(w) => seal_json(&w),
+            Err(back) => {
+                v = back;
+                break;
+            }
+        };
+        match RowItem::of(wrapped) {
+            Ok(m) => {
+                v = seal_list(&vec![m]);
+                levels += 1;
+            }
+            Err(back) => {
+                v = back;
+                break;
+            }
+        }
+    }
+    let bytes = v.as_bytes();
+    t.check("alternating containers nest at all", levels > 0);
+    t.check(
+        "a mixed nest reads back whole",
+        scanned(scan_value(bytes)) == Some(bytes.len()),
+    );
+    t.check(
+        "a mixed nest stops within one level of the bound",
+        v.descent() >= 126,
+    );
+    let forged = forged_nest(bytes, 2);
+    match scan_value(&forged) {
+        Ok(_) => t.check("two levels past a mixed nest is refused", false),
+        Err(e) => t.check(
+            "two levels past a mixed nest is refused as TooDeep",
+            e.reason() == Reason::TooDeep,
+        ),
+    }
+}
+
+/// Width is not depth. A row with many members spends one level, not one per
+/// member, and the reader must read all of them.
+fn wide_structure_does_not_consume_depth_budget(t: &mut Trials) {
+    for width in [1usize, 10, 100, 1000, 5000] {
+        let members: Vec<RowItem> = (0..width).map(|_| member(seal_null())).collect();
+        let wide = seal_list(&members);
+        let bytes = wide.as_bytes();
+        t.check("a wide row spends one level", wide.descent() == 3);
+        t.check(
+            "a wide row reads back whole",
+            scanned(scan_value(bytes)) == Some(bytes.len()),
+        );
+        t.check("a wide row is its members and its frame", bytes.len() == width + 2);
+    }
+}
+
+/// The reader refuses before it descends, so forged input far past the bound
+/// returns rather than exhausting the stack.
+fn depth_limit_prevents_stack_overflow(t: &mut Trials) {
+    for levels in [200usize, 1000, 10_000, 100_000] {
+        let forged = forged_nest(seal_null().as_bytes(), levels);
+        match scan_value(&forged) {
+            Ok(_) => t.check("a forged deep nest is refused", false),
+            Err(e) => t.check(
+                "a forged deep nest is refused as TooDeep, however deep",
+                e.reason() == Reason::TooDeep,
+            ),
+        }
+        t.check(
+            "the reference refuses the same forged nest",
+            reference::scan(&forged).is_err(),
+        );
+    }
+}
+
+/// The type invariant is the readability guarantee: anything that IS a
+/// `CanonicalBytes` reads back whole, whatever door built it.
+fn canonical_bytes_invariant_implies_executable_readability(t: &mut Trials) {
+    let mut g = Seeded::new(0x5EED_000C);
+    for _ in 0..2000 {
+        let v = built(&some_value(&mut g, 5));
+        let bytes = v.as_bytes();
+        t.check(
+            "every CanonicalBytes reads back whole",
+            scanned(scan_value(bytes)) == Some(bytes.len()),
+        );
+        t.check(
+            "every CanonicalBytes is within the reader's descent",
+            v.descent() <= 127,
+        );
+    }
+    for v in red_team_corpus() {
+        let bytes = v.as_bytes();
+        t.check(
+            "every door's output reads back whole",
+            scanned(scan_value(bytes)) == Some(bytes.len()),
+        );
     }
 }

@@ -3173,6 +3173,10 @@ pub fn seal_vector(components: Vec<NumericBytes>) -> (r: CanonicalBytes)
     seal(TAG_VECTOR, Body::product(Body::fixed(d), Body::row(&vals)))
 }
 
+/// The instant every open end reads as "still open". An assertion cannot be
+/// made at it: the coordinate is a seek target, not a moment a fact holds.
+pub const TERMINAL_TICK: i64 = i64::MAX;
+
 /// A valid-time instant and its assert flag, in the order the temporal seek
 /// wants: latest instant first, assert before retract at one instant.
 ///
@@ -3185,8 +3189,16 @@ pub struct Validity {
 }
 
 impl Validity {
-    pub fn new(ts_micros: i64, is_assert: bool) -> (r: Validity) {
-        Validity { ts_micros, is_assert }
+    /// The sole mint. Assert at [`TERMINAL_TICK`] is not a validity — the seek
+    /// bound that needs that pair is not a value and does not come through
+    /// here — so the state has no encoding rather than a refused one.
+    pub fn new(ts_micros: i64, is_assert: bool) -> (r: Option<Validity>)
+        ensures r is Some <==> !(is_assert && ts_micros == TERMINAL_TICK)
+    {
+        match (is_assert, ts_micros == TERMINAL_TICK) {
+            (true, true) => None,
+            _ => Some(Validity { ts_micros, is_assert }),
+        }
     }
 
     /// Eight instant bytes then the flag. The instant is biased into unsigned

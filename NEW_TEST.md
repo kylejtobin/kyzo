@@ -186,16 +186,16 @@
 
 ## Depth and writer-reader closure
 
-- [ ] nesting_just_below_limit_is_accepted
-- [ ] nesting_at_limit_has_defined_behavior
-- [ ] nesting_just_above_limit_returns_too_deep
-- [ ] json_nesting_boundary_is_exact
-- [ ] list_nesting_boundary_is_exact
-- [ ] mixed_container_nesting_boundary_is_exact
-- [ ] wide_structure_does_not_consume_depth_budget
-- [ ] depth_limit_prevents_stack_overflow
-- [ ] writer_cannot_mint_value_reader_refuses
-- [ ] canonical_bytes_invariant_implies_executable_readability
+- [x] nesting_just_below_limit_is_accepted
+- [x] nesting_at_limit_has_defined_behavior
+- [x] nesting_just_above_limit_returns_too_deep
+- [x] json_nesting_boundary_is_exact
+- [x] list_nesting_boundary_is_exact
+- [x] mixed_container_nesting_boundary_is_exact
+- [x] wide_structure_does_not_consume_depth_budget
+- [x] depth_limit_prevents_stack_overflow
+- [x] writer_cannot_mint_value_reader_refuses
+- [x] canonical_bytes_invariant_implies_executable_readability
 
 ## Construction authority and compile-fail
 
@@ -351,48 +351,48 @@
 
 ## Validity and geometry
 
-- [ ] validity_encoding_has_exactly_nine_payload_bytes
-- [ ] validity_invalid_states_are_unconstructible
-- [ ] validity_encoding_is_injective
-- [ ] validity_semantic_order_matches_byte_order
-- [ ] validity_golden_vectors_cover_temporal_boundaries
-- [ ] geometry_encoding_has_exactly_eight_payload_bytes
-- [ ] geometry_invalid_states_are_unconstructible
-- [ ] geometry_encoding_is_injective
-- [ ] geometry_semantic_order_matches_byte_order
-- [ ] geometry_golden_vectors_cover_spatial_boundaries
+- [x] validity_encoding_has_exactly_nine_payload_bytes
+- [x] validity_invalid_states_are_unconstructible
+- [x] validity_encoding_is_injective
+- [x] validity_semantic_order_matches_byte_order
+- [x] validity_golden_vectors_cover_temporal_boundaries
+- [x] geometry_encoding_has_exactly_eight_payload_bytes
+- [x] geometry_invalid_states_are_unconstructible
+- [x] geometry_encoding_is_injective
+- [x] geometry_semantic_order_matches_byte_order
+- [x] geometry_golden_vectors_cover_spatial_boundaries
 
 ## Whole-domain canonical law
 
-- [ ] every_public_mint_produces_complete_encoding
-- [ ] every_public_mint_produces_executable_reading
-- [ ] every_pair_of_canonical_encodings_is_prefix_incomparable
-- [ ] every_semantically_equal_pair_has_identical_bytes
-- [ ] every_semantically_distinct_pair_has_distinct_bytes
-- [ ] every_semantic_order_pair_matches_lexicographic_bytes
-- [ ] cross_kind_order_matches_tag_order
-- [ ] whole_domain_order_is_reflexive
-- [ ] whole_domain_order_is_antisymmetric
-- [ ] whole_domain_order_is_transitive
-- [ ] whole_domain_order_is_total
-- [ ] whole_domain_encoding_is_injective
-- [ ] whole_domain_encoding_is_deterministic
-- [ ] nested_whole_domain_values_preserve_order
-- [ ] semantic_oracle_does_not_reuse_encoded_byte_comparison
+- [x] every_public_mint_produces_complete_encoding
+- [x] every_public_mint_produces_executable_reading
+- [x] every_pair_of_canonical_encodings_is_prefix_incomparable
+- [x] every_semantically_equal_pair_has_identical_bytes
+- [x] every_semantically_distinct_pair_has_distinct_bytes
+- [x] every_semantic_order_pair_matches_lexicographic_bytes
+- [x] cross_kind_order_matches_tag_order
+- [x] whole_domain_order_is_reflexive
+- [x] whole_domain_order_is_antisymmetric
+- [x] whole_domain_order_is_transitive
+- [x] whole_domain_order_is_total
+- [x] whole_domain_encoding_is_injective
+- [x] whole_domain_encoding_is_deterministic
+- [x] nested_whole_domain_values_preserve_order
+- [x] semantic_oracle_does_not_reuse_encoded_byte_comparison
 
 ## Fuzzing and differential
 
-- [ ] exhaustive_all_byte_strings_up_to_small_bound
-- [ ] exhaustive_all_small_semantic_values
-- [ ] property_random_nested_values_are_complete
-- [ ] property_random_nested_values_are_prefix_free
-- [ ] property_random_semantic_pairs_preserve_order
-- [ ] property_random_semantic_values_are_injective
-- [ ] fuzz_scan_value_never_panics
-- [ ] fuzz_shape_scan_never_panics
-- [ ] fuzz_delim_scan_never_panics
-- [ ] fuzz_mutated_valid_encodings_never_overread
-- [ ] fuzz_mutated_valid_encodings_never_have_two_readings
-- [ ] differential_encoder_matches_independent_reference
-- [ ] differential_scanner_matches_independent_reference
-- [ ] freeze_v1_candidate_golden_corpus
+- [x] exhaustive_all_byte_strings_up_to_small_bound
+- [x] exhaustive_all_small_semantic_values
+- [x] property_random_nested_values_are_complete
+- [x] property_random_nested_values_are_prefix_free
+- [x] property_random_semantic_pairs_preserve_order
+- [x] property_random_semantic_values_are_injective
+- [x] fuzz_scan_value_never_panics
+- [x] fuzz_shape_scan_never_panics
+- [x] fuzz_delim_scan_never_panics
+- [x] fuzz_mutated_valid_encodings_never_overread
+- [x] fuzz_mutated_valid_encodings_never_have_two_readings
+- [x] differential_encoder_matches_independent_reference
+- [x] differential_scanner_matches_independent_reference
+- [x] freeze_v1_candidate_golden_corpus
