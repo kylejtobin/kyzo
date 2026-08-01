@@ -30,9 +30,10 @@
 mod canonical;
 
 use canonical::{
-    Bound, Branches, Reason, grammar_exec, CanonicalBytes, Shape, escape, scan_value, seal_bool, seal_bytes,
+    Bound, Refusal, Branches, Reason, grammar_exec, CanonicalBytes, Shape, escape, scan_value, seal_bool, seal_bytes,
     seal_geometry, seal_interval, seal_interval_empty, seal_json, seal_list, seal_null,
     seal_num_negative, seal_num_nan, seal_num_positive, seal_num_zero, seal_regex, seal_set, seal_str,
+    Magnitude, Repr, RegexFlags, MAG_BYTES, EXP_INFINITE, DIM_BYTES,
     seal_uuid, seal_validity, seal_vector, shape_scan,
 };
 
@@ -108,6 +109,40 @@ impl Trials {
 
 /// Lexicographic order on bytes, written independently of the encoder so the
 /// specification is compared against something, not against itself.
+/// The smallest finite magnitude the type admits: significand 1, scale 0.
+fn mag_min() -> Magnitude {
+    Magnitude::Finite { significand: 1, biased_scale: 0 }
+}
+
+/// The largest finite magnitude `wf_mag` admits: a saturated significand at
+/// the greatest scale that still leaves the exponent below the reserved one.
+fn mag_max() -> Magnitude {
+    Magnitude::Finite { significand: u64::MAX, biased_scale: EXP_INFINITE - 65 }
+}
+
+/// `n` distinct components, so a vector's dimension is derived rather than
+/// declared. Components differ by scale so no two collide.
+fn vec_of(n: usize) -> Vec<CanonicalBytes> {
+    (0..n)
+        .map(|i| {
+            seal_num_positive(
+                &Magnitude::Finite { significand: 1, biased_scale: (i % 1000) as u32 },
+                Repr::Int,
+            )
+        })
+        .collect()
+}
+
+/// A scan's length, discarding the refusal. Refusal carries a borrowed suffix
+/// and is deliberately not comparable, so trials that only care whether a
+/// boundary was found go through this.
+fn scanned(r: Result<usize, Refusal<'_>>) -> Option<usize> { r.ok() }
+
+/// Where a refusal stopped, as an offset from the front of `input`. The
+/// refusal carries the suffix it had not consumed; the offset is the caller's
+/// arithmetic because only the caller knows which buffer it handed over.
+fn stopped_at(input: &[u8], e: &Refusal<'_>) -> usize { input.len() - e.at().len() }
+
 fn lex_le_independent(a: &[u8], b: &[u8]) -> bool {
     let n = a.len().min(b.len());
     for i in 0..n {
@@ -369,14 +404,14 @@ fn attack_unmarked_row_element(t: &mut Trials) {
     let hostile = Shape::Row(Box::new(Shape::Fixed(1)));
     let empty_row: Vec<u8> = vec![0x01];
     let row_of_one: Vec<u8> = vec![0x01, 0x01]; // one element, byte 0x01, then the end
-    t.check("unmarked: empty row reads as 1", shape_scan(&g, &hostile, &empty_row, 0) == Ok(1));
+    t.check("unmarked: empty row reads as 1", scanned(shape_scan(&g, &hostile, &empty_row, 0)) == Some(1));
     t.check(
         "unmarked: row holding 0x01 reads as the EMPTY row",
-        shape_scan(&g, &hostile, &row_of_one, 0) == Ok(1),
+        scanned(shape_scan(&g, &hostile, &row_of_one, 0)) == Some(1),
     );
     t.check(
         "unmarked: two different rows, one reading — this is the defect",
-        shape_scan(&g, &hostile, &empty_row, 0) == shape_scan(&g, &hostile, &row_of_one, 0),
+        scanned(shape_scan(&g, &hostile, &empty_row, 0)) == scanned(shape_scan(&g, &hostile, &row_of_one, 0)),
     );
 
     // Marked: every element opens with a key above the terminator.
@@ -387,14 +422,14 @@ fn attack_unmarked_row_element(t: &mut Trials) {
     )))));
     let marked_empty: Vec<u8> = vec![0x01];
     let marked_one: Vec<u8> = vec![0x18, 0x01, 0x01]; // marker, hostile content, end
-    t.check("marked: empty row reads as 1", shape_scan(&g, &marked, &marked_empty, 0) == Ok(1));
+    t.check("marked: empty row reads as 1", scanned(shape_scan(&g, &marked, &marked_empty, 0)) == Some(1));
     t.check(
         "marked: row holding 0x01 reads as 3",
-        shape_scan(&g, &marked, &marked_one, 0) == Ok(3),
+        scanned(shape_scan(&g, &marked, &marked_one, 0)) == Some(3),
     );
     t.check(
         "marked: the two rows have different readings",
-        shape_scan(&g, &marked, &marked_empty, 0) != shape_scan(&g, &marked, &marked_one, 0),
+        scanned(shape_scan(&g, &marked, &marked_empty, 0)) != scanned(shape_scan(&g, &marked, &marked_one, 0)),
     );
 }
 
@@ -407,15 +442,15 @@ fn trial_grammar_table(t: &mut Trials) {
         (seal_null(), 1, "Null: tag only"),
         (seal_bool(false), 1, "False: tag only"),
         (seal_bool(true), 1, "True: tag only"),
-        (seal_num_zero(0x00), 3, "Num zero: tag, class, repr tie-break"),
-        (seal_num_negative(&[0x00; 12]), 14, "Num negative: tag, class, 12"),
-        (seal_num_positive(&[0x00; 12]), 14, "Num positive: tag, class, 12"),
+        (seal_num_zero(Repr::Int), 3, "Num zero: tag, class, repr tie-break"),
+        (seal_num_negative(&mag_min(), Repr::Int), 14, "Num negative: tag, class, 12"),
+        (seal_num_positive(&mag_min(), Repr::Int), 14, "Num positive: tag, class, 12"),
         (seal_str(b"hello"), 8, "Str: tag, content, terminator"),
         (seal_bytes(&[0x00, 0xFF]), 6, "Bytes: tag, escaped content, terminator"),
         (seal_uuid(&[0x00; 16]), 17, "Uuid: tag, 16"),
-        (seal_regex(b"ab", 0x07), 6, "Regex: tag, pattern, terminator, flags"),
+        (seal_regex(b"ab", &RegexFlags::new(true, true, true)), 6, "Regex: tag, pattern, terminator, flags"),
         (seal_json(&seal_null()), 2, "Json: tag, a value"),
-        (seal_vector(2, &vec![seal_num_zero(0), seal_num_zero(0)]), 12,
+        (seal_vector(&vec![seal_num_zero(Repr::Int), seal_num_zero(Repr::Int)]), 12,
             "Vector: tag, 4 dimension, two components, terminator"),
         (seal_list(&Vec::new()), 2, "List: tag, terminator"),
         (seal_set(&Vec::new()), 2, "Set: tag, terminator"),
@@ -429,11 +464,11 @@ fn trial_grammar_table(t: &mut Trials) {
     for (v, want, label) in &cases {
         let bytes = v.as_bytes();
         t.check(label, bytes.len() == *want);
-        t.check(label, scan_value(bytes) == Ok(bytes.len()));
+        t.check(label, scanned(scan_value(bytes)) == Some(bytes.len()));
         // One byte short is refused, never guessed at.
         if bytes.len() > 1 {
             let short = &bytes[..bytes.len() - 1];
-            t.check(label, shape_scan(&g, &Shape::Tagged, short, 0) != Ok(short.len()));
+            t.check(label, scanned(shape_scan(&g, &Shape::Tagged, short, 0)) != Some(short.len()));
         }
     }
 
@@ -442,13 +477,13 @@ fn trial_grammar_table(t: &mut Trials) {
         (seal_null(), TAG_NULL, "Null tag"),
         (seal_bool(false), TAG_FALSE, "False tag"),
         (seal_bool(true), TAG_TRUE, "True tag"),
-        (seal_num_zero(0), TAG_NUM, "Num tag"),
+        (seal_num_zero(Repr::Int), TAG_NUM, "Num tag"),
         (seal_str(b""), TAG_STR, "Str tag"),
         (seal_bytes(b""), TAG_BYTES, "Bytes tag"),
         (seal_uuid(&[0; 16]), TAG_UUID, "Uuid tag"),
-        (seal_regex(b"", 0), TAG_REGEX, "Regex tag"),
+        (seal_regex(b"", &RegexFlags::new(false, false, false)), TAG_REGEX, "Regex tag"),
         (seal_json(&seal_null()), TAG_JSON, "Json tag"),
-        (seal_vector(0, &Vec::new()), TAG_VECTOR, "Vector tag"),
+        (seal_vector(&Vec::new()), TAG_VECTOR, "Vector tag"),
         (seal_list(&Vec::new()), TAG_LIST, "List tag"),
         (seal_set(&Vec::new()), TAG_SET, "Set tag"),
         (seal_validity(&[0; 9]), TAG_VALIDITY, "Validity tag"),
@@ -500,10 +535,10 @@ fn trial_grammar_table(t: &mut Trials) {
 /// place it consistently: above everything. The check that can contradict it
 /// is the largest finite positive.
 fn attack_nan_is_the_top_of_number(t: &mut Trials) {
-    let neg = seal_num_negative(&[0x00; 12]);
-    let zero = seal_num_zero(0x00);
-    let pos = seal_num_positive(&[0xFF; 12]);
-    let nan = seal_num_nan(0x01);
+    let neg = seal_num_negative(&mag_min(), Repr::Int);
+    let zero = seal_num_zero(Repr::Int);
+    let pos = seal_num_positive(&mag_max(), Repr::Int);
+    let nan = seal_num_nan();
 
     t.check(
         "negative sorts under zero",
@@ -527,26 +562,29 @@ fn attack_nan_is_the_top_of_number(t: &mut Trials) {
     t.check("zero still carries its tie-break", zero.as_bytes().len() == 3);
     // Exhaustive over the negative magnitude's lead byte: nothing in the
     // negative class may climb past zero.
-    for b in 0u16..=255 {
-        let mut mag = [0x00; 12];
-        mag[0] = b as u8;
-        let n = seal_num_negative(&mag);
-        t.check(
-            "every negative magnitude stays under zero",
-            lex_le_independent(n.as_bytes(), zero.as_bytes())
-                && n.as_bytes() != zero.as_bytes(),
-        );
+    for scale in 0u32..=255 {
+        for sig in [1u64, 2, 0xFF, 0x8000_0000_0000_0000, u64::MAX] {
+            let n = seal_num_negative(
+                &Magnitude::Finite { significand: sig, biased_scale: scale },
+                Repr::Int,
+            );
+            t.check(
+                "every negative magnitude stays under zero",
+                lex_le_independent(n.as_bytes(), zero.as_bytes())
+                    && n.as_bytes() != zero.as_bytes(),
+            );
+        }
     }
 }
 
 fn attack_vector_dimension_leads(t: &mut Trials) {
     // Re-sealed per use: CanonicalBytes is not Clone, and a trial that built
     // its components once and shared them would be testing one buffer twice.
-    let big = || seal_num_positive(&[0xFF; 12]);
-    let small = || seal_num_negative(&[0x00; 12]);
+    let big = || seal_num_positive(&mag_max(), Repr::Int);
+    let small = || seal_num_negative(&mag_min(), Repr::Int);
 
-    let one_big = seal_vector(1, &vec![big()]);
-    let two_small = seal_vector(2, &vec![small(), small()]);
+    let one_big = seal_vector(&vec![big()]);
+    let two_small = seal_vector(&vec![small(), small()]);
     t.check(
         "a shorter vector sorts under a longer one whatever the components say",
         lex_le_independent(one_big.as_bytes(), two_small.as_bytes())
@@ -554,8 +592,8 @@ fn attack_vector_dimension_leads(t: &mut Trials) {
     );
 
     // Same dimension: now the components are what decides, componentwise.
-    let a = seal_vector(2, &vec![small(), small()]);
-    let b = seal_vector(2, &vec![small(), big()]);
+    let a = seal_vector(&vec![small(), small()]);
+    let b = seal_vector(&vec![small(), big()]);
     t.check(
         "at equal dimension the components decide, in order",
         lex_le_independent(a.as_bytes(), b.as_bytes()) && a.as_bytes() != b.as_bytes(),
@@ -563,9 +601,9 @@ fn attack_vector_dimension_leads(t: &mut Trials) {
 
     // Dimension is compared as a number, not as text: 2 < 10 must hold, which
     // a decimal or little-endian width would get wrong.
-    let d2 = seal_vector(2, &Vec::new());
-    let d10 = seal_vector(10, &Vec::new());
-    let d256 = seal_vector(256, &Vec::new());
+    let d2 = seal_vector(&vec_of(2));
+    let d10 = seal_vector(&vec_of(10));
+    let d256 = seal_vector(&vec_of(256));
     t.check(
         "dimension compares numerically across a byte boundary",
         lex_le_independent(d2.as_bytes(), d10.as_bytes())
@@ -574,9 +612,9 @@ fn attack_vector_dimension_leads(t: &mut Trials) {
     );
 
     // Exhaustive over the low dimension byte, so no single value is special.
-    for n in 0u32..=255 {
-        let lo = seal_vector(n, &Vec::new());
-        let hi = seal_vector(n + 1, &Vec::new());
+    for n in 0usize..=255 {
+        let lo = seal_vector(&vec_of(n));
+        let hi = seal_vector(&vec_of(n + 1));
         t.check(
             "dimension order is total over the low byte",
             lex_le_independent(lo.as_bytes(), hi.as_bytes())
@@ -640,7 +678,7 @@ fn attack_reader_agrees_with_writer(t: &mut Trials) {
         seal_null(),
         seal_str(&[]),
         seal_str(&[0x00, 0x01, 0xFF]),
-        seal_num_zero(0x00),
+        seal_num_zero(Repr::Int),
         seal_json(&seal_bool(true)),
         seal_list(&Vec::new()),
         seal_list(&vec![str_val(&[0x01]), str_val(&[0x00])]),
@@ -648,21 +686,21 @@ fn attack_reader_agrees_with_writer(t: &mut Trials) {
     ];
     for v in &values {
         let bytes = v.as_bytes();
-        t.check("reader measures the writer exactly", scan_value(bytes) == Ok(bytes.len()));
+        t.check("reader measures the writer exactly", scanned(scan_value(bytes)) == Some(bytes.len()));
 
         for trailer in [vec![0x00u8], vec![0x01], vec![0xFF; 4], vec![TAG_NULL]] {
             let mut extended = bytes.to_vec();
             extended.extend_from_slice(&trailer);
             t.check(
                 "trailing bytes cannot move the reading",
-                scan_value(&extended) == Ok(bytes.len()),
+                scanned(scan_value(&extended)) == Some(bytes.len()),
             );
         }
 
         // Every proper prefix is incomplete: it may be refused, but it may
         // never be accepted as the whole value.
         for cut in 0..bytes.len() {
-            t.check("no proper prefix is complete", scan_value(&bytes[..cut]) != Ok(cut));
+            t.check("no proper prefix is complete", scanned(scan_value(&bytes[..cut])) != Some(cut));
         }
     }
 }
@@ -694,7 +732,7 @@ fn attack_reader_totality(t: &mut Trials) {
     for p in &hostile {
         match scan_value(p) {
             Ok(n) => t.check("reader never claims more than it was given", n <= p.len()),
-            Err(e) => t.check("a refusal names an offset inside the input", e.at().get() <= p.len()),
+            Err(e) => t.check("a refusal names an offset inside the input", stopped_at(p, &e) <= p.len()),
         }
     }
 
@@ -739,7 +777,7 @@ fn attack_refusals_are_named(t: &mut Trials) {
             Ok(_) => t.check(label, false),
             Err(e) => {
                 t.check(label, e.reason() == *reason);
-                t.check(label, e.at().get() == *at);
+                t.check(label, stopped_at(bytes, &e) == *at);
             }
         }
     }
@@ -761,7 +799,7 @@ fn attack_json_is_the_value_grammar(t: &mut Trials) {
     let inner: Vec<CanonicalBytes> = vec![
         seal_null(),
         seal_bool(true),
-        seal_num_zero(0x00),
+        seal_num_zero(Repr::Int),
         seal_str(b"k"),
         seal_list(&Vec::new()),
     ];
@@ -769,10 +807,10 @@ fn attack_json_is_the_value_grammar(t: &mut Trials) {
         let bare = v.as_bytes().to_vec();
         let mut wrapped = vec![TAG_JSON];
         wrapped.extend_from_slice(&bare);
-        t.check("a json body IS a value", scan_value(&wrapped) == Ok(bare.len() + 1));
+        t.check("a json body IS a value", scanned(scan_value(&wrapped)) == Some(bare.len() + 1));
         t.check(
             "and it is the same reading as the bare value",
-            scan_value(&bare) == Ok(bare.len()),
+            scanned(scan_value(&bare)) == Some(bare.len()),
         );
     }
 }
