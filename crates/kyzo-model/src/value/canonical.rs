@@ -2615,6 +2615,170 @@ pub proof fn lemma_bit_len_bound(v: nat, n: nat)
     }
 }
 
+/// The denotation, scaled into whole numbers: `value(m) x 2^F == frac x 2^exp`.
+/// Comparing scaled values avoids a negative exponent without changing order.
+pub proof fn lemma_value_scaled(m: Magnitude)
+    requires wf_mag(m), m is Finite
+    ensures
+        mag_value(m) is Some,
+        mag_value(m).unwrap() * pow2(FRAC_BITS as nat)
+            == spec_frac(m) * pow2(spec_exp(m)),
+{
+    let s = m->Finite_significand as nat;
+    let sc = m->Finite_biased_scale as nat;
+    let bits = spec_bit_len(s);
+    assert(pow2(64nat) == 18446744073709551616nat) by (compute);
+    lemma_bit_len_bound(s, 64nat);
+    lemma_binade(s);
+    // value x 2^F = (s x 2^sc) x 2^F = s x 2^(sc+F)
+    lemma_pow2_add(sc, FRAC_BITS as nat);
+    assert((s * pow2(sc)) * pow2(FRAC_BITS as nat) == s * pow2((sc + FRAC_BITS) as nat))
+        by (nonlinear_arith)
+        requires pow2(sc) * pow2(FRAC_BITS as nat) == pow2((sc + FRAC_BITS) as nat);
+    // frac x 2^exp = (s x 2^(F-bits)) x 2^(bits+sc) = s x 2^(F+sc)
+    lemma_pow2_add((FRAC_BITS - bits) as nat, (bits + sc) as nat);
+    assert(((FRAC_BITS - bits) + (bits + sc)) as nat == (sc + FRAC_BITS) as nat);
+    assert((s * pow2((FRAC_BITS - bits) as nat)) * pow2((bits + sc) as nat)
+            == s * pow2((sc + FRAC_BITS) as nat))
+        by (nonlinear_arith)
+        requires pow2((FRAC_BITS - bits) as nat) * pow2((bits + sc) as nat)
+            == pow2((sc + FRAC_BITS) as nat);
+}
+
+/// A strictly greater exponent beats any fraction, because both fractions sit
+/// in the same binade.
+pub proof fn lemma_exp_dominates(m: Magnitude, n: Magnitude)
+    requires wf_mag(m), wf_mag(n), spec_exp(m) < spec_exp(n)
+    ensures spec_frac(m) * pow2(spec_exp(m)) < spec_frac(n) * pow2(spec_exp(n))
+{
+    lemma_frac_normalized(m);
+    lemma_frac_normalized(n);
+    let em = spec_exp(m);
+    let en = spec_exp(n);
+    // frac(m) x 2^em < 2^F x 2^em = 2^(F+em) <= 2^(F+en-1) = 2^(F-1) x 2^en <= frac(n) x 2^en
+    lemma_pow2_add(FRAC_BITS as nat, em);
+    lemma_pow2_add((FRAC_BITS - 1) as nat, en);
+    lemma_pow2_mono((FRAC_BITS + em) as nat, (FRAC_BITS - 1 + en) as nat);
+    lemma_pow2_pos(em);
+    lemma_pow2_pos(en);
+    assert(spec_frac(m) * pow2(em) < pow2(FRAC_BITS as nat) * pow2(em))
+        by (nonlinear_arith)
+        requires spec_frac(m) < pow2(FRAC_BITS as nat), pow2(em) >= 1;
+    assert(pow2((FRAC_BITS - 1) as nat) * pow2(en) <= spec_frac(n) * pow2(en))
+        by (nonlinear_arith)
+        requires pow2((FRAC_BITS - 1) as nat) <= spec_frac(n), pow2(en) >= 1;
+}
+
+/// THE NORMALIZATION BRIDGE. What a magnitude denotes orders exactly as its
+/// packed fields do. This is the obligation every kind owes and the one
+/// `theorem_value_order` cannot supply for itself.
+pub proof fn lemma_packed_order(a: Magnitude, b: Magnitude)
+    requires wf_mag(a), wf_mag(b)
+    ensures mag_le(a, b) == (spec_packed(a) <= spec_packed(b))
+{
+    lemma_packed_fields(a);
+    lemma_packed_fields(b);
+    lemma_frac_normalized(a);
+    lemma_frac_normalized(b);
+    let ea = spec_exp(a);
+    let eb = spec_exp(b);
+    let fa = spec_frac(a);
+    let fb = spec_frac(b);
+    let pf = pow2(FRAC_BITS as nat);
+    // packed is lexicographic in (exp, frac) because frac < 2^F.
+    assert(spec_packed(a) <= spec_packed(b)
+        <==> (ea < eb || (ea == eb && fa <= fb))) by (nonlinear_arith)
+        requires
+            spec_packed(a) == ea * pf + fa, spec_packed(b) == eb * pf + fb,
+            fa < pf, fb < pf;
+    match (a, b) {
+        (Magnitude::Infinite, Magnitude::Infinite) => {}
+        (Magnitude::Finite { .. }, Magnitude::Infinite) => {
+            lemma_exp_finite_below_infinite(a);
+        }
+        (Magnitude::Infinite, Magnitude::Finite { .. }) => {
+            lemma_exp_finite_below_infinite(b);
+        }
+        (Magnitude::Finite { .. }, Magnitude::Finite { .. }) => {
+            lemma_value_scaled(a);
+            lemma_value_scaled(b);
+            lemma_pow2_pos(FRAC_BITS as nat);
+            let va = mag_value(a).unwrap();
+            let vb = mag_value(b).unwrap();
+            assert(va <= vb <==> va * pf <= vb * pf) by (nonlinear_arith)
+                requires pf >= 1;
+            if ea < eb { lemma_exp_dominates(a, b); }
+            if eb < ea { lemma_exp_dominates(b, a); }
+            if ea == eb {
+                lemma_pow2_pos(ea);
+                assert(fa * pow2(ea) <= fb * pow2(eb) <==> fa <= fb)
+                    by (nonlinear_arith)
+                    requires ea == eb, pow2(ea) >= 1;
+            }
+        }
+    }
+}
+
+/// Every finite exponent is below the reserved one, which is what `wf_mag`
+/// buys: `Infinite` cannot be impersonated.
+pub proof fn lemma_exp_finite_below_infinite(m: Magnitude)
+    requires wf_mag(m), m is Finite
+    ensures spec_exp(m) < EXP_INFINITE as nat
+{
+    let s = m->Finite_significand as nat;
+    assert(pow2(64nat) == 18446744073709551616nat) by (compute);
+    lemma_bit_len_bound(s, 64nat);
+}
+
+/// The packed field fits the payload: exponent below 2^16, fraction below
+/// 2^72, so the pair is below 2^88 = 2^(8 x MAG_BYTES). Derived, so the order
+/// theorem needs no width precondition.
+pub proof fn lemma_packed_fits(m: Magnitude)
+    requires wf_mag(m)
+    ensures spec_packed(m) < pow2((8 * MAG_BYTES) as nat)
+{
+    lemma_packed_fields(m);
+    lemma_frac_normalized(m);
+    let e = spec_exp(m);
+    let f = spec_frac(m);
+    let pf = pow2(FRAC_BITS as nat);
+    assert(e <= EXP_INFINITE as nat) by {
+        match m {
+            Magnitude::Finite { .. } => { lemma_exp_finite_below_infinite(m); }
+            Magnitude::Infinite => {}
+        }
+    }
+    lemma_pow2_add(16nat, FRAC_BITS as nat);
+    assert((8 * MAG_BYTES) as nat == (16 + FRAC_BITS) as nat);
+    assert(pow2(16nat) == 65536nat) by (compute);
+    assert(e < pow2(16nat));
+    assert(e * pf + f < pow2(16nat) * pf) by (nonlinear_arith)
+        requires e < pow2(16nat), f < pf, pf >= 1;
+}
+
+/// THE MAGNITUDE ORDER BRIDGE. What a magnitude denotes orders exactly as the
+/// bytes it encodes to.
+///
+/// Without this, `theorem_value_order` proves that framing preserves an order
+/// the scalar bytes were *defined* to have. With it, the scalar side is an
+/// independent numeric order and the equality is a theorem.
+pub proof fn theorem_magnitude_order(a: Magnitude, b: Magnitude, tie: Repr)
+    requires wf_mag(a), wf_mag(b)
+    ensures mag_le(a, b) == lex_le(spec_mag_body(a, tie), spec_mag_body(b, tie))
+{
+    lemma_packed_order(a, b);
+    lemma_packed_fits(a);
+    lemma_packed_fits(b);
+    let pa = spec_packed(a);
+    let pb = spec_packed(b);
+    let w = MAG_BYTES as nat;
+    lemma_be_len(pa, w);
+    lemma_be_len(pb, w);
+    lemma_be_order(pa, pb, w);
+    lemma_be_order(pb, pa, w);
+    lemma_lex_snoc(spec_be(pa, w), spec_be(pb, w), tie.spec_byte(), tie.spec_byte());
+}
+
 /// A magnitude the numeric doors accept.
 pub open spec fn wf_mag(m: Magnitude) -> bool {
     match m {
