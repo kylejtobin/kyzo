@@ -2285,10 +2285,10 @@ impl Repr {
 
 /// Zero carries only the representation tie-break: there is no magnitude to
 /// write, so there is no door that takes one.
-pub fn seal_num_zero(tie: Repr) -> (r: CanonicalBytes) {
+pub fn seal_num_zero(tie: Repr) -> (r: NumericBytes) {
     proof { lemma_tag_shapes(); lemma_branch_shapes(); }
     let inner = Body::fixed(owned(&[tie.byte()]));
-    seal(TAG_NUM, Body::select(Ghost(num_branches()), 0x02, inner))
+    NumericBytes { value: seal(TAG_NUM, Body::select(Ghost(num_branches()), 0x02, inner)) }
 }
 
 /// A number's magnitude as stored: a 16-bit biased exponent, then an 80-bit
@@ -2909,7 +2909,7 @@ impl Magnitude {
 
 /// A signed magnitude. The class byte is not a parameter — the door the caller
 /// picks IS the class, so a magnitude cannot be filed under the wrong sign.
-pub fn seal_num_negative(mag: &Magnitude, tie: Repr) -> (r: CanonicalBytes)
+pub fn seal_num_negative(mag: &Magnitude, tie: Repr) -> (r: NumericBytes)
     requires match mag {
         Magnitude::Finite { significand, biased_scale } =>
             *significand > 0 && *biased_scale + 64 < EXP_INFINITE,
@@ -2918,10 +2918,10 @@ pub fn seal_num_negative(mag: &Magnitude, tie: Repr) -> (r: CanonicalBytes)
 {
     proof { lemma_tag_shapes(); lemma_branch_shapes(); }
     let inner = Body::fixed(mag.body_negated(tie));
-    seal(TAG_NUM, Body::select(Ghost(num_branches()), 0x01, inner))
+    NumericBytes { value: seal(TAG_NUM, Body::select(Ghost(num_branches()), 0x01, inner)) }
 }
 
-pub fn seal_num_positive(mag: &Magnitude, tie: Repr) -> (r: CanonicalBytes)
+pub fn seal_num_positive(mag: &Magnitude, tie: Repr) -> (r: NumericBytes)
     requires match mag {
         Magnitude::Finite { significand, biased_scale } =>
             *significand > 0 && *biased_scale + 64 < EXP_INFINITE,
@@ -2930,17 +2930,17 @@ pub fn seal_num_positive(mag: &Magnitude, tie: Repr) -> (r: CanonicalBytes)
 {
     proof { lemma_tag_shapes(); lemma_branch_shapes(); }
     let inner = Body::fixed(mag.body(tie));
-    seal(TAG_NUM, Body::select(Ghost(num_branches()), 0x03, inner))
+    NumericBytes { value: seal(TAG_NUM, Body::select(Ghost(num_branches()), 0x03, inner)) }
 }
 
 /// Not a number, and above every number.
 ///
 /// NaN is reachable only from a float, so the representation tie-break has one
 /// admissible value and this door writes it.
-pub fn seal_num_nan() -> (r: CanonicalBytes) {
+pub fn seal_num_nan() -> (r: NumericBytes) {
     proof { lemma_tag_shapes(); lemma_branch_shapes(); }
     let inner = Body::fixed(owned(&[Repr::Float.byte()]));
-    seal(TAG_NUM, Body::select(Ghost(num_branches()), 0x04, inner))
+    NumericBytes { value: seal(TAG_NUM, Body::select(Ghost(num_branches()), 0x04, inner)) }
 }
 
 /// Text. `Bytes` is the kind for content that is not text.
@@ -3016,6 +3016,28 @@ pub fn seal_json(v: &CanonicalBytes) -> (r: CanonicalBytes)
     ensures r.view() =~= seq![TAG_JSON] + v.view()
 { proof { lemma_tag_shapes(); } seal(TAG_JSON, Body::value(v)) }
 
+/// A sealed value of the Num kind.
+///
+/// The seat is private and the four numeric doors are the only mints, so a
+/// vector cannot be handed a component of some other kind.
+// CONSTRUCT: ValueObject NumericBytes
+pub struct NumericBytes {
+    value: CanonicalBytes,
+}
+
+impl NumericBytes {
+    pub closed spec fn spec_view(&self) -> Seq<u8> { self.value.view() }
+
+    /// The value itself, for the doors that take any kind.
+    pub fn into_value(self) -> (r: CanonicalBytes)
+        ensures r.view() =~= self.spec_view()
+    { self.value }
+
+    pub fn as_bytes(&self) -> (r: &[u8])
+        ensures r@ =~= self.spec_view()
+    { self.value.as_bytes() }
+}
+
 /// Width of the dimension field, in bytes.
 pub const DIM_BYTES: usize = 4;
 
@@ -3024,12 +3046,22 @@ pub const DIM_BYTES: usize = 4;
 /// ORDER_LAW: the dimension sorts first, so two vectors of different length
 /// order by length before either is examined and a shorter one is never a
 /// prefix of a longer one.
-pub fn seal_vector(components: &Vec<CanonicalBytes>) -> (r: CanonicalBytes)
+pub fn seal_vector(components: Vec<NumericBytes>) -> (r: CanonicalBytes)
     requires components.len() < 0x1_0000_0000u64
 {
     proof { lemma_tag_shapes(); }
-    let d = be_bytes(components.len() as u128, DIM_BYTES);
-    seal(TAG_VECTOR, Body::product(Body::fixed(d), Body::row(components)))
+    let dim = components.len();
+    let d = be_bytes(dim as u128, DIM_BYTES);
+    let mut rest = components;
+    let mut vals: Vec<CanonicalBytes> = Vec::new();
+    while rest.len() > 0
+        invariant vals@.len() + rest@.len() == dim
+        decreases rest.len()
+    {
+        let head = rest.remove(0);
+        vals.push(head.into_value());
+    }
+    seal(TAG_VECTOR, Body::product(Body::fixed(d), Body::row(&vals)))
 }
 
 pub fn seal_validity(v: &[u8; 9]) -> (r: CanonicalBytes) {

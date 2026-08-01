@@ -18,7 +18,7 @@
 - [x] inverted_interval_is_unconstructible
 - [x] set_permutations_encode_identically
 - [x] set_duplicates_encode_identically
-- [ ] vector_components_are_numeric_only
+- [x] vector_components_are_numeric_only
 - [x] string_payload_is_valid_utf8
 - [ ] json_payload_is_json_domain_only
 - [ ] validity_payload_cannot_be_arbitrary_bytes

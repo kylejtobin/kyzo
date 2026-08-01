@@ -31,7 +31,7 @@ use value::canonical;
 use value::codec::CanonicalSet;
 
 use canonical::{
-    Bound, Refusal, Utf8, Branches, Reason, grammar_exec, CanonicalBytes, Shape, escape, scan_value, seal_bool, seal_bytes,
+    Bound, Refusal, Utf8, NumericBytes, Branches, Reason, grammar_exec, CanonicalBytes, Shape, escape, scan_value, seal_bool, seal_bytes,
     seal_geometry, seal_interval, seal_interval_empty, seal_json, seal_list, seal_null,
     seal_num_negative, seal_num_nan, seal_num_positive, seal_num_zero, seal_regex, seal_set, seal_str,
     Magnitude, Repr, RegexFlags, MAG_BYTES, EXP_INFINITE, DIM_BYTES,
@@ -123,7 +123,7 @@ fn mag_max() -> Magnitude {
 
 /// `n` distinct components, so a vector's dimension is derived rather than
 /// declared. Components differ by scale so no two collide.
-fn vec_of(n: usize) -> Vec<CanonicalBytes> {
+fn vec_of(n: usize) -> Vec<NumericBytes> {
     (0..n)
         .map(|i| {
             seal_num_positive(
@@ -443,15 +443,15 @@ fn trial_grammar_table(t: &mut Trials) {
         (seal_null(), 1, "Null: tag only"),
         (seal_bool(false), 1, "False: tag only"),
         (seal_bool(true), 1, "True: tag only"),
-        (seal_num_zero(Repr::Int), 3, "Num zero: tag, class, repr tie-break"),
-        (seal_num_negative(&mag_min(), Repr::Int), 14, "Num negative: tag, class, 12"),
-        (seal_num_positive(&mag_min(), Repr::Int), 14, "Num positive: tag, class, 12"),
+        (seal_num_zero(Repr::Int).into_value(), 3, "Num zero: tag, class, repr tie-break"),
+        (seal_num_negative(&mag_min(), Repr::Int).into_value(), 14, "Num negative: tag, class, 12"),
+        (seal_num_positive(&mag_min(), Repr::Int).into_value(), 14, "Num positive: tag, class, 12"),
         (seal_str(&Utf8::of("hello")), 8, "Str: tag, content, terminator"),
         (seal_bytes(&[0x00, 0xFF]), 6, "Bytes: tag, escaped content, terminator"),
         (seal_uuid(&[0x00; 16]), 17, "Uuid: tag, 16"),
         (seal_regex(b"ab", &RegexFlags::new(true, true, true)), 6, "Regex: tag, pattern, terminator, flags"),
         (seal_json(&seal_null()), 2, "Json: tag, a value"),
-        (seal_vector(&vec![seal_num_zero(Repr::Int), seal_num_zero(Repr::Int)]), 12,
+        (seal_vector(vec![seal_num_zero(Repr::Int), seal_num_zero(Repr::Int)]), 12,
             "Vector: tag, 4 dimension, two components, terminator"),
         (seal_list(&Vec::new()), 2, "List: tag, terminator"),
         (seal_set(&Vec::new()), 2, "Set: tag, terminator"),
@@ -478,13 +478,13 @@ fn trial_grammar_table(t: &mut Trials) {
         (seal_null(), TAG_NULL, "Null tag"),
         (seal_bool(false), TAG_FALSE, "False tag"),
         (seal_bool(true), TAG_TRUE, "True tag"),
-        (seal_num_zero(Repr::Int), TAG_NUM, "Num tag"),
+        (seal_num_zero(Repr::Int).into_value(), TAG_NUM, "Num tag"),
         (seal_str(&Utf8::of("")), TAG_STR, "Str tag"),
         (seal_bytes(b""), TAG_BYTES, "Bytes tag"),
         (seal_uuid(&[0; 16]), TAG_UUID, "Uuid tag"),
         (seal_regex(b"", &RegexFlags::new(false, false, false)), TAG_REGEX, "Regex tag"),
         (seal_json(&seal_null()), TAG_JSON, "Json tag"),
-        (seal_vector(&Vec::new()), TAG_VECTOR, "Vector tag"),
+        (seal_vector(Vec::new()), TAG_VECTOR, "Vector tag"),
         (seal_list(&Vec::new()), TAG_LIST, "List tag"),
         (seal_set(&Vec::new()), TAG_SET, "Set tag"),
         (seal_validity(&[0; 9]), TAG_VALIDITY, "Validity tag"),
@@ -584,8 +584,8 @@ fn attack_vector_dimension_leads(t: &mut Trials) {
     let big = || seal_num_positive(&mag_max(), Repr::Int);
     let small = || seal_num_negative(&mag_min(), Repr::Int);
 
-    let one_big = seal_vector(&vec![big()]);
-    let two_small = seal_vector(&vec![small(), small()]);
+    let one_big = seal_vector(vec![big()]);
+    let two_small = seal_vector(vec![small(), small()]);
     t.check(
         "a shorter vector sorts under a longer one whatever the components say",
         lex_le_independent(one_big.as_bytes(), two_small.as_bytes())
@@ -593,8 +593,8 @@ fn attack_vector_dimension_leads(t: &mut Trials) {
     );
 
     // Same dimension: now the components are what decides, componentwise.
-    let a = seal_vector(&vec![small(), small()]);
-    let b = seal_vector(&vec![small(), big()]);
+    let a = seal_vector(vec![small(), small()]);
+    let b = seal_vector(vec![small(), big()]);
     t.check(
         "at equal dimension the components decide, in order",
         lex_le_independent(a.as_bytes(), b.as_bytes()) && a.as_bytes() != b.as_bytes(),
@@ -602,9 +602,9 @@ fn attack_vector_dimension_leads(t: &mut Trials) {
 
     // Dimension is compared as a number, not as text: 2 < 10 must hold, which
     // a decimal or little-endian width would get wrong.
-    let d2 = seal_vector(&vec_of(2));
-    let d10 = seal_vector(&vec_of(10));
-    let d256 = seal_vector(&vec_of(256));
+    let d2 = seal_vector(vec_of(2));
+    let d10 = seal_vector(vec_of(10));
+    let d256 = seal_vector(vec_of(256));
     t.check(
         "dimension compares numerically across a byte boundary",
         lex_le_independent(d2.as_bytes(), d10.as_bytes())
@@ -614,8 +614,8 @@ fn attack_vector_dimension_leads(t: &mut Trials) {
 
     // Exhaustive over the low dimension byte, so no single value is special.
     for n in 0usize..=255 {
-        let lo = seal_vector(&vec_of(n));
-        let hi = seal_vector(&vec_of(n + 1));
+        let lo = seal_vector(vec_of(n));
+        let hi = seal_vector(vec_of(n + 1));
         t.check(
             "dimension order is total over the low byte",
             lex_le_independent(lo.as_bytes(), hi.as_bytes())
@@ -679,7 +679,7 @@ fn attack_reader_agrees_with_writer(t: &mut Trials) {
         seal_null(),
         seal_str(&Utf8::of("")),
         seal_str(&Utf8::of("\u{0}\u{1}\u{ff}")),
-        seal_num_zero(Repr::Int),
+        seal_num_zero(Repr::Int).into_value(),
         seal_json(&seal_bool(true)),
         seal_list(&Vec::new()),
         seal_list(&vec![bytes_val(&[0x01]), bytes_val(&[0x00])]),
@@ -800,7 +800,7 @@ fn attack_json_is_the_value_grammar(t: &mut Trials) {
     let inner: Vec<CanonicalBytes> = vec![
         seal_null(),
         seal_bool(true),
-        seal_num_zero(Repr::Int),
+        seal_num_zero(Repr::Int).into_value(),
         seal_str(&Utf8::of("k")),
         seal_list(&Vec::new()),
     ];
@@ -1126,7 +1126,7 @@ fn set_permutations_encode_identically(t: &mut Trials) {
             .map(|i| seal_num_positive(
                 &Magnitude::Finite { significand: 1, biased_scale: *i as u32 },
                 Repr::Int,
-            ))
+            ).into_value())
             .collect();
         CanonicalSet::of(parts).seal()
     };
@@ -1140,29 +1140,36 @@ fn set_permutations_encode_identically(t: &mut Trials) {
 
 fn set_duplicates_encode_identically(t: &mut Trials) {
     let one = || seal_num_positive(
-        &Magnitude::Finite { significand: 1, biased_scale: 0 }, Repr::Int);
+        &Magnitude::Finite { significand: 1, biased_scale: 0 }, Repr::Int).into_value();
     let two = || seal_num_positive(
-        &Magnitude::Finite { significand: 1, biased_scale: 1 }, Repr::Int);
+        &Magnitude::Finite { significand: 1, biased_scale: 1 }, Repr::Int).into_value();
     let plain = CanonicalSet::of(vec![one(), two()]).seal();
     let dup = CanonicalSet::of(vec![one(), two(), one()]).seal();
     t.check("a repeated element does not change a set", plain.as_bytes() == dup.as_bytes());
 }
 
+/// `seal_vector` takes `Vec<NumericBytes>`, whose only mints are the four
+/// numeric doors, so a component of another kind is not a value the door can
+/// be handed. What runs here is that every component it does accept reads back
+/// as a Num, and that the row ends where the value does.
 fn vector_components_are_numeric_only(t: &mut Trials) {
-    let mixed = seal_vector(&vec![
-        seal_num_zero(Repr::Int),
-        seal_str(&Utf8::of("not a number")),
-    ]);
-    let numeric = seal_vector(&vec![seal_num_zero(Repr::Int), seal_num_zero(Repr::Int)]);
-    t.check(
-        "a vector cannot carry a non-numeric component",
-        mixed.as_bytes().len() == numeric.as_bytes().len(),
-    );
+    for n in 0usize..=8 {
+        let v = seal_vector(vec_of(n));
+        let bytes = v.as_bytes();
+        t.check("a vector reads back exactly",
+            scanned(scan_value(bytes)) == Some(bytes.len()));
+        let mut at = 1 + DIM_BYTES;
+        let mut counted = 0usize;
+        while counted < n {
+            t.check("every vector component is a Num", bytes[at] == TAG_NUM);
+            match scanned(scan_value(&bytes[at..])) {
+                Some(len) => { at += len; counted += 1; }
+                None => { t.check("a component scans", false); break; }
+            }
+        }
+        t.check("the component row ends where the value does", at + 1 == bytes.len());
+    }
 }
-
-/// `seal_str` takes `Utf8`, whose only mint is a `&str`, so an invalid payload
-/// is not a value the door can be handed. What runs here is that every payload
-/// it does produce survives the round trip as text.
 fn string_payload_is_valid_utf8(t: &mut Trials) {
     for s in ["", "a", "hello", "\u{0}", "\u{7f}", "\u{80}", "\u{7ff}", "\u{800}",
               "\u{ffff}", "\u{10000}", "\u{10ffff}", "e\u{301}", "\u{1f600}",
@@ -1212,13 +1219,13 @@ fn red_team_corpus() -> Vec<CanonicalBytes> {
         seal_null(),
         seal_bool(true),
         seal_bool(false),
-        seal_num_zero(Repr::Int),
-        seal_num_zero(Repr::Float),
-        seal_num_nan(),
-        seal_num_negative(&mag_min(), Repr::Int),
-        seal_num_positive(&mag_max(), Repr::Float),
-        seal_num_positive(&Magnitude::Infinite, Repr::Float),
-        seal_num_negative(&Magnitude::Infinite, Repr::Float),
+        seal_num_zero(Repr::Int).into_value(),
+        seal_num_zero(Repr::Float).into_value(),
+        seal_num_nan().into_value(),
+        seal_num_negative(&mag_min(), Repr::Int).into_value(),
+        seal_num_positive(&mag_max(), Repr::Float).into_value(),
+        seal_num_positive(&Magnitude::Infinite, Repr::Float).into_value(),
+        seal_num_negative(&Magnitude::Infinite, Repr::Float).into_value(),
         seal_str(&Utf8::of("")),
         seal_str(&Utf8::of("hello")),
         seal_str(&Utf8::of("\u{0}\u{1}\u{ff}")),
@@ -1229,10 +1236,10 @@ fn red_team_corpus() -> Vec<CanonicalBytes> {
         seal_regex(b"", &RegexFlags::new(false, false, false)),
         seal_regex(b"a.*b", &RegexFlags::new(true, false, true)),
         seal_json(&seal_null()),
-        seal_vector(&Vec::new()),
-        seal_vector(&vec_of(3)),
+        seal_vector(Vec::new()),
+        seal_vector(vec_of(3)),
         seal_list(&Vec::new()),
-        seal_list(&vec_of(2)),
+        seal_list(&vec_of(2).into_iter().map(|n| n.into_value()).collect()),
         seal_set(&Vec::new()),
         seal_validity(&[0x00; 9]),
         seal_geometry(&[0x00; 8]),

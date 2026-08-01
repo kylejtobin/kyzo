@@ -1369,7 +1369,7 @@ pub fn total(receipt: &Receipt) -> Cents {
 
 **Binds:** Core
 **Rule:** Reduce a collection with a fold.
-**Violation:** NondeterministicIteration
+**Violation:** UnprovenConstruction
 
 A mutable accumulator makes the result a function of how far the loop got, so a partial traversal and a complete one have the same type and only one of them is the answer.
 
