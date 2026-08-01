@@ -1211,6 +1211,149 @@ fn red_team_corpus() -> Vec<CanonicalBytes> {
     ]
 }
 
+
+// ====================== independent byte-order oracle =======================
+
+/// Rust's own slice ordering, used as a second opinion on `lex_le_independent`.
+fn slice_le(a: &[u8], b: &[u8]) -> bool { a <= b }
+
+fn oracle_corpus() -> Vec<Vec<u8>> {
+    let mut v = all_strings(&[0x00, 0x01, 0x41, 0xFF], 3);
+    v.extend(all_strings(&[0x00, 0xFF], 4));
+    v.push(vec![0x41; 12]);
+    v.push({ let mut x = vec![0x41; 12]; x.push(0x00); x });
+    v.push({ let mut x = vec![0x41; 12]; x.push(0xFF); x });
+    v
+}
+
+fn lex_le_matches_independent_slice_comparator_exhaustive(t: &mut Trials) {
+    let c = oracle_corpus();
+    for a in &c {
+        for b in &c {
+            t.check("lex_le agrees with slice order",
+                lex_le_independent(a, b) == slice_le(a, b));
+        }
+    }
+}
+
+fn lex_le_reflexive_exhaustive(t: &mut Trials) {
+    for a in &oracle_corpus() {
+        t.check("lex_le is reflexive", lex_le_independent(a, a));
+    }
+}
+
+fn lex_le_antisymmetric_exhaustive(t: &mut Trials) {
+    let c = oracle_corpus();
+    for a in &c {
+        for b in &c {
+            if lex_le_independent(a, b) && lex_le_independent(b, a) {
+                t.check("mutual lex_le means equal", a == b);
+            }
+        }
+    }
+}
+
+fn lex_le_transitive_exhaustive(t: &mut Trials) {
+    let c = all_strings(&[0x00, 0x01, 0xFF], 3);
+    for a in &c {
+        for b in &c {
+            if !lex_le_independent(a, b) { continue; }
+            for d in &c {
+                if lex_le_independent(b, d) {
+                    t.check("lex_le is transitive", lex_le_independent(a, d));
+                }
+            }
+        }
+    }
+}
+
+fn lex_le_total_exhaustive(t: &mut Trials) {
+    let c = oracle_corpus();
+    for a in &c {
+        for b in &c {
+            t.check("lex_le is total",
+                lex_le_independent(a, b) || lex_le_independent(b, a));
+        }
+    }
+}
+
+fn lex_le_empty_is_minimum(t: &mut Trials) {
+    let empty: Vec<u8> = Vec::new();
+    for a in &oracle_corpus() {
+        t.check("the empty string is the minimum", lex_le_independent(&empty, a));
+    }
+}
+
+fn lex_le_strict_prefix_sorts_first(t: &mut Trials) {
+    let c = oracle_corpus();
+    for a in &c {
+        for b in &c {
+            if is_proper_prefix(a, b) {
+                t.check("a strict prefix sorts first",
+                    lex_le_independent(a, b) && !lex_le_independent(b, a));
+            }
+        }
+    }
+}
+
+fn lex_le_first_differing_byte_decides(t: &mut Trials) {
+    let c = oracle_corpus();
+    for a in &c {
+        for b in &c {
+            let mut i = 0usize;
+            while i < a.len() && i < b.len() && a[i] == b[i] { i += 1; }
+            if i < a.len() && i < b.len() {
+                t.check("the first differing byte decides",
+                    lex_le_independent(a, b) == (a[i] < b[i]));
+            }
+        }
+    }
+}
+
+fn lex_le_long_common_prefix(t: &mut Trials) {
+    for n in 0usize..=64 {
+        let base = vec![0x41u8; n];
+        for (lo, hi) in [(0x00u8, 0x01u8), (0x7F, 0x80), (0xFE, 0xFF), (0x00, 0xFF)] {
+            let mut a = base.clone(); a.push(lo);
+            let mut b = base.clone(); b.push(hi);
+            t.check("a long common prefix defers to the byte after it",
+                lex_le_independent(&a, &b) && !lex_le_independent(&b, &a));
+        }
+    }
+}
+
+fn lex_le_zero_and_ff_boundaries(t: &mut Trials) {
+    for a in 0u16..=255 {
+        for b in 0u16..=255 {
+            t.check("single bytes order numerically",
+                lex_le_independent(&[a as u8], &[b as u8]) == (a <= b));
+        }
+    }
+}
+
+fn is_prefix_matches_independent_starts_with(t: &mut Trials) {
+    let c = oracle_corpus();
+    for a in &c {
+        for b in &c {
+            let mine = a.len() <= b.len() && &b[..a.len()] == &a[..];
+            t.check("is_prefix agrees with starts_with", mine == b.starts_with(a));
+        }
+    }
+}
+
+fn incomparable_rejects_every_strict_prefix_pair(t: &mut Trials) {
+    let corpus = red_team_corpus();
+    for a in &corpus {
+        for b in &corpus {
+            let (x, y) = (a.as_bytes(), b.as_bytes());
+            if x != y {
+                t.check("no canonical encoding is a prefix of another",
+                    !is_proper_prefix(x, y) && !is_proper_prefix(y, x));
+            }
+        }
+    }
+}
+
 fn main() {
     println!("canonical-trials: adversarial campaign against the order law\n");
 
@@ -1269,6 +1412,21 @@ fn main() {
     validity_payload_cannot_be_arbitrary_bytes(&mut t);
     geometry_payload_cannot_be_arbitrary_bytes(&mut t);
     t.report("red team");
+
+    println!("byte-order oracle");
+    lex_le_matches_independent_slice_comparator_exhaustive(&mut t);
+    lex_le_reflexive_exhaustive(&mut t);
+    lex_le_antisymmetric_exhaustive(&mut t);
+    lex_le_transitive_exhaustive(&mut t);
+    lex_le_total_exhaustive(&mut t);
+    lex_le_empty_is_minimum(&mut t);
+    lex_le_strict_prefix_sorts_first(&mut t);
+    lex_le_first_differing_byte_decides(&mut t);
+    lex_le_long_common_prefix(&mut t);
+    lex_le_zero_and_ff_boundaries(&mut t);
+    is_prefix_matches_independent_starts_with(&mut t);
+    incomparable_rejects_every_strict_prefix_pair(&mut t);
+    t.report("byte-order oracle");
 
     if t.failed.is_empty() {
         println!("\nall {} checks passed", t.run.count());

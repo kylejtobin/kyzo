@@ -26,18 +26,18 @@
 
 ## Independent byte-order oracle
 
-- [ ] lex_le_matches_independent_slice_comparator_exhaustive
-- [ ] lex_le_reflexive_exhaustive
-- [ ] lex_le_antisymmetric_exhaustive
-- [ ] lex_le_transitive_exhaustive
-- [ ] lex_le_total_exhaustive
-- [ ] lex_le_empty_is_minimum
-- [ ] lex_le_strict_prefix_sorts_first
-- [ ] lex_le_first_differing_byte_decides
-- [ ] lex_le_long_common_prefix
-- [ ] lex_le_zero_and_ff_boundaries
-- [ ] is_prefix_matches_independent_starts_with
-- [ ] incomparable_rejects_every_strict_prefix_pair
+- [x] lex_le_matches_independent_slice_comparator_exhaustive
+- [x] lex_le_reflexive_exhaustive
+- [x] lex_le_antisymmetric_exhaustive
+- [x] lex_le_transitive_exhaustive
+- [x] lex_le_total_exhaustive
+- [x] lex_le_empty_is_minimum
+- [x] lex_le_strict_prefix_sorts_first
+- [x] lex_le_first_differing_byte_decides
+- [x] lex_le_long_common_prefix
+- [x] lex_le_zero_and_ff_boundaries
+- [x] is_prefix_matches_independent_starts_with
+- [x] incomparable_rejects_every_strict_prefix_pair
 
 ## Concatenation and closure law
 
