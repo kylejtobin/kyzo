@@ -199,55 +199,55 @@
 
 ## Construction authority and compile-fail
 
-- [ ] canonical_bytes_fields_are_inaccessible
-- [ ] canonical_bytes_cannot_be_forged_outside_module
-- [ ] body_type_is_inaccessible
-- [ ] body_fields_are_inaccessible
-- [ ] seal_function_is_inaccessible
-- [ ] raw_tag_cannot_be_supplied_by_external_caller
-- [ ] raw_body_bytes_cannot_be_supplied_by_external_caller
-- [ ] magnitude_fields_are_inaccessible
-- [ ] magnitude_cannot_be_built_from_raw_bytes
-- [ ] regex_flags_fields_are_inaccessible
-- [ ] regex_flags_cannot_contain_unknown_bits
-- [ ] repr_has_only_int_and_float_variants
-- [ ] nan_representation_byte_cannot_be_selected_by_caller
-- [ ] numeric_class_byte_cannot_be_selected_by_caller
-- [ ] interval_marker_byte_cannot_be_selected_by_caller
-- [ ] raw_set_sealer_is_not_public
-- [ ] raw_set_sealer_has_only_canonical_set_callers
-- [ ] public_api_does_not_expose_raw_grammar_authority
+- [x] canonical_bytes_fields_are_inaccessible
+- [x] canonical_bytes_cannot_be_forged_outside_module
+- [x] body_type_is_inaccessible
+- [x] body_fields_are_inaccessible
+- [x] seal_function_is_inaccessible
+- [x] raw_tag_cannot_be_supplied_by_external_caller
+- [x] raw_body_bytes_cannot_be_supplied_by_external_caller
+- [x] magnitude_fields_are_inaccessible
+- [x] magnitude_cannot_be_built_from_raw_bytes
+- [x] regex_flags_fields_are_inaccessible
+- [x] regex_flags_cannot_contain_unknown_bits
+- [x] repr_has_only_int_and_float_variants
+- [x] nan_representation_byte_cannot_be_selected_by_caller
+- [x] numeric_class_byte_cannot_be_selected_by_caller
+- [x] interval_marker_byte_cannot_be_selected_by_caller
+- [x] raw_set_sealer_is_not_public
+- [x] raw_set_sealer_has_only_canonical_set_callers
+- [x] public_api_does_not_expose_raw_grammar_authority
 
 ## Numeric encoding
 
-- [ ] numeric_classes_sort_negative_zero_positive_nan
-- [ ] zero_int_sorts_before_zero_float
-- [ ] equal_magnitude_int_sorts_before_float
-- [ ] tie_break_is_consulted_only_after_magnitude
-- [ ] magnitude_is_exactly_released_width
-- [ ] magnitude_exponent_is_big_endian
-- [ ] magnitude_fraction_is_big_endian
-- [ ] magnitude_all_input_bits_affect_output
-- [ ] magnitude_finite_constructor_is_injective
-- [ ] magnitude_infinite_constructor_is_unique
-- [ ] finite_domain_excludes_infinity_sentinel
-- [ ] positive_magnitude_order_matches_semantic_order
-- [ ] negative_magnitude_order_is_reversed_correctly
-- [ ] negative_exponent_boundary_orders_correctly
-- [ ] negative_fraction_boundary_orders_correctly
-- [ ] positive_exponent_boundary_orders_correctly
-- [ ] positive_fraction_boundary_orders_correctly
-- [ ] fraction_carry_transition_preserves_order
-- [ ] exponent_carry_transition_preserves_order
-- [ ] negative_infinity_is_global_numeric_minimum
-- [ ] positive_infinity_sorts_below_nan
-- [ ] nan_sorts_above_every_numeric_value
-- [ ] nan_has_exactly_one_encoding
-- [ ] numeric_encoding_is_injective_across_classes
-- [ ] numeric_semantic_equality_implies_identical_bytes
-- [ ] numeric_semantic_order_matches_bytes_property
-- [ ] numeric_total_order_matches_database_number_order
-- [ ] numeric_golden_vectors_cover_every_boundary
+- [x] numeric_classes_sort_negative_zero_positive_nan
+- [x] zero_int_sorts_before_zero_float
+- [x] equal_magnitude_int_sorts_before_float
+- [x] tie_break_is_consulted_only_after_magnitude
+- [x] magnitude_is_exactly_released_width
+- [x] magnitude_exponent_is_big_endian
+- [x] magnitude_fraction_is_big_endian
+- [x] magnitude_all_input_bits_affect_output
+- [x] magnitude_finite_constructor_is_injective
+- [x] magnitude_infinite_constructor_is_unique
+- [x] finite_domain_excludes_infinity_sentinel
+- [x] positive_magnitude_order_matches_semantic_order
+- [x] negative_magnitude_order_is_reversed_correctly
+- [x] negative_exponent_boundary_orders_correctly
+- [x] negative_fraction_boundary_orders_correctly
+- [x] positive_exponent_boundary_orders_correctly
+- [x] positive_fraction_boundary_orders_correctly
+- [x] fraction_carry_transition_preserves_order
+- [x] exponent_carry_transition_preserves_order
+- [x] negative_infinity_is_global_numeric_minimum
+- [x] positive_infinity_sorts_below_nan
+- [x] nan_sorts_above_every_numeric_value
+- [x] nan_has_exactly_one_encoding
+- [x] numeric_encoding_is_injective_across_classes
+- [x] numeric_semantic_equality_implies_identical_bytes
+- [x] numeric_semantic_order_matches_bytes_property
+- [x] numeric_total_order_matches_database_number_order
+- [x] numeric_golden_vectors_cover_every_boundary
 
 ## Strings and byte strings
 

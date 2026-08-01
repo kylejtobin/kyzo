@@ -15,6 +15,7 @@ resolver = "3"
 # `package =` rename key. No `[patch.crates-io]` — that trick could never
 # publish (cargo strips it; a published crate would bind upstream fjall).
 members = [
+    "crates/canonical-forgery",
     "crates/canonical-trials",
     "crates/kyzo-core",
     "crates/kyzo-bin",

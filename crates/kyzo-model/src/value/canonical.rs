@@ -2411,11 +2411,57 @@ pub proof fn lemma_frac_mask()
 /// above every one of them.
 pub const EXP_INFINITE: u32 = 0xFFFF;
 
+/// A finite magnitude: `significand × 2^biased_scale`, the scale biased so the
+/// field is unsigned and its numeric order is its byte order.
+///
+/// The two bounds were a specification precondition on every numeric door,
+/// which binds the verifier and no caller outside it. A zero significand has no
+/// binade, and a scale that carries the exponent past its 16 bits would write
+/// bits the payload cannot hold — two different numbers with one encoding. Here
+/// both are the type: a pair that fails either is not a magnitude.
+// CONSTRUCT: ValueObject FiniteMagnitude
+pub struct FiniteMagnitude {
+    significand: u64,
+    biased_scale: u32,
+}
+
+impl FiniteMagnitude {
+    pub closed spec fn spec_significand(&self) -> nat { self.significand as nat }
+    pub closed spec fn spec_scale(&self) -> nat { self.biased_scale as nat }
+
+    #[verifier::type_invariant]
+    pub closed spec fn wf_finite(&self) -> bool {
+        self.significand > 0 && self.biased_scale + 64 < EXP_INFINITE
+    }
+
+    /// The sole mint. Refusing hands nothing back because there was nothing to
+    /// hand: two numbers went in and neither is owned.
+    pub fn of(significand: u64, biased_scale: u32) -> (r: Option<FiniteMagnitude>)
+        ensures
+            r is Some <==> (significand > 0 && biased_scale + 64 < EXP_INFINITE),
+            r is Some ==> r->Some_0.spec_significand() == significand,
+            r is Some ==> r->Some_0.spec_scale() == biased_scale,
+    {
+        // Written as a subtraction on the constant so the sum cannot overflow
+        // the field it is being checked against.
+        match significand > 0 && biased_scale < EXP_INFINITE - 64 {
+            true => Some(FiniteMagnitude { significand, biased_scale }),
+            false => None,
+        }
+    }
+
+    pub fn significand(&self) -> (r: u64)
+        ensures r == self.spec_significand(), r > 0
+    { proof { use_type_invariant(self); } self.significand }
+
+    pub fn scale(&self) -> (r: u32)
+        ensures r == self.spec_scale(), r + 64 < EXP_INFINITE
+    { proof { use_type_invariant(self); } self.biased_scale }
+}
+
 // CONSTRUCT: ClosedSum Magnitude
 pub enum Magnitude {
-    /// `significand × 2^(biased_scale)`, the scale biased so the field is
-    /// unsigned and its numeric order is its byte order.
-    Finite { significand: u64, biased_scale: u32 },
+    Finite(FiniteMagnitude),
     Infinite,
 }
 
@@ -2427,8 +2473,7 @@ pub open spec fn pow2(n: nat) -> nat
 /// `Infinite`, which is above every finite value rather than equal to one.
 pub open spec fn mag_value(m: Magnitude) -> Option<nat> {
     match m {
-        Magnitude::Finite { significand, biased_scale } =>
-            Some((significand as nat * pow2(biased_scale as nat)) as nat),
+        Magnitude::Finite(f) => Some((f.spec_significand() * pow2(f.spec_scale())) as nat),
         Magnitude::Infinite => None,
     }
 }
@@ -2454,11 +2499,11 @@ pub open spec fn spec_bit_len(v: nat) -> nat
 /// stated arithmetically rather than as a byte diagram.
 pub open spec fn spec_packed(m: Magnitude) -> nat {
     match m {
-        Magnitude::Finite { significand, biased_scale } => {
-            let bits = spec_bit_len(significand as nat);
-            let exponent = (bits + biased_scale as nat) as nat;
+        Magnitude::Finite(f) => {
+            let bits = spec_bit_len(f.spec_significand());
+            let exponent = (bits + f.spec_scale()) as nat;
             (exponent * pow2(FRAC_BITS as nat)
-                + significand as nat * pow2((FRAC_BITS - bits) as nat)) as nat
+                + f.spec_significand() * pow2((FRAC_BITS - bits) as nat)) as nat
         }
         Magnitude::Infinite =>
             (EXP_INFINITE as nat * pow2(FRAC_BITS as nat)
@@ -2639,8 +2684,8 @@ pub proof fn lemma_pow2_add(a: nat, b: nat)
 /// The exponent field a magnitude carries.
 pub open spec fn spec_exp(m: Magnitude) -> nat {
     match m {
-        Magnitude::Finite { significand, biased_scale } =>
-            (spec_bit_len(significand as nat) + biased_scale as nat) as nat,
+        Magnitude::Finite(f) =>
+            (spec_bit_len(f.spec_significand()) + f.spec_scale()) as nat,
         Magnitude::Infinite => EXP_INFINITE as nat,
     }
 }
@@ -2648,9 +2693,9 @@ pub open spec fn spec_exp(m: Magnitude) -> nat {
 /// The fraction field: the significand left-aligned in `FRAC_BITS` bits.
 pub open spec fn spec_frac(m: Magnitude) -> nat {
     match m {
-        Magnitude::Finite { significand, biased_scale } =>
-            (significand as nat
-                * pow2((FRAC_BITS - spec_bit_len(significand as nat)) as nat)) as nat,
+        Magnitude::Finite(f) =>
+            (f.spec_significand()
+                * pow2((FRAC_BITS - spec_bit_len(f.spec_significand())) as nat)) as nat,
         Magnitude::Infinite => (pow2(FRAC_BITS as nat) - 1) as nat,
     }
 }
@@ -2669,8 +2714,8 @@ pub proof fn lemma_frac_normalized(m: Magnitude)
         spec_frac(m) < pow2(FRAC_BITS as nat),
 {
     match m {
-        Magnitude::Finite { significand, biased_scale } => {
-            let s = significand as nat;
+        Magnitude::Finite(f) => {
+            let s = f.spec_significand();
             let bits = spec_bit_len(s);
             lemma_binade(s);
             assert(pow2(64nat) == 18446744073709551616nat) by (compute);
@@ -2722,8 +2767,8 @@ pub proof fn lemma_value_scaled(m: Magnitude)
         mag_value(m)->Some_0 * pow2(FRAC_BITS as nat)
             == spec_frac(m) * pow2(spec_exp(m)),
 {
-    let s = m->Finite_significand as nat;
-    let sc = m->Finite_biased_scale as nat;
+    let s = m->Finite_0.spec_significand();
+    let sc = m->Finite_0.spec_scale();
     let bits = spec_bit_len(s);
     assert(pow2(64nat) == 18446744073709551616nat) by (compute);
     lemma_bit_len_bound(s, 64nat);
@@ -2791,13 +2836,13 @@ pub proof fn lemma_packed_order(a: Magnitude, b: Magnitude)
             fa < pf, fb < pf;
     match (a, b) {
         (Magnitude::Infinite, Magnitude::Infinite) => {}
-        (Magnitude::Finite { .. }, Magnitude::Infinite) => {
+        (Magnitude::Finite(_), Magnitude::Infinite) => {
             lemma_exp_finite_below_infinite(a);
         }
-        (Magnitude::Infinite, Magnitude::Finite { .. }) => {
+        (Magnitude::Infinite, Magnitude::Finite(_)) => {
             lemma_exp_finite_below_infinite(b);
         }
-        (Magnitude::Finite { .. }, Magnitude::Finite { .. }) => {
+        (Magnitude::Finite(_), Magnitude::Finite(_)) => {
             lemma_value_scaled(a);
             lemma_value_scaled(b);
             lemma_pow2_pos(FRAC_BITS as nat);
@@ -2823,7 +2868,7 @@ pub proof fn lemma_exp_finite_below_infinite(m: Magnitude)
     requires wf_mag(m), m is Finite
     ensures spec_exp(m) < EXP_INFINITE as nat
 {
-    let s = m->Finite_significand as nat;
+    let s = m->Finite_0.spec_significand();
     assert(pow2(64nat) == 18446744073709551616nat) by (compute);
     lemma_bit_len_bound(s, 64nat);
 }
@@ -2842,7 +2887,7 @@ pub proof fn lemma_packed_fits(m: Magnitude)
     let pf = pow2(FRAC_BITS as nat);
     assert(e <= EXP_INFINITE as nat) by {
         match m {
-            Magnitude::Finite { .. } => { lemma_exp_finite_below_infinite(m); }
+            Magnitude::Finite(_) => { lemma_exp_finite_below_infinite(m); }
             Magnitude::Infinite => {}
         }
     }
@@ -2880,8 +2925,7 @@ pub proof fn theorem_magnitude_order(a: Magnitude, b: Magnitude, tie: Repr)
 /// A magnitude the numeric doors accept.
 pub open spec fn wf_mag(m: Magnitude) -> bool {
     match m {
-        Magnitude::Finite { significand, biased_scale } =>
-            significand > 0 && biased_scale + 64 < EXP_INFINITE,
+        Magnitude::Finite(f) => f.wf_finite(),
         Magnitude::Infinite => true,
     }
 }
@@ -2931,15 +2975,13 @@ pub fn be_bytes(v: u128, width: usize) -> (r: Vec<u8>)
 impl Magnitude {
     /// The exponent this magnitude carries. `Infinite`'s is the reserved one.
     pub fn exponent(&self) -> (r: u32)
-        requires match self {
-            Magnitude::Finite { significand, biased_scale } =>
-                *significand > 0 && *biased_scale + 64 < EXP_INFINITE,
-            Magnitude::Infinite => true,
-        }
         ensures r <= EXP_INFINITE
     {
         match self {
-            Magnitude::Finite { significand, biased_scale } => bit_len(*significand) + *biased_scale,
+            Magnitude::Finite(f) => {
+                proof { use_type_invariant(f); }
+                bit_len(f.significand()) + f.scale()
+            }
             Magnitude::Infinite => EXP_INFINITE,
         }
     }
@@ -2947,17 +2989,14 @@ impl Magnitude {
     /// Exponent in the high 16 bits, fraction left-aligned below it. One
     /// expression, so the layout has no second place to disagree with itself.
     fn packed(&self) -> (r: u128)
-        requires match self {
-            Magnitude::Finite { significand, biased_scale } =>
-                *significand > 0 && *biased_scale + 64 < EXP_INFINITE,
-            Magnitude::Infinite => true,
-        }
     {
         match self {
-            Magnitude::Finite { significand, biased_scale } => {
-                let bits = bit_len(*significand);
-                let exponent: u128 = (bit_len(*significand) + *biased_scale) as u128;
-                (exponent << FRAC_BITS) | ((*significand as u128) << (FRAC_BITS - bits))
+            Magnitude::Finite(f) => {
+                proof { use_type_invariant(f); }
+                let s = f.significand();
+                let bits = bit_len(s);
+                let exponent: u128 = (bits + f.scale()) as u128;
+                (exponent << FRAC_BITS) | ((s as u128) << (FRAC_BITS - bits))
             }
             Magnitude::Infinite => {
                 ((EXP_INFINITE as u128) << FRAC_BITS) | FRAC_MASK
@@ -2972,11 +3011,6 @@ impl Magnitude {
     /// tie-break is not complemented, so `Int` sorts before `Float` in both
     /// classes rather than flipping with the sign.
     pub fn body_negated(&self, tie: Repr) -> (r: Vec<u8>)
-        requires match self {
-            Magnitude::Finite { significand, biased_scale } =>
-                *significand > 0 && *biased_scale + 64 < EXP_INFINITE,
-            Magnitude::Infinite => true,
-        }
         ensures r@.len() == MAG_BYTES + 1
     {
         let p = be_bytes(self.packed(), MAG_BYTES);
@@ -2992,11 +3026,6 @@ impl Magnitude {
 
     /// The payload, big-endian, `MAG_BYTES` wide, then the tie-break.
     pub fn body(&self, tie: Repr) -> (r: Vec<u8>)
-        requires match self {
-            Magnitude::Finite { significand, biased_scale } =>
-                *significand > 0 && *biased_scale + 64 < EXP_INFINITE,
-            Magnitude::Infinite => true,
-        }
         ensures r@.len() == MAG_BYTES + 1
     {
         let mut b = be_bytes(self.packed(), MAG_BYTES);
@@ -3008,11 +3037,6 @@ impl Magnitude {
 /// A signed magnitude. The class byte is not a parameter — the door the caller
 /// picks IS the class, so a magnitude cannot be filed under the wrong sign.
 pub fn seal_num_negative(mag: &Magnitude, tie: Repr) -> (r: NumericBytes)
-    requires match mag {
-        Magnitude::Finite { significand, biased_scale } =>
-            *significand > 0 && *biased_scale + 64 < EXP_INFINITE,
-        Magnitude::Infinite => true,
-    }
 {
     proof { lemma_tag_shapes(); lemma_branch_shapes(); }
     let inner = Body::fixed(mag.body_negated(tie));
@@ -3020,11 +3044,6 @@ pub fn seal_num_negative(mag: &Magnitude, tie: Repr) -> (r: NumericBytes)
 }
 
 pub fn seal_num_positive(mag: &Magnitude, tie: Repr) -> (r: NumericBytes)
-    requires match mag {
-        Magnitude::Finite { significand, biased_scale } =>
-            *significand > 0 && *biased_scale + 64 < EXP_INFINITE,
-        Magnitude::Infinite => true,
-    }
 {
     proof { lemma_tag_shapes(); lemma_branch_shapes(); }
     let inner = Body::fixed(mag.body(tie));

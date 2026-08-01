@@ -1,0 +1,33 @@
+[package]
+name = "canonical-forgery"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Forgeries against the canonical encoder's construction authority, which must not compile"
+publish = false
+
+[features]
+# The forgeries are built only to be rejected; see src/bin/forge.rs.
+compile-fail = []
+
+[[bin]]
+name = "forge"
+path = "src/bin/forge.rs"
+required-features = ["compile-fail"]
+
+[[bin]]
+name = "forge_literal"
+path = "src/bin/forge_literal.rs"
+required-features = ["compile-fail"]
+
+[dependencies]
+canonical-trials = { path = "../canonical-trials" }
+
+[lints]
+workspace = true

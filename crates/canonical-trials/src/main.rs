@@ -35,7 +35,7 @@ use canonical::{
     Bound, Refusal, Utf8, NumericBytes, Branches, Reason, grammar_exec, CanonicalBytes, Shape, escape, scan_value, seal_bool, seal_bytes,
     seal_geometry, seal_interval, seal_interval_empty, seal_json, seal_list, seal_null,
     seal_num_negative, seal_num_nan, seal_num_positive, seal_num_zero, seal_regex, seal_set, seal_str,
-    Magnitude, Repr, RegexFlags, EXP_INFINITE, DIM_BYTES,
+    FiniteMagnitude, Magnitude, Repr, RegexFlags, EXP_INFINITE, DIM_BYTES, MAG_BYTES,
     seal_uuid, seal_validity, seal_vector, shape_scan, Components, Geometry, RowItem, Validity,
     Wrapped, MAX_DIMENSION,
 };
@@ -110,17 +110,28 @@ impl Trials {
     }
 }
 
-/// Lexicographic order on bytes, written independently of the encoder so the
-/// specification is compared against something, not against itself.
-/// The smallest finite magnitude the type admits: significand 1, scale 0.
-fn mag_min() -> Magnitude {
-    Magnitude::Finite { significand: 1, biased_scale: 0 }
+/// A finite magnitude, or the harness stops: a zero significand and a scale
+/// that would carry the exponent out of its field are not magnitudes, and the
+/// mint is where that is decided.
+fn mag(significand: u64, biased_scale: u32) -> Magnitude {
+    match FiniteMagnitude::of(significand, biased_scale) {
+        Some(f) => Magnitude::Finite(f),
+        None => {
+            eprintln!("canonical-trials: {significand}x2^{biased_scale} is not a magnitude");
+            std::process::exit(2)
+        }
+    }
 }
 
-/// The largest finite magnitude `wf_mag` admits: a saturated significand at
+/// The smallest finite magnitude the type admits: significand 1, scale 0.
+fn mag_min() -> Magnitude {
+    mag(1, 0)
+}
+
+/// The largest finite magnitude the type admits: a saturated significand at
 /// the greatest scale that still leaves the exponent below the reserved one.
 fn mag_max() -> Magnitude {
-    Magnitude::Finite { significand: u64::MAX, biased_scale: EXP_INFINITE - 65 }
+    mag(u64::MAX, EXP_INFINITE - 65)
 }
 
 /// `n` distinct components, so a vector's dimension is derived rather than
@@ -129,7 +140,7 @@ fn vec_of(n: usize) -> Vec<NumericBytes> {
     (0..n)
         .map(|i| {
             seal_num_positive(
-                &Magnitude::Finite { significand: 1, biased_scale: (i % 1000) as u32 },
+                &mag(1, (i % 1000) as u32),
                 Repr::Int,
             )
         })
@@ -241,6 +252,8 @@ fn deepest_nested_row() -> (CanonicalBytes, usize) {
 /// arithmetic because only the caller knows which buffer it handed over.
 fn stopped_at(input: &[u8], e: &Refusal<'_>) -> usize { input.len() - e.at().len() }
 
+/// Lexicographic order on bytes, written independently of the encoder so the
+/// specification is compared against something, not against itself.
 fn lex_le_independent(a: &[u8], b: &[u8]) -> bool {
     let n = a.len().min(b.len());
     for i in 0..n {
@@ -668,7 +681,7 @@ fn attack_nan_is_the_top_of_number(t: &mut Trials) {
     for scale in 0u32..=255 {
         for sig in [1u64, 2, 0xFF, 0x8000_0000_0000_0000, u64::MAX] {
             let n = seal_num_negative(
-                &Magnitude::Finite { significand: sig, biased_scale: scale },
+                &mag(sig, scale),
                 Repr::Int,
             );
             t.check(
@@ -967,7 +980,7 @@ fn negative_number_byte_order_matches_semantic_order(t: &mut Trials) {
     // number is more negative than the last and must sort strictly below it.
     for scale in 0u32..=400 {
         let n = seal_num_negative(
-            &Magnitude::Finite { significand: 3, biased_scale: scale },
+            &mag(3, scale),
             Repr::Int,
         );
         let cur = n.as_bytes().to_vec();
@@ -982,11 +995,11 @@ fn negative_number_byte_order_matches_semantic_order(t: &mut Trials) {
     // Same exponent, larger fraction: still more negative, still lower.
     for sig in 1u64..=200 {
         let a = seal_num_negative(
-            &Magnitude::Finite { significand: 256 + sig, biased_scale: 10 },
+            &mag(256 + sig, 10),
             Repr::Int,
         );
         let b = seal_num_negative(
-            &Magnitude::Finite { significand: 256 + sig + 1, biased_scale: 10 },
+            &mag(256 + sig + 1, 10),
             Repr::Int,
         );
         t.check(
@@ -1000,7 +1013,7 @@ fn negative_infinity_sorts_below_every_finite_number(t: &mut Trials) {
     let ninf = seal_num_negative(&Magnitude::Infinite, Repr::Float);
     for scale in [0u32, 1, 64, 1000, EXP_INFINITE - 66] {
         for sig in [1u64, 2, 0xFFFF, u64::MAX] {
-            let m = Magnitude::Finite { significand: sig, biased_scale: scale };
+            let m = mag(sig, scale);
             let finite_neg = seal_num_negative(&m, Repr::Int);
             t.check(
                 "negative infinity is below every finite negative",
@@ -1025,7 +1038,7 @@ fn positive_infinity_sorts_above_every_finite_number(t: &mut Trials) {
     let pinf = seal_num_positive(&Magnitude::Infinite, Repr::Float);
     for scale in [0u32, 1, 64, 1000, EXP_INFINITE - 66] {
         for sig in [1u64, 2, 0xFFFF, u64::MAX] {
-            let m = Magnitude::Finite { significand: sig, biased_scale: scale };
+            let m = mag(sig, scale);
             let finite_pos = seal_num_positive(&m, Repr::Int);
             t.check(
                 "positive infinity is above every finite positive",
@@ -1048,11 +1061,11 @@ fn magnitude_all_significand_bits_affect_encoding(t: &mut Trials) {
         let flipped: u64 = base ^ (1u64 << bit);
         if flipped == 0 { continue; }
         let a = seal_num_positive(
-            &Magnitude::Finite { significand: base, biased_scale: 0 },
+            &mag(base, 0),
             Repr::Int,
         );
         let b = seal_num_positive(
-            &Magnitude::Finite { significand: flipped, biased_scale: 0 },
+            &mag(flipped, 0),
             Repr::Int,
         );
         t.check(
@@ -1070,7 +1083,7 @@ fn magnitude_encoding_is_injective_over_significand(t: &mut Trials) {
     for sig in 1u64..=300 {
         for scale in 0u32..=40 {
             let bytes = seal_num_positive(
-                &Magnitude::Finite { significand: sig, biased_scale: scale },
+                &mag(sig, scale),
                 Repr::Int,
             ).as_bytes().to_vec();
             let value: u128 = (sig as u128) << scale;
@@ -1090,7 +1103,7 @@ fn finite_magnitude_cannot_equal_infinite_magnitude(t: &mut Trials) {
     // The greatest finite the type admits, plus a sweep near the ceiling.
     for scale in (EXP_INFINITE - 80)..(EXP_INFINITE - 64) {
         let fin = seal_num_positive(
-            &Magnitude::Finite { significand: u64::MAX, biased_scale: scale },
+            &mag(u64::MAX, scale),
             Repr::Int,
         );
         t.check(
@@ -1237,7 +1250,7 @@ fn set_permutations_encode_identically(t: &mut Trials) {
         let parts: Vec<RowItem> = order
             .iter()
             .map(|i| seal_num_positive(
-                &Magnitude::Finite { significand: 1, biased_scale: *i as u32 },
+                &mag(1, *i as u32),
                 Repr::Int,
             ).into_row_item())
             .collect();
@@ -1253,9 +1266,9 @@ fn set_permutations_encode_identically(t: &mut Trials) {
 
 fn set_duplicates_encode_identically(t: &mut Trials) {
     let one = || seal_num_positive(
-        &Magnitude::Finite { significand: 1, biased_scale: 0 }, Repr::Int).into_row_item();
+        &mag(1, 0), Repr::Int).into_row_item();
     let two = || seal_num_positive(
-        &Magnitude::Finite { significand: 1, biased_scale: 1 }, Repr::Int).into_row_item();
+        &mag(1, 1), Repr::Int).into_row_item();
     let plain = CanonicalSet::of(vec![one(), two()]).seal();
     let dup = CanonicalSet::of(vec![one(), two(), one()]).seal();
     t.check("a repeated element does not change a set", plain.as_bytes() == dup.as_bytes());
@@ -1614,6 +1627,42 @@ fn main() {
     fuzz_mutated_valid_encodings_never_have_two_readings(&mut t);
     t.report("independent reference");
 
+    println!("construction authority");
+    raw_set_sealer_has_only_canonical_set_callers(&mut t);
+    public_api_does_not_expose_raw_grammar_authority(&mut t);
+    t.report("construction authority");
+
+    println!("numeric");
+    numeric_classes_sort_negative_zero_positive_nan(&mut t);
+    zero_int_sorts_before_zero_float(&mut t);
+    equal_magnitude_int_sorts_before_float(&mut t);
+    tie_break_is_consulted_only_after_magnitude(&mut t);
+    magnitude_is_exactly_released_width(&mut t);
+    magnitude_exponent_is_big_endian(&mut t);
+    magnitude_fraction_is_big_endian(&mut t);
+    magnitude_all_input_bits_affect_output(&mut t);
+    magnitude_finite_constructor_is_injective(&mut t);
+    magnitude_infinite_constructor_is_unique(&mut t);
+    finite_domain_excludes_infinity_sentinel(&mut t);
+    positive_magnitude_order_matches_semantic_order(&mut t);
+    negative_magnitude_order_is_reversed_correctly(&mut t);
+    negative_exponent_boundary_orders_correctly(&mut t);
+    negative_fraction_boundary_orders_correctly(&mut t);
+    positive_exponent_boundary_orders_correctly(&mut t);
+    positive_fraction_boundary_orders_correctly(&mut t);
+    fraction_carry_transition_preserves_order(&mut t);
+    exponent_carry_transition_preserves_order(&mut t);
+    negative_infinity_is_global_numeric_minimum(&mut t);
+    positive_infinity_sorts_below_nan(&mut t);
+    nan_sorts_above_every_numeric_value(&mut t);
+    nan_has_exactly_one_encoding(&mut t);
+    numeric_encoding_is_injective_across_classes(&mut t);
+    numeric_semantic_equality_implies_identical_bytes(&mut t);
+    numeric_semantic_order_matches_bytes_property(&mut t);
+    numeric_total_order_matches_database_number_order(&mut t);
+    numeric_golden_vectors_cover_every_boundary(&mut t);
+    t.report("numeric");
+
     println!("strings, regex, uuid");
     empty_string_encodes_canonically(&mut t);
     empty_bytes_encodes_canonically(&mut t);
@@ -1819,10 +1868,7 @@ fn repr_of(r: reference::Repr) -> Repr {
 fn mag_of(m: reference::Mag) -> Magnitude {
     match m {
         reference::Mag::Infinite => Magnitude::Infinite,
-        reference::Mag::Finite { significand, scale } => Magnitude::Finite {
-            significand,
-            biased_scale: scale,
-        },
+        reference::Mag::Finite { significand, scale } => mag(significand, scale),
     }
 }
 
@@ -4571,5 +4617,597 @@ fn uuid_golden_vectors_are_architecture_independent(t: &mut Trials) {
     t.check(
         "reversing the identifier reverses the payload",
         seal_uuid(&reversed).as_bytes()[1..] == reversed,
+    );
+}
+
+// ============================ numeric encoding ==============================
+//
+// The number line, written down: negatives descending, zero, positives
+// ascending, NaN above all of it. Every trial below holds the encoding against
+// arithmetic, never against another encoding.
+
+/// The tie-break by index. `Repr` is not `Copy`, so a trial that wants one
+/// twice names it twice rather than holding it.
+///
+/// The magnitude mint lives beside the other harness doors, above.
+fn tie(k: usize) -> Repr {
+    match k {
+        0 => Repr::Int,
+        _ => Repr::Float,
+    }
+}
+
+/// Magnitudes in ascending order of what they denote, with the boundaries the
+/// packing has to cross: binade edges, a saturated significand, and the scale
+/// either side of a carry.
+fn ascending_magnitudes() -> Vec<Magnitude> {
+    let mut out = vec![
+        mag(1, 0),
+        mag(3, 0),
+        mag(1, 2),
+        mag(5, 0),
+        mag(3, 1),
+        mag(7, 0),
+        mag(1, 3),
+        mag(255, 0),
+        mag(1, 8),
+        mag(257, 0),
+        mag(u32::MAX as u64, 0),
+        mag(1, 32),
+        mag((u32::MAX as u64) + 2, 0),
+        mag(u64::MAX, 0),
+        mag(1, 64),
+        mag(1, 1000),
+        mag(u64::MAX, 1000),
+        mag(1, 1065),
+        mag(1, EXP_INFINITE - 65),
+        mag(u64::MAX, EXP_INFINITE - 65),
+    ];
+    out.push(Magnitude::Infinite);
+    out
+}
+
+/// What a magnitude denotes, as a pair the trials can compare with arithmetic
+/// rather than with bytes: where the top bit sits, and the significand aligned
+/// to it. `None` is the point above every finite one.
+fn denotation(m: &Magnitude) -> Option<(u64, u128)> {
+    match m {
+        Magnitude::Infinite => None,
+        Magnitude::Finite(f) => {
+            let significand = f.significand();
+            let mut bits = 0u32;
+            let mut x = significand;
+            while x > 0 {
+                bits += 1;
+                x /= 2;
+            }
+            Some((
+                bits as u64 + f.scale() as u64,
+                (significand as u128) << (64 - bits),
+            ))
+        }
+    }
+}
+
+fn cmp_denotation(a: &Magnitude, b: &Magnitude) -> Ordering {
+    match (denotation(a), denotation(b)) {
+        (None, None) => Ordering::Equal,
+        (None, Some(_)) => Ordering::Greater,
+        (Some(_), None) => Ordering::Less,
+        (Some(x), Some(y)) => x.cmp(&y),
+    }
+}
+
+/// Every number the trials sweep, in the order the line puts them.
+fn ascending_numbers() -> Vec<CanonicalBytes> {
+    let mut out: Vec<CanonicalBytes> = Vec::new();
+    let mags = ascending_magnitudes();
+    for m in mags.iter().rev() {
+        out.push(seal_num_negative(m, Repr::Int).into_value());
+        out.push(seal_num_negative(m, Repr::Float).into_value());
+    }
+    out.push(seal_num_zero(Repr::Int).into_value());
+    out.push(seal_num_zero(Repr::Float).into_value());
+    for m in mags.iter() {
+        out.push(seal_num_positive(m, Repr::Int).into_value());
+        out.push(seal_num_positive(m, Repr::Float).into_value());
+    }
+    out.push(seal_num_nan().into_value());
+    out
+}
+
+fn numeric_classes_sort_negative_zero_positive_nan(t: &mut Trials) {
+    let neg = seal_num_negative(&mag_min(), Repr::Int).into_value();
+    let zero = seal_num_zero(Repr::Int).into_value();
+    let pos = seal_num_positive(&mag_min(), Repr::Int).into_value();
+    let nan = seal_num_nan().into_value();
+    t.check("negative below zero", neg.as_bytes() < zero.as_bytes());
+    t.check("zero below positive", zero.as_bytes() < pos.as_bytes());
+    t.check("positive below nan", pos.as_bytes() < nan.as_bytes());
+    t.check("the class byte carries the order", neg.as_bytes()[1] < zero.as_bytes()[1]);
+    t.check("the class byte carries the order", zero.as_bytes()[1] < pos.as_bytes()[1]);
+    t.check("the class byte carries the order", pos.as_bytes()[1] < nan.as_bytes()[1]);
+}
+
+fn zero_int_sorts_before_zero_float(t: &mut Trials) {
+    let int = seal_num_zero(Repr::Int).into_value();
+    let float = seal_num_zero(Repr::Float).into_value();
+    t.check("integer zero sorts before float zero", int.as_bytes() < float.as_bytes());
+    t.check("the two zeroes differ only in the tie-break", int.as_bytes()[..2] == float.as_bytes()[..2]);
+    t.check("zero carries no magnitude", int.as_bytes().len() == 3);
+}
+
+fn equal_magnitude_int_sorts_before_float(t: &mut Trials) {
+    for m in ascending_magnitudes() {
+        let pos_int = seal_num_positive(&m, Repr::Int).into_value();
+        let pos_float = seal_num_positive(&m, Repr::Float).into_value();
+        t.check(
+            "at one positive magnitude the integer sorts first",
+            pos_int.as_bytes() < pos_float.as_bytes(),
+        );
+        let neg_int = seal_num_negative(&m, Repr::Int).into_value();
+        let neg_float = seal_num_negative(&m, Repr::Float).into_value();
+        t.check(
+            "at one negative magnitude the integer still sorts first",
+            neg_int.as_bytes() < neg_float.as_bytes(),
+        );
+    }
+}
+
+fn tie_break_is_consulted_only_after_magnitude(t: &mut Trials) {
+    let mags = ascending_magnitudes();
+    for (i, a) in mags.iter().enumerate() {
+        for (j, b) in mags.iter().enumerate() {
+            if i == j {
+                continue;
+            }
+            // The lower magnitude as a float against the higher as an integer:
+            // if the tie-break were read first, the float would win.
+            let low = seal_num_positive(a, Repr::Float).into_value();
+            let high = seal_num_positive(b, Repr::Int).into_value();
+            t.check(
+                "the magnitude decides before the tie-break is read",
+                (low.as_bytes() < high.as_bytes()) == (i < j),
+            );
+        }
+    }
+}
+
+fn magnitude_is_exactly_released_width(t: &mut Trials) {
+    for m in ascending_magnitudes() {
+        for k in 0..2usize {
+            let pos = seal_num_positive(&m, tie(k)).into_value();
+            let neg = seal_num_negative(&m, tie(k)).into_value();
+            t.check(
+                "a signed number is tag, class, magnitude, tie-break",
+                pos.as_bytes().len() == 2 + MAG_BYTES + 1,
+            );
+            t.check(
+                "the negative class is the same width",
+                neg.as_bytes().len() == 2 + MAG_BYTES + 1,
+            );
+        }
+    }
+}
+
+fn magnitude_exponent_is_big_endian(t: &mut Trials) {
+    // The exponent is the top 16 bits of the payload: raising it must change
+    // the first payload byte before it changes any other.
+    for scale in [0u32, 1, 255, 256, 4096] {
+        let m = mag(1, scale);
+        let sealed = seal_num_positive(&m, Repr::Int).into_value();
+        let payload = &sealed.as_bytes()[2..2 + MAG_BYTES];
+        let exponent = u16::from_be_bytes([payload[0], payload[1]]);
+        t.check(
+            "the exponent is where the top bit sits",
+            exponent as u32 == scale + 1,
+        );
+    }
+    for scale in 0u32..64 {
+        let low = seal_num_positive(&mag(1, scale), Repr::Int).into_value();
+        let high = seal_num_positive(&mag(1, scale + 1), Repr::Int).into_value();
+        t.check(
+            "a higher exponent sorts higher",
+            low.as_bytes() < high.as_bytes(),
+        );
+    }
+}
+
+fn magnitude_fraction_is_big_endian(t: &mut Trials) {
+    // At one exponent, the fraction is left-aligned below it: the significand's
+    // top bit is implicit in the exponent and the rest descends byte by byte.
+    let sealed = seal_num_positive(&mag(0xFF, 0), Repr::Int).into_value();
+    let payload = &sealed.as_bytes()[2..2 + MAG_BYTES];
+    t.check("the exponent leads", payload[0] == 0x00 && payload[1] == 0x08);
+    t.check("the fraction follows it, most significant byte first", payload[2] == 0xFF);
+    for k in 3..MAG_BYTES {
+        t.check("and the rest of the fraction is zero", payload[k] == 0x00);
+    }
+    let higher = seal_num_positive(&mag(0xFF, 1), Repr::Int).into_value();
+    t.check(
+        "shifting the significand shifts the exponent, not the fraction",
+        higher.as_bytes()[2 + 2..] == sealed.as_bytes()[2 + 2..],
+    );
+}
+
+fn magnitude_all_input_bits_affect_output(t: &mut Trials) {
+    // Every bit of the significand reaches the payload: flipping one changes it.
+    let base = u64::MAX;
+    let sealed = seal_num_positive(&mag(base, 0), Repr::Int).into_value();
+    for bit in 0..64u32 {
+        let flipped = base ^ (1u64 << bit);
+        if flipped == 0 {
+            continue;
+        }
+        let other = seal_num_positive(&mag(flipped, 0), Repr::Int).into_value();
+        t.check(
+            "every significand bit reaches the payload",
+            other.as_bytes() != sealed.as_bytes(),
+        );
+    }
+    // And every bit of the scale, within the range the door admits.
+    let scale_base = 1024u32;
+    let at_scale = seal_num_positive(&mag(1, scale_base), Repr::Int).into_value();
+    for bit in 0..12u32 {
+        let flipped = scale_base ^ (1u32 << bit);
+        let other = seal_num_positive(&mag(1, flipped), Repr::Int).into_value();
+        t.check(
+            "every scale bit reaches the payload",
+            other.as_bytes() != at_scale.as_bytes(),
+        );
+    }
+}
+
+fn magnitude_finite_constructor_is_injective(t: &mut Trials) {
+    // Two magnitudes encode alike exactly when they denote the same number:
+    // 2x2^0 and 1x2^1 ARE one number, and the encoder is right to agree.
+    let candidates: Vec<Magnitude> = vec![
+        mag(1, 0), mag(2, 0), mag(1, 1), mag(4, 0), mag(2, 1), mag(1, 2),
+        mag(3, 0), mag(6, 0), mag(3, 1), mag(u64::MAX, 0), mag(u64::MAX, 1),
+    ];
+    for a in &candidates {
+        for b in &candidates {
+            let same_number = cmp_denotation(a, b) == Ordering::Equal;
+            let same_bytes = seal_num_positive(a, Repr::Int).into_value().as_bytes()
+                == seal_num_positive(b, Repr::Int).into_value().as_bytes();
+            t.check("one number, one payload", same_number == same_bytes);
+        }
+    }
+}
+
+fn magnitude_infinite_constructor_is_unique(t: &mut Trials) {
+    let one = seal_num_positive(&Magnitude::Infinite, Repr::Int).into_value();
+    let two = seal_num_positive(&Magnitude::Infinite, Repr::Int).into_value();
+    t.check("infinity has one encoding", one.as_bytes() == two.as_bytes());
+    let payload = &one.as_bytes()[2..2 + MAG_BYTES];
+    t.check(
+        "its exponent is the reserved one",
+        u16::from_be_bytes([payload[0], payload[1]]) as u32 == EXP_INFINITE,
+    );
+    for k in 2..MAG_BYTES {
+        t.check("and its fraction is saturated", payload[k] == 0xFF);
+    }
+}
+
+fn finite_domain_excludes_infinity_sentinel(t: &mut Trials) {
+    let infinite = seal_num_positive(&Magnitude::Infinite, Repr::Int).into_value();
+    for m in ascending_magnitudes() {
+        match m {
+            Magnitude::Infinite => {}
+            finite => {
+                let sealed = seal_num_positive(&finite, Repr::Int).into_value();
+                let payload = &sealed.as_bytes()[2..2 + MAG_BYTES];
+                let exponent = u16::from_be_bytes([payload[0], payload[1]]) as u32;
+                t.check("no finite magnitude reaches the reserved exponent", exponent < EXP_INFINITE);
+                t.check(
+                    "and so sorts below infinity",
+                    sealed.as_bytes() < infinite.as_bytes(),
+                );
+            }
+        }
+    }
+}
+
+fn positive_magnitude_order_matches_semantic_order(t: &mut Trials) {
+    let mags = ascending_magnitudes();
+    for a in &mags {
+        for b in &mags {
+            let arithmetic = cmp_denotation(a, b);
+            let bytes = seal_num_positive(a, Repr::Int)
+                .into_value()
+                .as_bytes()
+                .cmp(seal_num_positive(b, Repr::Int).into_value().as_bytes());
+            t.check("positive order is magnitude order", bytes == arithmetic);
+        }
+    }
+}
+
+fn negative_magnitude_order_is_reversed_correctly(t: &mut Trials) {
+    let mags = ascending_magnitudes();
+    for a in &mags {
+        for b in &mags {
+            let arithmetic = cmp_denotation(a, b);
+            let bytes = seal_num_negative(a, Repr::Int)
+                .into_value()
+                .as_bytes()
+                .cmp(seal_num_negative(b, Repr::Int).into_value().as_bytes());
+            t.check("negative order is magnitude order reversed", bytes == arithmetic.reverse());
+        }
+    }
+}
+
+/// Either side of a binade edge, where the exponent changes and the fraction
+/// resets: the order must not notice the seam.
+fn exponent_carry_transition_preserves_order(t: &mut Trials) {
+    for bits in 1u32..63 {
+        let below = mag((1u64 << bits) - 1, 0);
+        let at = mag(1u64 << bits, 0);
+        let above = mag((1u64 << bits) + 1, 0);
+        let a = seal_num_positive(&below, Repr::Int).into_value();
+        let b = seal_num_positive(&at, Repr::Int).into_value();
+        let c = seal_num_positive(&above, Repr::Int).into_value();
+        t.check("the binade edge ascends", a.as_bytes() < b.as_bytes());
+        t.check("and keeps ascending past it", b.as_bytes() < c.as_bytes());
+        let na = seal_num_negative(&below, Repr::Int).into_value();
+        let nb = seal_num_negative(&at, Repr::Int).into_value();
+        t.check("negatives descend across the same edge", nb.as_bytes() < na.as_bytes());
+    }
+}
+
+/// Inside one binade, where only the fraction moves.
+fn fraction_carry_transition_preserves_order(t: &mut Trials) {
+    for bits in 8u32..40 {
+        let base = 1u64 << bits;
+        for delta in [1u64, 2, 3, 255, 256] {
+            let low = mag(base + delta - 1, 0);
+            let high = mag(base + delta, 0);
+            let a = seal_num_positive(&low, Repr::Int).into_value();
+            let b = seal_num_positive(&high, Repr::Int).into_value();
+            t.check("the fraction ascends inside a binade", a.as_bytes() < b.as_bytes());
+            let na = seal_num_negative(&low, Repr::Int).into_value();
+            let nb = seal_num_negative(&high, Repr::Int).into_value();
+            t.check("and descends for negatives", nb.as_bytes() < na.as_bytes());
+        }
+    }
+}
+
+fn negative_exponent_boundary_orders_correctly(t: &mut Trials) {
+    let least = mag(1, 0);
+    let greatest = mag(u64::MAX, EXP_INFINITE - 65);
+    let a = seal_num_negative(&greatest, Repr::Int).into_value();
+    let b = seal_num_negative(&least, Repr::Int).into_value();
+    t.check("the greatest negative magnitude sorts lowest", a.as_bytes() < b.as_bytes());
+    let infinite = seal_num_negative(&Magnitude::Infinite, Repr::Int).into_value();
+    t.check("and negative infinity below even that", infinite.as_bytes() < a.as_bytes());
+}
+
+fn negative_fraction_boundary_orders_correctly(t: &mut Trials) {
+    let saturated = mag(u64::MAX, 0);
+    let one_less = mag(u64::MAX - 1, 0);
+    let a = seal_num_negative(&saturated, Repr::Int).into_value();
+    let b = seal_num_negative(&one_less, Repr::Int).into_value();
+    t.check("a fuller fraction is a smaller negative", a.as_bytes() < b.as_bytes());
+}
+
+fn positive_exponent_boundary_orders_correctly(t: &mut Trials) {
+    let least = seal_num_positive(&mag(1, 0), Repr::Int).into_value();
+    let greatest = seal_num_positive(&mag(u64::MAX, EXP_INFINITE - 65), Repr::Int).into_value();
+    let infinite = seal_num_positive(&Magnitude::Infinite, Repr::Int).into_value();
+    t.check("the least positive sorts below the greatest", least.as_bytes() < greatest.as_bytes());
+    t.check("and the greatest below infinity", greatest.as_bytes() < infinite.as_bytes());
+}
+
+fn positive_fraction_boundary_orders_correctly(t: &mut Trials) {
+    let a = seal_num_positive(&mag(u64::MAX - 1, 0), Repr::Int).into_value();
+    let b = seal_num_positive(&mag(u64::MAX, 0), Repr::Int).into_value();
+    t.check("a fuller fraction is a larger positive", a.as_bytes() < b.as_bytes());
+}
+
+fn negative_infinity_is_global_numeric_minimum(t: &mut Trials) {
+    let least = seal_num_negative(&Magnitude::Infinite, Repr::Int).into_value();
+    for other in ascending_numbers() {
+        t.check(
+            "negative infinity is at or below every number",
+            least.as_bytes() <= other.as_bytes(),
+        );
+    }
+}
+
+fn positive_infinity_sorts_below_nan(t: &mut Trials) {
+    let infinite = seal_num_positive(&Magnitude::Infinite, Repr::Float).into_value();
+    let nan = seal_num_nan().into_value();
+    t.check("infinity sorts below nan", infinite.as_bytes() < nan.as_bytes());
+    t.check("and they are different values", infinite.as_bytes() != nan.as_bytes());
+}
+
+fn nan_sorts_above_every_numeric_value(t: &mut Trials) {
+    let nan = seal_num_nan().into_value();
+    for other in ascending_numbers() {
+        t.check(
+            "nan is at or above every number",
+            other.as_bytes() <= nan.as_bytes(),
+        );
+    }
+}
+
+fn nan_has_exactly_one_encoding(t: &mut Trials) {
+    let a = seal_num_nan().into_value();
+    let b = seal_num_nan().into_value();
+    t.check("nan has one encoding", a.as_bytes() == b.as_bytes());
+    t.check("nan is tag, class, tie-break", a.as_bytes().len() == 3);
+    t.check("its tie-break is the float one", a.as_bytes()[2] == 0x01);
+}
+
+fn numeric_encoding_is_injective_across_classes(t: &mut Trials) {
+    let all = ascending_numbers();
+    for (i, a) in all.iter().enumerate() {
+        for (j, b) in all.iter().enumerate() {
+            t.check(
+                "one number, one byte string",
+                (a.as_bytes() == b.as_bytes()) == (i == j),
+            );
+        }
+    }
+}
+
+fn numeric_semantic_equality_implies_identical_bytes(t: &mut Trials) {
+    // Written two ways, denoting one number.
+    let pairs: Vec<(Magnitude, Magnitude)> = vec![
+        (mag(2, 0), mag(1, 1)),
+        (mag(4, 0), mag(1, 2)),
+        (mag(6, 0), mag(3, 1)),
+        (mag(1 << 40, 0), mag(1, 40)),
+        (mag(u32::MAX as u64 + 1, 0), mag(1, 32)),
+    ];
+    for (a, b) in &pairs {
+        t.check("the two writings denote one number", cmp_denotation(a, b) == Ordering::Equal);
+        for k in 0..2usize {
+            t.check(
+                "and encode to one byte string",
+                seal_num_positive(a, tie(k)).into_value().as_bytes()
+                    == seal_num_positive(b, tie(k)).into_value().as_bytes(),
+            );
+            t.check(
+                "in the negative class too",
+                seal_num_negative(a, tie(k)).into_value().as_bytes()
+                    == seal_num_negative(b, tie(k)).into_value().as_bytes(),
+            );
+        }
+    }
+}
+
+fn numeric_semantic_order_matches_bytes_property(t: &mut Trials) {
+    let all = ascending_numbers();
+    for (i, a) in all.iter().enumerate() {
+        for (j, b) in all.iter().enumerate() {
+            t.check(
+                "the number line is the byte order",
+                a.as_bytes().cmp(b.as_bytes()) == i.cmp(&j),
+            );
+        }
+    }
+}
+
+/// The whole line at once, held against the reference's independent number
+/// order rather than against the encoder's own.
+fn numeric_total_order_matches_database_number_order(t: &mut Trials) {
+    use reference::{Mag, Num, Repr as R, Sem};
+    let mut values: Vec<Sem> = Vec::new();
+    for (sig, scale) in [(1u64, 0u32), (3, 0), (1, 8), (u64::MAX, 0), (1, 1000)] {
+        for tie in [R::Int, R::Float] {
+            match Mag::finite(sig, scale) {
+                Some(m) => {
+                    values.push(Sem::Number(Num::Negative(m, tie)));
+                    values.push(Sem::Number(Num::Positive(m, tie)));
+                }
+                None => t.check("a magnitude in range is a magnitude", false),
+            }
+        }
+    }
+    for tie in [R::Int, R::Float] {
+        values.push(Sem::Number(Num::Zero(tie)));
+        values.push(Sem::Number(Num::Negative(Mag::Infinite, tie)));
+        values.push(Sem::Number(Num::Positive(Mag::Infinite, tie)));
+    }
+    values.push(Sem::Number(Num::NotANumber));
+    for a in &values {
+        for b in &values {
+            t.check(
+                "the reference's number order is the encoder's byte order",
+                a.cmp_sem(b) == built(a).as_bytes().cmp(built(b).as_bytes()),
+            );
+        }
+    }
+}
+
+fn numeric_golden_vectors_cover_every_boundary(t: &mut Trials) {
+    let cases: Vec<(CanonicalBytes, Vec<u8>)> = vec![
+        (seal_num_zero(Repr::Int).into_value(), vec![0x10, 0x02, 0x00]),
+        (seal_num_zero(Repr::Float).into_value(), vec![0x10, 0x02, 0x01]),
+        (seal_num_nan().into_value(), vec![0x10, 0x04, 0x01]),
+        (
+            seal_num_positive(&mag(1, 0), Repr::Int).into_value(),
+            vec![0x10, 0x03, 0x00, 0x01, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0x00],
+        ),
+        (
+            seal_num_positive(&mag(1, 0), Repr::Float).into_value(),
+            vec![0x10, 0x03, 0x00, 0x01, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0x01],
+        ),
+        (
+            seal_num_negative(&mag(1, 0), Repr::Int).into_value(),
+            vec![0x10, 0x01, 0xFF, 0xFE, 0x7F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00],
+        ),
+        (
+            seal_num_positive(&Magnitude::Infinite, Repr::Float).into_value(),
+            vec![0x10, 0x03, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01],
+        ),
+        (
+            seal_num_negative(&Magnitude::Infinite, Repr::Float).into_value(),
+            vec![0x10, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01],
+        ),
+    ];
+    for (sealed, expected) in &cases {
+        t.check(
+            "a number encodes to its pinned bytes",
+            sealed.as_bytes() == expected.as_slice(),
+        );
+    }
+}
+
+/// The raw set door is `pub(crate)`, and inside the encoder's own crate it has
+/// exactly one caller: the type whose constructor normalises. This reads the
+/// encoder's source at compile time and counts, because "who calls it" is a
+/// fact about the source and not about any byte string.
+fn raw_set_sealer_has_only_canonical_set_callers(t: &mut Trials) {
+    const CANONICAL: &str = include_str!("../../kyzo-model/src/value/canonical.rs");
+    const CODEC: &str = include_str!("../../kyzo-model/src/value/codec.rs");
+
+    t.check(
+        "the raw set door is crate-private where it is declared",
+        CANONICAL.contains("pub(crate) fn seal_set"),
+    );
+    t.check(
+        "and is declared once",
+        CANONICAL.matches("fn seal_set").count() == 1,
+    );
+    let callers = CODEC.matches("seal_set(").count();
+    t.check("the codec calls it exactly once", callers == 1);
+    t.check(
+        "and that call is the normalising type's own",
+        CODEC.contains("canonical::seal_set(&self.0)"),
+    );
+    // No other file in the encoder's value module reaches it.
+    const CELL: &str = include_str!("../../kyzo-model/src/value/cell.rs");
+    t.check("no other value file calls it", !CELL.contains("seal_set("));
+}
+
+/// The public surface hands out no way to name a tag, a shape, or a branch
+/// table. Every one of those is a forgery in `canonical-forgery`, which is
+/// compiled by `xtask/compile-fail.sh` and must be rejected; what runs here is
+/// the other half — that the doors which ARE public take no such argument.
+fn public_api_does_not_expose_raw_grammar_authority(t: &mut Trials) {
+    const CANONICAL: &str = include_str!("../../kyzo-model/src/value/canonical.rs");
+    for private in [
+        "fn seal(tag: u8",
+        "struct Body {",
+        "fn shape_scan",
+        "fn sum_scan",
+        "fn delim_scan",
+    ] {
+        let at = CANONICAL.find(private);
+        match at {
+            None => t.check("the declaration this trial names still exists", false),
+            Some(index) => {
+                let before = &CANONICAL[index.saturating_sub(12)..index];
+                t.check(
+                    "no grammar-level door is public",
+                    !before.ends_with("pub ") || before.contains("pub(crate)"),
+                );
+            }
+        }
+    }
+    t.check(
+        "the tag constants are the format, not a door taking one",
+        !CANONICAL.contains("pub fn seal(tag"),
     );
 }
