@@ -551,7 +551,7 @@ fn trial_grammar_table(t: &mut Trials) {
         (seal_str(&Utf8::of("hello")), 8, "Str: tag, content, terminator"),
         (seal_bytes(&[0x00, 0xFF]), 6, "Bytes: tag, escaped content, terminator"),
         (seal_uuid(&[0x00; 16]), 17, "Uuid: tag, 16"),
-        (seal_regex(b"ab", &RegexFlags::new(true, true, true)), 6, "Regex: tag, pattern, terminator, flags"),
+        (seal_regex(&Utf8::of("ab"), &RegexFlags::new(true, true, true)), 6, "Regex: tag, pattern, terminator, flags"),
         (seal_json(&wrap(seal_null())), 2, "Json: tag, a value"),
         (seal_vector(components(vec![seal_num_zero(Repr::Int), seal_num_zero(Repr::Int)])), 12,
             "Vector: tag, 4 dimension, two components, terminator"),
@@ -584,7 +584,7 @@ fn trial_grammar_table(t: &mut Trials) {
         (seal_str(&Utf8::of("")), TAG_STR, "Str tag"),
         (seal_bytes(b""), TAG_BYTES, "Bytes tag"),
         (seal_uuid(&[0; 16]), TAG_UUID, "Uuid tag"),
-        (seal_regex(b"", &RegexFlags::new(false, false, false)), TAG_REGEX, "Regex tag"),
+        (seal_regex(&Utf8::of(""), &RegexFlags::new(false, false, false)), TAG_REGEX, "Regex tag"),
         (seal_json(&wrap(seal_null())), TAG_JSON, "Json tag"),
         (seal_vector(components(Vec::new())), TAG_VECTOR, "Vector tag"),
         (seal_list(&Vec::new()), TAG_LIST, "List tag"),
@@ -1371,8 +1371,8 @@ fn red_team_corpus() -> Vec<CanonicalBytes> {
         seal_bytes(&[0x00, 0x00, 0xFF]),
         seal_uuid(&[0x00; 16]),
         seal_uuid(&[0xFF; 16]),
-        seal_regex(b"", &RegexFlags::new(false, false, false)),
-        seal_regex(b"a.*b", &RegexFlags::new(true, false, true)),
+        seal_regex(&Utf8::of(""), &RegexFlags::new(false, false, false)),
+        seal_regex(&Utf8::of("a.*b"), &RegexFlags::new(true, false, true)),
         seal_json(&wrap(seal_null())),
         seal_vector(components(Vec::new())),
         seal_vector(components(vec_of(3))),
@@ -1614,6 +1614,35 @@ fn main() {
     fuzz_mutated_valid_encodings_never_have_two_readings(&mut t);
     t.report("independent reference");
 
+    println!("strings, regex, uuid");
+    empty_string_encodes_canonically(&mut t);
+    empty_bytes_encodes_canonically(&mut t);
+    string_prefix_sorts_before_string_extension(&mut t);
+    bytes_prefix_sorts_before_bytes_extension(&mut t);
+    string_order_matches_semantic_string_order(&mut t);
+    bytes_order_matches_raw_byte_order(&mut t);
+    string_and_bytes_same_payload_have_distinct_encodings(&mut t);
+    string_rejects_invalid_utf8(&mut t);
+    string_embedded_zero_roundtrips(&mut t);
+    bytes_all_values_roundtrip(&mut t);
+    string_golden_vectors_cover_utf8_boundaries(&mut t);
+    bytes_golden_vectors_cover_zero_and_ff(&mut t);
+    regex_all_eight_flag_combinations_are_unique(&mut t);
+    regex_unknown_flag_bits_are_unconstructible(&mut t);
+    regex_pattern_is_primary_sort_key(&mut t);
+    regex_flags_are_secondary_sort_key(&mut t);
+    regex_flag_bit_layout_matches_released_format(&mut t);
+    regex_empty_pattern_is_canonical(&mut t);
+    regex_pattern_rejects_invalid_utf8(&mut t);
+    regex_encoding_is_injective(&mut t);
+    regex_golden_vectors_cover_all_flags(&mut t);
+    uuid_encoding_is_exactly_sixteen_bytes_after_tag(&mut t);
+    uuid_encoding_is_injective(&mut t);
+    uuid_order_matches_semantic_uuid_order(&mut t);
+    uuid_zero_and_ff_boundaries(&mut t);
+    uuid_golden_vectors_are_architecture_independent(&mut t);
+    t.report("strings, regex, uuid");
+
     println!("json");
     json_wraps_exactly_one_complete_value(&mut t);
     json_encoding_order_matches_inner_value_order(&mut t);
@@ -1750,7 +1779,7 @@ fn built(v: &reference::Sem) -> CanonicalBytes {
         Sem::Blob(b) => seal_bytes(b),
         Sem::Uuid(id) => seal_uuid(id),
         Sem::Regex { pattern, case_insensitive, multi_line, dot_matches_new_line } => seal_regex(
-            pattern,
+            &Utf8::of(pattern),
             &RegexFlags::new(*case_insensitive, *multi_line, *dot_matches_new_line),
         ),
         Sem::Json(inner) => seal_json(&wrap(built(inner))),
@@ -1905,7 +1934,8 @@ fn some_value(g: &mut Seeded, fuel: u32) -> reference::Sem {
             Sem::Uuid(id)
         }
         6 => Sem::Regex {
-            pattern: g.bytes(5),
+            pattern: String::from_utf8(g.bytes(5).into_iter().map(|b| b & 0x7F).collect())
+                .unwrap_or_default(),
             case_insensitive: g.below(2) == 0,
             multi_line: g.below(2) == 0,
             dot_matches_new_line: g.below(2) == 0,
@@ -2001,9 +2031,9 @@ fn semantic_corpus() -> Vec<reference::Sem> {
         Sem::Blob(vec![0xFF]),
         Sem::Uuid([0x00; 16]),
         Sem::Uuid([0xFF; 16]),
-        Sem::Regex { pattern: Vec::new(), case_insensitive: false, multi_line: false, dot_matches_new_line: false },
-        Sem::Regex { pattern: Vec::new(), case_insensitive: true, multi_line: true, dot_matches_new_line: true },
-        Sem::Regex { pattern: vec![0x61], case_insensitive: false, multi_line: false, dot_matches_new_line: false },
+        Sem::Regex { pattern: String::new(), case_insensitive: false, multi_line: false, dot_matches_new_line: false },
+        Sem::Regex { pattern: String::new(), case_insensitive: true, multi_line: true, dot_matches_new_line: true },
+        Sem::Regex { pattern: "a".to_string(), case_insensitive: false, multi_line: false, dot_matches_new_line: false },
         Sem::Json(Box::new(Sem::Null)),
         Sem::Json(Box::new(Sem::Bool(true))),
         Sem::Json(Box::new(Sem::Json(Box::new(Sem::Null)))),
@@ -4000,4 +4030,546 @@ fn json_golden_vectors_cover_every_json_kind(t: &mut Trials) {
             sealed.as_bytes() == expected.as_slice(),
         );
     }
+}
+
+// ========================= strings and byte strings =========================
+//
+// Two kinds share one payload shape and differ in one thing: a Str carries text
+// and a Bytes carries content. The escape is the same, the tags are not, and
+// nothing may cross between them.
+
+/// The strings the trials sweep: empty, ordering neighbours, the escape byte,
+/// and the edges of UTF-8.
+fn text_corpus() -> Vec<String> {
+    vec![
+        String::new(),
+        "a".to_string(),
+        "aa".to_string(),
+        "ab".to_string(),
+        "b".to_string(),
+        "\u{0}".to_string(),
+        "\u{0}\u{0}".to_string(),
+        "\u{1}".to_string(),
+        "a\u{0}b".to_string(),
+        "\u{7f}".to_string(),
+        "\u{80}".to_string(),
+        "\u{7ff}".to_string(),
+        "\u{800}".to_string(),
+        "\u{ffff}".to_string(),
+        "\u{10000}".to_string(),
+        "\u{10ffff}".to_string(),
+        "héllo".to_string(),
+        "日本語".to_string(),
+    ]
+}
+
+fn empty_string_encodes_canonically(t: &mut Trials) {
+    let empty = seal_str(&Utf8::of(""));
+    let bytes = empty.as_bytes();
+    t.check("the empty string is tag and terminator", bytes.len() == 3);
+    t.check("it opens with the Str tag", bytes[0] == TAG_STR);
+    t.check("its payload is the terminator alone", bytes[1..] == [0x00, 0x00]);
+    t.check("it has one encoding", bytes == seal_str(&Utf8::of("")).as_bytes());
+    t.check(
+        "it reads back whole",
+        scanned(scan_value(bytes)) == Some(bytes.len()),
+    );
+    for s in text_corpus() {
+        if !s.is_empty() {
+            t.check(
+                "the empty string sorts below every other",
+                bytes < seal_str(&Utf8::of(&s)).as_bytes(),
+            );
+        }
+    }
+}
+
+fn empty_bytes_encodes_canonically(t: &mut Trials) {
+    let empty = seal_bytes(&[]);
+    let bytes = empty.as_bytes();
+    t.check("the empty byte string is tag and terminator", bytes.len() == 3);
+    t.check("it opens with the Bytes tag", bytes[0] == TAG_BYTES);
+    t.check("its payload is the terminator alone", bytes[1..] == [0x00, 0x00]);
+    for b in 0u16..=255 {
+        t.check(
+            "the empty byte string sorts below every one-byte one",
+            bytes < seal_bytes(&[b as u8]).as_bytes(),
+        );
+    }
+}
+
+fn string_prefix_sorts_before_string_extension(t: &mut Trials) {
+    for s in text_corpus() {
+        let short = seal_str(&Utf8::of(&s));
+        for extra in text_corpus() {
+            if extra.is_empty() {
+                continue;
+            }
+            let long = seal_str(&Utf8::of(&(s.clone() + &extra)));
+            t.check(
+                "a string sorts before its own extension",
+                short.as_bytes() < long.as_bytes(),
+            );
+            t.check(
+                "a string is not a byte prefix of its extension",
+                !is_proper_prefix(short.as_bytes(), long.as_bytes()),
+            );
+        }
+    }
+}
+
+fn bytes_prefix_sorts_before_bytes_extension(t: &mut Trials) {
+    let payloads: Vec<Vec<u8>> = vec![
+        Vec::new(),
+        vec![0x00],
+        vec![0x00, 0x00],
+        vec![0x01],
+        vec![0x41],
+        vec![0xFF],
+        vec![0x00, 0xFF],
+    ];
+    for base in &payloads {
+        let short = seal_bytes(base);
+        for extra in 0u16..=255 {
+            let mut long_payload = base.clone();
+            long_payload.push(extra as u8);
+            let long = seal_bytes(&long_payload);
+            t.check(
+                "a byte string sorts before its own extension",
+                short.as_bytes() < long.as_bytes(),
+            );
+            t.check(
+                "a byte string is not a byte prefix of its extension",
+                !is_proper_prefix(short.as_bytes(), long.as_bytes()),
+            );
+        }
+    }
+}
+
+fn string_order_matches_semantic_string_order(t: &mut Trials) {
+    for a in text_corpus() {
+        for b in text_corpus() {
+            t.check(
+                "string order is the order of the text",
+                seal_str(&Utf8::of(&a))
+                    .as_bytes()
+                    .cmp(seal_str(&Utf8::of(&b)).as_bytes())
+                    == a.as_bytes().cmp(b.as_bytes()),
+            );
+        }
+    }
+}
+
+fn bytes_order_matches_raw_byte_order(t: &mut Trials) {
+    let mut payloads: Vec<Vec<u8>> = vec![Vec::new()];
+    for b in 0u16..=255 {
+        payloads.push(vec![b as u8]);
+    }
+    for b in [0x00u8, 0x01, 0xFE, 0xFF] {
+        payloads.push(vec![b, 0x00]);
+        payloads.push(vec![b, 0xFF]);
+    }
+    for a in &payloads {
+        for b in &payloads {
+            t.check(
+                "byte-string order is raw byte order",
+                seal_bytes(a).as_bytes().cmp(seal_bytes(b).as_bytes()) == a.cmp(b),
+            );
+        }
+    }
+}
+
+fn string_and_bytes_same_payload_have_distinct_encodings(t: &mut Trials) {
+    for s in text_corpus() {
+        let as_text = seal_str(&Utf8::of(&s));
+        let as_content = seal_bytes(s.as_bytes());
+        t.check(
+            "text and content are different values",
+            as_text.as_bytes() != as_content.as_bytes(),
+        );
+        t.check(
+            "they differ in the tag and nowhere else",
+            as_text.as_bytes()[1..] == as_content.as_bytes()[1..],
+        );
+        t.check(
+            "text sorts below content, whatever the payload",
+            as_text.as_bytes() < as_content.as_bytes(),
+        );
+    }
+}
+
+/// The Str door takes [`Utf8`], whose only mint takes a `&str`, so a byte
+/// string that is not text is not an argument that exists. What runs here is
+/// that every payload it does produce is text on the way out.
+fn string_rejects_invalid_utf8(t: &mut Trials) {
+    for s in text_corpus() {
+        let sealed = seal_str(&Utf8::of(&s));
+        let body = &sealed.as_bytes()[1..];
+        let payload = unescape(body);
+        t.check("a Str payload is the text it was given", payload == s.as_bytes());
+        t.check(
+            "a Str payload is valid UTF-8",
+            std::str::from_utf8(&payload).is_ok(),
+        );
+    }
+    // The content door is the one that takes bytes, and its output is not a
+    // Str: there is no path from invalid UTF-8 to the Str tag.
+    for bad in [vec![0x80u8], vec![0xFFu8, 0xFE], vec![0xC0, 0x80]] {
+        t.check(
+            "invalid UTF-8 seals as content, never as text",
+            seal_bytes(&bad).as_bytes()[0] == TAG_BYTES,
+        );
+        t.check("and it is not valid text", std::str::from_utf8(&bad).is_err());
+    }
+}
+
+fn string_embedded_zero_roundtrips(t: &mut Trials) {
+    let cases = [
+        "\u{0}",
+        "\u{0}\u{0}",
+        "a\u{0}",
+        "\u{0}a",
+        "a\u{0}b\u{0}c",
+        "\u{0}\u{0}\u{0}\u{0}",
+    ];
+    for s in cases {
+        let sealed = seal_str(&Utf8::of(s));
+        let bytes = sealed.as_bytes();
+        t.check(
+            "an embedded zero reads back whole",
+            scanned(scan_value(bytes)) == Some(bytes.len()),
+        );
+        t.check(
+            "an embedded zero survives the escape",
+            unescape(&bytes[1..]) == s.as_bytes(),
+        );
+        // Only the zero bytes double, so the payload grows by exactly the
+        // number of them and never by more.
+        let zeros = s.as_bytes().iter().filter(|b| **b == 0x00).count();
+        t.check(
+            "an embedded zero does not terminate the payload",
+            bytes.len() == 1 + s.len() + zeros + 2,
+        );
+    }
+}
+
+fn bytes_all_values_roundtrip(t: &mut Trials) {
+    for b in 0u16..=255 {
+        let payload = vec![b as u8];
+        let sealed = seal_bytes(&payload);
+        let bytes = sealed.as_bytes();
+        t.check(
+            "every byte value reads back whole",
+            scanned(scan_value(bytes)) == Some(bytes.len()),
+        );
+        t.check("every byte value survives the escape", unescape(&bytes[1..]) == payload);
+        for c in 0u16..=255 {
+            let pair = vec![b as u8, c as u8];
+            let sealed_pair = seal_bytes(&pair);
+            t.check(
+                "every byte pair survives the escape",
+                unescape(&sealed_pair.as_bytes()[1..]) == pair,
+            );
+        }
+    }
+}
+
+fn string_golden_vectors_cover_utf8_boundaries(t: &mut Trials) {
+    let cases: Vec<(&str, Vec<u8>)> = vec![
+        ("", vec![0x18, 0x00, 0x00]),
+        ("a", vec![0x18, 0x61, 0x00, 0x00]),
+        ("\u{0}", vec![0x18, 0x00, 0xFF, 0x00, 0x00]),
+        ("\u{7f}", vec![0x18, 0x7F, 0x00, 0x00]),
+        ("\u{80}", vec![0x18, 0xC2, 0x80, 0x00, 0x00]),
+        ("\u{7ff}", vec![0x18, 0xDF, 0xBF, 0x00, 0x00]),
+        ("\u{800}", vec![0x18, 0xE0, 0xA0, 0x80, 0x00, 0x00]),
+        ("\u{ffff}", vec![0x18, 0xEF, 0xBF, 0xBF, 0x00, 0x00]),
+        ("\u{10000}", vec![0x18, 0xF0, 0x90, 0x80, 0x80, 0x00, 0x00]),
+        ("\u{10ffff}", vec![0x18, 0xF4, 0x8F, 0xBF, 0xBF, 0x00, 0x00]),
+    ];
+    for (s, expected) in &cases {
+        t.check(
+            "a string encodes to its pinned bytes",
+            seal_str(&Utf8::of(s)).as_bytes() == expected.as_slice(),
+        );
+    }
+}
+
+fn bytes_golden_vectors_cover_zero_and_ff(t: &mut Trials) {
+    let cases: Vec<(Vec<u8>, Vec<u8>)> = vec![
+        (vec![], vec![0x20, 0x00, 0x00]),
+        (vec![0x00], vec![0x20, 0x00, 0xFF, 0x00, 0x00]),
+        (vec![0x00, 0x00], vec![0x20, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0x00]),
+        (vec![0x01], vec![0x20, 0x01, 0x00, 0x00]),
+        (vec![0xFF], vec![0x20, 0xFF, 0x00, 0x00]),
+        (vec![0x00, 0xFF], vec![0x20, 0x00, 0xFF, 0xFF, 0x00, 0x00]),
+        (vec![0xFF, 0x00], vec![0x20, 0xFF, 0x00, 0xFF, 0x00, 0x00]),
+    ];
+    for (payload, expected) in &cases {
+        t.check(
+            "a byte string encodes to its pinned bytes",
+            seal_bytes(payload).as_bytes() == expected.as_slice(),
+        );
+    }
+}
+
+// ================================= regex ====================================
+
+fn flags_of(bits: u8) -> RegexFlags {
+    RegexFlags::new(bits & 1 != 0, bits & 2 != 0, bits & 4 != 0)
+}
+
+fn regex_all_eight_flag_combinations_are_unique(t: &mut Trials) {
+    let mut seen: Vec<(u8, Vec<u8>)> = Vec::new();
+    for bits in 0u8..8 {
+        let sealed = seal_regex(&Utf8::of("a"), &flags_of(bits));
+        let bytes = sealed.as_bytes().to_vec();
+        for (other_bits, other) in &seen {
+            t.check(
+                "each flag combination has its own encoding",
+                (other == &bytes) == (*other_bits == bits),
+            );
+        }
+        seen.push((bits, bytes));
+    }
+    t.check("all eight combinations are present", seen.len() == 8);
+}
+
+/// The flags type has three fields and no fourth, so bit 3 and above are not a
+/// value a caller can name. What runs here is that no combination it can name
+/// ever sets one.
+fn regex_unknown_flag_bits_are_unconstructible(t: &mut Trials) {
+    for bits in 0u8..8 {
+        let sealed = seal_regex(&Utf8::of(""), &flags_of(bits));
+        let bytes = sealed.as_bytes();
+        let written = bytes[bytes.len() - 1];
+        t.check("the flags byte holds only the three known bits", written < 8);
+        t.check("the flags byte is the combination asked for", written == bits);
+    }
+}
+
+fn regex_pattern_is_primary_sort_key(t: &mut Trials) {
+    let patterns = ["", "a", "aa", "ab", "b", "a.*b", "\u{0}"];
+    for a in patterns {
+        for b in patterns {
+            if a == b {
+                continue;
+            }
+            // The lower pattern with every flag set still sorts below the
+            // higher pattern with none: the pattern decides first.
+            let low = seal_regex(&Utf8::of(a), &flags_of(7));
+            let high = seal_regex(&Utf8::of(b), &flags_of(0));
+            t.check(
+                "the pattern decides before the flags are read",
+                (low.as_bytes() < high.as_bytes()) == (a.as_bytes() < b.as_bytes()),
+            );
+        }
+    }
+}
+
+fn regex_flags_are_secondary_sort_key(t: &mut Trials) {
+    for pattern in ["", "a", "a.*b"] {
+        for x in 0u8..8 {
+            for y in 0u8..8 {
+                let a = seal_regex(&Utf8::of(pattern), &flags_of(x));
+                let b = seal_regex(&Utf8::of(pattern), &flags_of(y));
+                t.check(
+                    "equal patterns are decided by their flags",
+                    a.as_bytes().cmp(b.as_bytes()) == x.cmp(&y),
+                );
+            }
+        }
+    }
+}
+
+fn regex_flag_bit_layout_matches_released_format(t: &mut Trials) {
+    let cases: [(bool, bool, bool, u8); 4] = [
+        (true, false, false, 0x01),
+        (false, true, false, 0x02),
+        (false, false, true, 0x04),
+        (true, true, true, 0x07),
+    ];
+    for (ci, ml, dot, expected) in cases {
+        let sealed = seal_regex(&Utf8::of(""), &RegexFlags::new(ci, ml, dot));
+        let bytes = sealed.as_bytes();
+        t.check(
+            "the flag bits sit where the format puts them",
+            bytes[bytes.len() - 1] == expected,
+        );
+    }
+}
+
+fn regex_empty_pattern_is_canonical(t: &mut Trials) {
+    let empty = seal_regex(&Utf8::of(""), &flags_of(0));
+    let bytes = empty.as_bytes();
+    t.check("an empty pattern is tag, terminator, flags", bytes.len() == 4);
+    t.check("it opens with the Regex tag", bytes[0] == TAG_REGEX);
+    t.check(
+        "it has one encoding",
+        bytes == seal_regex(&Utf8::of(""), &flags_of(0)).as_bytes(),
+    );
+    t.check(
+        "it reads back whole",
+        scanned(scan_value(bytes)) == Some(bytes.len()),
+    );
+    for p in ["a", "\u{0}", "z"] {
+        t.check(
+            "the empty pattern sorts below every other",
+            bytes < seal_regex(&Utf8::of(p), &flags_of(0)).as_bytes(),
+        );
+    }
+}
+
+/// The pattern is [`Utf8`], so a pattern that is not text is not an argument.
+/// What runs here is that every pattern the door writes comes back as text.
+fn regex_pattern_rejects_invalid_utf8(t: &mut Trials) {
+    for p in text_corpus() {
+        let sealed = seal_regex(&Utf8::of(&p), &flags_of(3));
+        let bytes = sealed.as_bytes();
+        let payload = unescape(&bytes[1..]);
+        t.check("a pattern survives the escape", payload == p.as_bytes());
+        t.check(
+            "a pattern is valid UTF-8",
+            std::str::from_utf8(&payload).is_ok(),
+        );
+        t.check(
+            "a regex reads back whole",
+            scanned(scan_value(bytes)) == Some(bytes.len()),
+        );
+    }
+}
+
+fn regex_encoding_is_injective(t: &mut Trials) {
+    let patterns = ["", "a", "ab", "b", "\u{0}"];
+    let mut seen: Vec<((usize, u8), Vec<u8>)> = Vec::new();
+    for (i, p) in patterns.iter().enumerate() {
+        for bits in 0u8..8 {
+            let bytes = seal_regex(&Utf8::of(p), &flags_of(bits)).as_bytes().to_vec();
+            for (key, other) in &seen {
+                t.check(
+                    "one regex, one byte string",
+                    (other == &bytes) == (*key == (i, bits)),
+                );
+            }
+            seen.push(((i, bits), bytes));
+        }
+    }
+}
+
+fn regex_golden_vectors_cover_all_flags(t: &mut Trials) {
+    let cases: Vec<(&str, u8, Vec<u8>)> = vec![
+        ("", 0, vec![0x30, 0x00, 0x00, 0x00]),
+        ("", 7, vec![0x30, 0x00, 0x00, 0x07]),
+        ("a", 0, vec![0x30, 0x61, 0x00, 0x00, 0x00]),
+        ("a", 1, vec![0x30, 0x61, 0x00, 0x00, 0x01]),
+        ("a", 2, vec![0x30, 0x61, 0x00, 0x00, 0x02]),
+        ("a", 4, vec![0x30, 0x61, 0x00, 0x00, 0x04]),
+        ("\u{0}", 0, vec![0x30, 0x00, 0xFF, 0x00, 0x00, 0x00]),
+    ];
+    for (pattern, bits, expected) in &cases {
+        t.check(
+            "a regex encodes to its pinned bytes",
+            seal_regex(&Utf8::of(pattern), &flags_of(*bits)).as_bytes() == expected.as_slice(),
+        );
+    }
+}
+
+// ================================== uuid ====================================
+
+fn uuid_corpus() -> Vec<[u8; 16]> {
+    let mut out: Vec<[u8; 16]> = vec![[0x00; 16], [0xFF; 16], [0x01; 16]];
+    for at in [0usize, 1, 7, 8, 15] {
+        let mut id = [0x00u8; 16];
+        id[at] = 0x01;
+        out.push(id);
+        let mut high = [0x00u8; 16];
+        high[at] = 0xFF;
+        out.push(high);
+    }
+    out
+}
+
+fn uuid_encoding_is_exactly_sixteen_bytes_after_tag(t: &mut Trials) {
+    for id in uuid_corpus() {
+        let sealed = seal_uuid(&id);
+        let bytes = sealed.as_bytes();
+        t.check("a uuid is a tag and sixteen bytes", bytes.len() == 17);
+        t.check("it opens with the Uuid tag", bytes[0] == TAG_UUID);
+        t.check("the payload is the identifier unchanged", bytes[1..] == id);
+        t.check(
+            "a uuid reads back whole",
+            scanned(scan_value(bytes)) == Some(17),
+        );
+    }
+}
+
+fn uuid_encoding_is_injective(t: &mut Trials) {
+    let all = uuid_corpus();
+    for a in &all {
+        for b in &all {
+            t.check(
+                "one uuid, one byte string",
+                (seal_uuid(a).as_bytes() == seal_uuid(b).as_bytes()) == (a == b),
+            );
+        }
+    }
+}
+
+fn uuid_order_matches_semantic_uuid_order(t: &mut Trials) {
+    let all = uuid_corpus();
+    for a in &all {
+        for b in &all {
+            t.check(
+                "uuid order is the order of its bytes",
+                seal_uuid(a).as_bytes().cmp(seal_uuid(b).as_bytes()) == a.cmp(b),
+            );
+        }
+    }
+}
+
+fn uuid_zero_and_ff_boundaries(t: &mut Trials) {
+    let zero = seal_uuid(&[0x00; 16]);
+    let ones = seal_uuid(&[0xFF; 16]);
+    for id in uuid_corpus() {
+        let sealed = seal_uuid(&id);
+        t.check(
+            "the zero uuid sorts at or below every uuid",
+            zero.as_bytes() <= sealed.as_bytes(),
+        );
+        t.check(
+            "the all-ones uuid sorts at or above every uuid",
+            sealed.as_bytes() <= ones.as_bytes(),
+        );
+    }
+    // A zero byte inside the payload is not an escape: a uuid is fixed-width.
+    let mut middle = [0xFFu8; 16];
+    middle[8] = 0x00;
+    let sealed = seal_uuid(&middle);
+    t.check(
+        "a zero byte inside a uuid is payload, not structure",
+        scanned(scan_value(sealed.as_bytes())) == Some(17),
+    );
+}
+
+fn uuid_golden_vectors_are_architecture_independent(t: &mut Trials) {
+    let ordered: [u8; 16] = [
+        0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD,
+        0xEE, 0xFF,
+    ];
+    let expected: Vec<u8> = [vec![0x28u8], ordered.to_vec()].concat();
+    t.check(
+        "a uuid encodes to its pinned bytes",
+        seal_uuid(&ordered).as_bytes() == expected.as_slice(),
+    );
+    t.check(
+        "the identifier is written in the order it was given",
+        seal_uuid(&ordered).as_bytes()[1..] == ordered,
+    );
+    // Byte order is the identifier's own, so no host word order reaches it.
+    let mut reversed = ordered;
+    reversed.reverse();
+    t.check(
+        "reversing the identifier reverses the payload",
+        seal_uuid(&reversed).as_bytes()[1..] == reversed,
+    );
 }

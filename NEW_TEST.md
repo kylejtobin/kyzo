@@ -251,38 +251,38 @@
 
 ## Strings and byte strings
 
-- [ ] empty_string_encodes_canonically
-- [ ] empty_bytes_encodes_canonically
-- [ ] string_prefix_sorts_before_string_extension
-- [ ] bytes_prefix_sorts_before_bytes_extension
-- [ ] string_order_matches_semantic_string_order
-- [ ] bytes_order_matches_raw_byte_order
-- [ ] string_and_bytes_same_payload_have_distinct_encodings
-- [ ] string_rejects_invalid_utf8
-- [ ] string_embedded_zero_roundtrips
-- [ ] bytes_all_values_roundtrip
-- [ ] string_golden_vectors_cover_utf8_boundaries
-- [ ] bytes_golden_vectors_cover_zero_and_ff
+- [x] empty_string_encodes_canonically
+- [x] empty_bytes_encodes_canonically
+- [x] string_prefix_sorts_before_string_extension
+- [x] bytes_prefix_sorts_before_bytes_extension
+- [x] string_order_matches_semantic_string_order
+- [x] bytes_order_matches_raw_byte_order
+- [x] string_and_bytes_same_payload_have_distinct_encodings
+- [x] string_rejects_invalid_utf8
+- [x] string_embedded_zero_roundtrips
+- [x] bytes_all_values_roundtrip
+- [x] string_golden_vectors_cover_utf8_boundaries
+- [x] bytes_golden_vectors_cover_zero_and_ff
 
 ## Regex
 
-- [ ] regex_all_eight_flag_combinations_are_unique
-- [ ] regex_unknown_flag_bits_are_unconstructible
-- [ ] regex_pattern_is_primary_sort_key
-- [ ] regex_flags_are_secondary_sort_key
-- [ ] regex_flag_bit_layout_matches_released_format
-- [ ] regex_empty_pattern_is_canonical
-- [ ] regex_pattern_rejects_invalid_utf8
-- [ ] regex_encoding_is_injective
-- [ ] regex_golden_vectors_cover_all_flags
+- [x] regex_all_eight_flag_combinations_are_unique
+- [x] regex_unknown_flag_bits_are_unconstructible
+- [x] regex_pattern_is_primary_sort_key
+- [x] regex_flags_are_secondary_sort_key
+- [x] regex_flag_bit_layout_matches_released_format
+- [x] regex_empty_pattern_is_canonical
+- [x] regex_pattern_rejects_invalid_utf8
+- [x] regex_encoding_is_injective
+- [x] regex_golden_vectors_cover_all_flags
 
 ## UUID
 
-- [ ] uuid_encoding_is_exactly_sixteen_bytes_after_tag
-- [ ] uuid_encoding_is_injective
-- [ ] uuid_order_matches_semantic_uuid_order
-- [ ] uuid_zero_and_ff_boundaries
-- [ ] uuid_golden_vectors_are_architecture_independent
+- [x] uuid_encoding_is_exactly_sixteen_bytes_after_tag
+- [x] uuid_encoding_is_injective
+- [x] uuid_order_matches_semantic_uuid_order
+- [x] uuid_zero_and_ff_boundaries
+- [x] uuid_golden_vectors_are_architecture_independent
 
 ## JSON
 

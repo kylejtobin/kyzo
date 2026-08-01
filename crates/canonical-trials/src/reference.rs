@@ -318,7 +318,7 @@ pub enum Sem {
     Blob(Vec<u8>),
     Uuid([u8; 16]),
     Regex {
-        pattern: Vec<u8>,
+        pattern: String,
         case_insensitive: bool,
         multi_line: bool,
         dot_matches_new_line: bool,
@@ -426,7 +426,8 @@ impl Sem {
                     dot_matches_new_line: db,
                 },
             ) => pa
-                .cmp(pb)
+                .as_bytes()
+                .cmp(pb.as_bytes())
                 .then(flag_byte(*ia, *ma, *da).cmp(&flag_byte(*ib, *mb, *db))),
             (Sem::Json(a), Sem::Json(b)) => a.cmp_sem(b),
             (Sem::Vector(a), Sem::Vector(b)) => a
@@ -533,7 +534,7 @@ pub fn encode(v: &Sem) -> Vec<u8> {
             dot_matches_new_line,
         } => {
             let mut out = vec![TAG_REGEX];
-            out.extend_from_slice(&escaped(pattern));
+            out.extend_from_slice(&escaped(pattern.as_bytes()));
             out.push(flag_byte(
                 *case_insensitive,
                 *multi_line,

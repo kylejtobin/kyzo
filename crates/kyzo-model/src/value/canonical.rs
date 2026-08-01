@@ -3103,10 +3103,14 @@ impl RegexFlags {
 
 /// A regex is identified by its pattern, so the pattern sorts first and the
 /// flags break ties. The order of the two is the grammar's, not the caller's.
-pub fn seal_regex(pattern: &[u8], flags: &RegexFlags) -> (r: CanonicalBytes) {
+///
+/// The pattern is text: a regex is written, and a byte string that is not text
+/// is not a pattern any engine would compile. [`Utf8`] is that in the argument
+/// rather than in a check.
+pub fn seal_regex(pattern: &Utf8, flags: &RegexFlags) -> (r: CanonicalBytes) {
     proof { lemma_tag_shapes(); }
     let f = Body::fixed(owned(&[flags.byte()]));
-    seal(TAG_REGEX, Body::product(Body::delimited(pattern), f))
+    seal(TAG_REGEX, Body::product(Body::delimited(pattern.as_slice()), f))
 }
 
 /// A JSON value IS a value. There is no second grammar to keep in step.
