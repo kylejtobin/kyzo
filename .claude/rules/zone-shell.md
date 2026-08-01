@@ -8,6 +8,7 @@ paths:
   - "crates/xtask/src/**/*.rs"
   - "crates/bs-detector/src/**/*.rs"
   - "crates/canonical-trials/src/**/*.rs"
+  - "crates/canonical-forgery/src/**/*.rs"
   - "crates/kyzo-trials/src/**/*.rs"
   - "crates/kyzo-arrow-interop/src/**/*.rs"
   - "crates/kyzo-core/src/bench_recovery.rs"
@@ -242,7 +243,7 @@ use crate::boundary::git::read_head as load_state;
 **Rule:** Re-export only what this posture may itself reach.
 
 ```rust allowed
-pub use crate::core::clause::Clause;
+pub use crate::clause::Clause;
 ```
 
 ```rust forbidden

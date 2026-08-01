@@ -256,7 +256,7 @@ use crate::boundary::git::read_head as load_state;
 **Rule:** Re-export only what this posture may itself reach.
 
 ```rust allowed
-pub use crate::core::clause::Clause;
+pub use crate::clause::Clause;
 ```
 
 ```rust forbidden
@@ -651,9 +651,11 @@ pub struct Query {
 **Rule:** State the order law in the type's documentation wherever `Ord` is implemented.
 
 ```rust allowed
+/// ORDER_LAW: byte order over the namespace. Total and stable.
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 pub struct Namespace(String);
 
+/// ORDER_LAW: byte order over the key. Total and stable.
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 pub struct KeyBytes(Vec<u8>);
 
@@ -667,9 +669,11 @@ pub struct StorageKey {
 ```
 
 ```rust forbidden
+/// ORDER_LAW: byte order over the namespace. Total and stable.
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 pub struct Namespace(String);
 
+/// ORDER_LAW: byte order over the key. Total and stable.
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 pub struct KeyBytes(Vec<u8>);
 
