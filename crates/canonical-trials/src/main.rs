@@ -1001,6 +1001,216 @@ fn finite_magnitude_cannot_equal_infinite_magnitude(t: &mut Trials) {
     }
 }
 
+
+/// Every value the writer can mint must be readable by the reader that ships
+/// with it. A writer with no depth bound and a reader with one breaks this.
+fn canonical_writer_output_is_always_readable(t: &mut Trials) {
+    for depth in [1usize, 8, 64, 126, 127, 128, 129, 200] {
+        let mut v = seal_null();
+        for _ in 0..depth {
+            v = seal_json(&v);
+        }
+        let bytes = v.as_bytes();
+        t.check(
+            "the reader reads everything the writer sealed",
+            scanned(scan_value(bytes)) == Some(bytes.len()),
+        );
+    }
+}
+
+fn max_writer_nesting_never_exceeds_reader_capacity(t: &mut Trials) {
+    // Find the deepest value the writer will mint, then ask the reader for it.
+    let mut v = seal_null();
+    let mut depth = 0usize;
+    while depth < 300 {
+        v = seal_list(&vec![v]);
+        depth += 1;
+    }
+    let bytes = v.as_bytes();
+    t.check(
+        "the writer refuses to mint deeper than the reader accepts",
+        scanned(scan_value(bytes)) == Some(bytes.len()),
+    );
+}
+
+/// A boundary the scanner accepts must be a complete encoding on its own.
+fn accepted_scan_prefix_is_complete(t: &mut Trials) {
+    let corpus = red_team_corpus();
+    for v in &corpus {
+        let bytes = v.as_bytes();
+        for tail in [vec![], vec![0x00u8], vec![0xFFu8, 0x01], vec![TAG_NULL]] {
+            let mut buf = bytes.to_vec();
+            buf.extend_from_slice(&tail);
+            match scanned(scan_value(&buf)) {
+                Some(n) => {
+                    t.check("the accepted prefix is the value", n == bytes.len());
+                    t.check(
+                        "the accepted prefix scans complete on its own",
+                        scanned(scan_value(&buf[..n])) == Some(n),
+                    );
+                }
+                None => t.check("a sealed value followed by anything still reads", false),
+            }
+        }
+    }
+}
+
+/// A refusal's unconsumed bytes must be a genuine suffix of what was handed in,
+/// not a fabricated buffer.
+fn refusal_position_is_suffix_of_original_input(t: &mut Trials) {
+    let mut inputs: Vec<Vec<u8>> = vec![
+        vec![], vec![0x02], vec![0xFF], vec![TAG_STR], vec![TAG_STR, 0x00],
+        vec![TAG_STR, 0x00, 0x41], vec![TAG_NUM], vec![TAG_NUM, 0x07],
+        vec![TAG_LIST], vec![TAG_LIST, TAG_NULL], vec![TAG_UUID, 0x00],
+    ];
+    for b in 0u16..=255 {
+        inputs.push(vec![b as u8]);
+        inputs.push(vec![TAG_LIST, b as u8]);
+    }
+    for p in &inputs {
+        if let Err(e) = scan_value(p) {
+            let rest = e.at();
+            t.check("the refusal suffix is no longer than the input", rest.len() <= p.len());
+            let off = p.len() - rest.len();
+            t.check(
+                "the refusal suffix is literally a suffix of the input",
+                &p[off..] == rest,
+            );
+        }
+    }
+}
+
+fn inverted_interval_is_unconstructible(t: &mut Trials) {
+    let hi = [0xFFu8; 8];
+    let lo = [0x00u8; 8];
+    let inverted = seal_interval(&Bound::At(hi), &Bound::At(lo));
+    let proper = seal_interval(&Bound::At(lo), &Bound::At(hi));
+    t.check(
+        "an interval whose lower end is above its upper end cannot be sealed",
+        inverted.as_bytes() == proper.as_bytes(),
+    );
+}
+
+fn set_permutations_encode_identically(t: &mut Trials) {
+    let build = |order: [usize; 3]| {
+        let parts: Vec<CanonicalBytes> = order
+            .iter()
+            .map(|i| seal_num_positive(
+                &Magnitude::Finite { significand: 1, biased_scale: *i as u32 },
+                Repr::Int,
+            ))
+            .collect();
+        seal_set(&parts)
+    };
+    let a = build([0, 1, 2]);
+    for order in [[0usize, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]] {
+        let b = build(order);
+        t.check("a set encodes the same whatever order it was given in",
+            a.as_bytes() == b.as_bytes());
+    }
+}
+
+fn set_duplicates_encode_identically(t: &mut Trials) {
+    let one = || seal_num_positive(
+        &Magnitude::Finite { significand: 1, biased_scale: 0 }, Repr::Int);
+    let two = || seal_num_positive(
+        &Magnitude::Finite { significand: 1, biased_scale: 1 }, Repr::Int);
+    let plain = seal_set(&vec![one(), two()]);
+    let dup = seal_set(&vec![one(), two(), one()]);
+    t.check("a repeated element does not change a set", plain.as_bytes() == dup.as_bytes());
+}
+
+fn vector_components_are_numeric_only(t: &mut Trials) {
+    let mixed = seal_vector(&vec![
+        seal_num_zero(Repr::Int),
+        seal_str(b"not a number"),
+    ]);
+    let numeric = seal_vector(&vec![seal_num_zero(Repr::Int), seal_num_zero(Repr::Int)]);
+    t.check(
+        "a vector cannot carry a non-numeric component",
+        mixed.as_bytes().len() == numeric.as_bytes().len(),
+    );
+}
+
+fn string_payload_is_valid_utf8(t: &mut Trials) {
+    // Lone continuation byte, unpaired surrogate lead, and an overlong form.
+    for bad in [vec![0x80u8], vec![0xEDu8, 0xA0, 0x80], vec![0xC0u8, 0xAF], vec![0xFFu8]] {
+        let sealed = seal_str(&bad);
+        let body = &sealed.as_bytes()[1..];
+        t.check(
+            "a Str payload is valid UTF-8",
+            std::str::from_utf8(&unescape(body)).is_ok(),
+        );
+    }
+}
+
+fn validity_payload_cannot_be_arbitrary_bytes(t: &mut Trials) {
+    // Every nine-byte string is accepted, including ones no clock can produce.
+    let a = seal_validity(&[0xFF; 9]);
+    let b = seal_validity(&[0x00; 9]);
+    t.check(
+        "a validity payload is a temporal value, not nine free bytes",
+        a.as_bytes() == b.as_bytes(),
+    );
+}
+
+fn geometry_payload_cannot_be_arbitrary_bytes(t: &mut Trials) {
+    let a = seal_geometry(&[0xFF; 8]);
+    let b = seal_geometry(&[0x00; 8]);
+    t.check(
+        "a geometry payload is a spatial value, not eight free bytes",
+        a.as_bytes() == b.as_bytes(),
+    );
+}
+
+/// Reverse the escape so a Str payload can be checked as text.
+fn unescape(body: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i + 1 < body.len() {
+        if body[i] == 0x00 && body[i + 1] == 0x00 { break; }
+        if body[i] == 0x00 && body[i + 1] == 0xFF { out.push(0x00); i += 2; }
+        else { out.push(body[i]); i += 1; }
+    }
+    out
+}
+
+/// One value of every kind, for trials that sweep the whole domain.
+fn red_team_corpus() -> Vec<CanonicalBytes> {
+    vec![
+        seal_null(),
+        seal_bool(true),
+        seal_bool(false),
+        seal_num_zero(Repr::Int),
+        seal_num_zero(Repr::Float),
+        seal_num_nan(),
+        seal_num_negative(&mag_min(), Repr::Int),
+        seal_num_positive(&mag_max(), Repr::Float),
+        seal_num_positive(&Magnitude::Infinite, Repr::Float),
+        seal_num_negative(&Magnitude::Infinite, Repr::Float),
+        seal_str(b""),
+        seal_str(b"hello"),
+        seal_str(&[0x00, 0x01, 0xFF]),
+        seal_bytes(b""),
+        seal_bytes(&[0x00, 0x00, 0xFF]),
+        seal_uuid(&[0x00; 16]),
+        seal_uuid(&[0xFF; 16]),
+        seal_regex(b"", &RegexFlags::new(false, false, false)),
+        seal_regex(b"a.*b", &RegexFlags::new(true, false, true)),
+        seal_json(&seal_null()),
+        seal_vector(&Vec::new()),
+        seal_vector(&vec_of(3)),
+        seal_list(&Vec::new()),
+        seal_list(&vec_of(2)),
+        seal_set(&Vec::new()),
+        seal_validity(&[0x00; 9]),
+        seal_geometry(&[0x00; 8]),
+        seal_interval_empty(),
+        seal_interval(&Bound::Unbounded, &Bound::Unbounded),
+        seal_interval(&Bound::At([0x00; 8]), &Bound::At([0xFF; 8])),
+    ]
+}
+
 fn main() {
     println!("canonical-trials: adversarial campaign against the order law\n");
 
@@ -1047,6 +1257,17 @@ fn main() {
     magnitude_all_significand_bits_affect_encoding(&mut t);
     magnitude_encoding_is_injective_over_significand(&mut t);
     finite_magnitude_cannot_equal_infinite_magnitude(&mut t);
+    canonical_writer_output_is_always_readable(&mut t);
+    max_writer_nesting_never_exceeds_reader_capacity(&mut t);
+    accepted_scan_prefix_is_complete(&mut t);
+    refusal_position_is_suffix_of_original_input(&mut t);
+    inverted_interval_is_unconstructible(&mut t);
+    set_permutations_encode_identically(&mut t);
+    set_duplicates_encode_identically(&mut t);
+    vector_components_are_numeric_only(&mut t);
+    string_payload_is_valid_utf8(&mut t);
+    validity_payload_cannot_be_arbitrary_bytes(&mut t);
+    geometry_payload_cannot_be_arbitrary_bytes(&mut t);
     t.report("red team");
 
     if t.failed.is_empty() {

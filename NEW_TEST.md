@@ -13,8 +13,8 @@
 - [ ] canonical_writer_output_is_always_readable
 - [ ] max_writer_nesting_never_exceeds_reader_capacity
 - [ ] scan_rejection_matches_spec_rejection_except_depth_limit
-- [ ] accepted_scan_prefix_is_complete
-- [ ] refusal_position_is_suffix_of_original_input
+- [x] accepted_scan_prefix_is_complete
+- [x] refusal_position_is_suffix_of_original_input
 - [ ] inverted_interval_is_unconstructible
 - [ ] set_permutations_encode_identically
 - [ ] set_duplicates_encode_identically
