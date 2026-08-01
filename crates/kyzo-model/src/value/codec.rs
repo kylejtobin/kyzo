@@ -31,7 +31,7 @@
 //! IS. So the raw door is `pub(crate)` and the only public way to seal a set is
 //! [`CanonicalSet`], whose one constructor sorts and dedups.
 
-use super::canonical::{self, CanonicalBytes};
+use super::canonical::{self, CanonicalBytes, RowItem};
 
 /// A set's elements in canonical form: ascending by their sealed bytes, no
 /// duplicates.
@@ -41,7 +41,7 @@ use super::canonical::{self, CanonicalBytes};
 /// deliberately no `from_sorted` fast path: a caller claiming its input is
 /// already sorted is a claim nothing checks, and the sort it saves is not worth
 /// a door that can be told a lie.
-pub struct CanonicalSet(Vec<CanonicalBytes>);
+pub struct CanonicalSet(Vec<RowItem>);
 
 impl CanonicalSet {
     /// Sort by sealed bytes and drop duplicates.
@@ -50,8 +50,8 @@ impl CanonicalSet {
     /// which is why this normalises rather than refusing an unsorted input.
     /// There is no wrong argument to reject: every multiset of values denotes
     /// exactly one set, and this computes its one encoding.
-    pub fn of<I: IntoIterator<Item = CanonicalBytes>>(elems: I) -> CanonicalSet {
-        let mut v: Vec<CanonicalBytes> = elems.into_iter().collect();
+    pub fn of<I: IntoIterator<Item = RowItem>>(elems: I) -> CanonicalSet {
+        let mut v: Vec<RowItem> = elems.into_iter().collect();
         v.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
         v.dedup_by(|a, b| a.as_bytes() == b.as_bytes());
         CanonicalSet(v)
@@ -72,8 +72,8 @@ impl CanonicalSet {
     }
 }
 
-impl FromIterator<CanonicalBytes> for CanonicalSet {
-    fn from_iter<I: IntoIterator<Item = CanonicalBytes>>(iter: I) -> CanonicalSet {
+impl FromIterator<RowItem> for CanonicalSet {
+    fn from_iter<I: IntoIterator<Item = RowItem>>(iter: I) -> CanonicalSet {
         CanonicalSet::of(iter)
     }
 }
@@ -81,30 +81,40 @@ impl FromIterator<CanonicalBytes> for CanonicalSet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::value::canonical::{seal_str, seal_null};
+    use crate::value::canonical::{seal_null, seal_str, Utf8};
+
+    /// A member built from a leaf value. The mint is fallible because a deep
+    /// value is not a member; a leaf never is one.
+    fn member(v: CanonicalBytes) -> RowItem {
+        RowItem::of(v).expect("a leaf value is shallow enough to be a member")
+    }
+
+    fn text(s: &str) -> RowItem {
+        member(seal_str(&Utf8::of(s)))
+    }
 
     /// The breach this file exists to close: one set value, one byte string,
     /// regardless of the order the elements were written in.
     #[test]
     fn a_set_has_one_encoding_whatever_order_it_arrives_in() {
-        let ab = CanonicalSet::of([seal_str(b"a"), seal_str(b"b")]).seal();
-        let ba = CanonicalSet::of([seal_str(b"b"), seal_str(b"a")]).seal();
+        let ab = CanonicalSet::of([text("a"), text("b")]).seal();
+        let ba = CanonicalSet::of([text("b"), text("a")]).seal();
         assert_eq!(ab.as_bytes(), ba.as_bytes());
     }
 
     #[test]
     fn duplicates_are_not_members_twice() {
-        let once = CanonicalSet::of([seal_str(b"a")]).seal();
-        let twice = CanonicalSet::of([seal_str(b"a"), seal_str(b"a")]).seal();
+        let once = CanonicalSet::of([text("a")]).seal();
+        let twice = CanonicalSet::of([text("a"), text("a")]).seal();
         assert_eq!(once.as_bytes(), twice.as_bytes());
-        assert_eq!(CanonicalSet::of([seal_str(b"a"), seal_str(b"a")]).len(), 1);
+        assert_eq!(CanonicalSet::of([text("a"), text("a")]).len(), 1);
     }
 
     /// Distinct elements are not silently merged: dedup is by whole bytes, not
     /// by a prefix or a hash.
     #[test]
     fn distinct_elements_all_survive() {
-        let s = CanonicalSet::of([seal_str(b"a"), seal_str(b"ab"), seal_null()]);
+        let s = CanonicalSet::of([text("a"), text("ab"), member(seal_null())]);
         assert_eq!(s.len(), 3);
     }
 
@@ -112,10 +122,10 @@ mod tests {
     /// the same order a reader would sort them into.
     #[test]
     fn members_are_ascending_by_their_bytes() {
-        let s = CanonicalSet::of([seal_str(b"c"), seal_str(b"a"), seal_str(b"b")]);
+        let s = CanonicalSet::of([text("c"), text("a"), text("b")]);
         let sealed = s.seal();
-        let a = seal_str(b"a");
-        let c = seal_str(b"c");
+        let a = seal_str(&Utf8::of("a"));
+        let c = seal_str(&Utf8::of("c"));
         let body = sealed.as_bytes();
         let first = body
             .windows(a.as_bytes().len())

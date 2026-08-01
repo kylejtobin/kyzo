@@ -1567,19 +1567,90 @@ proof fn lemma_cat_snoc(r: Seq<Seq<u8>>, x: Seq<u8>)
 // CONSTRUCT: SealedProduct CanonicalBytes
 pub struct CanonicalBytes {
     bytes: Vec<u8>,
+    descent: u32,
 }
 
 // CONSTRUCT: ImplBlock CanonicalBytes
 impl CanonicalBytes {
     pub closed spec fn view(self) -> Seq<u8> { self.bytes@ }
 
+    /// How far the reader descends to read these bytes.
+    pub closed spec fn spec_descent(self) -> nat { self.descent as nat }
+
     #[verifier::type_invariant]
-    closed spec fn wf_bytes(self) -> bool { complete(self.view()) }
+    closed spec fn wf_bytes(self) -> bool {
+        complete(self.view()) && self.descent < MAX_DEPTH
+    }
 
     pub fn as_bytes(&self) -> (r: &[u8])
         ensures r@ =~= self.view()
     { self.bytes.as_slice() }
 
+    /// The descent, for the mints that decide whether a door has room to
+    /// enclose this value.
+    pub fn descent(&self) -> (r: u32)
+        ensures r == self.spec_descent(), r < MAX_DEPTH
+    { proof { use_type_invariant(self); } self.descent }
+}
+
+/// A value another value may carry whole.
+///
+/// The reader spends a level on the enclosing tag before it reaches this one,
+/// so a value already at the limit is not wrappable. That is decided here, once,
+/// and [`seal_json`] takes this type rather than deciding it again.
+// CONSTRUCT: ValueObject Wrapped
+pub struct Wrapped {
+    value: CanonicalBytes,
+}
+
+impl Wrapped {
+    pub closed spec fn spec_view(&self) -> Seq<u8> { self.value.view() }
+
+    #[verifier::type_invariant]
+    closed spec fn wf_wrapped(&self) -> bool { self.value.spec_descent() + 1 < MAX_DEPTH }
+
+    /// Refusing hands the value back: a value too deep to wrap is still a
+    /// value, and losing it would make the refusal cost more than it reports.
+    pub fn of(v: CanonicalBytes) -> (r: Result<Wrapped, CanonicalBytes>)
+        ensures match r {
+            Ok(w) => w.spec_view() =~= v.view(),
+            Err(back) => back.view() =~= v.view(),
+        }
+    {
+        let d = v.descent();
+        if d + 1 < MAX_DEPTH { Ok(Wrapped { value: v }) } else { Err(v) }
+    }
+}
+
+/// A value a row may hold.
+///
+/// A row spends a level of its own on top of the element's tag, so the room a
+/// member needs is one more than a wrapper's.
+// CONSTRUCT: ValueObject RowItem
+pub struct RowItem {
+    value: CanonicalBytes,
+}
+
+impl RowItem {
+    pub closed spec fn spec_view(&self) -> Seq<u8> { self.value.view() }
+
+    #[verifier::type_invariant]
+    closed spec fn wf_item(&self) -> bool { self.value.spec_descent() + 2 < MAX_DEPTH }
+
+    /// Refusing hands the value back, for the reason [`Wrapped::of`] gives.
+    pub fn of(v: CanonicalBytes) -> (r: Result<RowItem, CanonicalBytes>)
+        ensures match r {
+            Ok(m) => m.spec_view() =~= v.view(),
+            Err(back) => back.view() =~= v.view(),
+        }
+    {
+        let d = v.descent();
+        if d + 2 < MAX_DEPTH { Ok(RowItem { value: v }) } else { Err(v) }
+    }
+
+    pub fn as_bytes(&self) -> (r: &[u8])
+        ensures r@ =~= self.spec_view()
+    { self.value.as_bytes() }
 }
 
 /// Escape a variable-length payload into the order-preserving, self-delimiting
@@ -1944,36 +2015,45 @@ impl<'a> Reading<'a> {
 struct Body {
     bytes: Vec<u8>,
     shape: Ghost<Shape>,
+    descent: u32,
 }
 
 // CONSTRUCT: ImplBlock Body
 impl Body {
     closed spec fn view(self) -> Seq<u8> { self.bytes@ }
     closed spec fn shape(self) -> Shape { self.shape@ }
+    closed spec fn spec_descent(self) -> nat { self.descent as nat }
 
     #[verifier::type_invariant]
     closed spec fn wf_body(self) -> bool {
         shape_end(grammar(), self.shape@, self.bytes@) == Some(self.bytes@.len() as nat)
+            && self.descent + 1 < MAX_DEPTH
     }
 
     /// Exactly these bytes. The width is a fact about the vector, so a body of
     /// the wrong width is not ill-formed — it is a different shape, and the tag
     /// it is sealed under will not accept it.
     fn fixed(bytes: Vec<u8>) -> (r: Body)
-        ensures r.view() =~= bytes@, r.shape() == Shape::Fixed(bytes@.len() as usize)
+        ensures
+            r.view() =~= bytes@,
+            r.shape() == Shape::Fixed(bytes@.len() as usize),
+            r.spec_descent() == 0,
     {
         let n = bytes.len();
-        Body { bytes, shape: Ghost(Shape::Fixed(n)) }
+        Body { bytes, shape: Ghost(Shape::Fixed(n)), descent: 0 }
     }
 
     /// Opaque content of any length. Every byte sequence has an escaped form,
     /// so there is nothing here that can fail.
     fn delimited(content: &[u8]) -> (r: Body)
-        ensures r.view() =~= enc_bytes(content@), r.shape() == Shape::Delimited
+        ensures
+            r.view() =~= enc_bytes(content@),
+            r.shape() == Shape::Delimited,
+            r.spec_descent() == 0,
     {
         let bytes = escape(content);
         proof { lemma_delim_end_of_enc_bytes(content@); }
-        Body { bytes, shape: Ghost(Shape::Delimited) }
+        Body { bytes, shape: Ghost(Shape::Delimited), descent: 0 }
     }
 
     /// One body then another, with no separator between them.
@@ -1985,8 +2065,10 @@ impl Body {
         ensures
             r.view() =~= a.view() + b.view(),
             r.shape() == prod(a.shape(), b.shape()),
+            r.spec_descent() == a.spec_descent() || r.spec_descent() == b.spec_descent(),
     {
         proof { use_type_invariant(&a); use_type_invariant(&b); }
+        let deeper = if a.descent > b.descent { a.descent } else { b.descent };
         let ghost sa = a.shape@;
         let ghost sb = b.shape@;
         let ghost va = a.bytes@;
@@ -1999,7 +2081,7 @@ impl Body {
             lemma_shape_local(grammar(), sa, va, va + vb);
             assert((va + vb).skip(va.len() as int) =~= vb);
         }
-        Body { bytes, shape: Ghost(prod(sa, sb)) }
+        Body { bytes, shape: Ghost(prod(sa, sb)), descent: deeper }
     }
 
     /// A lead byte, and the body the branch table says it selects.
@@ -2008,12 +2090,16 @@ impl Body {
     /// a precondition, discharged where the kind is defined; there is no lookup
     /// here and nothing to refuse.
     fn select(bs: Ghost<Branches>, k: u8, inner: Body) -> (r: Body)
-        requires branch_of(bs@, k) == Some(inner.shape())
+        requires
+            branch_of(bs@, k) == Some(inner.shape()),
+            inner.spec_descent() + 2 < MAX_DEPTH,
         ensures
             r.view() =~= seq![k] + inner.view(),
             r.shape() == Shape::Sum(Box::new(bs@)),
+            r.spec_descent() == inner.spec_descent() + 1,
     {
         proof { use_type_invariant(&inner); }
+        let below = inner.descent;
         let ghost vi = inner.bytes@;
         let ghost si = inner.shape@;
         let mut bytes: Vec<u8> = Vec::new();
@@ -2028,29 +2114,33 @@ impl Body {
             assert(shape_end(grammar(), si, bytes@.skip(1)) == Some(vi.len() as nat));
             assert(sum_end(grammar(), bs@, bytes@) == Some((1 + vi.len()) as nat));
         }
-        Body { bytes, shape: Ghost(Shape::Sum(Box::new(bs@))) }
+        Body { bytes, shape: Ghost(Shape::Sum(Box::new(bs@))), descent: below + 1 }
     }
 
     /// A row of complete values, terminated. Elements open with a tag, which
     /// sorts above the terminator, so none can be read as the row's end.
-    fn row(elems: &Vec<CanonicalBytes>) -> (r: Body)
+    fn row(elems: &Vec<RowItem>) -> (r: Body)
         ensures
-            r.view() =~= enc_row(elems@.map_values(|e: CanonicalBytes| e.view())),
+            r.view() =~= enc_row(elems@.map_values(|e: RowItem| e.spec_view())),
             r.shape() == row(Shape::Tagged),
     {
-        let ghost views = elems@.map_values(|e: CanonicalBytes| e.view());
+        let ghost views = elems@.map_values(|e: RowItem| e.spec_view());
         let mut bytes: Vec<u8> = Vec::new();
+        let mut deepest: u32 = 0;
         let mut i: usize = 0;
         while i < elems.len()
             invariant
                 0 <= i <= elems.len(),
-                views =~= elems@.map_values(|e: CanonicalBytes| e.view()),
+                views =~= elems@.map_values(|e: RowItem| e.spec_view()),
                 bytes@ =~= cat(views.take(i as int)),
+                deepest + 2 < MAX_DEPTH,
                 forall|k: int| 0 <= k < i ==> complete(#[trigger] views[k]),
             decreases elems.len() - i
         {
             let e = &elems[i];
-            proof { use_type_invariant(e); }
+            proof { use_type_invariant(e); use_type_invariant(&e.value); }
+            let d = e.value.descent();
+            if d > deepest { deepest = d; }
             let src = e.as_bytes();
             let ghost before = bytes@;
             let mut j: usize = 0;
@@ -2079,15 +2169,20 @@ impl Body {
             lemma_scan_row_of_row(views, Seq::empty());
             assert(bytes@ =~= (cat(views) + seq![STRUCT_END]) + Seq::<u8>::empty());
         }
-        Body { bytes, shape: Ghost(row(Shape::Tagged)) }
+        Body { bytes, shape: Ghost(row(Shape::Tagged)), descent: deepest + 1 }
     }
 
     /// One complete value, carried as a body. This is the back-reference: a
     /// kind whose payload is a value, not bytes of its own.
     fn value(v: &CanonicalBytes) -> (r: Body)
-        ensures r.view() =~= v.view(), r.shape() == Shape::Tagged
+        requires v.spec_descent() + 1 < MAX_DEPTH
+        ensures
+            r.view() =~= v.view(),
+            r.shape() == Shape::Tagged,
+            r.spec_descent() == v.spec_descent(),
     {
         proof { use_type_invariant(v); }
+        let below = v.descent();
         let src = v.as_bytes();
         let mut bytes: Vec<u8> = Vec::new();
         let mut j: usize = 0;
@@ -2103,7 +2198,7 @@ impl Body {
             assert(src@.take(src.len() as int) =~= v.view());
             assert(scan(bytes@) == Some(bytes@.len() as nat));
         }
-        Body { bytes, shape: Ghost(Shape::Tagged) }
+        Body { bytes, shape: Ghost(Shape::Tagged), descent: below }
     }
 }
 
@@ -2121,10 +2216,13 @@ impl Body {
 // CONSTRUCT: Mint seal
 fn seal(tag: u8, body: Body) -> (r: CanonicalBytes)
     requires tag_shape(tag) == Some(body.shape())
-    ensures r.view() =~= seq![tag] + body.view()
+    ensures
+        r.view() =~= seq![tag] + body.view(),
+        r.spec_descent() == body.spec_descent() + 1,
 {
     proof { use_type_invariant(&body); }
     let ghost vb = body.bytes@;
+    let below = body.descent;
     let mut out: Vec<u8> = Vec::new();
     out.push(tag);
     let mut tail = body.bytes;
@@ -2133,7 +2231,7 @@ fn seal(tag: u8, body: Body) -> (r: CanonicalBytes)
         assert(out@ =~= seq![tag] + vb);
         lemma_scan_peel(tag, vb);
     }
-    CanonicalBytes { bytes: out }
+    CanonicalBytes { bytes: out, descent: below + 1 }
 }
 
 // ================================= the kinds =================================
@@ -3012,9 +3110,12 @@ pub fn seal_regex(pattern: &[u8], flags: &RegexFlags) -> (r: CanonicalBytes) {
 }
 
 /// A JSON value IS a value. There is no second grammar to keep in step.
-pub fn seal_json(v: &CanonicalBytes) -> (r: CanonicalBytes)
-    ensures r.view() =~= seq![TAG_JSON] + v.view()
-{ proof { lemma_tag_shapes(); } seal(TAG_JSON, Body::value(v)) }
+pub fn seal_json(v: &Wrapped) -> (r: CanonicalBytes)
+    ensures r.view() =~= seq![TAG_JSON] + v.spec_view()
+{
+    proof { lemma_tag_shapes(); use_type_invariant(v); }
+    seal(TAG_JSON, Body::value(&v.value))
+}
 
 /// A sealed value of the Num kind.
 ///
@@ -3028,6 +3129,9 @@ pub struct NumericBytes {
 impl NumericBytes {
     pub closed spec fn spec_view(&self) -> Seq<u8> { self.value.view() }
 
+    #[verifier::type_invariant]
+    closed spec fn wf_num(&self) -> bool { self.value.spec_descent() + 2 < MAX_DEPTH }
+
     /// The value itself, for the doors that take any kind.
     pub fn into_value(self) -> (r: CanonicalBytes)
         ensures r.view() =~= self.spec_view()
@@ -3036,6 +3140,11 @@ impl NumericBytes {
     pub fn as_bytes(&self) -> (r: &[u8])
         ensures r@ =~= self.spec_view()
     { self.value.as_bytes() }
+
+    /// A number is a leaf, so it is a member of any row without asking.
+    pub fn into_row_item(self) -> (r: RowItem)
+        ensures r.spec_view() =~= self.spec_view()
+    { proof { use_type_invariant(&self); } RowItem { value: self.value } }
 }
 
 /// Width of the dimension field, in bytes.
@@ -3053,31 +3162,76 @@ pub fn seal_vector(components: Vec<NumericBytes>) -> (r: CanonicalBytes)
     let dim = components.len();
     let d = be_bytes(dim as u128, DIM_BYTES);
     let mut rest = components;
-    let mut vals: Vec<CanonicalBytes> = Vec::new();
+    let mut vals: Vec<RowItem> = Vec::new();
     while rest.len() > 0
         invariant vals@.len() + rest@.len() == dim
         decreases rest.len()
     {
         let head = rest.remove(0);
-        vals.push(head.into_value());
+        vals.push(head.into_row_item());
     }
     seal(TAG_VECTOR, Body::product(Body::fixed(d), Body::row(&vals)))
 }
 
-pub fn seal_validity(v: &[u8; 9]) -> (r: CanonicalBytes) {
+/// A valid-time instant and its assert flag, in the order the temporal seek
+/// wants: latest instant first, assert before retract at one instant.
+///
+/// ORDER_LAW: descending by `ts_micros`, then assert before retract. The
+/// descent is why the instant is stored complemented rather than as written.
+// CONSTRUCT: ValueObject Validity
+pub struct Validity {
+    ts_micros: i64,
+    is_assert: bool,
+}
+
+impl Validity {
+    pub fn new(ts_micros: i64, is_assert: bool) -> (r: Validity) {
+        Validity { ts_micros, is_assert }
+    }
+
+    /// Eight instant bytes then the flag. The instant is biased into unsigned
+    /// space and complemented, so a later instant sorts first.
+    pub fn body(&self) -> (r: Vec<u8>)
+        ensures r@.len() == 9
+    {
+        let biased: u64 = (self.ts_micros as u64) ^ 0x8000_0000_0000_0000u64;
+        let mut b = be_bytes(!biased as u128, 8);
+        b.push(if self.is_assert { 0x00u8 } else { 0x01u8 });
+        b
+    }
+}
+
+pub fn seal_validity(v: &Validity) -> (r: CanonicalBytes) {
     proof { lemma_tag_shapes(); }
-    let b = Body::fixed(owned(v.as_slice()));
+    let b = Body::fixed(v.body());
     seal(TAG_VALIDITY, b)
 }
 
-pub fn seal_geometry(g: &[u8; 8]) -> (r: CanonicalBytes) {
+/// A point on the space-filling curve.
+///
+/// ORDER_LAW: ascending by curve index, big-endian, so memcmp of the payload
+/// is curve order.
+// CONSTRUCT: ValueObject Geometry
+pub struct Geometry {
+    curve_index: u64,
+}
+
+impl Geometry {
+    pub fn new(curve_index: u64) -> (r: Geometry) { Geometry { curve_index } }
+
+    pub fn body(&self) -> (r: Vec<u8>)
+        ensures r@.len() == 8
+    { be_bytes(self.curve_index as u128, 8) }
+}
+
+pub fn seal_geometry(g: &Geometry) -> (r: CanonicalBytes) {
     proof { lemma_tag_shapes(); }
-    let b = Body::fixed(owned(g.as_slice()));
+    let b = Body::fixed(g.body());
     seal(TAG_GEOMETRY, b)
 }
 
-pub fn seal_list(elems: &Vec<CanonicalBytes>) -> (r: CanonicalBytes)
-    ensures r.view() =~= seq![TAG_LIST] + enc_row(elems@.map_values(|e: CanonicalBytes| e.view()))
+pub fn seal_list(elems: &Vec<RowItem>) -> (r: CanonicalBytes)
+    ensures r.view() =~= seq![TAG_LIST] + enc_row(elems@.map_values(|e: RowItem| e.spec_view()))
 { proof { lemma_tag_shapes(); } seal(TAG_LIST, Body::row(elems)) }
 
 /// The raw set door: a row under the set tag, in the order given.
@@ -3087,8 +3241,8 @@ pub fn seal_list(elems: &Vec<CanonicalBytes>) -> (r: CanonicalBytes)
 /// forbids — equal values encode equal. Normalising is not a grammar property,
 /// so it is not provable here and does not belong here; the public path is
 /// [`super::codec::CanonicalSet`], whose only constructor sorts and dedups.
-pub(crate) fn seal_set(elems: &Vec<CanonicalBytes>) -> (r: CanonicalBytes)
-    ensures r.view() =~= seq![TAG_SET] + enc_row(elems@.map_values(|e: CanonicalBytes| e.view()))
+pub(crate) fn seal_set(elems: &Vec<RowItem>) -> (r: CanonicalBytes)
+    ensures r.view() =~= seq![TAG_SET] + enc_row(elems@.map_values(|e: RowItem| e.spec_view()))
 { proof { lemma_tag_shapes(); } seal(TAG_SET, Body::row(elems)) }
 
 /// An interval endpoint. Unboundedness is a variant, never a sentinel instant:

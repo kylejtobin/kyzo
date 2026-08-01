@@ -34,8 +34,8 @@ use canonical::{
     Bound, Refusal, Utf8, NumericBytes, Branches, Reason, grammar_exec, CanonicalBytes, Shape, escape, scan_value, seal_bool, seal_bytes,
     seal_geometry, seal_interval, seal_interval_empty, seal_json, seal_list, seal_null,
     seal_num_negative, seal_num_nan, seal_num_positive, seal_num_zero, seal_regex, seal_set, seal_str,
-    Magnitude, Repr, RegexFlags, MAG_BYTES, EXP_INFINITE, DIM_BYTES,
-    seal_uuid, seal_validity, seal_vector, shape_scan,
+    Magnitude, Repr, RegexFlags, EXP_INFINITE, DIM_BYTES,
+    seal_uuid, seal_validity, seal_vector, shape_scan, Geometry, RowItem, Validity, Wrapped,
 };
 
 // The released format, written out here and nowhere else in this file. These
@@ -138,6 +138,77 @@ fn vec_of(n: usize) -> Vec<NumericBytes> {
 /// and is deliberately not comparable, so trials that only care whether a
 /// boundary was found go through this.
 fn scanned(r: Result<usize, Refusal<'_>>) -> Option<usize> { r.ok() }
+
+/// A row member. The mint refuses a value the reader could not reach inside a
+/// row; every value built here is shallow, and the boundary is tested where the
+/// mint is asked directly.
+fn member(v: CanonicalBytes) -> RowItem {
+    match RowItem::of(v) {
+        Ok(m) => m,
+        Err(refused) => harness_cannot_continue("row member", &refused),
+    }
+}
+
+/// A wrapped value, minted the same way and for the same reason.
+fn wrap(v: CanonicalBytes) -> Wrapped {
+    match Wrapped::of(v) {
+        Ok(w) => w,
+        Err(refused) => harness_cannot_continue("wrapper", &refused),
+    }
+}
+
+/// A refusal here is not a failing check: the harness asked for a member or a
+/// wrapper it cannot have, so there is no trial to report. Shell owns the exit,
+/// and this is one.
+fn harness_cannot_continue(door: &str, refused: &CanonicalBytes) -> ! {
+    eprintln!(
+        "canonical-trials: {door} refused a value of descent {} that the harness built as shallow",
+        refused.descent(),
+    );
+    std::process::exit(2)
+}
+
+fn row(items: Vec<CanonicalBytes>) -> Vec<RowItem> {
+    items.into_iter().map(member).collect()
+}
+
+/// Nest by hand, past what the writer will mint. A reader is judged on input no
+/// writer of ours produced, so the attack has to forge the bytes itself.
+fn forged_nest(inner: &[u8], levels: usize) -> Vec<u8> {
+    let mut b = inner.to_vec();
+    for _ in 0..levels {
+        let mut o = vec![TAG_LIST];
+        o.extend_from_slice(&b);
+        o.push(0x01);
+        b = o;
+    }
+    b
+}
+
+/// The deepest value the writer will mint, by wrapping until the mint refuses,
+/// and the number of levels it took.
+fn deepest_wrapped() -> (CanonicalBytes, usize) {
+    let mut v = seal_null();
+    let mut levels = 0usize;
+    loop {
+        match Wrapped::of(v) {
+            Ok(w) => { v = seal_json(&w); levels += 1; }
+            Err(back) => return (back, levels),
+        }
+    }
+}
+
+/// The same, for rows: one element per level.
+fn deepest_nested_row() -> (CanonicalBytes, usize) {
+    let mut v = seal_null();
+    let mut levels = 0usize;
+    loop {
+        match RowItem::of(v) {
+            Ok(m) => { v = seal_list(&vec![m]); levels += 1; }
+            Err(back) => return (back, levels),
+        }
+    }
+}
 
 /// Where a refusal stopped, as an offset from the front of `input`. The
 /// refusal carries the suffix it had not consumed; the offset is the caller's
@@ -308,8 +379,8 @@ fn attack_concatenation_collision(t: &mut Trials) {
 fn attack_structural_smuggling(t: &mut Trials) {
 
     // An element whose content starts with the sequence terminator.
-    let one = seal_list(&vec![bytes_val(&[0x01, 0x41])]);
-    let two = seal_list(&vec![bytes_val(&[0x01, 0x41]), bytes_val(&[0x41])]);
+    let one = seal_list(&row(vec![bytes_val(&[0x01, 0x41])]));
+    let two = seal_list(&row(vec![bytes_val(&[0x01, 0x41]), bytes_val(&[0x41])]));
 
     // Every element opens with its tag byte, which is >= 0x05, so the smuggled
     // 0x01 sits inside a payload and can never be read as the terminator.
@@ -329,7 +400,7 @@ fn attack_structural_smuggling(t: &mut Trials) {
 fn attack_empty_confusion(t: &mut Trials) {
 
     let empty_seq = seal_list(&Vec::new());
-    let seq_of_empty = seal_list(&vec![bytes_val(&[])]);
+    let seq_of_empty = seal_list(&row(vec![bytes_val(&[])]));
 
     t.check("empty seq != seq of empty", empty_seq.as_bytes() != seq_of_empty.as_bytes());
     t.check(
@@ -368,8 +439,8 @@ fn attack_cross_type_order(t: &mut Trials) {
 fn attack_prefix_sequence_exhaustive(t: &mut Trials) {
     for x in 0u16..=255 {
         let byte = x as u8;
-        let short = seal_list(&vec![str_val("a")]);
-        let long = seal_list(&vec![str_val("a"), bytes_val(&[byte])]);
+        let short = seal_list(&row(vec![str_val("a")]));
+        let long = seal_list(&row(vec![str_val("a"), bytes_val(&[byte])]));
         t.check(
             "prefix sequence sorts first, all 256 extensions",
             lex_le_independent(short.as_bytes(), long.as_bytes())
@@ -382,12 +453,17 @@ fn attack_prefix_sequence_exhaustive(t: &mut Trials) {
 /// value must still be exactly self-delimiting.
 fn attack_deep_nesting(t: &mut Trials) {
     let mut inner = str_val("leaf");
-    for _ in 0..512 {
-        inner = seal_list(&vec![inner]);
+    let mut levels = 0usize;
+    loop {
+        match RowItem::of(inner) {
+            Ok(m) => { inner = seal_list(&vec![m]); levels += 1; }
+            Err(back) => { inner = back; break; }
+        }
     }
     let bytes = inner.as_bytes();
-    // 512 opening tags, 512 terminators, plus the leaf.
-    t.check("deep nesting balanced", bytes.len() == 512 * 2 + 1 + 4 + 2);
+    // One opening tag and one terminator per level, plus the leaf: tag, two
+    // escaped-empty bytes, and four content bytes.
+    t.check("deep nesting balanced", bytes.len() == levels * 2 + 1 + 4 + 2);
     t.check("deep nesting opens with the list tag", bytes[0] == TAG_LIST);
     t.check("deep nesting closes with the terminator", bytes[bytes.len() - 1] == 0x01);
 }
@@ -450,16 +526,16 @@ fn trial_grammar_table(t: &mut Trials) {
         (seal_bytes(&[0x00, 0xFF]), 6, "Bytes: tag, escaped content, terminator"),
         (seal_uuid(&[0x00; 16]), 17, "Uuid: tag, 16"),
         (seal_regex(b"ab", &RegexFlags::new(true, true, true)), 6, "Regex: tag, pattern, terminator, flags"),
-        (seal_json(&seal_null()), 2, "Json: tag, a value"),
+        (seal_json(&wrap(seal_null())), 2, "Json: tag, a value"),
         (seal_vector(vec![seal_num_zero(Repr::Int), seal_num_zero(Repr::Int)]), 12,
             "Vector: tag, 4 dimension, two components, terminator"),
         (seal_list(&Vec::new()), 2, "List: tag, terminator"),
         (seal_set(&Vec::new()), 2, "Set: tag, terminator"),
-        (seal_validity(&[0x00; 9]), 10, "Validity: tag, 9"),
+        (seal_validity(&Validity::new(0, true)), 10, "Validity: tag, 9"),
         (seal_interval_empty(), 2, "Interval empty: tag, marker"),
         (seal_interval(&Bound::Unbounded, &Bound::Unbounded), 4, "Interval: tag, marker, two ends"),
         (seal_interval(&Bound::At([0x00; 8]), &Bound::Unbounded), 12, "Interval: lo at"),
-        (seal_geometry(&[0x00; 8]), 9, "Geometry: tag, 8"),
+        (seal_geometry(&Geometry::new(0)), 9, "Geometry: tag, 8"),
     ];
     let g = grammar_exec();
     for (v, want, label) in &cases {
@@ -483,13 +559,13 @@ fn trial_grammar_table(t: &mut Trials) {
         (seal_bytes(b""), TAG_BYTES, "Bytes tag"),
         (seal_uuid(&[0; 16]), TAG_UUID, "Uuid tag"),
         (seal_regex(b"", &RegexFlags::new(false, false, false)), TAG_REGEX, "Regex tag"),
-        (seal_json(&seal_null()), TAG_JSON, "Json tag"),
+        (seal_json(&wrap(seal_null())), TAG_JSON, "Json tag"),
         (seal_vector(Vec::new()), TAG_VECTOR, "Vector tag"),
         (seal_list(&Vec::new()), TAG_LIST, "List tag"),
         (seal_set(&Vec::new()), TAG_SET, "Set tag"),
-        (seal_validity(&[0; 9]), TAG_VALIDITY, "Validity tag"),
+        (seal_validity(&Validity::new(0, true)), TAG_VALIDITY, "Validity tag"),
         (seal_interval_empty(), TAG_INTERVAL, "Interval tag"),
-        (seal_geometry(&[0; 8]), TAG_GEOMETRY, "Geometry tag"),
+        (seal_geometry(&Geometry::new(0)), TAG_GEOMETRY, "Geometry tag"),
     ];
     for (v, tag, label) in &leads {
         t.check(label, v.as_bytes()[0] == *tag);
@@ -680,10 +756,10 @@ fn attack_reader_agrees_with_writer(t: &mut Trials) {
         seal_str(&Utf8::of("")),
         seal_str(&Utf8::of("\u{0}\u{1}\u{ff}")),
         seal_num_zero(Repr::Int).into_value(),
-        seal_json(&seal_bool(true)),
+        seal_json(&wrap(seal_bool(true))),
         seal_list(&Vec::new()),
-        seal_list(&vec![bytes_val(&[0x01]), bytes_val(&[0x00])]),
-        seal_list(&vec![seal_list(&vec![str_val("x")])]),
+        seal_list(&row(vec![bytes_val(&[0x01]), bytes_val(&[0x00])])),
+        seal_list(&row(vec![seal_list(&row(vec![str_val("x")]))])),
     ];
     for v in &values {
         let bytes = v.as_bytes();
@@ -740,13 +816,11 @@ fn attack_reader_totality(t: &mut Trials) {
     // Nesting past the bound is refused, never followed.
     let mut deep = str_val("leaf");
     for _ in 0..40 {
-        deep = seal_list(&vec![deep]);
+        deep = seal_list(&vec![member(deep)]);
     }
     t.check("nesting within the bound is read", scan_value(deep.as_bytes()).is_ok());
-    for _ in 0..512 {
-        deep = seal_list(&vec![deep]);
-    }
-    t.check("nesting past the bound is refused", scan_value(deep.as_bytes()).is_err());
+    let forged = forged_nest(deep.as_bytes(), 512);
+    t.check("nesting past the bound is refused", scan_value(&forged).is_err());
 }
 
 /// ATTACK: a refusal must name itself. `None` tells a caller nothing it can act
@@ -784,11 +858,8 @@ fn attack_refusals_are_named(t: &mut Trials) {
     }
 
     // Nesting past the bound names itself too, rather than overflowing a stack.
-    let mut deep = seal_null();
-    for _ in 0..400 {
-        deep = seal_list(&vec![deep]);
-    }
-    match scan_value(deep.as_bytes()) {
+    let deep = forged_nest(seal_null().as_bytes(), 400);
+    match scan_value(&deep) {
         Ok(_) => t.check("nesting past the bound", false),
         Err(e) => t.check("nesting past the bound names TooDeep", e.reason() == Reason::TooDeep),
     }
@@ -1007,32 +1078,48 @@ fn finite_magnitude_cannot_equal_infinite_magnitude(t: &mut Trials) {
 
 /// Every value the writer can mint is readable by the reader that ships with it.
 fn canonical_writer_output_is_always_readable(t: &mut Trials) {
-    for depth in [1usize, 8, 64, 126, 127, 128, 129, 200] {
-        let mut v = seal_null();
-        for _ in 0..depth {
-            v = seal_json(&v);
+    let mut v = seal_null();
+    let mut levels = 0usize;
+    loop {
+        match Wrapped::of(v) {
+            Ok(w) => {
+                v = seal_json(&w);
+                levels += 1;
+                let bytes = v.as_bytes();
+                t.check(
+                    "the reader reads everything the writer sealed",
+                    scanned(scan_value(bytes)) == Some(bytes.len()),
+                );
+            }
+            Err(back) => { v = back; break; }
         }
-        let bytes = v.as_bytes();
-        t.check(
-            "the reader reads everything the writer sealed",
-            scanned(scan_value(bytes)) == Some(bytes.len()),
-        );
     }
+    // The released bound, written out here rather than read from the encoder:
+    // the reader descends 128 levels, a leaf spends one of them, and each
+    // wrapper spends one more, so 126 wrappers is the last that fits.
+    t.check("wrapping reaches the reader's bound", levels == 126);
+    t.check("the deepest value spends every level but one", v.descent() == 127);
 }
 
+/// The writer's bound is the reader's, exactly: the deepest value it will mint
+/// reads, and one level more — which only a forger can write — is refused.
 fn max_writer_nesting_never_exceeds_reader_capacity(t: &mut Trials) {
-    // Find the deepest value the writer will mint, then ask the reader for it.
-    let mut v = seal_null();
-    let mut depth = 0usize;
-    while depth < 300 {
-        v = seal_list(&vec![v]);
-        depth += 1;
+    for (deepest, levels) in [deepest_wrapped(), deepest_nested_row()] {
+        let bytes = deepest.as_bytes();
+        t.check(
+            "the writer refuses to mint deeper than the reader accepts",
+            scanned(scan_value(bytes)) == Some(bytes.len()),
+        );
+        t.check("the writer nests at all", levels > 0);
+        let forged = forged_nest(bytes, 1);
+        match scan_value(&forged) {
+            Ok(_) => t.check("one level past the writer's bound is refused", false),
+            Err(e) => t.check(
+                "one level past the writer's bound is refused as TooDeep",
+                e.reason() == Reason::TooDeep,
+            ),
+        }
     }
-    let bytes = v.as_bytes();
-    t.check(
-        "the writer refuses to mint deeper than the reader accepts",
-        scanned(scan_value(bytes)) == Some(bytes.len()),
-    );
 }
 
 /// A boundary the scanner accepts must be a complete encoding on its own.
@@ -1121,12 +1208,12 @@ fn inverted_interval_is_unconstructible(t: &mut Trials) {
 
 fn set_permutations_encode_identically(t: &mut Trials) {
     let build = |order: [usize; 3]| {
-        let parts: Vec<CanonicalBytes> = order
+        let parts: Vec<RowItem> = order
             .iter()
             .map(|i| seal_num_positive(
                 &Magnitude::Finite { significand: 1, biased_scale: *i as u32 },
                 Repr::Int,
-            ).into_value())
+            ).into_row_item())
             .collect();
         CanonicalSet::of(parts).seal()
     };
@@ -1140,9 +1227,9 @@ fn set_permutations_encode_identically(t: &mut Trials) {
 
 fn set_duplicates_encode_identically(t: &mut Trials) {
     let one = || seal_num_positive(
-        &Magnitude::Finite { significand: 1, biased_scale: 0 }, Repr::Int).into_value();
+        &Magnitude::Finite { significand: 1, biased_scale: 0 }, Repr::Int).into_row_item();
     let two = || seal_num_positive(
-        &Magnitude::Finite { significand: 1, biased_scale: 1 }, Repr::Int).into_value();
+        &Magnitude::Finite { significand: 1, biased_scale: 1 }, Repr::Int).into_row_item();
     let plain = CanonicalSet::of(vec![one(), two()]).seal();
     let dup = CanonicalSet::of(vec![one(), two(), one()]).seal();
     t.check("a repeated element does not change a set", plain.as_bytes() == dup.as_bytes());
@@ -1182,23 +1269,48 @@ fn string_payload_is_valid_utf8(t: &mut Trials) {
     }
 }
 
-fn validity_payload_cannot_be_arbitrary_bytes(t: &mut Trials) {
-    // Every nine-byte string is accepted, including ones no clock can produce.
-    let a = seal_validity(&[0xFF; 9]);
-    let b = seal_validity(&[0x00; 9]);
+fn validity_orders_latest_first(t: &mut Trials) {
+    let later = seal_validity(&Validity::new(2, true));
+    let earlier = seal_validity(&Validity::new(1, true));
+    t.check(
+        "a later valid instant sorts before an earlier one",
+        later.as_bytes() < earlier.as_bytes(),
+    );
+    let neg = seal_validity(&Validity::new(-1, true));
+    t.check(
+        "instant zero sorts before instant minus one",
+        seal_validity(&Validity::new(0, true)).as_bytes() < neg.as_bytes(),
+    );
+    let max = seal_validity(&Validity::new(i64::MAX, true));
+    let min = seal_validity(&Validity::new(i64::MIN, true));
+    t.check(
+        "the greatest instant sorts before the least",
+        max.as_bytes() < min.as_bytes(),
+    );
+    let assert_at = seal_validity(&Validity::new(7, true));
+    let retract_at = seal_validity(&Validity::new(7, false));
+    t.check(
+        "at one instant an assert sorts before a retract",
+        assert_at.as_bytes() < retract_at.as_bytes(),
+    );
     t.check(
         "a validity payload is a temporal value, not nine free bytes",
-        a.as_bytes() == b.as_bytes(),
+        seal_validity(&Validity::new(0, true)).as_bytes()
+            == seal_validity(&Validity::new(0, true)).as_bytes(),
     );
 }
 
-fn geometry_payload_cannot_be_arbitrary_bytes(t: &mut Trials) {
-    let a = seal_geometry(&[0xFF; 8]);
-    let b = seal_geometry(&[0x00; 8]);
-    t.check(
-        "a geometry payload is a spatial value, not eight free bytes",
-        a.as_bytes() == b.as_bytes(),
-    );
+fn geometry_orders_by_curve_index(t: &mut Trials) {
+    for a in [0u64, 1, 255, 256, 1 << 32, u64::MAX - 1] {
+        for b in [0u64, 1, 255, 256, 1 << 32, u64::MAX - 1] {
+            let x = seal_geometry(&Geometry::new(a));
+            let y = seal_geometry(&Geometry::new(b));
+            t.check(
+                "geometry byte order is curve-index order",
+                (x.as_bytes() < y.as_bytes()) == (a < b),
+            );
+        }
+    }
 }
 
 /// Reverse the escape so a Str payload can be checked as text.
@@ -1235,14 +1347,14 @@ fn red_team_corpus() -> Vec<CanonicalBytes> {
         seal_uuid(&[0xFF; 16]),
         seal_regex(b"", &RegexFlags::new(false, false, false)),
         seal_regex(b"a.*b", &RegexFlags::new(true, false, true)),
-        seal_json(&seal_null()),
+        seal_json(&wrap(seal_null())),
         seal_vector(Vec::new()),
         seal_vector(vec_of(3)),
         seal_list(&Vec::new()),
-        seal_list(&vec_of(2).into_iter().map(|n| n.into_value()).collect()),
+        seal_list(&vec_of(2).into_iter().map(|n| n.into_row_item()).collect()),
         seal_set(&Vec::new()),
-        seal_validity(&[0x00; 9]),
-        seal_geometry(&[0x00; 8]),
+        seal_validity(&Validity::new(0, true)),
+        seal_geometry(&Geometry::new(0)),
         seal_interval_empty(),
         seal_interval(&Bound::Unbounded, &Bound::Unbounded),
         seal_interval(&Bound::At([0x00; 8]), &Bound::At([0xFF; 8])),
@@ -1447,8 +1559,8 @@ fn main() {
     set_duplicates_encode_identically(&mut t);
     vector_components_are_numeric_only(&mut t);
     string_payload_is_valid_utf8(&mut t);
-    validity_payload_cannot_be_arbitrary_bytes(&mut t);
-    geometry_payload_cannot_be_arbitrary_bytes(&mut t);
+    validity_orders_latest_first(&mut t);
+    geometry_orders_by_curve_index(&mut t);
     t.report("red team");
 
     println!("byte-order oracle");
