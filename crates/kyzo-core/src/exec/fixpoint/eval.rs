@@ -185,7 +185,6 @@
 //! | InterruptTicker | [`INTERRUPT_STRIDE`], mid-epoch interrupt + in-flight spend guard |
 //! | SEAM: RuleBody / FixedRuleEval | [`RuleBody`], [`FixedRuleEval`], premises / occurrence keys |
 //! | Evaluable program tier | [`EvalRuleSet`], [`HeadAggrKind`], [`EvalProgram`], [`RuleSetShapeError`] |
-//! | Query limiter | [`RowLimit`], early-return counter for `:limit` / `:offset` |
 //! | Evaluator | [`stratified_evaluate`], merge barrier, [`store_of`] / [`store_of_mut`] |
 //! | Per-kind epoch bodies | plain / meet / normal initial + incremental rule evaluation |
 //! | Tests (`cfg(test)`) | oracle differentials, determinism law, budget refusal identity |
@@ -220,10 +219,6 @@ use kyzo_model::value::Tuple;
 /// every program tier (see `MagicInlineRule::aggr` in `data/program.rs`).
 type HeadAggr = HeadAggrSlot;
 
-// ─────────────────────────────────────────────────────────────────────────
-// Refusals and invariants
-// ─────────────────────────────────────────────────────────────────────────
-
 /// A budget dimension. The first three are **deterministic**: their spend
 /// is a function of program+facts+budget alone, so their refusals are
 /// byte-identical on every run at any thread count. `Deadline` is an
@@ -240,11 +235,9 @@ pub enum BudgetDimension {
     /// keeps a single hostile-but-legal epoch — a near-cross-product join —
     /// from materializing an unbounded intermediate before the barrier's
     /// [`DerivedTuples`](BudgetDimension::DerivedTuples) check ever fires.
-    /// See [`InterruptTicker`] for the determinism and boundedness laws.
     InFlightDerivations,
     /// Fixpoint epochs, per stratum.
     Epochs,
-    /// Wall-clock milliseconds since the budget's timeout was armed.
     Deadline,
 }
 
@@ -279,7 +272,6 @@ pub struct LimitExceeded {
     pub spent: u64,
     pub ceiling: u64,
     /// The rule whose in-flight materialization crossed the ceiling
-    /// (mid-epoch dimension only); `None` for the barrier dimensions.
     pub rule: Option<MagicSymbol>,
     /// The offending rule's source span, so the diagnostic points back at
     /// the query text. `None` for the barrier dimensions.
@@ -294,10 +286,6 @@ pub struct LimitExceeded {
 #[error("evaluation invariant violated: {0}")]
 #[diagnostic(code(eval::invariant), help("This is a bug. Please report it."))]
 pub(crate) struct EvalInvariantError(pub(crate) &'static str);
-
-// ─────────────────────────────────────────────────────────────────────────
-// Budget
-// ─────────────────────────────────────────────────────────────────────────
 
 /// An armed deadline: a start stamp and the allotted duration. Kept
 /// together so the refusal can report both spend and ceiling. Stamps are
@@ -338,7 +326,6 @@ impl Budget {
     }
 
     /// Cap the total derivations admitted across the whole query.
-    /// The deterministic derived-tuple ceiling, if armed — read by the
     /// session fixed-rule wrapper to arm its output writer.
     pub(crate) fn derived_tuple_ceiling(&self) -> Option<u64> {
         self.derived_tuple_ceiling
@@ -393,11 +380,9 @@ impl Budget {
             let elapsed = host_clock::mono_millis().saturating_elapsed_since(deadline.started);
             if elapsed > deadline.allotted {
                 // Deadline report is `u64` millis; saturate past u64::MAX so
-                // LimitExceeded still fires — never panic on a long clock.
                 let millis_u64 = |ms: u128| match u64::try_from(ms) {
                     Ok(v) => v,
                     Err(_past_u64) => {
-                        // Clock past u64::MAX ms — ceiling for LimitExceeded report.
                         u64::MAX
                     }
                 };
@@ -416,8 +401,6 @@ impl Budget {
 
     /// Arm a per-rule mid-epoch meter for one eval-function invocation.
     /// `baseline` is the globally admitted total as of this epoch's barrier
-    /// (a snapshot of `spent_derived`, deterministic and fixed for the whole
-    /// epoch); `rule` names the rule for a refusal's attribution.
     pub fn ticker<'a>(&'a self, baseline: u64, rule: &'a MagicSymbol) -> InterruptTicker<'a> {
         InterruptTicker {
             budget: self,
@@ -430,13 +413,10 @@ impl Budget {
 }
 
 /// How many derivations may pass between interrupt checks inside a rule's
-/// iteration. Small enough that no scan is unkillable for long; large
 /// enough that the check does not dominate the loop. NonZero by construction
 /// — wrap-through-zero is unrepresentable.
 pub const INTERRUPT_STRIDE: std::num::NonZeroU32 = match std::num::NonZeroU32::new(64) {
     Some(n) => n,
-    // 64 is nonzero; this arm is compile-time dead. [`NonZeroU32::MIN`]
-    // keeps the match total without a panic-shape (Law 5).
     None => std::num::NonZeroU32::MIN,
 };
 
@@ -456,7 +436,6 @@ impl InterruptCountdown {
     pub fn tick(&mut self) -> bool {
         match std::num::NonZeroU32::new(self.0.get() - 1) {
             None => {
-                // Was 1: stride elapsed.
                 *self = Self::fresh();
                 true
             }
@@ -526,7 +505,6 @@ impl InterruptCountdown {
 ///   group against the running total — the meet twin of the plain filter.
 ///   So again `in_flight ≤ admitted_r`, by construction.
 ///
-/// Hence on every path, if the barrier never trips
 /// (`baseline + Σ_r admitted_r ≤ ceiling` at every epoch), then
 /// `baseline + in_flight ≤ ceiling` at every point and this guard never
 /// fires. It refuses *only* queries the barrier would also refuse — earlier,
@@ -562,7 +540,6 @@ pub struct InterruptTicker<'a> {
     /// The derived-tuple ceiling, mirrored from the budget; `None` disables
     /// the spend guard (the interrupt poll still runs).
     ceiling: Option<u64>,
-    /// The rule owning this stream, for a refusal's name and span.
     rule: &'a MagicSymbol,
 }
 
@@ -605,9 +582,6 @@ impl InterruptTicker<'_> {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// SEAM: the compile tier's rule surface
-// ─────────────────────────────────────────────────────────────────────────
 
 /// The stable, positional key selecting one body-atom occurrence for
 /// semi-naive delta substitution — assigned by walking a rule body
@@ -630,7 +604,6 @@ impl InterruptTicker<'_> {
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AtomOccurrence(pub usize);
 
-/// The premise rows of one derivation, for provenance. `NotRequested` when
 /// eval did not ask (`want_premises` false) — the body implementation must
 /// not pay to collect them in that case.
 pub enum Premises<'a> {
@@ -647,7 +620,6 @@ impl Premises<'_> {
     }
 }
 
-/// Where one positive body literal's rows come from, for provenance
 /// attribution. The premise rows [`Premises::Rows`] passes are bare
 /// tuples; without the body naming each one's source, two relations
 /// holding the same tuple would be indistinguishable and a derivation
@@ -665,8 +637,6 @@ pub enum PremiseSource {
     Fact(Symbol),
 }
 
-/// Private supertrait seal for [`RuleBody`]: only types this crate admits
-/// (via an explicit `impl seal::Sealed`) can implement the eval seam.
 /// Crate visibility alone is not the seal — when the crate splits, an open
 /// `pub(crate)` trait would reopen.
 pub mod seal {
@@ -691,7 +661,6 @@ pub mod seal {
 ///   as `Cow<[DataValue]>`, so a producer whose rows live in a batch
 ///   buffer passes `Cow::Borrowed` and mints nothing — the consumer
 ///   dedups/filters on the slice and materializes ownership
-///   (`into_owned`) only for rows it actually admits. A producer that
 ///   already owns the row passes `Cow::Owned`, and admission moves it
 ///   without a copy. Re-derived and rejected rows — the bulk of every
 ///   recursive fixpoint — therefore allocate nothing on either path.
@@ -745,7 +714,6 @@ pub trait RuleBody: Send + Sync + seal::Sealed {
 /// (`query::normalize::SessionFixedRule`, over `fixed_rule::FixedRule`)
 /// implements this over `MagicFixedRuleApply`; the `budget` is passed so
 /// long-running algorithms can check interrupts cooperatively (the original
-/// passed `Poison` for the same purpose).
 ///
 /// `baseline` is the globally admitted total as of this stratum's epoch-0
 /// barrier — the same quantity [`Budget::ticker`]'s `baseline` is for
@@ -762,9 +730,6 @@ pub trait FixedRuleEval: Send + Sync {
     ) -> Result<()>;
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// The evaluable program tier
-// ─────────────────────────────────────────────────────────────────────────
 
 /// How a rule set's head aggregates — the classification that picks its
 /// store and its evaluation schedule. (Distinct from
@@ -824,8 +789,6 @@ impl<R> EvalRuleSet<R> {
             .iter()
             .filter_map(|a| a.as_aggregated())
             .all(|(aggregation, _)| aggregation.is_meet());
-        // MeetAggrStore groups positionally: key positions are every
-        // non-aggregated head slot, wherever they sit.
         let kind = match (has_aggr, all_meet) {
             (false, _) => HeadAggrKind::None,
             (true, false) => HeadAggrKind::Normal,
@@ -888,9 +851,6 @@ impl<R, F> EvalProgram<R, F> {
             .last()
             .and_then(|last| last.defs.keys().find(|k| k.is_prog_entry()))
             .cloned()
-            // This later-tier site is structurally unreachable once
-            // `InputProgram::new` has proven an entry exists, so it carries
-            // no span (see `NoEntry::spanless` in `kyzo_model::program::rule`).
             .ok_or(kyzo_model::program::rule::NoEntry::spanless())?;
         Ok(Self { strata, entry })
     }
@@ -901,9 +861,6 @@ impl<R, F> EvalProgram<R, F> {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// The query limiter (`:limit` / `:offset` early return)
-// ─────────────────────────────────────────────────────────────────────────
 
 /// The row limit of a query: how many entry rows to produce before
 /// stopping early, and how many of the first to flag as offset-skipped.
@@ -965,7 +922,6 @@ impl QueryLimiter {
     fn should_skip_next(&self) -> bool {
         match self.skip {
             None => {
-                // No :offset — never skip.
                 let no_offset = false;
                 no_offset
             }
@@ -974,9 +930,6 @@ impl QueryLimiter {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// The evaluator
-// ─────────────────────────────────────────────────────────────────────────
 
 /// What evaluation produced: the entry rule's store, and whether the
 /// limiter filtered it (in which case its authoritative rows are
@@ -1048,7 +1001,6 @@ pub(crate) fn stratified_evaluate_with_stores<R: RuleBody, F: FixedRuleEval>(
     let mut limited = false;
     for (stratum_idx, stratum) in program.strata.iter().enumerate() {
         if stratum_idx > 0 {
-            // Drop stores that have outlived their last reader.
             stores.retain(|name, _| lifetimes.is_live_at(name, stratum_idx));
         }
         for (name, def) in &stratum.defs {
@@ -1063,10 +1015,7 @@ pub(crate) fn stratified_evaluate_with_stores<R: RuleBody, F: FixedRuleEval>(
             };
             let clobbered = stores.insert(name.clone(), store);
             // Stratification (`stratify.rs`) places every rule name into
-            // EXACTLY ONE stratum — a second definition of the same store
-            // showing up here would mean two strata both claim to define
             // `name`, silently overwriting whichever one ran first with an
-            // empty store.
             if clobbered.is_some() {
                 return Err(EvalInvariantError(
                     "a rule name must belong to exactly one stratum; store redefined across strata",
@@ -1107,14 +1056,9 @@ pub(crate) fn evaluate_stratum<R: RuleBody, F: FixedRuleEval>(
     for epoch in 0..budget.epoch_ceiling.get() {
         budget.check_interrupt()?;
         let borrowed_stores = &*stores;
-        // The globally admitted total as of this epoch's barrier — fixed
-        // for the whole epoch, so every rule's mid-epoch spend check reads
         // the same deterministic baseline (see [`InterruptTicker`]).
         let epoch_baseline = *spent_derived;
 
-        // One rule set's epoch: dispatch on kind and on epoch 0 vs later.
-        // Runs (possibly in parallel) against the immutable store map; all
-        // writes go to the fresh out-store it returns.
         let execution = |(name, def): (&MagicSymbol, &EvalDefinition<R, F>)| -> Result<_> {
             let (engaged_limiter, out, pending) = match def {
                 EvalDefinition::Rules(rule_set) => match &rule_set.kind {
@@ -1152,8 +1096,6 @@ pub(crate) fn evaluate_stratum<R: RuleBody, F: FixedRuleEval>(
                                 epoch_baseline,
                             )?
                         } else {
-                            // Complete at epoch 0 (all dependencies sit in
-                            // lower strata); an empty store clears the delta.
                             (
                                 false,
                                 RegularTempStore::new().wrap(),
@@ -1191,7 +1133,6 @@ pub(crate) fn evaluate_stratum<R: RuleBody, F: FixedRuleEval>(
                         rule.run(borrowed_stores, &mut out, budget, epoch_baseline)?;
                         (false, out.wrap(), PendingWitnesses::new())
                     } else {
-                        // Fixed rules run exactly once.
                         (
                             false,
                             RegularTempStore::new().wrap(),
@@ -1206,9 +1147,6 @@ pub(crate) fn evaluate_stratum<R: RuleBody, F: FixedRuleEval>(
 
         let mut to_merge: BTreeMap<MagicSymbol, (TempStore, PendingWitnesses)> = BTreeMap::new();
         let limiter_enabled = limiter.enabled();
-        // Entry rules under a limit run sequentially, in order, stopping
-        // as soon as the take-count is reached: the deterministic-ordering
-        // carve-out preserved from the original (its eval.rs:261).
         for res in defs
             .iter()
             .filter(|(name, _)| limiter_enabled && name.is_prog_entry())
@@ -1220,7 +1158,6 @@ pub(crate) fn evaluate_stratum<R: RuleBody, F: FixedRuleEval>(
                 break;
             }
         }
-        // Non-entry batch: rayon on native, sequential on wasm32.
         for res in crate::exec::fixpoint::parallel::collect_non_entry_batch(
             defs,
             limiter_enabled,
@@ -1230,10 +1167,6 @@ pub(crate) fn evaluate_stratum<R: RuleBody, F: FixedRuleEval>(
             to_merge.insert(name, (out, pending));
         }
 
-        // ── The merge barrier ────────────────────────────────────────────
-        // Sequential, in canonical store order: this is where admissions
-        // happen (witnesses bind, Admitted counts accrue) and the ONLY
-        // place the deterministic budget dimensions may be checked.
         let mut changed = false;
         let mut epoch_admitted: u64 = 0;
         for (name, (out, pending)) in to_merge {
@@ -1276,12 +1209,9 @@ pub(crate) fn evaluate_stratum<R: RuleBody, F: FixedRuleEval>(
             .into());
         }
         if !changed {
-            // Fixpoint: every delta is empty.
             return Ok(used_limiter.load(Ordering::Acquire));
         }
     }
-    // The epoch ceiling exhausted without a fixpoint: the deterministic
-    // refusal that replaces the original's unbounded loop.
     let ceiling = u64::from(budget.epoch_ceiling.get());
     Err(LimitExceeded {
         dimension: BudgetDimension::Epochs,
@@ -1316,11 +1246,9 @@ pub(crate) fn project_positions(row: &[DataValue], positions: &[HeadPos]) -> Tup
     positions.iter().map(|p| row[p.get()].clone()).collect()
 }
 
-/// Shared ingest for one plain-rule derivation: dedup → optional provenance
 /// note → limiter put. Used by both epoch-0 and semi-naive epochs; the
 /// epochs differ in *which* derivations are offered (full body vs delta
 /// occurrence), not in how a new row is admitted to `out`.
-/// Staging seats for [`ingest_plain_derivation`] — out/pending/limiter stay distinct.
 struct PlainIngestSeats<'a> {
     out: &'a mut RegularTempStore,
     pending: &'a mut PendingWitnesses,
@@ -1371,7 +1299,6 @@ fn ingest_plain_derivation(
     Ok(ControlFlow::Continue(()))
 }
 
-/// Epoch 0 for a plain (non-aggregating) rule set. Returns
 /// `(engaged_limiter, out, pending)`; `engaged_limiter` is true whenever
 /// this evaluation applied the limiter (limit set and rule is the entry),
 /// telling the caller the entry store's rows are limit-filtered.
@@ -1414,7 +1341,6 @@ fn initial_plain_eval<R: RuleBody>(
     Ok((should_check_limit, out.wrap(), pending))
 }
 
-/// Epochs > 0 for a plain rule set: the semi-naive delta discipline. One
 /// derivation pass per body-atom OCCURRENCE whose named store has a delta
 /// this epoch, in canonical (occurrence-index) order — a store mentioned
 /// twice in one body (the self-join shape) gets two independent passes,
@@ -1437,16 +1363,11 @@ fn incremental_plain_eval<R: RuleBody>(
     let mut ticker = budget.ticker(baseline, rule_symb);
 
     for (rule_n, body) in rule_set.bodies.iter().enumerate() {
-        // A `Cell` because `handle` lives across the per-occurrence passes
-        // while the flag is read between them.
         let hit_limit = std::cell::Cell::new(false);
         let mut handle =
             |item: Cow<'_, [DataValue]>, premises: Premises<'_>| -> Result<ControlFlow<()>> {
                 ticker.tick(crate::rules::convert::u64_from_usize(out.len())?)?;
                 if prev_store.exists(&item) {
-                    // Re-derived: already in the total, invisible to the next
-                    // epoch — this is what terminates the fixpoint. The probe
-                    // runs on the slice, so this dominant case mints nothing.
                     return Ok(ControlFlow::Continue(()));
                 }
                 let mut hit = false;
@@ -1471,9 +1392,6 @@ fn incremental_plain_eval<R: RuleBody>(
 
         for (occurrence, store_name) in body.contained_rules() {
             if !store_of(stores, store_name)?.has_delta() {
-                // This occurrence's own store didn't change: a pass narrowed
-                // to its (empty) delta would derive nothing — skip it rather
-                // than pay for a no-op join.
                 continue;
             }
             body.for_each_derivation(stores, Some(*occurrence), recording, &mut handle)?;
@@ -1486,8 +1404,6 @@ fn incremental_plain_eval<R: RuleBody>(
     Ok((should_check_limit, out.wrap(), pending))
 }
 
-/// Epoch 0 for a meet-aggregation head: fold every derived row into a
-/// fresh [`MeetAggrStore`]. If nothing was derived and *every* position is
 /// aggregated, the identity row (each meet's `init_val`) is inserted as a
 /// real fact the recursion builds on — and only then, so the identity can
 /// never leak alongside real derivations (see the oracle's law).
@@ -1507,10 +1423,6 @@ fn initial_meet_eval<R: RuleBody>(
         body.for_each_derivation(stores, None, recording, &mut |item, premises| {
             ticker.tick(crate::rules::convert::u64_from_usize(out.len())?)?;
             if recording {
-                // Witnesses for a meet head are per group (the seam's
-                // documented boundary), keyed by the grouping projection —
-                // the non-aggregated positions wherever they sit, not a
-                // prefix.
                 note_pending(
                     &mut pending,
                     project_positions(&item, key_positions),
@@ -1530,7 +1442,6 @@ fn initial_meet_eval<R: RuleBody>(
     Ok((false, out.wrap(), pending))
 }
 
-/// Epochs > 0 for a meet head: the same delta discipline as the plain
 /// path, folding into a fresh meet store (whose merge admits a group only
 /// when its folded value actually changed — the landed changed-flag
 /// contract).
@@ -1546,18 +1457,12 @@ fn incremental_meet_eval<R: RuleBody>(
     let mut out = MeetAggrStore::new(rule_set.aggr.clone())?;
     let mut pending = PendingWitnesses::new();
     let mut ticker = budget.ticker(baseline, rule_symb);
-    // The rule's running total, against which a re-derivation counts as
-    // in-flight ONLY if the barrier would actually admit it. This is the
     // meet twin of the plain path's `!prev_store.exists(item)` filter: a
-    // meet epoch folds every re-derived group into a FRESH out-store, so
     // `out.len()` counts unchanged re-derivations the barrier drops — the
-    // defect that refused completing programs. Counting admissions here
     // instead makes `in_flight ≤ admitted_r` hold BY CONSTRUCTION (see
     // `MeetAggrStore::meet_put_admission_faithful`: monotone meet ⇒ each
-    // admitted group contributes exactly one tick, so the guard fires only
     // when the barrier would too, and its `spent` is true admitted spend).
     let total_meet = store_of(stores, rule_symb)?.meet_total()?;
-    // Admission-faithful in-flight count for the whole rule (spans bodies),
     // the meet analogue of the plain path's cross-body `out.len()`.
     let mut effective: u64 = 0;
     for (rule_n, body) in rule_set.bodies.iter().enumerate() {
@@ -1571,8 +1476,6 @@ fn incremental_meet_eval<R: RuleBody>(
                         &premises,
                     );
                 }
-                // The meet stores are slice consumers end to end: no derived
-                // row is ever minted on this path, owned or not.
                 if out.meet_put_admission_faithful(&item, &total_meet)? {
                     effective += 1;
                 }
@@ -1682,9 +1585,4 @@ fn initial_normal_aggr_eval<R: RuleBody>(
     Ok((should_check_limit, out.wrap(), PendingWitnesses::new()))
 }
 
-// ═════════════════════════════════════════════════════════════════════════
-// Tests: the oracle differentials, the determinism law, budget refusals
-// ═════════════════════════════════════════════════════════════════════════
 
-// Oracle-differential fixpoint unit corpus: see kyzo-trials gauntlet /
-// verify_differential (crate wall forbids kyzo_oracle inside kyzo-core).

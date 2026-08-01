@@ -17,7 +17,6 @@
 use sha2::digest::Update;
 
 /// Closed vocabulary of identity-digest / KDF domain tags.
-///
 /// Each variant's bytes are the published domain label. Call sites absorb via
 /// [`DigestDomain::absorb`]; inventing a new tag requires seating a variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

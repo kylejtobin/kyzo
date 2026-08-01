@@ -75,8 +75,6 @@ use miette::{Result, ensure, miette};
 
 use kyzo::{ReadTx, Storage, WriteTx};
 
-// ==================== contract laws: generic over any Storage ====================
-
 /// Compiler-enforced law: transactions move across threads (`Send`) and are
 /// shared by reference across threads (`Sync`) — the engine's parallel
 /// query evaluation depends on both. Nothing to run; a backend that fails
@@ -447,11 +445,6 @@ mod tests {
     fn fresh_fjall() -> Result<kyzo::FjallStorage> {
         let dir = tempfile::tempdir().map_err(|e| miette!("tempdir: {e}"))?;
         let db = new_fjall_storage(dir.path()).map_err(|e| miette!("new_fjall_storage: {e}"))?;
-        // Each law wants a fresh, empty store; a fjall store's live file
-        // handles keep working after its directory is unlinked from the
-        // tree, so leaking the `TempDir` guard (rather than threading a
-        // handle through every law) is the right call for test scaffolding
-        // that must hand back a bare `S`.
         std::mem::forget(dir);
         Ok(db)
     }
@@ -461,12 +454,3 @@ mod tests {
         run_full_battery(|| fresh_fjall().expect("INVARIANT/harness: fresh_fjall"))
     }
 }
-
-// ==================== sim-backed arms (deleted) ====================
-//
-// Deleted the prior `#[cfg(any())]` `sim_backed` dead module (pre-peel
-// `crate::storage::…` paths that never type-checked). Cannot re-arm inside
-// kyzo-trials: `SimStorage` lives at `kyzo::store::sim` as `pub(crate)` and
-// `TempTx` at `kyzo::store::scratch` as `pub(crate)` — neither is on the
-// trials public door. Re-arm when those factories are exported for out-of-crate
-// conformance callers (DST fault campaign + cross-backend differential).

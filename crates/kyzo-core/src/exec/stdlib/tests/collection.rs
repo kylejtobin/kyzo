@@ -388,17 +388,13 @@ fn test_json_path_negative_index_errors() -> Result<(), Box<dyn std::error::Erro
     Ok(())
 }
 
-// ===========================================================================
 // Date/time behavior-pinning fixtures for the chrono -> jiff migration.
-//
-// Every expected value below was first captured from the chrono 0.4 /
 // chrono-tz 0.10 baseline and then re-verified byte-for-byte against jiff 0.2.
 // The `*_agreed` tests are inputs where chrono and jiff produce identical
 // results: they pin the preserved public behavior. The `datetime_deltas_vs_chrono`
 // test pins the exact inputs where jiff and chrono diverge; each case asserts
 // jiff's current output and records chrono's former output in a comment. See
 // jiff-migration-report.md for the taxonomy.
-// ===========================================================================
 
 // `op_format_timestamp` -> RFC3339 string; helper returns Ok(String)/Err(msg).
 fn fmt(args: &[DataValue]) -> Result<String, String> {
@@ -656,13 +652,11 @@ fn datetime_deltas_vs_chrono() -> Result<(), Box<dyn std::error::Error + Send + 
     assert!(fmt_n(-4.0e11).is_err()); // chrono OK: "-10706-07-03T08:53:20+00:00"
     assert!(parse_secs("9999-12-31T23:59:59Z").is_err()); // chrono OK: 253402300799.0
 
-    // -- Delta 3: expanded-year FORMAT for in-range NEGATIVE years. jiff emits a
     //    signed 6-digit year; chrono emitted a signed minimal-width year. Only
     //    affects years < 0 (positive years 0000..=9999 are byte-identical).
     assert_eq!(fmt_n(-250000000000.0)?, "-005953-10-25T11:33:20+00:00"); // chrono: "-5953-10-25T11:33:20+00:00"
 
     // -- Delta 4: jiff ACCEPTS parse forms chrono rejected (Temporal/RFC9557).
-    //    Each was `bad datetime` under chrono; jiff yields the instant below.
     assert_eq!(parse_secs("+002020-01-01T00:00:00Z")?, 1577836800.0); // expanded-year sign
     assert_eq!(parse_secs("2020-01-01T00:00:00+0000")?, 1577836800.0); // offset without colon
     assert_eq!(parse_secs("2020-01-01T00:00:00Z[UTC]")?, 1577836800.0); // RFC9557 zone annotation

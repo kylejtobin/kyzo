@@ -65,7 +65,6 @@ pub(crate) fn mono_millis() -> MonoMillis {
     let ms = elapsed_since_anchor().as_millis();
     let ms = match u64::try_from(ms) {
         Ok(v) => v,
-        // Past u64::MAX millis — clock still reports a finite mono reading.
         Err(_past_u64) => MONO_MILLIS_CEILING,
     };
     MonoMillis(ms)

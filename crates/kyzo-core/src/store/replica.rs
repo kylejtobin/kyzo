@@ -13,8 +13,6 @@
 //! [`NamespacedRecordIdentity`], [`ReplicaCustody`], [`ReplicaCustodyTable`],
 //! PendingAnchor anchoring, [`LocalProjection`] contract,
 //! [`AuthorizingKey`] / [`AuthorizingKeyTable`], [`ScopeManifestTable`],
-//! [`OriginContinuity`], full crossing-contract validation before lowering
-//! ([`validate_crossing_before_lower`], [`CrossingEnvelope`], [`CrossingValidated`]),
 //! schema-preserving [`PromotionMeaning`] replay equality,
 //! [`GraphBoundKey`] key-never-crosses-graph-boundary enforcement (#270 T3),
 //! and the enforced signed-state-root-head (STH) gossip obligation
@@ -27,9 +25,7 @@
 //! exposing never-anchored PendingAnchor as queryable; caller-asserted
 //! `scope_ok` / `anchored` verdicts; authenticity that ignores the sealed
 //! signature; symmetric MAC standing in for certificate signatures (ed25519
-//! public-key verify only — receivers must not hold the origin seed);
 //! lowering a crossing record without validating kind/schema/authority/
-//! context/evidence/status/capabilities; folding ScopeUnknown/Revoked/Denied
 //! into RetentionDeclined; silent drop of missing declared evidence;
 //! identity that lets distinct origins collapse into one (content-only id);
 //! promotion that diverges identity/time/provenance/schema; a storage key
@@ -192,11 +188,9 @@ impl LocalRecordId {
 }
 
 /// Authorizing key for AdmissionCertificate authenticity (ed25519).
-///
 /// Holds the **public** verifying key always. May optionally carry a signing
 /// seed capability when minted at the origin admission door — never reconstituted
 /// from [`AuthorizingKeyTable`] (receivers verify; they cannot forge).
-///
 /// Public construction is Unconstructible; only the trust / admission doors mint.
 #[derive(Clone)]
 pub struct AuthorizingKey {
@@ -229,11 +223,9 @@ impl Eq for AuthorizingKey {}
 
 impl AuthorizingKey {
     /// Mint from a 32-byte ed25519 seed (origin admission door).
-    ///
     /// Derives the public verifying key and retains signing capability so the
     /// origin can seal certificates. [`AuthorizingKeyTable::insert`] stores
     /// **only** the public verifying bytes.
-    ///
     /// `id` must be a **public** identifier — never equal to `seed`. Prefer
     /// [`Self::mint_with_verifying_id`] so the id is the verifying key bytes.
     pub(crate) fn mint(id: AuthorizingKeyId, seed: super::authority::Entropy) -> Self {
@@ -247,7 +239,6 @@ impl AuthorizingKey {
     }
 
     /// Origin mint: id = ed25519 verifying key bytes (public), material = seed.
-    ///
     /// Guarantees `id ≠ seed` (re-rolls on the astronomical collision). The
     /// seed is never derived from a public token id — callers supply fresh
     /// OS entropy.
@@ -264,7 +255,6 @@ impl AuthorizingKey {
                     signing: Some(signing),
                 };
             }
-            // Negligible; domain-separate and try again.
             let mut h = Sha256::new();
             DigestDomain::AuthorizingKeySeedReroll.absorb(&mut h);
             h.update(seed_bytes);
@@ -273,7 +263,6 @@ impl AuthorizingKey {
     }
 
     /// Install public verifying material under its id (replica trust door).
-    ///
     /// Receivers use this form — no signing seed, cannot forge.
     pub(crate) fn mint_verifying(
         id: AuthorizingKeyId,
@@ -331,7 +320,6 @@ impl AuthorizingKey {
 }
 
 /// Table of trusted authorizing **public** keys — verify looks up by [`AuthorizingKeyId`].
-///
 /// Stores verifying material only. A replica with this table can authenticate
 /// certificates but cannot forge the origin's signatures.
 #[derive(Debug, Clone)]
@@ -354,7 +342,6 @@ impl AuthorizingKeyTable {
     }
 
     /// Lookup trusted public verifying material for `id`, if installed.
-    ///
     /// Returned key can verify; [`AuthorizingKey::can_sign`] is always false.
     pub fn lookup(&self, id: &AuthorizingKeyId) -> Result<Option<AuthorizingKey>, ReplicaRefuse> {
         match self.keys.get(id).copied() {
@@ -430,7 +417,6 @@ impl ScopeManifestStatus {
 }
 
 /// Evidence that origin coordinates are continuous (CheckpointSeal / contiguous chain).
-///
 /// Minted only by the chain/seal door — caller-forged `anchored: true` is Unconstructible.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct OriginContinuity {
@@ -445,7 +431,6 @@ impl OriginContinuity {
 }
 
 /// Sealed AdmissionCertificate type (§69) — CanonicalTranscript artifact.
-///
 /// Mint happens only at the admission door via [`mint_admission_certificate`].
 /// Replicas call [`verify_replica`] and mint custody — never re-author.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -517,7 +502,6 @@ impl AdmissionCertificate {
     }
 
     /// Origin schema cut sealed into the certificate (§69).
-    ///
     /// Crossing receivers interpret as-of this cut forever. A local Catalog
     /// cut never rewrites this field in place — only [`LocalProjection`] or a
     /// newly admitted derived Record may carry a different reading.
@@ -537,7 +521,6 @@ impl AdmissionCertificate {
 }
 
 /// Replica custody key (§70): H(origin_store, origin_epoch, origin_commit, record_digest).
-///
 /// Makes re-delivery converge — at-least-once bytes, exactly-once custody.
 /// The one custody authority — [`NamespacedRecordIdentity::custody_key`]
 /// delegates here; never a second competing key space.
@@ -568,7 +551,6 @@ impl ReplicaKey {
 }
 
 /// Tenant / graph-scope digest bound into federation identity (#270 T2).
-///
 /// Distinct from origin authority and StoreId: a receiver may hold many
 /// tenants; collapsing tenant out of identity lets distinct graphs collide.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -615,7 +597,6 @@ impl<'a> DigestSeatPipe<'a> {
 }
 
 /// Namespaced federation record identity (#270 T2 / seat 70).
-///
 /// Four-tuple: **local id + origin authority + tenant + content**. Content
 /// alone is never federation identity — two origins admitting identical
 /// bytes must remain distinct. Custody still keys through [`ReplicaKey`]
@@ -705,7 +686,6 @@ impl NamespacedRecordIdentity {
 }
 
 /// Replica custody state (§69/§70): Queryable or opaque PendingAnchor.
-///
 /// Out-of-order certificates stay PendingAnchor until a seal or contiguous
 /// chain anchors origin coordinates. Never-anchored is reclaimable under
 /// operator pressure — never exposed as queryable.
@@ -739,7 +719,6 @@ impl ReplicaCustody {
 }
 
 /// Exactly-once custody ledger keyed by [`ReplicaKey`] (§70 / #270 T2).
-///
 /// At-least-once fabric deliveries admit through [`ReplicaCustodyTable::admit`]:
 /// first delivery inserts; duplicates converge on the held custody — no
 /// reshape, no double-mint.
@@ -780,7 +759,6 @@ impl ReplicaCustodyTable {
 }
 
 /// Local rebuildable projection of origin-schema interpretation (§69).
-///
 /// A local Catalog produces exactly this (rebuildable cache) or a derived
 /// Record through ordinary admission carrying the certificate as evidence —
 /// no third constructor. In-place reinterpretation of a certified Record
@@ -820,7 +798,6 @@ impl LocalProjection {
 }
 
 /// Closed replica-verification refuse sum (§69).
-///
 /// Manifest-resolution outcomes are never folded into RetentionDeclined;
 /// no reshape exists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
@@ -975,9 +952,7 @@ impl AdmissionCertificateParts {
 }
 
 /// Mint an AdmissionCertificate — callable only from the admission seam.
-///
 /// Authoring lives at `session/admit.rs`; replicas never call this.
-///
 /// When `authorizing_key` is provided, the sealed signature is checked (or
 /// may be produced) against that key; mismatch → [`ReplicaRefuse::AuthenticityFailed`].
 pub(crate) fn mint_admission_certificate(
@@ -1045,7 +1020,6 @@ pub(crate) fn mint_admission_certificate(
         ),
     ];
     if let Some(op) = parts.operation_key {
-        // Insert "operation_key" in sorted position (after origin_epoch, before post_state_root).
         let idx = match bindings
             .iter()
             .position(|(k, _)| k.as_slice() > b"operation_key".as_slice())
@@ -1086,7 +1060,6 @@ pub(crate) fn mint_admission_certificate(
 }
 
 /// Sign certificate parts under a trusted authorizing key (admission helper).
-///
 /// Produces the signature bytes that must be carried in
 /// [`AdmissionCertificateParts::signature`].
 pub(crate) fn sign_admission_parts(
@@ -1100,27 +1073,22 @@ pub(crate) fn sign_admission_parts(
 }
 
 /// Verify a replica certificate and produce custody (§69/§70).
-///
 /// Accepting verify produces durable custody carrying origin coordinates
 /// (what) and local `(StoreId, CommitOrdinal)` (when); creates NO new Record
 /// identity. Re-delivery with the same [`ReplicaKey`] converges — admit into
 /// [`ReplicaCustodyTable`] for exactly-once ledger retention.
-///
 /// Federation-facing equality is [`NamespacedRecordIdentity`] (local id +
 /// origin authority + tenant + content); content-only ids must not collapse
 /// distinct origins. Custody still keys through [`ReplicaKey`] — one authority.
-///
 /// Authenticity, scope, and anchor are **derived**:
 /// - signature checked against [`AuthorizingKeyTable`] lookup of
 ///   `certificate.authorizing_key_id`
 /// - scope refuse derived from [`ScopeManifestTable::resolve`]
 /// - Queryable vs PendingAnchor from [`OriginContinuity`] evidence (projection
 ///   / chain door), never a caller-asserted bool
-///
 /// Full crossing-contract validation (kind/schema/authority/context/evidence/
 /// status/capabilities) before lowering is [`validate_crossing_before_lower`] —
 /// this door alone does not authorize lowering.
-///
 /// STAGED PENDING OPERATOR: declared-fn seat candidate — prefer
 /// [`AdmissionCertificate::verify`].
 pub fn verify_replica(
@@ -1144,7 +1112,6 @@ impl AdmissionCertificate {
         scopes: &ScopeManifestTable,
         continuity: Option<&OriginContinuity>,
     ) -> Result<ReplicaCustody, ReplicaRefuse> {
-        // Scope resolution is a closed sum — never folded into RetentionDeclined.
         scopes
             .resolve(&self.scope_manifest_digest())
             .to_refuse_result()?;
@@ -1152,7 +1119,6 @@ impl AdmissionCertificate {
         if self.transcript().as_bytes().is_empty() {
             return Err(ReplicaRefuse::AuthenticityFailed);
         }
-        // Re-parse sealed bytes so corrupt transcripts refuse (not only empty).
         CanonicalTranscript::parse(self.transcript().as_bytes())
             .map_err(|_| ReplicaRefuse::AuthenticityFailed)?;
 
@@ -1201,7 +1167,6 @@ fn verify_replica_finish(
     custody
 }
 
-// ── Crossing contract before lowering (§69 / story #270 T1) ─────────────────
 
 /// Context scope carried on a crossing envelope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1259,7 +1224,6 @@ pub enum CrossingStatus {
 }
 
 /// Opaque shared-capability digests claimed by a crossing envelope.
-///
 /// Receiver must hold every claimed digest or refuse
 /// [`CrossingRefuse::CapabilityMissing`] — never reshape into
 /// [`ReplicaRefuse::RetentionDeclined`] or [`ReplicaRefuse::ScopeDenied`].
@@ -1293,7 +1257,6 @@ impl CrossingCapabilitySet {
 }
 
 /// Declared crossing envelope validated against the certificate before lowering.
-///
 /// Kind, schema version, schema cut, issuing authority, context, evidence
 /// demand/presence, status, and shared capabilities — the full contract the
 /// receiver checks before any projection lower (§69 / #270 T1).
@@ -1405,7 +1368,6 @@ impl CrossingEnvelope {
 }
 
 /// Proof that the full crossing contract passed — required before lowering.
-///
 /// Opaque: only [`validate_crossing_before_lower`] mints this. Holding this
 /// token means kind/schema/authority/context/evidence/status/capabilities
 /// were checked, [`verify_replica`] accepted custody, and the certificate's
@@ -1449,7 +1411,6 @@ impl CrossingValidated {
 }
 
 /// Closed crossing-contract refuse sum (§69 / #270 T1).
-///
 /// Manifest outcomes stay on [`ReplicaRefuse`] (`ScopeUnknown` / `ScopeRevoked`
 /// / `ScopeDenied`) and are **never** folded into `RetentionDeclined`.
 /// Envelope-specific refuses are distinct arms here.
@@ -1508,12 +1469,10 @@ pub enum CrossingRefuse {
 }
 
 /// Validate the full crossing contract **before** any lowering (§69 / #270 T1).
-///
 /// Order: [`verify_replica`] (authenticity + typed Scope* ≠ RetentionDeclined)
 /// then envelope kind / schema version / schema cut / authority / context /
 /// evidence / status / shared capabilities. Missing declared evidence →
 /// [`CrossingRefuse::DeclaredEvidenceMissing`] (typed, not silent drop).
-///
 /// Success mints [`CrossingValidated`] — the only token that authorizes
 /// crossing lowering. In-place reinterpretation under a local schema cut is
 /// Unconstructible ([`CrossingRefuse::LocalReinterpretationUnconstructible`]);
@@ -1552,7 +1511,6 @@ pub fn validate_crossing_before_lower(
         continuity,
         held_capabilities,
     } = seats;
-    // 1) Replica path first — ScopeUnknown/Revoked/Denied stay distinct.
     let custody = verify_replica(
         certificate,
         local_store,
@@ -1562,32 +1520,26 @@ pub fn validate_crossing_before_lower(
         continuity,
     )?;
 
-    // 2) Kind — closed wire set (construction already typed; the
     // from_wire∘as_wire identity is pinned by crossing_kind_wire_roundtrip).
     let kind = CrossingKind::from_wire(envelope.kind().as_wire())?;
 
-    // 3) Schema version ↔ certificate protocol_version.
     if envelope.schema_version() != certificate.protocol_version() {
         return Err(CrossingRefuse::SchemaVersionMismatch);
     }
 
-    // 4) Schema cut ↔ certificate origin cut (never a local Catalog rewrite).
     if envelope.schema_cut() != certificate.schema_cut() {
         return Err(CrossingRefuse::SchemaCutMismatch);
     }
 
-    // 5) Issuing authority ↔ certificate authorizing key.
     if envelope.issuing_authority() != certificate.authorizing_key_id() {
         return Err(CrossingRefuse::AuthorityMismatch);
     }
 
-    // 6) Context — closed sum only (Unscoped | Scoped); third form Unconstructible
     // at construction / [`CrossingContext::from_wire`].
     match envelope.context() {
         CrossingContext::Unscoped | CrossingContext::Scoped(_) => {}
     }
 
-    // 7) Evidence — declared required + absent → typed refuse (not silent drop).
     match (envelope.evidence_demand(), envelope.evidence()) {
         (CrossingEvidenceDemand::DeclaredRequired, CrossingEvidence::Absent) => {
             return Err(CrossingRefuse::DeclaredEvidenceMissing);
@@ -1597,12 +1549,10 @@ pub fn validate_crossing_before_lower(
         | (CrossingEvidenceDemand::NotRequired, CrossingEvidence::Present(_)) => {}
     }
 
-    // 8) Status — only Active may lower as live meaning.
     if !matches!(envelope.status(), CrossingStatus::Active) {
         return Err(CrossingRefuse::StatusNotLowerable);
     }
 
-    // 9) Shared capabilities — every claimed digest must be held.
     if !held_capabilities.covers(envelope.shared_capabilities()) {
         return Err(CrossingRefuse::CapabilityMissing);
     }
@@ -1617,7 +1567,6 @@ pub fn validate_crossing_before_lower(
 }
 
 /// Explicit refuse for in-place local reinterpretation under a local Catalog cut.
-///
 /// §69: certified origin meaning is sealed as-of the certificate schema cut.
 /// A local Catalog wanting a different reading produces [`LocalProjection`] or
 /// a newly admitted derived Record — never mutates the certified record in place.
@@ -1626,7 +1575,6 @@ pub fn refuse_in_place_local_reinterpretation() -> CrossingRefuse {
 }
 
 /// View certified origin meaning under a candidate schema cut (§69 / #270 T3).
-///
 /// Equal cuts → same sealed interpretation. A different local Catalog cut is
 /// Unconstructible in place — produce [`LocalProjection`] or a derived Record.
 pub fn view_under_schema_cut(
@@ -1643,7 +1591,6 @@ pub fn view_under_schema_cut(
 // ── Promotion replay equality + graph-bound keys (#270 T3) ───────────────────
 
 /// Graph / tenant boundary a storage key is confined to (#270 T3).
-///
 /// A key never crosses this boundary as authority — per-graph blast radius.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct GraphBoundary(TenantId);
@@ -1670,7 +1617,6 @@ pub enum KeyBoundaryRefuse {
 }
 
 /// Storage / custody key confined to one [`GraphBoundary`] (#270 T3).
-///
 /// Holding key bytes is not authority under a foreign graph. Authorize only
 /// when the acting graph equals the sealed boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1714,7 +1660,6 @@ impl GraphBoundKey {
 }
 
 /// Meaning seats preserved across promotion (#270 T3).
-///
 /// Identity / valid-time / provenance / schema — export/import and
 /// local-to-hosted promotion must replay-equal on these four. Digests only
 /// at the store seat (session binds live record fields into digests).
@@ -1791,7 +1736,6 @@ pub enum PromotionRefuse {
 }
 
 /// Prove export/import or local-to-hosted promotion preserved meaning (#270 T3).
-///
 /// Destination StoreId / host may change; the four meaning seats must
 /// [`PromotionMeaning::replay_equal`].
 pub fn prove_promotion_replay(
@@ -1806,7 +1750,6 @@ pub fn prove_promotion_replay(
 }
 
 /// Anchor a PendingAnchor into Queryable once origin coordinates are continuous.
-///
 /// Requires [`OriginContinuity`] evidence — caller-asserted anchor is Unconstructible.
 pub fn anchor_pending(
     pending: ReplicaCustody,
@@ -1828,7 +1771,6 @@ pub fn anchor_pending(
 // ── STH gossip obligation (CT non-equivocation; seats 2/56/58/69/92) ───────
 
 /// JetStream subject that carries compact STH digests for one Store.
-///
 /// Gossip rides the NATS fabric (seat 92) — cadence publish + designated
 /// peer/auditor pull. A peer-dial endpoint type is Unconstructible here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1860,7 +1802,6 @@ impl SthGossipSubject {
 }
 
 /// Closed STH gossip carriage — JetStream fabric only (seat 92).
-///
 /// No peer-dial variant exists; fabric-down is host/`Refuse(FabricUnavailable)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SthGossipCarriage {
@@ -1869,7 +1810,6 @@ pub enum SthGossipCarriage {
 }
 
 /// Enforced signed-state-root-head gossip obligation for one Store.
-///
 /// Origin publishes signed compact heads on [`SthGossipCarriage::JetStream`];
 /// designated peers/auditors pull and cross-check via [`enforce_sth_gossip`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1899,7 +1839,6 @@ impl SthGossipObligation {
 }
 
 /// Signed state-root head — CT STH analogue under the origin authorizing key.
-///
 /// The signed body is [`StateRootHead::compact_digest`]: SHA-256 over the ONE
 /// `encode_state_root_head` CanonicalTranscript bytes — never a hand-rolled
 /// field hash of the head (seat 59).
@@ -1912,7 +1851,6 @@ pub struct SignedStateRootHead {
 
 impl SignedStateRootHead {
     /// Sign a compact head under an origin authorizing key.
-    ///
     /// Signs [`StateRootHead::compact_digest`] (transcript-derived), not raw
     /// head fields.
     pub(crate) fn sign(head: StateRootHead, key: &AuthorizingKey) -> Result<Self, ReplicaRefuse> {
@@ -1946,7 +1884,6 @@ impl SignedStateRootHead {
     }
 
     /// Verify signature against a trusted key table.
-    ///
     /// Recomputes the transcript-derived compact digest — same body as
     /// [`Self::sign`].
     pub fn verify_authenticity(&self, keys: &AuthorizingKeyTable) -> Result<(), ReplicaRefuse> {
@@ -1969,7 +1906,6 @@ impl SignedStateRootHead {
 }
 
 /// Enforce STH gossip non-equivocation between two fabric-observed signed heads.
-///
 /// Verifies both signatures, then runs [`check_sth_gossip`]. Split-view is
 /// [`ReplicaRefuse::SplitViewDetected`] — Detected-on-gossip, before chains meet.
 pub fn enforce_sth_gossip(
@@ -2037,7 +1973,6 @@ mod authorizing_key_ed25519_tests {
     }
 
     /// RFC 8032 ed25519 test vector 1 (empty message) — public verify golden.
-    ///
     /// Public key + signature bytes are the RFC §7.1 TEST 1 constants. Origin
     /// mint uses the matching 32-byte seed via dalek; receiver verifies with
     /// public material only (cannot forge).
@@ -2062,7 +1997,6 @@ mod authorizing_key_ed25519_tests {
             0x65, 0x51, 0x41, 0x43, 0x8e, 0x7a, 0x10, 0x0b,
         ];
 
-        // Golden vector: RFC public key verifies RFC signature (empty message).
         // This is the sovereign-store verify path — public material only.
         let vk = VerifyingKey::from_bytes(&expect_pk).map_err(|e| miette!("vk: {e}"))?;
         let rfc_sig = Ed25519Signature::try_from(expect_sig.as_slice()).map_err(|e| miette!("sig: {e}"))?;
@@ -2095,7 +2029,6 @@ mod authorizing_key_ed25519_tests {
         );
         // RFC public key must not verify a signature under the dalek-derived
         // key from this seed if they diverge — document the installed dalek
-        // wire; RFC vector above remains the public-verify golden.
 
         Ok(())
     }
@@ -2541,7 +2474,6 @@ mod crossing_contract_tests {
 }
 
 /// Non-collision + custody-idempotency proofs (#270 T2 / seat 70).
-///
 /// Board Check filters `replica::identity` — keep this module name stable.
 #[cfg(test)]
 mod identity {
@@ -2854,7 +2786,6 @@ mod promotion {
             SchemaCutDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x51; 32])),
             ProvenanceDigest::from_digest(crate::data::fixed_bytes::Bytes32([0xB1; 32])),
         );
-        // Local-to-hosted: same meaning seats, different host — equality holds.
         let after = sample_meaning(
             SchemaCutDigest::from_digest(crate::data::fixed_bytes::Bytes32([0x51; 32])),
             ProvenanceDigest::from_digest(crate::data::fixed_bytes::Bytes32([0xB1; 32])),

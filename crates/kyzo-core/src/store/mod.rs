@@ -73,12 +73,10 @@ pub(crate) mod wal;
 pub(crate) mod sim;
 
 // Seat reexports: crate-visible names for hosts and mid-wiring.
-// Production-used names stay live; test-corpus flat imports are cfg(test);
 // unused flat reexports are cut (callers use module paths).
 pub use authority::WriteAuthority;
 #[cfg(test)]
 pub use authority::{Entropy, IncarnationId, OpenOrdinal, RecoveryMatrix, WriteTokenId};
-// Leave-is-free external import stays fail-closed (#359 / #375 T5): no flat
 // reexport of ImportCapability / OriginRootRegistry — module-path only.
 
 pub use commit_cap::SnapshotFork;

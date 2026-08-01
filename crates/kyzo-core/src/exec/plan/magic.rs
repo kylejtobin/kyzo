@@ -72,8 +72,6 @@
 //! happens to bind one of its arguments, even inside a rule whose own head
 //! is fully free. Andersen points-to is exactly this: `pt` occurs twice in
 //! `load`/`store`'s bodies, the first occurrence's output binds an argument
-//! the second consumes, and SIP correctly (if uselessly, here) proposes
-//! `bf`/`bb` demand for the second — while the entry (`?[y, x] := pt[y,
 //! x]`) is fully unbound and must compute the complete `pt` regardless.
 //! Answering that proposal literally — minting `pt|Mbf`/`pt|Mbb` plus their
 //! `Input`/`Sup` chain — is sound (law 1 holds; every deviation would still
@@ -91,7 +89,6 @@
 //! [`AdornedProgram::sweep_unreachable`] then mark-and-sweeps the reference
 //! graph from every always-evaluated (Muggle) head and drops anything the
 //! walk never reaches. The sweep, not the redirect, is what actually proves
-//! the theorem: a redirect is local to the atom it rewrites, so if the
 //! variant it just orphaned held the *only* reference to some unrelated
 //! predicate's own tight variant, that predicate never gains a free sibling
 //! of its own and `collapse_ff_redundant_variants`'s name-keyed pass cannot
@@ -110,7 +107,6 @@
 //! through both `Db::run_script` (this file's rewrite included) and the
 //! crate-internal bypass path (`bench_api`'s magic-sets-free compile), and
 //! asserts byte-identical answers *and* a byte-identical adorned-symbol set
-//! (one variant per reachable predicate, no `Input`/`Sup`) for every
 //! fully-unbound query in the corpus.
 //!
 //! The transformation is *visible internally and invisible at the
@@ -129,7 +125,6 @@
 //!   value, not a lazier computation of the same one;
 //! - **everything**, when the query says `:disable_magic_rewrite true`;
 //! - **cross-stratum producers**: a rule consumed from a later-executing
-//!   stratum was already referenced there under its Muggle name (adornment
 //!   never crosses a stratum boundary), so its definition must stay Muggle
 //!   — and must not be dropped as undemanded.
 
@@ -156,7 +151,6 @@ use kyzo_model::schema::StoredRelationMetadata;
 // ─────────────────────────────────────────────────────────────────────────
 
 /// The magic tier's seam to the runtime's catalog, mirroring what
-/// `BodyNormalizer` (`data/program.rs`) does for normalization: the CozoDB
 /// original's adornment phase took the session transaction because
 /// fixed-rule arguments naming *stored* relations need their declared
 /// schemas — to refuse time travel over a relation whose last key column is
@@ -164,7 +158,6 @@ use kyzo_model::schema::StoredRelationMetadata;
 /// Those lookups are the only transaction-facing part of this file; when
 /// the runtime tier lands, its session transaction implements this trait.
 pub trait StoredRelationSchemaSource {
-    /// The declared schema of the stored relation `name`, or an error if no
     /// such relation exists (the implementation owns that diagnostic).
     fn stored_relation_schema(
         &self,
@@ -188,7 +181,6 @@ pub(crate) struct NamedFieldNotFound(
     #[label] pub(crate) SourceSpan,
 );
 
-/// An invariant the rewrite maintains internally was found broken. Returned
 /// (never panicked) on the paths whose impossibility is proven elsewhere,
 /// so corruption of that proof surfaces as a bug report instead of an
 /// abort — and, worse here than anywhere, instead of silently *changed
@@ -208,7 +200,6 @@ struct MagicInvariantError(&'static str);
 /// [`MagicSymbol`]s and asserted "the remaining options are impossible" in
 /// a comment inside the rewrite; here the `Input` and `Sup` roles cannot
 /// exist before the rewrite phase because only [`AdornedHead::rewrite_ruleset`]
-/// mints those names. The match in the rewrite is total, not trusted.
 #[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq)]
 enum AdornedHead {
     Muggle { inner: Symbol },
@@ -280,7 +271,6 @@ impl StratifiedNormalFormProgram {
     /// within one stratum's fixpoint only. So every rule consumed across a
     /// stratum boundary must be **exempt** in the stratum that defines it —
     /// otherwise its definition would either be specialized away from the
-    /// Muggle name its consumers already reference, or (if nothing in its
     /// own stratum references it) dropped entirely as undemanded. Consumers
     /// execute *after* producers; therefore the walk must visit consumers
     /// *first*, accumulating each stratum's cross-stratum dependencies into
@@ -289,7 +279,6 @@ impl StratifiedNormalFormProgram {
     /// collected output is reversed back exactly once, here. (The CozoDB
     /// original stored strata in reverse execution order and walked them
     /// front to back — the identical logical direction; `compile.rs`'s
-    /// `.rev()` was its un-reversal, and has no descendant here.)
     ///
     /// An inverted walk does not crash: it silently drops or specializes
     /// cross-stratum producers, which evaluation then resolves to empty
@@ -321,7 +310,6 @@ impl StratifiedNormalFormProgram {
 
 impl NormalFormStratum {
     /// Add this stratum's exempt rules to `exempt_rules`: every rule when
-    /// the rewrite is disabled for the query, else every inline rule with
     /// an aggregation anywhere in its head. (The entry needs no entry here:
     /// its exemption is structural, by [`SymbolKind::Entry`], in
     /// [`NormalFormStratum::adorn`].) Port of the original's
@@ -356,7 +344,6 @@ impl NormalFormStratum {
 
     /// The rule names this stratum applies but does not define — its
     /// dependencies in earlier-executing strata (the original's
-    /// `get_downstream_rules`, named for its walk order). In-memory
     /// arguments of fixed rules are included unconditionally: stratification
     /// always puts a fixed rule's inputs in strictly earlier strata.
     fn cross_stratum_dependencies(&self) -> BTreeSet<Symbol> {
@@ -665,7 +652,6 @@ impl NormalFormAtom {
                 // `@spans`/`@delta`/`@delta_sys` bind one extra column
                 // beyond `args` (the interval or the sign) — the same
                 // "own bindings beyond the base row" shape `Search` uses
-                // for its engine-appended columns, below.
                 if let Some(extra) = v.validity.as_ref().and_then(ValidityClause::extra_var) {
                     seen_bindings.insert(extra.clone());
                 }
@@ -771,7 +757,6 @@ impl AdornedProgram {
     /// variant collapses onto the ff one, and the now-unreferenced variant
     /// is dropped.
     ///
-    /// This is issue #68's actual driver for Andersen points-to: `pt`
     /// occurs twice in each `load`/`store` rule body, and left-to-right SIP
     /// sees the first occurrence bind a variable the second consumes,
     /// adorning the second `bf`/`bb` — even though the ENTRY's demand for
@@ -787,7 +772,6 @@ impl AdornedProgram {
     ///
     /// Sound regardless of *why* the ff variant is demanded: nothing here
     /// assumes points-to's specific shape, only that an ff demand, once it
-    /// exists for a predicate, subsumes every other adornment of it.
     fn collapse_ff_redundant_variants(mut self) -> Self {
         let ff_names: BTreeSet<Symbol> = self
             .prog
@@ -833,11 +817,9 @@ impl AdornedProgram {
         // Dropping the now-unreferenced tight variants themselves is
         // `sweep_unreachable`'s job, not this pass's: redirecting a
         // predicate's OWN references onto its ff sibling can just as well
-        // orphan some UNRELATED predicate whose only referrer was the
         // redirected variant's body — this pass, keyed on `ff_names`, has
         // no way to see that (the orphan never gains an ff sibling of its
         // own). Reachability from the always-evaluated roots is the actual
-        // invariant; name-matching was only ever an approximation of it.
         self
     }
 
@@ -856,7 +838,6 @@ impl AdornedProgram {
     /// sibling", is the actual criterion; this sweep drops anything the
     /// walk from the roots never reaches, which subsumes
     /// `collapse_ff_redundant_variants`'s own cleanup role (its retain step
-    /// was removed once this landed) and closes the whole orphan class, not
     /// one instance of it.
     fn sweep_unreachable(mut self) -> Self {
         fn target_head(sym: &MagicSymbol) -> Option<AdornedHead> {
@@ -944,7 +925,6 @@ impl AdornedProgram {
 }
 
 impl MagicProgram {
-    /// Append one rule under `key`, creating the rule set if absent. Replaces
     /// the original's `entry().or_default().mut_rules()` panic-on-miss: the key
     /// roles are disjoint by construction (`Sup`/`Input` names are minted only
     /// here, and one name is never both rules and fixed), so a collision with a
@@ -966,7 +946,6 @@ impl MagicProgram {
 }
 
 impl AdornedHead {
-    /// Rewrite one rule set (sideways information passing): for a head with
     /// bound positions, seed the body with the input relation's demand tuples;
     /// at each application of an adorned rule inside the body, cut the atoms
     /// collected so far into a supplementary rule, and feed its projection onto
@@ -1009,7 +988,6 @@ impl AdornedHead {
         let mut collected_atoms = vec![];
         let mut seen_bindings: BTreeSet<Symbol> = BTreeSet::new();
 
-        // SIP from the input rule, if the head has any bound positions:
         // sup₀ carries the demanded tuples in from the input relation.
         if rule_has_bound_args {
             let sup_kw = make_sup_kw()?;
@@ -1342,7 +1320,6 @@ mod tests {
     /// Until the runtime tier lands, the port is structural: with the
     /// rewrite disabled every rule is exempt, so the magic tier must be the
     /// identity image of the program — all names Muggle, every body
-    /// preserved atom for atom, no Input/Sup/Magic stores anywhere. The
     /// end-to-end row assertion re-lands with `DbInstance`, and the
     /// naive-oracle differential covers the answer itself.
     #[test]
@@ -1773,7 +1750,6 @@ mod tests {
 
     /// The seam: named-field bindings on a stored fixed-rule argument
     /// resolve to positional bindings against the declared schema, with
-    /// digit-named fillers for unbound columns; unknown fields are refused.
     #[test]
     fn named_stored_fixed_rule_args_resolve_positionally() -> Result<()> {
         let schema = FixedSchema(StoredRelationMetadata {

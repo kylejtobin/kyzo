@@ -119,10 +119,6 @@ use kyzo_model::program::expr::Expr;
 use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::value::{DataValue, LARGEST_UTF_CHAR, ScanBound, Tuple};
 
-// ---------------------------------------------------------------------------
-// Projection kind — `K` of the shared build→seal→query machine (#305).
-// ---------------------------------------------------------------------------
-
 /// FTS as a projection kind: one `K` of
 /// [`ProjectionBuilder`](crate::project::projection::ProjectionBuilder) /
 /// [`Sealed`](crate::project::projection::Sealed).
@@ -139,10 +135,6 @@ pub(crate) struct Fts;
 
 impl ProjectionKind for Fts {}
 
-// ---------------------------------------------------------------------------
-// Scoring vocabulary.
-// ---------------------------------------------------------------------------
-
 /// How [`fts_search`] scores a matched document. The engine's own type: the
 /// RA-tier search config maps onto it — `query/search.rs` resolves the
 /// `score_kind` search param (`tf`/`tf_idf`) to a variant, and
@@ -156,10 +148,6 @@ pub(crate) enum FtsScoreKind {
     TfIdf,
 }
 
-// ---------------------------------------------------------------------------
-// Typed errors.
-// ---------------------------------------------------------------------------
-
 /// The FTS extractor evaluated to something other than a string (or `Null`).
 /// A document must be text to be tokenized; a non-string extraction is a
 /// definition error surfaced at index time, typed rather than the original's
@@ -170,10 +158,6 @@ pub(crate) enum FtsScoreKind {
 pub(crate) struct FtsExtractorType {
     pub(crate) got: DataValue,
 }
-
-// ---------------------------------------------------------------------------
-// The index relation's schema.
-// ---------------------------------------------------------------------------
 
 /// Mint the index relation's column metadata for an FTS index over `base`.
 ///
@@ -201,10 +185,6 @@ pub(crate) fn fts_index_metadata(base: &StoredRelationMetadata) -> StoredRelatio
         ],
     )
 }
-
-// ---------------------------------------------------------------------------
-// Index maintenance.
-// ---------------------------------------------------------------------------
 
 /// Evaluate the extractor and return the document text, or `None` when the
 /// extraction is `Null` (a row with no text is simply not indexed).

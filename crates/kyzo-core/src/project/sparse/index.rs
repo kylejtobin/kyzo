@@ -120,10 +120,6 @@ use kyzo_model::program::expr::Expr;
 use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::value::{DataValue, Tuple};
 
-// ---------------------------------------------------------------------------
-// Projection kind — `K` of the shared build→seal→query machine (#305).
-// ---------------------------------------------------------------------------
-
 /// Sparse-vector index as a projection kind: one `K` of
 /// [`ProjectionBuilder`](crate::project::projection::ProjectionBuilder) /
 /// [`Sealed`](crate::project::projection::Sealed).
@@ -142,10 +138,6 @@ pub(crate) use crate::exec::stdlib::convert::f64_to_f32;
 pub(crate) struct Sparse;
 
 impl ProjectionKind for Sparse {}
-
-// ---------------------------------------------------------------------------
-// Typed errors — the admission gate's refusals.
-// ---------------------------------------------------------------------------
 
 /// A sparse-vector weight was NaN, infinite, or negative. Non-negative finite
 /// weights are the SPLADE/BM25-family invariant this engine enforces at
@@ -229,10 +221,6 @@ fn admit_sparse(vector: &[(u32, f32)]) -> Result<SparseVector> {
     Ok(SparseVector { pairs: out })
 }
 
-// ---------------------------------------------------------------------------
-// The index relation's schema.
-// ---------------------------------------------------------------------------
-
 /// Mint the index relation's column metadata for a sparse index over `base`.
 ///
 /// Keys: `dim` (the dimension id, a non-negative `Int`), then `src_*` (the base
@@ -254,10 +242,6 @@ pub(crate) fn sparse_index_metadata(base: &StoredRelationMetadata) -> StoredRela
         vec![index_col(col("weight"), ColType::Float)],
     )
 }
-
-// ---------------------------------------------------------------------------
-// Index maintenance.
-// ---------------------------------------------------------------------------
 
 /// The base-key suffix of a sparse posting: `src_key…` copied from the base
 /// row. Callers prepend the dimension themselves — no placeholder slot.
@@ -346,10 +330,6 @@ pub(crate) fn sparse_del<T: WriteTx>(
         tx.del(key_bytes)
     })
 }
-
-// ---------------------------------------------------------------------------
-// Query.
-// ---------------------------------------------------------------------------
 
 /// The total number of documents in the base relation. Hoisted so a multi-tuple
 /// search counts once, mirroring the FTS engine's `fts_total_docs`.
@@ -680,10 +660,6 @@ pub(crate) fn naive_sparse_dot_f64(
         |a, b| a.total_cmp(b),
     )
 }
-
-// ---------------------------------------------------------------------------
-// Tests: the engine's executable law.
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

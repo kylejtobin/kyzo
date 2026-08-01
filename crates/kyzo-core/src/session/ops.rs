@@ -46,13 +46,9 @@ use kyzo_model::schema::ColumnDef;
 use kyzo_model::schema::NullableColType;
 const DEFAULT_MERKLE_SCAN_CEILING: NonZeroU64 = match NonZeroU64::new(1 << 32) {
     Some(n) => n,
-    // 1<<32 ≠ 0 — NonZeroU64::new only rejects zero; MIN is an unreachable stand-in.
     None => NonZeroU64::MIN,
 };
 
-// ─────────────────────────────────────────────────────────────────────────
-// Manifest-index maintenance and lifecycle (the index-operator tier)
-// ─────────────────────────────────────────────────────────────────────────
 
 /// A manifest index's resolved runtime context: live handles, compiled
 /// extractor/filter bytecode, built analyzer, decoded permutations. Resolved
@@ -95,7 +91,6 @@ pub(crate) struct IndexLifecycleError(pub(crate) String);
 const BACKFILL_BATCH: usize = 4096;
 
 /// Memcmp-successor cursor for temporal raw-keyspace backfill.
-///
 /// Consuming `drive` walks without local reassignment inside a SessionTx
 /// transition (nested_place_assign law).
 struct TemporalBackfillCursor {
@@ -124,9 +119,7 @@ impl TemporalBackfillCursor {
         for (k, v) in &batch {
             // Every stored row here IS one point event: decode its
             // key columns plus its two time slots directly (no
-            // as-of resolution — resolution is exactly what would
             // collapse the history this backfill must reproduce
-            // whole), and its polarity from the value.
             let tuple = kyzo_model::value::decode_tuple_from_key(k, keys_len + 2)?;
             let polarity = crate::store::time::claim_polarity_of_value(v)?;
             let key_cols = &tuple.as_slice()[..keys_len];
@@ -207,9 +200,7 @@ impl CurrentRowBackfillCursor {
                     let idx_handle = tx.get_relation(index_ref.relation_name(&base.name).as_str())?;
                     // Backfill re-mints "now" for both coordinates —
                     // it indexes the base's CURRENT rows (`as_of`
-                    // above), and the scan already discards each row's
                     // original bitemporal slots, so there is no
-                    // per-row valid instant left to carry forward.
                     tx.plain_index_write(crate::session::admit::PlainIndexWriteSeats::new(
                         base,
                         &idx_handle,
@@ -227,7 +218,6 @@ impl CurrentRowBackfillCursor {
                 }
             }
         }
-        // Resume past ALL versions of the last fact: the 0xFF tail
         // encodes above every slot byte, so this bound clears its group.
         let next_lower = {
             let mut succ = base
@@ -277,7 +267,6 @@ impl<T: WriteTx> SessionTx<T> {
                 )))
             }
             IndexKind::Hnsw(manifest) => {
-                // Manifest holds typed Expr substance; fill binding indices
                 // against the base frame — never re-parse source text.
                 let filter = manifest
                     .index_filter()
@@ -419,7 +408,6 @@ impl<T: WriteTx> SessionTx<T> {
         // (a posting IS a bitemporal fact — its own as-of reads are how
         // window scans see corrections, per issue #62's design ruling);
         // every manifest index keyspace is the algorithm's own
-        // current-only state.
         let kind = match &index_ref.kind {
             IndexKind::Plain { .. } | IndexKind::Temporal => KeyspaceKind::Facts,
             IndexKind::Hnsw(_) | IndexKind::Fts(_) | IndexKind::Lsh { .. } => {
@@ -445,11 +433,9 @@ impl<T: WriteTx> SessionTx<T> {
         // Temporal backfill is NOT "index the current rows": a posting
         // exists per POINT EVENT, so an index attached after N base
         // writes must reproduce the exact posting keyspace an index live
-        // since the first write would hold (backfill-equals-incremental,
         // the rebuildability law) — every stored version of every fact,
         // each posted at its own original (valid, sys) and polarity, not
         // "now". That is a raw walk of the base's whole keyspace, not the
-        // as-of skip-scan the Plain/manifest path below uses.
         if matches!(index_ref.kind, IndexKind::Temporal) {
             let idx_handle = self.get_relation(index_ref.relation_name(&base.name).as_str())?;
             let keys_len = base.metadata.keys.len();
@@ -461,7 +447,6 @@ impl<T: WriteTx> SessionTx<T> {
             return Ok(status_ok());
         }
 
-        // Backfill: index every existing base row, in bounded batches — the
         // scan borrows the store the puts need mutably, so each round
         // materializes at most BACKFILL_BATCH rows and resumes from the
         // strict successor of the last key (memcmp order: key ++ 0x00).
@@ -558,7 +543,6 @@ impl<T: WriteTx> SessionTx<T> {
     /// — see [`IndexKind::Temporal`]). The stored posting rows are the
     /// write's own valid instant as a leading column, followed by the
     /// base relation's key columns.
-    ///
     /// No parsed `SysOp` surface yet (grammar lives outside this door);
     /// exercised by in-crate temporal index tests that drive `SessionTx`
     /// directly — the same code the eventual parsed surface will call.
@@ -614,8 +598,6 @@ impl<T: WriteTx> SessionTx<T> {
             // manifest stores that same Expr substance (not source text).
             Self::compile_row_extractor(&base, filter)?;
         }
-        // Admit-only mint: private fields, MNeighbours (m >= 2), derived
-        // m_max / m_max0 / level_multiplier — illegal descriptions refuse here.
         let manifest = crate::project::vector::hnsw::HnswIndexManifest::admit(
             crate::project::vector::hnsw::HnswAdmitSpec {
                 base_relation: cfg.base_relation.clone(),
@@ -681,12 +663,9 @@ impl<T: WriteTx> SessionTx<T> {
             cfg.n_perm,
             &Weights(cfg.false_positive_weight.0, cfg.false_negative_weight.0),
         )?;
-        // The signature holds exactly b*r hashes (the engine's band-chunk
-        // contract); the requested n_perm is the optimizer's search budget,
         // not the drawn count. This product reaches both a STORED count
         // (`num_perm`) and the permutation allocation below, so it is a
         // checked multiply, not a wrapping one: an overflow is a typed refusal
-        // here, never a silently-wrapped count that mis-sizes the index.
         let n_drawn = params.b.checked_mul(params.r).ok_or_else(|| {
             IndexLifecycleError(format!(
                 "LSH parameters overflow: {} bands * {} rows-per-band exceeds usize",
@@ -746,9 +725,7 @@ impl<T: WriteTx> SessionTx<T> {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
 // Engine sys-op doors for index / operator lifecycle
-// ─────────────────────────────────────────────────────────────────────────
 
 impl<S: Storage> Engine<S> {
     /// `::compact` — flush the store.
@@ -763,10 +740,7 @@ impl<S: Storage> Engine<S> {
         rel: Option<&Symbol>,
         options: &ScriptOptions,
     ) -> Result<NamedRows> {
-        // A cold root is a full ordered rescan, so the scan must be
-        // bounded: the session's derived-tuple ceiling doubles as the
         // scan ceiling (one scanned pair = one unit), with a default
-        // when the caller sets none. A ceiling of zero refuses before
         // scanning anything.
         let ceiling = match options.derived_tuple_ceiling {
             Some(c) => {
@@ -860,7 +834,6 @@ impl<S: Storage> Engine<S> {
 
 /// read-side RA operator that serves window/stab queries over these
 /// postings is a separate chunk, see `IndexKind::Temporal`'s doc comment).
-///
 /// These tests drive `SessionTx` directly rather than through
 /// `Db::run_script`: `::temporal index create` has no parsed KyzoScript
 /// surface yet (the grammar and `SysOp` dispatch live in `parse/sys.rs`
@@ -930,7 +903,6 @@ mod temporal_index_tests {
     /// caller yet — goes straight to `temporal_index_write`, proving the
     /// write PRIMITIVE composes correctly for whatever future correction
     /// mechanism calls it.
-    ///
     /// `reasserts_existing`: when true, an `Assert` event ALSO supplies
     /// its own row as `old_kv` — simulating a `:put`-overwrite or
     /// `:update` (both `old_kv` and `new_kv` present), the exact branch
@@ -1088,8 +1060,6 @@ mod temporal_index_tests {
         let idx_handle = stx.get_relation("e:t")?;
 
         // (k, valid, sys, polarity). The third event corrects the FIRST
-        // one: same valid instant (10), newer sys (3) — an Erase un-
-        // recording the earlier Assert, never a new instant.
         let events = [
             (1i64, 10i64, 1i64, ClaimPolarity::Assert),
             (1, 20, 2, ClaimPolarity::Retract),
@@ -1161,11 +1131,8 @@ mod temporal_index_tests {
         // (k, valid, sys, polarity, reasserts_existing) — several keys,
         // mixed polarities, instants not in chronological write order,
         // several sys stamps. The `(1, 120, 14, Assert, true)` event is a
-        // real-shaped overwrite: as-of resolution AT valid=120 finds the
         // `(1, 100, 10, Assert)` row (100 <= 120), so a real pipeline
-        // write here supplies BOTH `old_kv` and `new_kv` — the branch
         // story #62's hostile review found unguarded, now included in the
-        // byte-identity check.
         let events = [
             (1i64, 100i64, 10i64, ClaimPolarity::Assert, false),
             (2, 200, 11, ClaimPolarity::Assert, false),
@@ -1314,7 +1281,6 @@ mod temporal_index_tests {
         db.run_script("?[k, v] <- [[1, 100]] :put po {k, v}", BTreeMap::new())
             .map_err(|e| miette!("fresh insert: {e}"))?;
         // The overwrite: `current_row_routed` resolves at THIS write's own
-        // valid to the prior row (`old_kv = Some`), and this write
         // supplies a new payload (`new_kv = Some`) — both `Some`, the
         // exact branch under review.
         db.run_script("?[k, v] <- [[1, 200]] :put po {k, v}", BTreeMap::new())
@@ -1372,7 +1338,6 @@ mod temporal_index_tests {
     /// count claim, not a content claim, so it needs a count oracle:
     /// `SimStorage::put_call_count`, which totals calls at the call site
     /// (before any in-transaction collapse), not post-collapse entries.
-    ///
     /// Drives the real production pipeline (`Db::run_script`, matching
     /// `temporal_index_production_pipeline_mirrors_one_posting_per_base_event`
     /// above) through the four mutation kinds and checks the EXACT put
@@ -1417,13 +1382,11 @@ mod temporal_index_tests {
             Ok((puts_after, dels_after))
         };
 
-        // :put fresh — no existing row, so `old_kv` is `None`: the branch
         // the dual-fire mutant cannot distinguish from single-fire.
         db.run_script("?[k, v] <- [[1, 100]] :put po {k, v}", BTreeMap::new())
             .map_err(|e| miette!("fresh insert: {e}"))?;
         let (p1, d1) = check_delta("put fresh", puts_before_all, dels_before_all)?;
 
-        // :put overwrite — `old_kv` AND `new_kv` both `Some`: the exact
         // branch story #62's hostile review found unguarded.
         db.run_script("?[k, v] <- [[1, 200]] :put po {k, v}", BTreeMap::new())
             .map_err(|e| miette!("overwrite: {e}"))?;
@@ -1434,10 +1397,7 @@ mod temporal_index_tests {
             .map_err(|e| miette!("update: {e}"))?;
         let (p3, d3) = check_delta("update", p2, d2)?;
 
-        // :rm — `new_kv` is `None`, `old_kv` is `Some`: single-fire and
         // the dual-fire mutant agree here too (only overwrite/update
-        // diverge), so this is the control showing the law holds
-        // everywhere, not just where the mutant happens to differ.
         db.run_script("?[k] <- [[1]] :rm po {k}", BTreeMap::new())
             .map_err(|e| miette!("remove: {e}"))?;
         check_delta("rm", p3, d3)?;
@@ -1481,14 +1441,12 @@ mod index_surface_tests {
         .map_err(|e| miette!("create: {e}"))?;
         db.run_script("::index create t:by_v {v}", no_params())
             .map_err(|e| miette!("::index create must be a live surface: {e}"))?;
-        // History: update k=1, retract k=2 (distinct stamps).
         db.run_script("?[k, v] <- [[1, 11]] :put t {k => v}", no_params())
             .map_err(|e| miette!("update: {e}"))?;
         db.run_script("?[k] <- [[2]] :rm t {k}", no_params())
             .map_err(|e| miette!("retract: {e}"))?;
 
         // The index-served plan binds v first (the index's leading
-        // column); the base plan binds k first. Same logical query.
         let via_index = db
             .run_script("?[v, k] := *t:by_v{v, k} :order v", no_params())
             .map_err(|e| miette!("index read: {e}"))?;

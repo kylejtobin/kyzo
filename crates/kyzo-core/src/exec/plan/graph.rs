@@ -184,7 +184,6 @@ impl Graph<()> {
 }
 
 impl<T: Ord + Copy> StratifiedGraph<T> {
-    /// The dependency graph with poison labels forgotten, for reachability
     /// and SCC computation.
     pub(crate) fn reduce_to_graph(&self) -> Graph<T> {
         self.iter()
@@ -200,7 +199,6 @@ impl<T: Ord> Graph<T> {
     ///
     /// Components are returned keyed by their root's DFS discovery order, each
     /// component's members in ascending node order — the same output, member
-    /// for member, as the CozoDB original's recursive formulation.
     pub(crate) fn strongly_connected_components(&self) -> Result<Vec<Vec<&T>>> {
         let indices: Vec<&T> = self.keys().collect();
         let invert_indices: BTreeMap<&T, usize> = indices
@@ -281,7 +279,6 @@ impl StratifiedGraph<usize> {
         let mut current_stratum = vec![];
         // Nodes with no unprocessed dependents, placeable in the current
         // stratum; and nodes reached over a poisoned edge from the current
-        // stratum, which must wait for the next one.
         let mut safe_pending = vec![];
         let mut unsafe_nodes: BTreeSet<usize> = BTreeSet::new();
 
@@ -334,7 +331,6 @@ impl StratifiedGraph<usize> {
             }
         }
         // The original's graph.rs:129 `release-absent assert`, as a real invariant:
-        // every edge must have been consumed, or some node was never emitted.
         ensure!(
             in_degree.iter().all(|d| *d == 0),
             GraphInvariantError("generalized Kahn did not consume every edge (cyclic input?)")
@@ -343,7 +339,6 @@ impl StratifiedGraph<usize> {
     }
 }
 
-/// An invariant these algorithms maintain internally was found broken.
 /// Returned (never panicked, and never only debug-asserted) so corrupt
 /// bookkeeping surfaces as a bug report instead of a silently wrong
 /// stratification.
@@ -455,7 +450,6 @@ impl<'a> TarjanScc<'a> {
                         }
                     }
                     // What the recursive version does right after `dfs(to)`
-                    // returns: if the child is still on the component
                     // stack, its low-link constrains the parent's.
                     if let Some(&(parent, _)) = frames.last()
                         && self.on_stack[at]
@@ -489,7 +483,6 @@ mod tests {
         g
     }
 
-    /// SCCs as an order-free partition, for comparing against the oracle.
     fn scc_partition(graph: &Graph<usize>) -> Result<BTreeSet<BTreeSet<usize>>> {
         Ok(graph.strongly_connected_components()?
             .into_iter()

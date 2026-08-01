@@ -21,7 +21,6 @@
 //! advances the WAL byte hash-chain (`WalRecord` / [`WalHash`] tip) and the
 //! meaning-layer [`RootChain`] together, then seals a
 //! [`DurableCommitCut`](super::merkle::DurableCommitCut) that composes both
-//! tips. A third independent predecessor digest is deleted — the WAL tip *is*
 //! the CommitOrdinal predecessor-hash seal.
 //!
 //! **Overlap-only group commit.** A durable barrier batches only writers
@@ -32,7 +31,6 @@
 //! shutdown — never a coalescing sleep.
 //!
 //! Bans: timers (wake ≠ timer — park only on queue non-empty or shutdown);
-//! early ack before the batch barrier; refuse-as-durable-event to fill
 //! ordinal holes; cut advancement on ghosts; seal without session recheck
 //! against the Store's **current** live session; soft dual-mint of one
 //! proof type across fsync and non-fsync paths; out-of-order IntentOrdinal
@@ -269,7 +267,6 @@ pub fn current_live_sweep() -> Result<Option<LiveSweepHandle>, SweepRefuse> {
 
 impl LiveSweepHandle {
     /// Open the one live SweepDoor for `store_id` under NativeFsyncProof{No}.
-    ///
     /// Crash recovery (decisions.md §21 / §38): before serving, replay the
     /// retained WAL suffix and rebuild [`IdempotencyMemo`] + ordinal/WAL tips
     /// via [`SweepDoor::restore_from_wal_replay`]. Pass an empty slice for
@@ -432,7 +429,6 @@ impl CommitOrdinal {
 
 /// Proof that an Open write transaction applied through the SweepDoor without
 /// a backing fsync (process-crash durable, not power-cut durable).
-///
 /// Distinct from [`Committed`]: soft dual-mint of one proof type across
 /// durability strengths is banned (decisions.md §25). Carries no
 /// [`CommitOrdinal`] — history ordinals mint only at the durable event.
@@ -472,7 +468,6 @@ impl Applied {
 
 /// Proof that an Open write transaction committed through the SweepDoor after
 /// the backing fsync (power-cut durable).
-///
 /// Carries Store identity, fence epoch, and dense [`CommitOrdinal`]. Private
 /// fields — construction sites only inside this module (the ruled door).
 /// Mintable only after the StableCommitCap barrier returns (§25).
@@ -512,7 +507,6 @@ impl Committed {
 
 /// An intent admitted to the IntentionQueue — carries [`IntentOrdinal`] plus
 /// the [`OperationKey`] / request digest that authorized admission (§38/§39).
-///
 /// `CommitOrdinal` construction at admission is Unconstructible.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdmittedIntent {
@@ -566,7 +560,6 @@ impl AdmittedIntent {
 
 /// Observable membership of one StableCommitCap barrier under overlap-only
 /// group commit (decisions.md §25).
-///
 /// IntentOrdinals listed here shared exactly one in-flight fsync window.
 /// A non-overlapping arrival after that window closed is Unconstructible as
 /// a member of this batch.
@@ -596,7 +589,6 @@ impl OverlapBatch {
 
     fn from_sealed(members: Vec<IntentOrdinal>, commit_ordinals: Vec<CommitOrdinal>) -> Self {
         // INVARIANT(barrier_pair_len): seal paths zip members with commits
-        // one-to-one before minting the barrier.
         Self {
             members,
             commit_ordinals,
@@ -649,7 +641,6 @@ impl IntentionQueue {
 }
 
 /// Session coordinates the SweepDoor rechecks before sealing any batch.
-///
 /// Open-time snapshot on the door is **not** live authority — admit/seal
 /// paths take a `current: &SweepSession` so a superseded session fails
 /// [`SweepRefuse::WriteSessionDead`].
@@ -688,7 +679,6 @@ impl SweepSession {
 
 /// The ruled commit door: single commit thread, continuous sweep → one
 /// [`StableCommitCap`] barrier → sweep again.
-///
 /// First arm: physical apply = today's [`WriteTx::commit_durable`] (native
 /// fsync proof) for [`Committed`]; [`WriteTx::commit`] for [`Applied`].
 pub struct SweepDoor {
@@ -736,12 +726,10 @@ pub struct SweepDoor {
 impl SweepDoor {
     /// Physical StableCommitCap barrier for a live write **acknowledgement**
     /// (seat 25 / #374 T10).
-    ///
     /// Ruled arm for single-process native: [`StableCommitCap::NativeFsyncProof`]
     /// with [`SnapshotFork::No`]. Applies the same physical fsync path
     /// [`Self::seal_durable`] uses for that arm — never bare
     /// [`WriteTx::commit`].
-    ///
     /// Production KyzoScript ack routes through [`Self::ack_write`] (OperationKey
     /// admit → barrier → memo). This key-less barrier remains for arm-refusal
     /// unit proofs only — not the live commit door.
@@ -777,7 +765,6 @@ impl SweepDoor {
         preimage: SingleStoreKeyPreimage,
         tx: W,
     ) -> Result<(), SweepSealFailure> {
-        // Crash-restored digest map (bodies without preimage).
         if let Some(prior) = self.wal_restored_digests.get(&key.as_bytes().0) {
             if *prior != request_digest {
                 let Aborted = tx.abort();
@@ -786,7 +773,6 @@ impl SweepDoor {
             let Aborted = tx.abort();
             return Ok(());
         }
-        // Live / preimage-restored IdempotencyMemo.
         match self.idempotency.consult(&key, request_digest) {
             Err(StoreRefuse::OperationKeyReuse) => {
                 let Aborted = tx.abort();
@@ -809,7 +795,6 @@ impl SweepDoor {
             .admit_with_preimage(incarnation_id, current, key, request_digest, Some(preimage))
             .map_err(SweepSealFailure::Sweep)?;
 
-        // Post-seal retry: admit replays the prior intent; do not reseal.
         if matches!(
             self.idempotency.lookup(&key),
             OperationOutcome::Committed { .. }
@@ -974,11 +959,9 @@ impl SweepDoor {
     /// Admit an intent under an [`OperationKey`]: mint Store-monotonic
     /// [`IntentOrdinal`] (may gap later), or replay a prior admission for the
     /// same key + request digest without minting a second ordinal.
-    ///
     /// `current` is the Store's live session authority — not the open-time
     /// snapshot alone. A superseded live session → [`SweepRefuse::WriteSessionDead`].
     /// Same key + changed request digest → [`SweepRefuse::OperationKeyReuse`].
-    ///
     /// While a fsync window is open, a **fresh** arrival **overlaps** the
     /// in-flight barrier and joins that cohort. After the window closes, fresh
     /// admits land on the IntentionQueue for a later barrier — never the prior
@@ -1004,7 +987,6 @@ impl SweepDoor {
     ) -> Result<AdmittedIntent, SweepRefuse> {
         self.recheck_session(incarnation_id, current)?;
 
-        // Real path consults the idempotency organ before minting (§38/§39).
         match self.idempotency.consult(&key, request_digest) {
             Err(StoreRefuse::OperationKeyReuse) => {
                 return Err(SweepRefuse::OperationKeyReuse);
@@ -1053,7 +1035,6 @@ impl SweepDoor {
     /// Open the overlap-only fsync window: queue waiters become the initial
     /// overlap cohort, and further admits join until
     /// [`Self::seal_durable_overlap_batch`] closes the window.
-    ///
     /// Wake ≠ timer — this is an explicit barrier compose, never a sleep.
     pub fn begin_fsync_window(
         &mut self,
@@ -1072,12 +1053,10 @@ impl SweepDoor {
     }
 
     /// Seal the in-flight overlap cohort through **one** StableCommitCap barrier.
-    ///
     /// `work` must supply one `(WriteTx, StateRoot)` per overlap cohort member,
     /// in IntentOrdinal order. Assigns dense [`CommitOrdinal`]s in that order,
     /// records [`OverlapBatch`] membership, then **closes** the fsync window so
     /// a non-overlapping arrival cannot join this batch.
-    ///
     /// [`Committed`] mints only after the barrier returns (§25).
     pub fn seal_durable_overlap_batch<W: WriteTx>(
         &mut self,
@@ -1108,7 +1087,6 @@ impl SweepDoor {
 
         // One logical barrier for the whole overlap cohort — first arm applies
         // each physical tx under the same in-flight window, then the window closes.
-        // Close the window before returning apply failure so a non-overlapping
         // retry cannot join a half-applied cohort.
         match self.stable_commit_cap {
             StableCommitCap::NativeFsyncProof { .. }
@@ -1140,17 +1118,14 @@ impl SweepDoor {
     }
 
     /// Sweep one intent through the StableCommitCap barrier (backing fsync).
-    ///
     /// Physical apply for the first arm: `WriteTx::commit_durable`.
     /// Assigns dense [`CommitOrdinal`] only on success; refuses advance no cut
     /// on failure. Session recheck against live `current` before any seal —
     /// mismatch seals zero bytes. Intents must seal in strictly increasing
     /// [`IntentOrdinal`] order.
-    ///
     /// Singleton path: refuses while an overlap fsync window is already open
     /// (use [`Self::seal_durable_overlap_batch`]). Records a one-member
     /// [`OverlapBatch`] on success.
-    ///
     /// On success, mints a Spec [`ChainedStateRoot`] over `content_root`
     /// (plaintext-canonical digest at this cut), extends [`RootChain`] via
     /// [`RootChain::append`], advances the WAL byte hash-chain with a Commit
@@ -1188,7 +1163,6 @@ impl SweepDoor {
     }
 
     /// Sweep one intent through a process-crash-durable (non-fsync) barrier.
-    ///
     /// Returns [`Applied`] — never [`Committed`]. Soft dual-mint of one proof
     /// type across durability strengths is banned. Does not assign
     /// [`CommitOrdinal`] and does not extend [`RootChain`] (history-authoritative
@@ -1232,7 +1206,6 @@ impl SweepDoor {
     }
 
     /// Recheck ask + door against the Store's **current** live session.
-    ///
     /// Comparing only to the open-time snapshot lets a stale door pass its
     /// own recheck — resurrection cannot fire. Live `current` must still
     /// equal the session this door opened under; ask incarnation must match
@@ -1284,7 +1257,6 @@ impl SweepDoor {
 
     /// Post-barrier sole [`Committed`] mint: RootChain + WAL byte chain +
     /// composed [`DurableCommitCut`] at one durable boundary (§24 / §25 / §56).
-    ///
     /// WAL Commit body carries OperationKey + RequestDigest (+ optional
     /// single-store preimage) so reopen can rebuild [`IdempotencyMemo`].
     fn mint_committed_after_barrier(
@@ -1299,7 +1271,6 @@ impl SweepDoor {
             .map_err(SweepSealFailure::Sweep)?;
         self.highest_commit = commit_ordinal;
 
-        // Meaning-layer chain (seat 56).
         let chained = ChainedStateRoot::mint(
             self.store_id,
             self.fence_epoch,
@@ -1426,26 +1397,20 @@ pub enum SweepSealFailure {
 }
 
 // ── Recovery SLA claim / bench-lane emit (decisions.md §28 / §86) ─────────
-//
 // Coefficients are **derived then sealed** from wall-clock calibration in
 // `crates/kyzo-core/benches/recovery_sla.rs` over real
 // `kyzo::bench_recovery::replay` / `wal::replay` on MB / tens-of-MB WalSegment
-// dirty-tails (§87). Campaign identity:
 // - opponent pin `kyzo.recovery_sla.corpus.v2` (1–32 MiB dirty-tails)
 // - tagged commit `kyzo.recovery_sla.seal.v2`
-// Campaign-derived ceiling (margin 2/1) — sealed from the first honest derive
 // printout. Later bench runs re-derive for transparency but assert only
 // measured_p999 ≤ f(sealed) and that derived does not exceed sealed (re-seal
 // upward on regression; never require bit-stable equality — wall-clock noise).
 // Unit is nanoseconds — honest for sub-ms / per-byte replay cost. The
-// path-wired DST corpus (`kyzo-trials/src/dst.rs` → `dst` below) proves
 // recovery correctness + structural bound *shape* against these sealed numbers
 // — it does not invent them and does not equate structural work-units with
-// wall-clock. This surface publishes sealed `f` and refuses the durability/SLA
 // *claim* when exceeded — never Store open of a recoverable Store.
 
 /// Sealed intercept (ns) of `f(bytes_since_last_flush)`.
-///
 /// Campaign ceiling from `kyzo.recovery_sla.corpus.v2` /
 /// `kyzo.recovery_sla.seal.v2` real `wal::replay` (margin 2/1) — story #221 T3.
 /// Bound, not bit-stable equality to every re-derive.
@@ -1507,7 +1472,6 @@ pub enum RecoverySlaClaimRefuse {
 }
 
 /// Bench-lane emit for the §86 recovery SLA claim.
-///
 /// When `recovery_time_p999_ns` exceeds sealed `f(bytes_since_last_flush)`,
 /// refuses the **claim** (badge / Spec “meets recovery SLA”). Does not gate
 /// Store open — recoverability is independent of the marketing bound (§28).
@@ -1748,7 +1712,6 @@ mod composition_tests {
         assert_eq!(proof.commit_ordinal().get(), 1);
         assert_eq!(door.highest_commit_ordinal().get(), 1);
 
-        // Post-seal retry: same key+digest replays; reseal cannot advance cut.
         let after_seal = door.admit(incarnation, &session, key, digest)?;
         assert_eq!(after_seal.intent_ordinal(), IntentOrdinal::ZERO);
         assert!(matches!(

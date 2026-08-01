@@ -25,7 +25,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-/// i64 count → f64 via [`Num::to_f64`] (cast lives in kyzo-model, not here).
 fn count_to_f64(count: i64) -> f64 {
     kyzo_model::value::Num::int(count).to_f64()
 }
@@ -242,7 +241,6 @@ impl MeetAggr {
     }
 }
 
-/// The meet form for a model [`Aggregation`], if it is a meet.
 pub(crate) fn meet_op(a: &Aggregation) -> Option<MeetAggr> {
     match a.name {
         "and" => Some(MeetAggr::And(MeetAggrAnd)),
@@ -261,7 +259,6 @@ pub(crate) fn meet_op(a: &Aggregation) -> Option<MeetAggr> {
     }
 }
 
-/// A fresh normal fold for a model [`Aggregation`] (every aggregation,
 /// meet included, has one).
 pub(crate) fn normal_op(a: &Aggregation, args: &[DataValue]) -> Result<NormalAggr> {
     match a.name {
@@ -870,7 +867,6 @@ fn update_numeric_extremum(
     }
 }
 
-/// Select `[payload, cost]` by cost order — ONE seat for latest_by / smallest_by.
 fn set_by_cost(
     found: &mut Option<DataValue>,
     cost: &mut Option<DataValue>,
@@ -2068,7 +2064,6 @@ mod tests {
         Ok(())
     }
 
-    /// All-integer sum/product return exact Int; float input demotes.
     #[test]
     fn sum_product_exact_int() -> Result<()> {
         let mut op = AggrSum::empty();

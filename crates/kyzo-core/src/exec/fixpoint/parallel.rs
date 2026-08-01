@@ -20,7 +20,6 @@ use std::collections::BTreeMap;
 use crate::exec::fixpoint::eval::EvalDefinition;
 use crate::exec::plan::program::MagicSymbol;
 
-/// Collect results for every non-entry definition in `defs` (entry rules
 /// under a limit are excluded — they run sequentially in
 /// [`super::eval::evaluate_stratum`]).
 ///

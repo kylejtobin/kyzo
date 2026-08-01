@@ -84,7 +84,6 @@ use crate::rules::io::Constant;
 use crate::rules::io::CsvReader;
 use crate::rules::io::JsonReader;
 
-// Model owns the name wrapper; re-export so engine call sites share one type.
 pub use kyzo_model::program::rule::FixedRuleHandle;
 
 #[cfg(test)]
@@ -129,9 +128,6 @@ where
     items.into_iter().map(f).collect()
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// Cancellation lifecycle
-// ─────────────────────────────────────────────────────────────────────────
 
 /// Private shared cancel publish cell: a one-shot latch (`OnceLock`), not
 /// an `AtomicBool` stop-bit. Cancellation is minted only through
@@ -215,9 +211,6 @@ impl CancelFlag {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// SEAM: stored-relation input
-// ─────────────────────────────────────────────────────────────────────────
 
 /// What the payload needs from the transaction in order to serve a
 /// `MagicFixedRuleRuleArg::Stored` input: arity lookup and (validity-
@@ -235,9 +228,6 @@ pub(crate) trait StoredInputSource {
     ) -> Result<TupleIter<'a>>;
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// Payload and input relations
-// ─────────────────────────────────────────────────────────────────────────
 
 /// Passed into implementation of fixed rule, can be used to obtain relation inputs and options
 pub struct FixedRulePayload<'a> {
@@ -598,9 +588,6 @@ impl<'a> FixedRulePayload<'a> {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// The arity-branded output writer
-// ─────────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Error, Diagnostic)]
 #[error("Fixed rule declared arity {declared} but produced a row of width {got}")]
@@ -790,9 +777,6 @@ mod fixed_rule_output_budget_tests {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// The trait
-// ─────────────────────────────────────────────────────────────────────────
 
 /// Trait for an implementation of an algorithm or a utility
 pub trait FixedRule: Send + Sync {
@@ -826,9 +810,6 @@ pub trait FixedRule: Send + Sync {
     ) -> Result<()>;
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// SimpleFixedRule — named body owner only (P083: no Fn / dyn Fn)
-// ─────────────────────────────────────────────────────────────────────────
 
 /// Named body for a simple fixed rule. Prefer a named [`FixedRule`] impl for
 /// production algorithms; this trait is the reduced door for host rules that
@@ -1020,9 +1001,6 @@ impl<B: SimpleRuleBody> FixedRule for SimpleFixedRule<B> {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// Handle, registry, errors
-// ─────────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Error, Diagnostic)]
 #[error("Cannot determine arity for algo {0} since {1}")]
@@ -1398,9 +1376,6 @@ impl MagicFixedRuleRuleArg {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// The fixed-rule evaluation adapter
-// ─────────────────────────────────────────────────────────────────────────
 
 /// Bridges one `MagicFixedRuleApply` to `FixedRule::run` at evaluation time.
 /// It assembles the payload (in-memory rule inputs from the epoch stores,
@@ -1463,9 +1438,6 @@ impl<S: StoredInputSource + Send + Sync> FixedRuleEval for SessionFixedRule<'_, 
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// Test harness (new in KyzoDB)
-// ─────────────────────────────────────────────────────────────────────────
 
 /// Runs fixed rules without a database: builds a [`MagicFixedRuleApply`]
 /// over in-memory inputs, executes `run`, and returns the output rows in

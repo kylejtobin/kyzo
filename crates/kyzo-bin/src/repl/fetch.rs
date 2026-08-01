@@ -272,7 +272,6 @@ fn read_chunked_body(reader: &mut impl BufRead) -> Result<Vec<u8>> {
             .into_diagnostic()
             .map_err(|e| miette!("bad chunk size {size_hex:?}: {e}"))?;
         if size == 0 {
-            // Trailing headers (rare) end at the next blank line.
             loop {
                 let mut trailer = String::new();
                 reader.read_line(&mut trailer).into_diagnostic()?;

@@ -10,7 +10,6 @@
 //! Key hierarchy, shred, and AEAD pipeline (decisions.md §60–§68).
 //!
 //! Owns: DEK derive, KEK unwrap capability, [`ShredSalt`], [`WrappedShredSalt`],
-//! [`AuditKey`], AEAD/SIV arms, compression-before-encryption pipeline, shred verb.
 //!
 //! Bans: plaintext-mode flag; encrypt-then-compress; unstructured random DEKs /
 //! single global DEK; root-over-ciphertext (roots are cipher-invariant —
@@ -21,7 +20,6 @@
 //! in memory. Shred destroys the wrapped salt + authorized replicas.
 //!
 //! Cipher binding (T11): [`AeadArm::Siv`] → RustCrypto `aes-gcm-siv` (AES-256-GCM-SIV,
-//! misuse-resistant; required when SnapshotFork=yes). [`AeadArm::Gcm`] →
 //! RustCrypto `chacha20poly1305`. Shred-salt wrap uses the SIV arm under the KEK.
 
 use std::collections::HashSet;
@@ -128,7 +126,6 @@ pub enum AeadArm {
 }
 
 /// Root unwrap capability presented at open (client / HSM trait).
-///
 /// Absent at open → [`super::failure::StoreRefuse::MissingRootKek`]. Presence
 /// of this type is the crypto-door proof: wrap/unwrap/derive take `&KekUnwrapCap`,
 /// so a missing root is unconstructible at those doors (not a crypto refuse).
@@ -248,7 +245,6 @@ impl Kek {
 }
 
 /// Data-encryption key derived under the sealed hierarchy — never unstructured.
-///
 /// Carries the [`CryptoDomain`] it was derived under so CMT-1 key-commitment
 /// (seat 67a) can bind key-id + domain without a second encrypt-door argument.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -277,7 +273,6 @@ impl Dek {
 }
 
 /// Plaintext shred salt — transient, memory-only, never persisted.
-///
 /// No serde. No constructor accepts this into WAL / pack / seal writers.
 /// Exists only inside the derivation moment after unwrap of [`WrappedShredSalt`].
 #[derive(Debug)]
@@ -296,7 +291,6 @@ impl ShredSalt {
 }
 
 /// KEK-wrapped shred salt — the only persistable salt form.
-///
 /// Required in every leave-is-free pack. Useless without the KEK.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WrappedShredSalt {
@@ -339,7 +333,6 @@ impl WrappedShredSalt {
 }
 
 /// Audit integrity key — leaf MAC over CanonicalTranscript.
-///
 /// `AuditKey ≠ AncestorReadGrant ≠ decrypt ≠ WriteAuthority`.
 /// Wrapped under KEK alongside WrappedShredSalts. Never in packs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -365,7 +358,6 @@ impl AuditKey {
 }
 
 /// Typed refuse from crypto doors.
-///
 /// Missing root KEK is not a variant here — [`KekUnwrapCap`] makes absence
 /// unconstructible at wrap/unwrap/derive; open refuses via
 /// [`super::failure::StoreRefuse::MissingRootKek`].
@@ -394,7 +386,6 @@ const AEAD_TAG_LEN: usize = 16;
 const KEY_COMMIT_LEN: usize = 32;
 
 /// Raw 32-byte AEAD key material at the RustCrypto primitive edge.
-///
 /// Constructible only from [`Dek`] / [`Kek`] wrap doors — never from a peer
 /// digest, MAC, or untyped array at a free-fn seam.
 struct AeadRawKey([u8; 32]);
@@ -414,7 +405,6 @@ impl AeadRawKey {
 }
 
 /// CMT-1 key-commitment over raw key bytes — RustCrypto / `.as_bytes()` edge only.
-///
 /// Callers must pass [`AeadRawKey::from_dek`] or [`AeadRawKey::from_kek`]; never a peer digest/MAC.
 fn key_commitment_bytes(
     key: &AeadRawKey,
@@ -434,7 +424,6 @@ fn key_commitment_bytes(
 }
 
 /// CMT-1 key-commitment for the DEK encrypt door — [`Kek`] cannot satisfy this.
-///
 /// Minted through the ONE [`encode_key_commitment`] CanonicalTranscript constructor
 /// (seat 59). The AEAD tag already binds nonce+aad+message; C adds only key-binding.
 fn key_commitment(key: &Dek, crypto_domain: CryptoDomain) -> Result<Digest, CryptoRefuse> {
@@ -466,7 +455,6 @@ fn shred_salt_wrap_transcript(
 }
 
 /// Deterministic 96-bit nonce for KEK wrap (SIV makes repeat safe).
-///
 /// Digests the ONE wrap-AAD [`CanonicalTranscript`] — no second serialization path.
 /// Misuse-resistant SIV keeps deterministic nonce repeat message-equality-only.
 fn wrap_nonce(transcript: &CanonicalTranscript) -> Nonce {
@@ -591,7 +579,6 @@ fn open_aead_arm_bytes(
 }
 
 /// Base AEAD open under a KEK — wrap path only. [`Dek`] cannot enter.
-///
 /// Production open goes through [`open_arm_kek`] → [`open_arm_committed`].
 /// This typed non-committed door exists for the guardian collision fixture
 /// that must exercise the base Gcm arm before CMT-1 is applied.
@@ -607,7 +594,6 @@ fn open_aead_arm_kek(
 }
 
 /// ONE committing-AEAD seal body — RustCrypto / `.as_bytes()` edge only.
-///
 /// Sealed bytes = ciphertext ‖ tag ‖ C, with
 /// `C = H_canonical(KEY_COMMIT domain-label, key-id, CryptoDomain)`.
 /// Callers must pass [`AeadRawKey`] from Dek/Kek wrap doors; typed doors stay split.
@@ -629,7 +615,6 @@ fn seal_arm_committed(
 }
 
 /// Committing-AEAD seal under a DEK: thin typed door over [`seal_arm_committed`].
-///
 /// KeyCommitment posture is on for all AEAD sites (seat 27 pattern).
 /// A [`Kek`] is type-stopped here — DEK↔KEK swap is unconstructable.
 fn seal_arm(
@@ -670,7 +655,6 @@ fn seal_arm_kek(
 }
 
 /// ONE committing-AEAD open body — RustCrypto / `.as_bytes()` edge only.
-///
 /// Base arm open, then constant-time CMT-1 key-commitment check.
 /// On commitment mismatch returns [`CryptoRefuse::KeyCommitmentMismatch`] and
 /// does not release the AEAD plaintext.
@@ -707,7 +691,6 @@ fn open_arm_committed(
 }
 
 /// Committing-AEAD open under a DEK: thin typed door over [`open_arm_committed`].
-///
 /// A [`Kek`] is type-stopped here.
 fn open_arm(
     arm: AeadArm,
@@ -747,7 +730,6 @@ fn open_arm_kek(
 }
 
 /// Wrap a plaintext [`ShredSalt`] under the KEK for persistence.
-///
 /// STAGED PENDING OPERATOR: declared-fn seat candidate — prefer
 /// [`KekUnwrapCap::wrap_shred_salt`].
 pub fn wrap_shred_salt(
@@ -760,7 +742,6 @@ pub fn wrap_shred_salt(
 }
 
 /// Unwrap a persisted [`WrappedShredSalt`] to a memory-only [`ShredSalt`].
-///
 /// STAGED PENDING OPERATOR: declared-fn seat candidate — prefer
 /// [`KekUnwrapCap::unwrap_shred_salt`].
 pub fn unwrap_shred_salt(
@@ -772,7 +753,6 @@ pub fn unwrap_shred_salt(
 }
 
 /// `DEK = derive(KEK, CryptoDomain, SegmentCounter, ShredSalt)`.
-///
 /// STAGED PENDING OPERATOR: declared-fn seat candidate — prefer
 /// [`KekUnwrapCap::derive_dek`].
 pub fn derive_dek(
@@ -785,7 +765,6 @@ pub fn derive_dek(
 }
 
 /// Compressed plaintext — the only input the encrypt door accepts.
-///
 /// Encrypt-then-compress is Unconstructible: there is no encrypt path over
 /// raw plaintext bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -864,7 +843,6 @@ pub fn decompress(compressed: &CompressedBytes) -> Result<Vec<u8>, CryptoRefuse>
 }
 
 /// Encrypt compressed bytes under a DEK + nonce + arm.
-///
 /// STAGED PENDING OPERATOR: declared-fn seat candidate — prefer
 /// [`CompressedBytes::encrypt_under`].
 pub fn encrypt(
@@ -878,7 +856,6 @@ pub fn encrypt(
 }
 
 /// Open AEAD ciphertext back to [`CompressedBytes`].
-///
 /// STAGED PENDING OPERATOR: declared-fn seat candidate — prefer
 /// [`Ciphertext::decrypt_under`].
 pub fn decrypt(
@@ -901,7 +878,6 @@ pub fn compress_then_encrypt(
 }
 
 /// Shred receipt — reserved for the Store destroy door (seat 64).
-///
 /// The hollow `shred()` that minted this without destroying on-disk wrapped
 /// salt was deleted (tip 477). Receipt construction returns when that door
 /// is built for real.
@@ -924,7 +900,6 @@ impl ShredReceipt {
 }
 
 /// Durable shred tombstone naming one shredded (CryptoDomain, SegmentCounter).
-///
 /// Survives so restore of an old pack that still carries the wrapped
 /// ciphertext converges to [`CryptoRefuse::Shredded`], not silent unreadability.
 /// Naming a revocation here does **not** destroy on-disk wrapped salt — that
@@ -937,7 +912,6 @@ pub struct ShredTombstone {
 
 impl ShredTombstone {
     /// Name a (domain, segment) as revoked in a [`ShredLedger`].
-    ///
     /// This is ledger bookkeeping only — it does not zeroize, rewrite, or
     /// GC any persisted [`WrappedShredSalt`]. Seat 64's destroy door is
     /// unbuilt; do not treat this as crypto-shred.
@@ -1026,7 +1000,6 @@ mod tests {
         let k2 = Kek::admit(crate::data::fixed_bytes::Bytes32([0x22u8; 32]));
         let nonce = Nonce::admit(crate::data::fixed_bytes::Bytes12([0x24u8; 12]));
         let domain = test_domain();
-        // Collision-fixture AAD (fixed historical bytes the Poly1305 collision targets).
         let mut aad = Vec::new();
         aad.extend_from_slice(b"WSS1");
         aad.extend_from_slice(&[0x5au8; 32]);
@@ -1140,7 +1113,6 @@ mod tests {
         let store_b = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0xB2; 32]));
         let domain_a = CryptoDomain::new(FenceEpoch::genesis(store_a));
 
-        // Sanity: wrap+unwrap under the TRUE domain succeeds (not a blanket lockout).
         let wrapped = wrap_shred_salt(&cap, &salt, seg, domain_a)?;
         assert!(
             unwrap_shred_salt(&cap, &wrapped, &ledger).is_ok(),
@@ -1253,7 +1225,6 @@ mod tests {
             std::any::type_name::<Kek>(),
             "Dek and Kek must remain distinct types"
         );
-        // Wrap-derived nonce is typed Nonce, not a free [u8;12].
         let wrap_aad = encode_wrapped_shred_salt_aad(domain, SegmentCounter::ZERO.get())?;
         let n: Nonce = wrap_nonce(&wrap_aad);
         // encrypt door takes &Dek + Nonce — naked [u8;12] / &Kek are type errors.
@@ -1269,7 +1240,6 @@ mod tests {
     /// Grep gate obligation (#376 T17): named crypto/auth doors must not take or
     /// return naked `[u8;32]` / `[u8;12]` / `[u8;64]`, and DEK/KEK doors must be
     /// role-split (no shared `AeadKeyBytes` / `impl AeadKeyBytes` door).
-    ///
     /// Parent escalate: durable guardian copy belongs in `crates/xtask` (off
     /// allowlist) scanning the full store surface — this pin locks the T17
     /// doors until that lands.

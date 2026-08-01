@@ -128,10 +128,6 @@ use kyzo_model::program::symbol::Symbol;
 use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::value::{DataValue, Tuple, append_canonical};
 
-// ---------------------------------------------------------------------------
-// Projection kind — `K` of the shared build→seal→query machine (#305).
-// ---------------------------------------------------------------------------
-
 /// MinHash-LSH as a projection kind: one `K` of
 /// [`ProjectionBuilder`](crate::project::projection::ProjectionBuilder) /
 /// [`Sealed`](crate::project::projection::Sealed).
@@ -150,10 +146,6 @@ use crate::exec::stdlib::convert::{f64_to_f32, usize_to_f64};
 pub(crate) struct Lsh;
 
 impl ProjectionKind for Lsh {}
-
-// ---------------------------------------------------------------------------
-// The manifest: the index's persisted description.
-// ---------------------------------------------------------------------------
 
 /// The persisted description of one MinHash-LSH index. Serialized (msgpack,
 /// struct maps) as the payload of the base relation's `IndexKind::Lsh`
@@ -292,10 +284,6 @@ pub(crate) fn lsh_inv_index_metadata(base: &StoredRelationMetadata) -> StoredRel
         }],
     }
 }
-
-// ---------------------------------------------------------------------------
-// MinHash: permutations and signatures.
-// ---------------------------------------------------------------------------
 
 /// The default seed for the permutation draw when a `::lsh create` carries no
 /// explicit `seed`. Pinned, like the fixed-rule tier's `SeededRng::DEFAULT_SEED`
@@ -590,10 +578,6 @@ impl HashValues {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Parameter search: bands × rows from threshold and error weights.
-// ---------------------------------------------------------------------------
-
 /// The banding parameters: `b` bands of `r` rows (`b * r` = permutations).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LshParams {
@@ -651,10 +635,6 @@ impl LshParams {
         Ok(integrate(probability, threshold, 1.0, ALLOWED_INTEGRATE_ERR).integral)
     }
 }
-
-// ---------------------------------------------------------------------------
-// The engine's entry points.
-// ---------------------------------------------------------------------------
 
 /// Decode an inverse-index row's value (the row's stored band chunks). The
 /// original hit an abort-on-impossible arm on any other shape; a wrong shape is
@@ -971,10 +951,6 @@ fn lsh_search_body(tx: &impl ReadTx, request: LshSearchRequest<'_>) -> Result<Ve
     }
     Ok(ret)
 }
-
-// ---------------------------------------------------------------------------
-// Tests: the engine's executable law.
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

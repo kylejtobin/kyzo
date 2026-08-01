@@ -32,7 +32,6 @@ pub struct OperationKey([u8; 32]);
 
 impl OperationKey {
     /// Derive `H(domain_label, CompositionId, StoreId, StepId)`.
-    ///
     /// `composition_id` is the caller-derived CompositionId digest (session
     /// owns the type; Store sees only the sealed digest so the layering stays
     /// one-way).
@@ -89,7 +88,6 @@ impl RequestDigest {
 
 
 /// Memoized terminal outcome for an [`OperationKey`] (§38).
-///
 /// Transient refuses (capacity, availability, transport) are **never**
 /// memoized as terminal — only these three arms exist.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -166,7 +164,6 @@ impl IdempotencyMemo {
     }
 
     /// Consult the memo for a safe-retry door (admit / commit).
-    ///
     /// - No entry → [`Ok`]`(None)` (fresh).
     /// - Same key + digest → [`Ok`]`(Some(entry))` (replay).
     /// - Same key + different digest → [`StoreRefuse::OperationKeyReuse`].
@@ -183,7 +180,6 @@ impl IdempotencyMemo {
     }
 
     /// Replay or record a terminal outcome.
-    ///
     /// Same key + digest → replay prior outcome. Same key + different digest →
     /// [`StoreRefuse::OperationKeyReuse`]. Transient outcomes must not call this.
     pub fn remember(

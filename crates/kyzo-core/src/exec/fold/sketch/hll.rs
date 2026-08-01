@@ -48,12 +48,9 @@ use miette::{Result, bail, ensure};
 
 use kyzo_model::value::DataValue;
 
-/// The seed for the element hash. Pinned: changing it changes every
-/// sketch's contents (and is a stored-format change if sketches are ever
 /// persisted). Its value is arbitrary but fixed.
 const HASH_SEED: u64 = 0x48_4C_4C_5F_53_4B_54_31; // "HLL_SKT1"
 
-/// The precision `p`: `m = 2^p = 16384` registers, for a relative standard
 /// error of `1.04 / sqrt(m) ≈ 0.81%`. Pinned as part of the sketch format.
 pub(crate) const DEFAULT_PRECISION: u8 = 14;
 
@@ -152,7 +149,6 @@ impl HyperLogLog<DEFAULT_M> {
 impl<const M: usize> HyperLogLog<M> {
     /// Precision `p` such that `M = 2^p`. Const-evaluated; `M` must be a
     /// power of two in `2^4..=2^18`.
-    /// Precision `p` for lawful `M ∈ {2^4, …, 2^18}`. Illegal `M` has no
     /// arm — monomorphization fails at the `_` placeholder via a length
     /// mismatch that is only evaluated for that arm.
     pub(crate) const PRECISION: u8 = match M {
@@ -233,7 +229,6 @@ impl<const M: usize> HyperLogLog<M> {
     }
 
     /// The estimated number of distinct elements seen. A pure function of
-    /// the register bytes: equal sketches always return the same estimate.
     pub(crate) fn estimate(&self) -> HllEstimate {
         let m = super::usize_to_f64(self.num_registers());
         let alpha = alpha(self.num_registers());
@@ -261,7 +256,6 @@ impl<const M: usize> HyperLogLog<M> {
     }
 
     /// Serialize to the portable stored form: `[FORMAT_TAG, precision,
-    /// registers...]`. Byte-identical for equal sketches on every platform
     /// (the registers are single bytes; there is no word-size or endianness
     /// choice to make).
     pub(crate) fn to_bytes(&self) -> Vec<u8> {
@@ -272,7 +266,6 @@ impl<const M: usize> HyperLogLog<M> {
     }
 
     /// Parse the stored form, validating the tag and that wire precision /
-    /// length match this type's const `M`. Corrupt bytes are an error, never
     /// a panic.
     pub(crate) fn decode(bytes: &[u8]) -> Result<Self> {
         let [tag, precision, rest @ ..] = bytes else {
@@ -557,7 +550,6 @@ mod tests {
 
         assert!(HyperLogLog::<M>::decode(&[]).is_err());
         assert!(HyperLogLog::<M>::decode(&[0x02, 10]).is_err(), "bad tag");
-        // Wrong precision for this type (wire says 14, type is p=10).
         assert!(
             HyperLogLog::<M>::decode(&[FORMAT_TAG, 14]).is_err(),
             "precision mismatch"
@@ -594,7 +586,6 @@ mod tests {
         }
     }
 
-    /// PINNED-LITERAL sketch bytes for a fixed input and seed: format or
     /// hash drift fails loudly here. The digest of registers is asserted (a
     /// full 16384-byte register dump would be unwieldy), together with the
     /// exact non-zero register population, both of which are pure functions

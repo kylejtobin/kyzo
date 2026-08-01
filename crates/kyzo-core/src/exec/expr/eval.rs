@@ -16,14 +16,12 @@
 //! short-circuit semantics made columnar (a deciding argument's dead rows
 //! never touch later arguments, so their errors never fire — the same
 //! law `data/expr.rs`'s row evaluator implements). This is the shape
-//! DuckDB's and Velox's expression executors settled on, and for the
 //! same reason: with partitioning as control, straight-line kernels are
 //! all that remains, and a jump-shaped bytecode would add bookkeeping
 //! without removing any per-row work.
 //!
 //! Two laws, both pinned by the differential in this module's tests:
 //!
-//! - **Observational identity**: for every expression and every batch,
 //!   the columnar result equals row-by-row [`Expr::eval`] exactly —
 //!   values, presence, and error IDENTITY (the first failing row in row
 //!   order; within a row, the first failing subexpression in evaluation
@@ -189,7 +187,6 @@ pub(crate) fn eval_to_const(mut expr: Expr) -> Result<DataValue> {
 }
 
 /// A column of values ALIGNED TO A SELECTION: `values[i]` is the result
-/// for the `i`-th live row of the selection it was computed under. The
 /// alignment is positional, which is what lets `Cond` stitch arm results
 /// back together by selection order alone.
 struct SelAligned {
@@ -197,7 +194,6 @@ struct SelAligned {
 }
 
 /// Evaluation state threaded through one batch evaluation: the batch, a
-/// monotone node counter (evaluation order for error identity), and the
 /// running minimum error.
 struct BatchEval<'a> {
     batch: &'a ColumnBatch,
@@ -505,7 +501,6 @@ mod tests {
     #[test]
     fn guard_short_circuits_per_row() {
         // c0 == 0 rows must never evaluate the division-by-zero-ish arm;
-        // an erroring op (int + string) stands in for it.
         let guard = Expr::Lazy {
             op: LazyOp::And,
             args: Box::new([

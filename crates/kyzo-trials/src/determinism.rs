@@ -27,8 +27,6 @@
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn thread_count_determinism_lane_shares_cap1() -> miette::Result<()> {
-    // Smoke: one seed through the shared Cap1 door. The full sweep lives
-    // as `gauntlet::determinism_campaign` (KYZO_TRIALS_SEEDS / BASE).
     crate::gauntlet::run_seed(0)
         .map_err(|e| miette::miette!("Cap1 run_seed holds for seed 0: {e}"))?;
     Ok(())

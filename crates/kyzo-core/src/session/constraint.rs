@@ -25,7 +25,6 @@
 //!   deserializes the sealed body on decode — never re-parses source.
 //! - **Enforcement point.** The mutation pipeline notes the constraints of
 //!   every relation it touches ([`SessionTx::note_constraints`]); after the
-//!   top-level query and its whole trigger cascade have run — and before
 //!   commit — [`Db::enforce_constraints`] evaluates each noted constraint
 //!   once from its compiled program, read-only, against the transaction's
 //!   own write set (`WriteTx: ReadTx`, so post-write state is visible). A
@@ -36,7 +35,6 @@
 //!   [`ScriptOptions`] budget; a body that exceeds it is a typed refusal
 //!   (wrapped to name the constraint), never a hang.
 //! - **Deterministic witnesses.** Constraints are checked in name order and
-//!   witness rows are sorted and deduped before reporting, so the same
 //!   violation yields the same refusal at any thread count. At most
 //!   [`WITNESS_CAP`] witnesses are shown; the total count is always
 //!   reported.
@@ -60,7 +58,6 @@
 //! time-travel gap), so a body MAY name a fixed historical coordinate, but
 //! the constraint is still checked only once, at creation and at THIS
 //! session's `cur_vld`, never re-run at other instants automatically. A
-//! constraint that must hold across time must be written with explicit `@`
 //! validity qualifiers in its body; the natural now-scoped FK/CHECK shape
 //! guards the present instant only. This boundary is stated, not silently
 //! assumed.
@@ -296,7 +293,6 @@ impl<S: Storage> Engine<S> {
             cur_vld,
             options,
             // Constraint bodies read the WRITE tx's post-write view;
-            // committed-state segments must never serve them.
             crate::project::current::Segments::OFF,
         )?;
         let mut rows: Vec<Tuple> = result
@@ -325,7 +321,6 @@ impl<S: Storage> Engine<S> {
         for (name, constraint) in pending {
             let program = constraint.program().clone();
             // Defensive purity re-check: the catalog row's bytes are a
-            // claim, not a proof; a tampered body must not mutate.
             validate_constraint_purity(&name, program.out_opts())?;
             let witnesses = self
                 .eval_constraint_body(&tx.store, &tx.temp, program, cur_vld, &options)
@@ -416,7 +411,6 @@ impl<S: Storage> Engine<S> {
             }
         }
 
-        // L4: a constraint current data violates never comes into
         // being. Full-state evaluation inside the creating transaction,
         // under the caller's budget.
         let witnesses = self
@@ -443,7 +437,6 @@ impl<S: Storage> Engine<S> {
             }));
         }
 
-        // Attach: the identical substance mirrored onto every relation
         // the body reads, kept name-sorted. Requires the trigger rung of
         // the access ladder on each.
         for rel in read_set {
@@ -463,7 +456,6 @@ impl<S: Storage> Engine<S> {
 
     /// `::constraint drop <name>`: strip the constraint from every catalog
     /// row carrying it. Dropping a name nothing carries is a typed refusal.
-    ///
     /// Removing an invariant is gated by the same access rung that created it
     /// (`AccessLevel::Protected` on every carrying relation): a constraint
     /// proved at construction must not be detachable below the rung that
@@ -607,7 +599,6 @@ mod tests {
             "the witness is exactly the violating row, post-write"
         );
 
-        // The abort was whole: the co-inserted GOOD row [4, 9] is gone too.
         let out = db
             .run_script("?[k, v] := *scores[k, v]", no_params())
             .map_err(|e| miette!("scan: {e}"))?;
@@ -695,11 +686,9 @@ mod tests {
         ])];
         assert_eq!(rej.witnesses, want);
 
-        // Nothing was attached by the refused creation.
         let listed = db.run_script("::constraint list", no_params())?;
         assert!(listed.rows().is_empty());
 
-        // Repair, create, and the constraint now enforces.
         db.run_script("?[k, v] <- [[1, 9]] :put scores {k, v}", no_params())
             .map_err(|e| miette!("repair: {e}"))?;
         db.run_script(
@@ -752,7 +741,6 @@ mod tests {
         );
 
         // A put whose TRIGGER write violates the constraint on b is denied
-        // whole: neither the a-row nor the b-row survives.
         let err = db
             .run_script("?[x] <- [[50]] :put a {x}", no_params())
             .expect_err("trigger write violates b's constraint");
@@ -786,7 +774,6 @@ mod tests {
         )
         .map_err(|e| miette!("create edges: {e}"))?;
         // The body computes the full transitive closure (12 derived path
-        // tuples) and then filters to nothing: satisfiable never, expensive
         // always.
         db.run_script(
             "::constraint create acyclic_probe { \
@@ -908,7 +895,6 @@ mod tests {
         // `:timeout` body: refused, NOT panicked. An unbounded `:timeout`
         // would overflow `Duration::from_secs_f64` inside creation-time eval
         // (hostile-review finding: user-input panic on the general query
-        // path); the purity gate refuses it before it can reach the budget.
         let err = db
             .run_script(
                 "::constraint create bad_to { ?[k] := *r[k], k < 0 :timeout 1e300 }",
@@ -1044,7 +1030,6 @@ mod tests {
         )
         .map_err(|e| miette!("constraint creation (relation is Normal, above Protected): {e}"))?;
 
-        // Drop it to read_only — below the Protected rung the constraint was
         // established at.
         db.run_script("::access_level read_only scores", no_params())
             .map_err(|e| miette!("lower access: {e}"))?;
@@ -1053,11 +1038,9 @@ mod tests {
         let err = db
             .run_script("?[k, v] <- [[2, -1]] :put scores {k, v}", no_params())
             .expect_err("write refused (read_only)");
-        // read_only blocks the write at the access ladder before the denial,
         // but the constraint must remain undroppable at this rung.
         assert!(err.downcast_ref::<ConstraintViolation>().is_none());
 
-        // Dropping the constraint at read_only is refused: the ladder holds.
         let err = db
             .run_script("::constraint drop nonneg", no_params())
             .expect_err("drop refused below Protected");
@@ -1065,12 +1048,10 @@ mod tests {
             err.downcast_ref::<InsufficientAccessLevel>().is_some(),
             "drop below Protected must be a typed access refusal, got: {err:?}"
         );
-        // And nothing was stripped — the constraint is still listed.
         let listed = db.run_script("::constraint list", no_params())?;
         assert_eq!(listed.rows().len(), 1, "the refused drop detached nothing");
 
         // Restore the rung, then the drop proceeds — the invariant can only
-        // be removed at (or above) the rung that created it.
         db.run_script("::access_level normal scores", no_params())
             .map_err(|e| miette!("restore access: {e}"))?;
         db.run_script("::constraint drop nonneg", no_params())
@@ -1128,7 +1109,6 @@ mod tests {
             .expect_err("cycle must hit the typed ceiling");
         // Trigger recursion attaches the trigger source as source_code at
         // every unwind level, so the concrete type is behind miette
-        // adapters; the diagnostic code is the stable identity.
         let msg = format!("{err:?}");
         assert!(
             msg.contains("tx::trigger_cascade_too_deep")

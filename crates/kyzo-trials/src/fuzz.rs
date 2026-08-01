@@ -56,7 +56,6 @@ fn must_some<T>(o: Option<T>, ctx: &str) -> T {
 pub fn law5_corrupt_dictionary_sweep_never_panics() {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
-    // (a) surfaces list containing a nested List (not a string).
     {
         let dir = must_ok(tempfile::tempdir(), "tempdir");
         let db = must_ok(new_fjall_storage(dir.path()), "fjall storage");
@@ -84,7 +83,6 @@ pub fn law5_corrupt_dictionary_sweep_never_panics() {
         );
     }
 
-    // (b) enormous surface (~2 MiB of 'a') — must build or error, never panic.
     {
         let dir = must_ok(tempfile::tempdir(), "tempdir");
         let db = must_ok(new_fjall_storage(dir.path()), "fjall storage");

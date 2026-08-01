@@ -35,7 +35,6 @@ use kyzo_model::value::DataValue;
 
 // ── HyperLogLog: approximate distinct count (normal) ─────────────────────
 
-/// `hll(x)`: fold raw elements, return the estimated distinct count as an
 /// `Int`. Normal, not meet: its output is a scalar, and two counts cannot be
 /// meet-combined — exactly the `count_unique` story.
 pub(crate) struct AggrHll {
@@ -63,7 +62,6 @@ impl NormalAggrObj for AggrHll {
     }
 }
 
-/// `hll_sketch(x)`: fold raw elements, return the sketch itself as `Bytes` —
 /// the builder whose output is fed to `hll_union`.
 pub(crate) struct AggrHllSketch {
     hll: HyperLogLog,
@@ -135,7 +133,6 @@ impl MeetAggrObj for MeetAggrHllUnion {
     }
 }
 
-/// The normal form of `hll_union`, for use outside recursion.
 pub(crate) struct AggrHllUnion {
     acc: Option<HyperLogLog>,
 }
@@ -246,14 +243,12 @@ impl NormalAggrObj for AggrTDigest {
     }
 }
 
-/// `quantile(x, q)`: buffer raw numeric elements and return the estimated
 /// value at quantile `q ∈ [0, 1]`.
 pub(crate) struct AggrQuantile {
     buf: Vec<DataValue>,
     q: f64,
 }
 
-/// Factory for the `quantile` normal fold (compile-time `q` argument).
 pub(crate) fn quantile_factory(args: &[DataValue]) -> Result<NormalAggr> {
     let q = args
         .first()

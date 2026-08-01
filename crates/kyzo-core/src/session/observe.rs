@@ -31,13 +31,10 @@
  */
 
 //! Post-commit event callbacks: the universe telling its observers what
-//! changed.
 //!
 //! A callback is a channel registered against a relation name. During a
-//! mutating query the session *collects* (relation, op, new rows, old
 //! rows) into a [`CallbackCollector`] — pure data, no delivery — and only
 //! after the transaction commits does [`Db::send_callbacks`] fan the
-//! collected events out to the registered channels. Ordering guarantees:
 //! events for one commit are delivered after that commit is durable in the
 //! process-crash sense, in relation order, in mutation order within a
 //! relation.
@@ -68,7 +65,6 @@
 //!
 //! ## One authoritative counter per metric (§20 / §42 / §44)
 //!
-//! Each metric has exactly one counter. Exporters hold a [`MetricExporter`]
 //! that **renders** [`MetricCounter`] — they never recompute a divergent
 //! number. Compaction-debt is witnessed only from [`DebtLedger`]; index-status
 //! is witnessed only from [`IndexStatus`] (Catalog generation / staleness).
@@ -108,7 +104,6 @@ use crate::store::failure::{
 use crate::store::verify_walk::{DeepVerifyDigest, DeepVerifyReport, deep_verify_storage};
 
 /// Typed refuses for the observe / event-callback / deep-verify door.
-///
 /// Reachable registry and report failures — never `.expect` / panic costumes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error, Diagnostic)]
 pub enum ObserveRefuse {
@@ -149,7 +144,6 @@ impl RenderedMetric {
 }
 
 /// Exporter surface: renders one [`MetricCounter`], never recomputes.
-///
 /// Construction requires a [`MetricCounter`] from an authority door. There is
 /// no API that accepts raw inputs to invent a divergent number.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -269,7 +263,6 @@ impl Integrity {
     }
 
     /// Independently-queryable `integrity` relation — one row.
-    ///
     /// When a last-verify digest is present it is **rendered** as a second
     /// column (`last_verify` bytes); when absent the column is omitted
     /// (never a zero-filled digest placeholder).
@@ -369,7 +362,6 @@ impl ObservationBudget {
 }
 
 /// Outcome of an observation probe: result rows + budget spend.
-///
 /// Constructed only by [`observe_probe`] — verbosity cannot reshape these fields.
 #[derive(Clone, Debug)]
 pub struct ObservationOutcome {
@@ -407,7 +399,6 @@ impl DiagnosticEmission {
 }
 
 /// Run a fixed observation probe under [`TracingVerbosity`].
-///
 /// **Behavior-invariant:** `rows` and budget charge are taken from the probe
 /// arguments only — verbosity changes [`DiagnosticEmission`] alone. Turning
 /// tracing up or down never changes result rows or budget spend.
@@ -433,7 +424,6 @@ pub fn observe_probe(
 }
 
 /// Sync live in-flight count into ephemeral for relation export.
-///
 /// Compaction-debt / index-status are **not** projected into ephemeral —
 /// relations render [`DebtLedger`] / [`IndexStatus`] directly.
 fn sync_in_flight_into_ephemeral(surface: &mut OperatorHealthSurface, in_flight: u64) {
@@ -594,7 +584,6 @@ impl Display for CallbackOp {
 }
 
 impl CallbackOp {
-    /// Get the string representation.
     pub fn as_str(&self) -> &'static str {
         match self {
             CallbackOp::Put => "Put",
@@ -685,7 +674,6 @@ pub struct CallbackDeclaration {
 /// order. Plain data: building one has no side effects, so the retry loop
 /// discards a conflicted attempt's collector wholesale and no observer
 /// ever sees an aborted transaction's events.
-///
 /// Stored as `(op, new, old)` tuples so admit's push sites stay compatible;
 /// [`Db::send_callbacks`] lifts each into a [`CallbackEvent`] at delivery.
 pub(crate) type CallbackCollector =
@@ -695,7 +683,6 @@ pub(crate) type CallbackCollector =
 /// from relation name to the ids watching it. The two maps agree by
 /// construction — `register`, `unregister`, and the disconnect pruning in
 /// [`Db::send_callbacks`] are the only mutators, and each maintains both.
-///
 /// Also carries the deep-verify operator schedule + persisted last-result
 /// (§51) and the sealed [`OperatorHealthSurface`] (§82) — same lock door so
 /// observe stays one session observation surface. Index-status authority
@@ -745,7 +732,6 @@ impl EventCallbackRegistry {
     fn unregister(&mut self, id: CallbackId) -> bool {
         match self.by_id.remove(&id) {
             None => {
-                // Id was never registered.
                 let was_absent = false;
                 was_absent
             }
@@ -842,7 +828,6 @@ impl<S: Storage> Engine<S> {
 impl<S: Storage> Engine<S> {
     /// Register a callback channel to receive changes when the requested
     /// relation is successfully committed. The returned id unregisters it.
-    ///
     /// (The CozoDB original took an optional bounded capacity; see the
     /// header — delivery is unbounded and lossy-by-disconnect.)
     pub fn register_callback(
@@ -978,7 +963,6 @@ impl<S: Storage> Engine<S> {
     }
 
     /// Snapshot the sealed [`OperatorHealthSurface`] (§82).
-    ///
     /// Ephemeral in-flight is synced from the live registry. Compaction-debt
     /// and index-status are **not** mirrored into ephemeral — relation doors
     /// render [`DebtLedger`] / [`IndexStatus`] directly.
@@ -990,7 +974,6 @@ impl<S: Storage> Engine<S> {
     }
 
     /// Replace the sealed operator health surface (operator wiring door).
-    ///
     /// Re-syncs ephemeral in-flight from the live registry so a stale
     /// ephemeral cannot disagree with the registry counter.
     pub fn set_operator_health_surface(
@@ -1003,7 +986,6 @@ impl<S: Storage> Engine<S> {
         Ok(())
     }
 
-    /// Set the index-status authority (§20).
     pub(crate) fn set_index_status(&self, status: IndexStatus) -> Result<(), ObserveRefuse> {
         self.event_callbacks_write()?.set_index_status(status);
         Ok(())
@@ -1040,7 +1022,6 @@ impl<S: Storage> Engine<S> {
     }
 
     /// Cap-absent ephemeral engine-state relations (§82).
-    ///
     /// Projects in-flight tx / debt / index-status / storage-stats.
     /// Quarantine and failure topology are **unreachable** without
     /// [`OperatorCap`] — this door does not mint or accept Cap.
@@ -1054,7 +1035,6 @@ impl<S: Storage> Engine<S> {
     }
 
     /// Cap-present operator ephemeral relations (§82).
-    ///
     /// Requires unforgeable [`OperatorCap`] (composition-root / host mint
     /// only — like `StoreOpen::mint`). Tenant doors have no path here.
     pub fn operator_ephemeral_relations_for(
@@ -1074,7 +1054,6 @@ impl<S: Storage> Engine<S> {
     }
 
     /// Register an open transaction on the live in-flight registry.
-    ///
     /// SessionTx open/close in `session/db.rs` should call these; until that
     /// wire lands, tests and Cap doors call them explicitly.
     pub fn in_flight_tx_begin(&self) -> Result<(), ObserveRefuse> {
@@ -1104,7 +1083,6 @@ impl<S: Storage> Engine<S> {
     }
 
     /// Query the integrity tier — independently of liveness and readiness.
-    ///
     /// The relation **renders** [`DeepVerifyDigest`] from the private
     /// last_verify field when a deep-verify has completed; otherwise the
     /// digest column is absent (never zero-filled).
@@ -1144,7 +1122,6 @@ impl<S: Storage> Engine<S> {
         Ok(self.event_callbacks_read()?.tracing_verbosity)
     }
 
-    /// Set tracing verbosity — must not change query result rows or budget.
     pub fn set_tracing_verbosity(
         &self,
         verbosity: TracingVerbosity,
@@ -1154,7 +1131,6 @@ impl<S: Storage> Engine<S> {
     }
 
     /// Observe a fixed probe under the engine's current tracing verbosity.
-    ///
     /// Rows and budget spend are behavior-invariant in verbosity; only
     /// [`DiagnosticEmission`] may differ.
     pub fn observe_under_tracing(
@@ -1339,7 +1315,6 @@ mod deep_verify_schedule {
             DeepVerifyStaleness::Fresh { .. }
         ));
 
-        // Re-schedule → stale again even though a prior result exists.
         db.schedule_deep_verify()?;
         match db.deep_verify_staleness()? {
             DeepVerifyStaleness::Stale {
@@ -1398,7 +1373,6 @@ mod tenant_blind_operator_surface {
             b"hi".to_vec(),
         ))?;
 
-        // Cap-absent ordinary door: ephemeral metrics OK, topology unreachable.
         let tenant = db.operator_ephemeral_relations()?;
         assert!(!tenant.has_operator_cap());
         assert_eq!(
@@ -1598,7 +1572,6 @@ mod health_tiers_and_tracing {
         let db = Engine::compose(new_fjall_storage(dir.path())?, Catalog::new())
             .map_err(|e| miette!("compose: {e}"))?;
 
-        // Defaults: live + ready; integrity fails until verify witnesses clean.
         assert!(db.liveness()?.is_passing());
         assert!(db.readiness()?.is_passing());
         assert!(!db.integrity()?.is_passing());
@@ -1617,7 +1590,6 @@ mod health_tiers_and_tracing {
             &["integrity".to_string()]
         );
 
-        // Flip only readiness — liveness and integrity must be unchanged.
         db.set_readiness(Readiness::failing())?;
         assert!(
             db.liveness()?.is_passing(),
@@ -1629,19 +1601,16 @@ mod health_tiers_and_tracing {
             "integrity must not follow readiness"
         );
 
-        // Flip only integrity — liveness and readiness must be unchanged.
         db.set_integrity(Integrity::passing())?;
         assert!(db.liveness()?.is_passing());
         assert!(!db.readiness()?.is_passing());
         assert!(db.integrity()?.is_passing());
 
-        // Flip only liveness — readiness and integrity must be unchanged.
         db.set_liveness(Liveness::failing())?;
         assert!(!db.liveness()?.is_passing());
         assert!(!db.readiness()?.is_passing());
         assert!(db.integrity()?.is_passing());
 
-        // Type-level independence: the three types are not interchangeable.
         let live = Liveness::passing();
         let ready = Readiness::failing();
         let integ = Integrity::passing();

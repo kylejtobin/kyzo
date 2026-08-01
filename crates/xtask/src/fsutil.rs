@@ -16,18 +16,11 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 
 pub fn repo_root() -> Result<PathBuf> {
-    // Overridable so tooling can point at a throwaway copy.
     if let Some(r) = crate::host_env::gate_root() {
         return Ok(PathBuf::from(r));
     }
     let manifest_dir = crate::host_env::cargo_manifest_dir()
         .context("CARGO_MANIFEST_DIR not set (run via `cargo run -p xtask`)")?;
-    // Walk up from xtask's own manifest dir to the real workspace root
-    // (marked by a root `Cargo.toml` containing a `[workspace]` table),
-    // rather than assuming a fixed nesting depth: the crates/ move put
-    // xtask two levels below the root instead of one, and a hardcoded
-    // `.parent()` silently pointed at `crates/` instead — "no source files
-    // found" on CI. Walking up to the marker survives the next move too.
     let mut dir = PathBuf::from(manifest_dir);
     loop {
         let candidate = dir.join("Cargo.toml");

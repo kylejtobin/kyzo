@@ -20,7 +20,6 @@
 //! folklore.
 
 /// Closed class of engine-illegal indexed-key material (§61).
-///
 /// Every variant is refused by admission when placed in an indexed / memcmp
 /// key. Extending this enum requires a Spec edit — open-ended growth is banned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -67,7 +66,6 @@ pub enum SecretKeyRefuse {
 }
 
 /// Classify whether a proposed key-plane marking is Secret-class.
-///
 /// Admission calls this; a `Some(Secret)` → [`SecretKeyRefuse::SecretInIndexedKey`].
 pub fn refuse_if_secret(marking: Option<Secret>) -> Result<(), SecretKeyRefuse> {
     match marking {

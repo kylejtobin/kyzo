@@ -22,7 +22,6 @@
 use crate::project::projection::Generation;
 
 /// The one catalog-meaning freshness clock.
-///
 /// @authority CatalogGeneration
 /// @layer runtime-catalog
 /// @owns the one catalog-meaning freshness clock; sole door that mints projection Generation stamps from a proven counter
@@ -57,7 +56,6 @@ impl CatalogGeneration {
 }
 
 /// Per-relation monotone write counter that witnesses catalog freshness.
-///
 /// @authority RelationGeneration
 /// @layer runtime-catalog
 /// @owns per-relation monotone write counter that witnesses catalog freshness for one relation
@@ -87,7 +85,6 @@ impl RelationGeneration {
 }
 
 /// Per-index monotone rebuild counter that witnesses catalog freshness.
-///
 /// @authority IndexGeneration
 /// @layer runtime-catalog
 /// @owns per-index monotone rebuild counter that witnesses catalog freshness for one index
@@ -117,7 +114,6 @@ impl IndexGeneration {
 }
 
 /// Index-status authority (§20): Catalog generation + staleness of a sealed index.
-///
 /// The sole counter exporters render for index-status is the live Catalog
 /// generation ([`IndexStatus::counter`]). Staleness is derived from that
 /// clock vs the index's last rebuild stamp — never a second independent
@@ -289,7 +285,6 @@ mod tests {
 
         // The first read's miss is ungated (declines to build, per the
         // rebuild gate); the second read's miss is at the same generation
-        // (stable) and crosses the threshold, building the segment. Either
         // way both reads return the correct answer.
         let q = "?[k, v] := *w[k, v]";
         assert_eq!(
@@ -320,7 +315,6 @@ mod tests {
         );
 
         // A write whose transaction rolls back (parse-stage failure after
-        // the relation was touched is hard to stage; a constraint denial
         // is the canonical rollback) leaves both state and served answers
         // untouched — the early bump merely orphans, never lies.
         db.run_script(
@@ -340,7 +334,6 @@ mod tests {
         // A PLAIN INDEX is a mutated relation in its own right: its
         // segment must orphan when a base-relation write updates the
         // mirrored rows (hostile-review reproducer: the served index
-        // segment returned the stale two-row past after a base `:put`).
         db.run_script("::index create w:by_v {v}", no_params())?;
         let qi = "?[v, k] := *w:by_v{v, k}";
         assert_eq!(
@@ -381,7 +374,6 @@ mod tests {
 
         // A committed write to jr — the PROBE side of the join — orphans
         // its segment: the re-read must see the new row, not a stale
-        // probe answer served from before the write.
         db.run_script("?[k2, v] <- [[2, 20]] :put jr {k2 => v}", no_params())?;
         assert_eq!(
             int_rows(&db.run_script(q, no_params())?)?,

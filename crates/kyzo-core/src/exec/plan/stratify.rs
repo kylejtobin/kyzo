@@ -184,7 +184,6 @@ type PoisonSpans<'a> = BTreeMap<(&'a Symbol, &'a Symbol), SourceSpan>;
 
 /// The program's dependency graph, edges labelled poisoned (`true`) when
 /// the dependency forces a stratum boundary, together with the span of the
-/// atom that established each poison (for the refusal diagnostic). The
 /// rules are the module doc's; the shape is the original's, decision for
 /// decision:
 ///
@@ -413,7 +412,6 @@ impl NormalFormProgram {
             .into_iter()
             .map(|scc| scc.into_iter().copied().collect())
             .collect();
-        // 4. refuse if any SCC contains a poisoned edge: THE soundness gate
         stratified_graph.verify_no_cycle(&poison_spans, &sccs)?;
         // 5. collapse the SCCs into the condensation DAG
         let (invert_indices, reduced_graph) = stratified_graph.make_scc_reduced_graph(&sccs)?;
@@ -501,7 +499,6 @@ impl NormalFormProgram {
 
         // 9. mint the stratified tier: the constructor reverses to
         // execution order and proves the entry sits in the final stratum.
-        // That always holds for what this function feeds it: after pruning,
         // every node is reachable from the entry, so in the condensation
         // every non-entry component has an incoming edge (from its
         // predecessor on a path from the entry) while the entry's component
@@ -706,7 +703,6 @@ mod tests {
         }
     }
 
-    /// The execution-order stratum index holding rule `name`, if any.
     fn stratum_of(program: &StratifiedNormalFormProgram, name: &str) -> Option<usize> {
         program
             .strata()
@@ -875,7 +871,6 @@ mod tests {
         Ok(())
     }
 
-    /// The meet exemption is for a head reading *itself*: meet recursion
     /// routed through an intermediary rule is refused, exactly as the
     /// original decided it. (Deliberately preserved upstream behavior.)
     #[test]

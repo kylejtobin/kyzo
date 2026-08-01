@@ -33,7 +33,6 @@ use crate::store::failure::{
 };
 
 /// Closed job-system op sum for `::running` / `::kill` (§82).
-///
 /// Illegal combinations are unconstructable: every variant is exhaustive at
 /// this seat. Dispatch is [`run_job_op`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,7 +63,6 @@ pub enum JobsRefuse {
 }
 
 /// Projector: ephemeral counters → relation rows on the sealed operator door.
-///
 /// Cap-present (`for_operator`) may select quarantine / failure topology.
 /// Cap-absent (`for_tenant`) keeps ephemeral metrics but refuses topology.
 /// Compaction-debt / index-status render from authorities, not ephemeral fields.
@@ -171,7 +169,6 @@ impl OperatorEphemeralRelations {
     }
 
     /// Quarantine-range relation — **Cap required**; Cap-absent refuses (§82).
-    ///
     /// `start` / `end` are memcomparable key bytes as [`DataValue::Bytes`] —
     /// never `Debug` string formatting that loses byte order.
     pub fn quarantine_relation(&self) -> Result<NamedRows, TenantBlindRefuse> {
@@ -329,7 +326,6 @@ mod tests {
             b"q1".to_vec(),
         ));
 
-        // Cap-absent: no path to topology.
         let tenant = OperatorEphemeralRelations::for_tenant(surface.clone(), IndexStatus::empty());
         assert!(!tenant.has_operator_cap());
         assert!(matches!(
@@ -386,7 +382,6 @@ mod tests {
             .map_err(|e| miette!("compose: {e}"))?;
 
         // Open a real write transaction (live Store tx) and register it on the
-        // in-flight registry — the registry is the ::running authority.
         let tx = db
             .store
             .write_tx()

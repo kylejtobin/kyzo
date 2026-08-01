@@ -139,13 +139,11 @@ fn negation_and_named_field_through_public_api() -> Result<()> {
     .map_err(|e| miette!("create: {e}"))?;
 
     // Sources of edges whose reverse is absent: 1↔2 is symmetric (both
-    // excluded); 2→3, 3→4, 4→2 have no reverse, so their sources qualify.
     let neg = db
         .run_script("?[a] := *edge[a, b], not *edge[b, a]", no_params())
         .map_err(|e| miette!("negation query: {e}"))?;
     assert_eq!(int_rows(&neg)?, vec![vec![2], vec![3], vec![4]]);
 
-    // Named-field read binds the `a` column by name; the result is every
     // distinct source vertex.
     let named = db
         .run_script("?[x] := *edge{a: x}", no_params())
@@ -209,7 +207,6 @@ fn compiled_magic_symbols<S: Storage>(db: &Engine<S>, script: &str) -> Result<Ve
 /// leaked demand returns the wrong rows, not merely a slower plan.
 #[test]
 fn magic_sets_demand_matches_naive_oracle_end_to_end() -> Result<()> {
-    // Hand-checked fixpoint on edges 1→2→3→4 plus disconnected 5→6
     // (oracle differential lives in kyzo-trials; crate wall forbids kyzo_oracle here).
     let db = open_engine(SimStorage::new(17))?;
     db.run_script(
@@ -224,7 +221,6 @@ fn magic_sets_demand_matches_naive_oracle_end_to_end() -> Result<()> {
 
     // Demand pattern 1: first argument bound (forward reachability from 1).
     // A rewritten plan carries adorned symbols (`path|Mbf` magic, `path|Ibf`
-    // input, `path|S…` supplementary); a Muggle symbol has no `|adornment`.
     let q1 = format!("{recursive_rule}\n?[d] := path[1, d]");
     let syms1 = compiled_magic_symbols(&db, &q1)?;
     assert!(
@@ -290,7 +286,6 @@ fn pointsto_magic_symbols_are_unadorned() -> Result<()> {
     // variant — issue #68's fix (`AdornedProgram::collapse_ff_redundant_variants`)
     // collapses what sideways information passing would otherwise
     // proliferate into Mff/Mbf/Mbb plus ~20 Input/supplementary
-    // relations, all computing overlapping fragments of the same `pt`.
     assert_eq!(
         syms,
         vec!["?".to_string(), "pt|Mff".to_string()],
@@ -329,22 +324,13 @@ fn transitive_closure_magic_symbols_under_unbound_query() -> Result<()> {
 }
 
 // ── obligation 12: the standing magic-vs-bypass differential (#68) ───────
-//
 // The two diagnostic tests above pin the symbol shape for one program
-// each, by hand. This is that check turned into a permanent, generic
-// differential: a small recursive corpus, each program queried with NO
 // bound arguments, run BOTH through the public `Engine::run_script` path
 // (`magic.rs`'s rewrite included) and through the production bypass
 // door `:disable_magic_rewrite true` on the same facts (every rule
 // exempt → muggle symbols → `stratified_magic_compile` → `bind_for_eval`
 // → `stratified_evaluate` with no adornment) — asserting byte-identical
-// answers (magic-sets law 1) AND the adorned-symbol shape on the magic
-// path, one variant per predicate with no `Input`/`Sup` (magic.rs's
-// fully-free identity theorem). A regression in either direction —
-// wrong answers, or the theorem's cost guarantee — fails here, for any
 // future program added to the corpus, not just points-to.
-//
-// The deleted `bench_api` façade used to host the bypass; that sealed
 // door stays cut. The language option is the honest production twin.
 mod magic_bypass_differential {
     use super::*;

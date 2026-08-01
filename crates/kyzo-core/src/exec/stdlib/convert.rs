@@ -85,7 +85,6 @@ fn f64_bits_to_f32_bits(a: u64) -> u32 {
         let nan_bit = if frac != 0 { 0x0040_0000u32 } else { 0 };
         return sign | 0x7F80_0000 | nan_bit;
     }
-    // Unbias, rebias for f32
     let mut exp32 = exp - 1023 + 127;
     if exp == 0 {
         // ±0 or subnormal → ±0 in f32 (flush)
@@ -129,7 +128,6 @@ fn f64_bits_to_f32_bits(a: u64) -> u32 {
     }
     // Normal number
     let mut mant = frac;
-    // Round: bits below the 23 kept for f32
     let round_bit = (mant >> 28) & 1;
     let sticky = if mant & 0x0FFF_FFFF != 0 { 1u64 } else { 0 };
     mant >>= 29;

@@ -169,10 +169,6 @@ const SEEDED_TC_ROWS: usize = 6;
 /// After retracting edge (3,4): only 1→2→3 remains → three pairs.
 const REDUCED_TC_ROWS: usize = 3;
 
-// ════════════════════════════════════════════════════════════════════════
-// Corpus render helpers — laws::Program → KyzoScript (fixture mint only)
-// ════════════════════════════════════════════════════════════════════════
-
 pub(crate) use crate::gauntlet::Rng;
 
 
@@ -292,9 +288,6 @@ fn gen_program(rng: &mut Rng) -> (Program, Vec<(Rel, usize)>) {
     let n = rng.range(4, 12);
     let with_negation = rng.chance(1, 2);
 
-    // Provenance rejects self-loop derivations (premise == head). Keep the
-    // EDB a strict DAG of forward edges and use edge-step recursion only —
-    // never path⋈path — so honest programs stay Match-able.
     let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
     let n_edges = require(
         i64::try_from(rng.below(require(u64::try_from(n * 3), "n*3 fits u64"))),
@@ -600,7 +593,6 @@ fn verify_matches_across_a_generated_corpus() {
             let arity = match rows.iter().next() {
                 Some(t) => t.len(),
                 None => {
-                    // Empty fact set — zero-arity create.
                     0
                 }
             };
@@ -712,7 +704,6 @@ fn verify_never_matches_the_unstratifiable_corpus() {
                 Ok(rows) if status_of(&rows) == "match" => failures.push(format!(
                     "{name}/{rel}: provenance ::verify silently matched an unstratifiable program"
                 )),
-                // Refuse or non-match — corpus expects no silent green match.
                 Ok(_) | Err(_) => {}
             }
         }
@@ -775,7 +766,6 @@ fn verify_matches_a_point_in_time_historical_read() {
         let rows = require(run_verify(&db, q, ScriptOptions::new()), "::verify historical");
         assert_eq!(match_row_count(&rows), expect, "query {q}");
     }
-    // Ghost-future check: @50 must stay empty even though @200 exists.
     assert_eq!(eval_answer_count(&db, "?[k, v] := *hist[k, v @ 50]"), 0);
 }
 
@@ -907,9 +897,6 @@ fn verify_propagates_a_starved_epoch_ceiling_as_an_ordinary_refusal() {
         summary_of(&refused)
     );
 
-    // Generous arm: eval may itself be large; verify must Match that size
-    // (or refuse for a different reason — but must not soft-green as Match
-    // with a wrong count). Prefer Match against eval when eval completes.
     match db.run_script_with(DENSE_SELF_JOIN_PATH, no_params(), generous.clone()) {
         Ok(eval_rows) => {
             let verified =
@@ -923,8 +910,6 @@ fn verify_propagates_a_starved_epoch_ceiling_as_an_ordinary_refusal() {
             assert_eq!(match_row_count(&verified), eval_rows.rows().len());
         }
         Err(_) => {
-            // Eval itself refused under the generous budget — then verify
-            // must not silently Match either.
             let verified = run_verify(&db, DENSE_SELF_JOIN_PATH, generous);
             if let Ok(rows) = verified {
                 assert_ne!(

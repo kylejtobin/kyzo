@@ -21,7 +21,6 @@ use thiserror::Error;
 
 use kyzo_model::value::{DataValue, Tuple};
 
-/// A row's width does not match the batch arity — refuse, never truncate
 /// with `.take` (P061).
 #[derive(Debug, Error, Diagnostic, PartialEq, Eq)]
 #[error("column batch row width {got} does not match arity {expected}")]

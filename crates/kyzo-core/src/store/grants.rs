@@ -134,11 +134,9 @@ impl KeyMaterialCommitment {
 
 
 /// Sealed registry of predecessor-consent verifying keys keyed by [`StoreId`].
-///
 /// Register at genesis/seal time. [`PredecessorConsentProof::verify`] and
 /// [`materialize`] resolve the trust root by StoreId lookup — never a
 /// caller-supplied verifying key (self-issued consent is Unconstructible).
-///
 /// [`Self::insert`] is operator/genesis-scoped: untrusted or peer input must
 /// never reach it unvalidated. Seal-once per StoreId — first key wins;
 /// same key re-register is idempotent; a different key refuses
@@ -159,7 +157,6 @@ impl PredecessorConsentTable {
     }
 
     /// Register the consent verifying key for a StoreId (operator/genesis door).
-    ///
     /// Invalid ed25519 material refuses. Seal-once per StoreId: first key
     /// wins; same key → idempotent Ok; different key →
     /// [`MaterializeRefuse::TrustRootAlreadySealed`] (never silent overwrite).
@@ -185,7 +182,6 @@ impl PredecessorConsentTable {
 }
 
 /// Opaque sealed evidence that a predecessor consented to a fork payload.
-///
 /// No public free constructor — mint only via [`PredecessorConsentProof::verify`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PredecessorConsentProof {
@@ -197,7 +193,6 @@ pub struct PredecessorConsentProof {
 
 impl PredecessorConsentProof {
     /// Verify an ed25519 consent signature against the sealed table and seal the proof.
-    ///
     /// Resolves the verifying key from `consent_table` for `predecessor_store`
     /// — never accepts a caller-supplied verifying key as the trust root.
     /// Message: `kyzo.fork_consent.v1 || predecessor_store || payload_digest`.
@@ -232,7 +227,6 @@ impl PredecessorConsentProof {
 }
 
 /// Different-principal fork seed — not an event.
-///
 /// Binds GrantId, predecessor StoreId, fork-point root, successor principal,
 /// identity seed, and key-material commitment. Changes nothing about the
 /// original lineage. Materialization is at discovery via [`materialize`].
@@ -250,7 +244,6 @@ pub struct ForkGrant {
 
 impl ForkGrant {
     /// Construct a fork grant seed bound to a verified predecessor consent proof.
-    ///
     /// The proof's predecessor and payload digest must match this grant's sealed
     /// fields; signatureless construction that mints power is condemned.
     pub fn new(
@@ -310,11 +303,9 @@ impl ForkGrant {
 }
 
 /// Opaque sealed evidence that a [`RecoveryMatrix`] FROST quorum signed a payload.
-///
 /// Carries only matrix + payload digests — **no signer identifiers**. The
 /// signer subset is not recoverable from sealed proof bytes (FROST aggregate
 /// is one group signature under the sealed group verifying key).
-///
 /// No public free constructor — mint only via [`RecoveryQuorumProof::verify`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoveryQuorumProof {
@@ -326,7 +317,6 @@ pub struct RecoveryQuorumProof {
 impl RecoveryQuorumProof {
     /// Verify one FROST (RFC 9591 / `frost-ed25519`) aggregate signature against
     /// `matrix` and seal the proof.
-    ///
     /// Message: `kyzo.recovery_quorum.v1 || payload_digest`. Verification uses
     /// the matrix's sealed FROST group verifying key — never an enumerated
     /// N-of-M ed25519 count. Below-threshold or wrong-share aggregates fail
@@ -354,8 +344,6 @@ impl RecoveryQuorumProof {
         message.extend_from_slice(payload_digest.as_bytes().as_slice());
 
         if verifying.verify(message.as_slice(), &signature).is_err() {
-            // Below-threshold / wrong-share / forged aggregate: FROST verify
-            // refuses. Do not distinguish which custodians failed — that would
             // reintroduce signer-subset leakage into the refuse surface.
             return Err(MaterializeRefuse::QuorumInsufficient {
                 have: 0,
@@ -382,7 +370,6 @@ impl RecoveryQuorumProof {
 }
 
 /// Same-principal recovery seed — one-shot quorum under RecoveryMatrix.
-///
 /// Predecessor FenceEpoch in the signed payload. A second valid grant for
 /// one predecessor epoch is quorum equivocation → poison for the signing
 /// set's authority, never a second lineage. Recovery keys are a distinct
@@ -400,7 +387,6 @@ pub struct RecoveryGrant {
 
 impl RecoveryGrant {
     /// Construct a recovery grant seed bound to a verified quorum proof.
-    ///
     /// The proof's payload digest must match this grant's sealed fields;
     /// signatureless construction that mints power is condemned.
     pub fn new(
@@ -462,7 +448,6 @@ pub enum Grant {
 }
 
 /// Pure materialization of a grant seed: successor identity + derivation inputs.
-///
 /// Same grant → same result every time (deterministic, idempotent). Discovery
 /// draws no identity entropy outside the grant seed. Not `Clone`: carries an
 /// affine [`WriteAuthority`].
@@ -526,7 +511,6 @@ pub enum MaterializeRefuse {
     #[diagnostic(code(store::grants::quorum_unverified))]
     QuorumUnverified,
     /// FROST aggregate failed verify (below-threshold, wrong-share, or forged).
-    ///
     /// `have` is not a recovered signer count — sealed proofs carry no signer
     /// subset. Hosts may treat `have == 0` as "aggregate refused".
     #[error(
@@ -551,7 +535,6 @@ pub enum MaterializeRefuse {
     #[diagnostic(code(store::grants::consent_key_unknown))]
     ConsentKeyUnknown,
     /// StoreId already has a sealed trust root; a different key cannot overwrite it.
-    ///
     /// First registration wins. Same key re-register is idempotent Ok on
     /// [`PredecessorConsentTable::insert`]. Rotation is a separate explicit
     /// verb — never silent overwrite via insert.
@@ -561,7 +544,6 @@ pub enum MaterializeRefuse {
     #[diagnostic(code(store::grants::trust_root_already_sealed))]
     TrustRootAlreadySealed { store_id: StoreId },
     /// Second distinct RecoveryGrant for one predecessor epoch — quorum equivocation poison.
-    ///
     /// Never a second WriteAuthority / second lineage. Distinct from
     /// [`GrantAlreadyMaterialized`] (same-grant rediscovery mismatch) and from
     /// quorum verification / threshold refuses.
@@ -635,7 +617,6 @@ impl PriorMaterialization {
         }
     }
 
-    /// Grant id.
     pub fn grant_id(self) -> GrantId {
         self.grant_id
     }
@@ -648,7 +629,6 @@ impl PriorMaterialization {
 
 /// Host-side one-shot ledger: which RecoveryGrant already materialized for each
 /// predecessor [`FenceEpoch`] (binds [`StoreId`]).
-///
 /// Pure [`materialize`] consults this evidence; a second distinct RecoveryGrant
 /// naming the same predecessor epoch refuses
 /// [`MaterializeRefuse::QuorumEquivocationPoison`] — never a second lineage.
@@ -667,11 +647,9 @@ impl PriorRecoveryTable {
     }
 
     /// Record that recovery already materialized for `predecessor_epoch`.
-    ///
     /// Requires a [`MaterializedGrant`] witness — proof recovery actually
     /// materialized. A bare fabricated [`GrantId`] cannot occupy the one-shot
     /// slot (closes pre-squat grief via [`MaterializeRefuse::QuorumEquivocationPoison`]).
-    ///
     /// Idempotent for the same grant. A distinct grant for the same predecessor
     /// epoch refuses [`MaterializeRefuse::QuorumEquivocationPoison`].
     pub fn record(
@@ -717,14 +695,11 @@ impl PriorRecoveryTable {
 }
 
 /// Pure / deterministic / idempotent materialization of a grant seed.
-///
 /// Same grant → same successor StoreId and derivation inputs every time.
 /// Discovery draws **no** identity entropy outside the grant seed.
-///
 /// When `prior` names this grant:
 /// - matching successor → converge (return the same materialization again);
 /// - mismatched successor → [`MaterializeRefuse::GrantAlreadyMaterialized`].
-///
 /// Original lineage continues untouched (ForkGrant) and only when the grant
 /// carries a verified [`PredecessorConsentProof`] for the named predecessor
 /// whose verifying key is resolved from `consent_table` (never caller-supplied).
@@ -810,7 +785,6 @@ fn materialize_recovery(
     if recovery.quorum_proof().matrix_digest() != &recovery_matrix_digest(matrix)? {
         return Err(MaterializeRefuse::QuorumUnverified);
     }
-    // One-shot quorum: a second distinct RecoveryGrant for this predecessor
     // epoch is equivocation poison — never a second WriteAuthority lineage.
     if let Some(table) = prior_recovery
         && let Some(first_grant) = table.shot_for(recovery.store_id(), recovery.predecessor_epoch())
@@ -842,11 +816,9 @@ fn materialize_recovery(
 }
 
 /// Sealed registry of ancestor-decrypt entitlement verifying keys keyed by [`StoreId`].
-///
 /// Register at genesis/seal time. [`AncestorEntitlementProof::verify`] and
 /// [`AncestorReadGrant::new`] resolve the trust root by StoreId lookup — never a
 /// caller-supplied verifying key (self-issued decrypt-scope is Unconstructible).
-///
 /// [`Self::insert`] is operator/genesis-scoped: untrusted or peer input must
 /// never reach it unvalidated. Seal-once per StoreId — first key wins;
 /// same key re-register is idempotent; a different key refuses
@@ -867,7 +839,6 @@ impl AncestorEntitlementTable {
     }
 
     /// Register the entitlement verifying key for a StoreId (operator/genesis door).
-    ///
     /// Invalid ed25519 material refuses. Seal-once per StoreId: first key
     /// wins; same key → idempotent Ok; different key →
     /// [`AncestorReadRefuse::TrustRootAlreadySealed`] (never silent overwrite).
@@ -893,7 +864,6 @@ impl AncestorEntitlementTable {
 }
 
 /// Opaque sealed evidence that a sealed entitlement key authorized ancestor decrypt-scope.
-///
 /// No public free constructor — mint only via [`AncestorEntitlementProof::verify`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AncestorEntitlementProof {
@@ -905,7 +875,6 @@ pub struct AncestorEntitlementProof {
 
 impl AncestorEntitlementProof {
     /// Verify an ed25519 entitlement signature against the sealed table and seal the proof.
-    ///
     /// Resolves the verifying key from `entitlement_table` for `store_id` — never
     /// accepts a caller-supplied verifying key as the trust root.
     /// Message: `kyzo.ancestor_entitlement.v1 || store_id || payload_digest`.
@@ -940,7 +909,6 @@ impl AncestorEntitlementProof {
 }
 
 /// Ancestor-epoch plaintext read grant — O(epochs) rewrap.
-///
 /// Cross-fork foreign-CryptoDomain plaintext is Unconstructible.
 /// AuditKey ≠ AncestorReadGrant ≠ decrypt ≠ WriteAuthority.
 /// Carries a verified [`AncestorEntitlementProof`] — signatureless mint is Unconstructible.
@@ -977,7 +945,6 @@ pub enum AncestorReadRefuse {
     #[diagnostic(code(store::grants::entitlement_mismatch))]
     EntitlementMismatch,
     /// StoreId already has a sealed trust root; a different key cannot overwrite it.
-    ///
     /// First registration wins. Same key re-register is idempotent Ok on
     /// [`AncestorEntitlementTable::insert`]. Rotation is a separate explicit
     /// verb — never silent overwrite via insert.
@@ -998,7 +965,6 @@ pub enum AncestorReadRefuse {
 
 impl AncestorReadGrant {
     /// Seal an O(epochs) rewrap grant bound to verified sealed entitlement evidence.
-    ///
     /// Resolves the trust root from `entitlement_table` for `store_id` — never a
     /// caller-supplied verifying key. The proof's store and payload digest must
     /// match this grant's sealed fields; signatureless construction is Unconstructible.
@@ -1579,7 +1545,6 @@ use miette::{IntoDiagnostic, Result, miette};
 
 /// Test-only: mint a FROST 2-of-3 recovery matrix + one aggregate signature
 /// over the quorum domain via `frost-ed25519` (trusted dealer + threshold sign).
-///
 /// Real threshold crypto only — never home-rolled share counting.
 #[cfg(test)]
 pub(crate) fn frost_sign_recovery_quorum(
@@ -1590,7 +1555,6 @@ pub(crate) fn frost_sign_recovery_quorum(
 }
 
 /// Test-only FROST dealer → aggregate over `kyzo.recovery_quorum.v1 || payload`.
-///
 /// `participating` must be ≥ `min_signers` for a valid aggregate; callers that
 /// want a below-threshold attempt should use [`frost_try_aggregate_below_threshold`].
 #[cfg(test)]
@@ -1673,7 +1637,6 @@ fn frost_recovery_aggregate(
 }
 
 /// Test-only: attempt FROST aggregate with fewer than min_signers signature shares.
-///
 /// Round1 commitments cover `min_signers` so the SigningPackage is well-formed
 /// and round2 can produce shares; aggregate then receives a strict subset of
 /// those shares and must return `Err` (below-threshold refuse — no panic).
@@ -1834,11 +1797,9 @@ mod tests {
     use crate::store::authority::RecoveryMatrix;
 
     // ---- Hostile-peer verify gates (#376) ----------------------------------
-    // ed25519-dalek: VerifyingKey::from_bytes accepts small-order keys; only
     // verify_strict refuses the identity-R / S=0 forgery. Fork consent and
     // ancestor entitlement doors use verify_strict (a5be07a).
     // FROST recovery: frost-ed25519 Group::deserialize rejects identity and
-    // non-torsion-free points, so a dalek-style degenerate group key cannot
     // seal RecoveryMatrix / reach RecoveryQuorumProof::verify — see seat 2
     // (frost verify strict by construction). Forged aggregates against a
     // sealed matrix still refuse at the production verify door.
@@ -1923,7 +1884,6 @@ mod tests {
         );
         Ok(())
     }
-    // -----------------------------------------------------------------------
 
     /// Nasty: victim StoreId+epoch grant with empty/forged/wrong-matrix FROST
     /// aggregate must not mint WriteAuthority.
@@ -1956,8 +1916,6 @@ mod tests {
             Err(MaterializeRefuse::QuorumInsufficient { have: 0, need: 2 })
         );
 
-        // Below-threshold share set cannot form a FROST aggregate (production
-        // frost::aggregate door) — wrong-share / short quorum is refuse.
         assert!(
             frost_try_aggregate_below_threshold([0xA1; 32], &payload).is_err(),
             "below-threshold FROST aggregate must refuse at frost-ed25519 aggregate"
@@ -2148,7 +2106,6 @@ mod tests {
 
     /// Nasty: fabricated GrantId cannot pre-squat the predecessor-epoch one-shot
     /// and grief legitimate quorum-materialized recovery via QuorumEquivocationPoison.
-    ///
     /// `PriorRecoveryTable::record` is witness-bound ([`MaterializedGrant`]); a
     /// bare fabricated id has no path into the ledger, so the legitimate recovery
     /// still materializes.
@@ -2278,7 +2235,6 @@ mod tests {
             Err(MaterializeRefuse::ConsentMismatch)
         );
 
-        // Cross-stream: attacker signs a real consent for the victim under a
         // *different* payload (forged lineage fields), then tries to attach it
         // to the victim-named grant — construction and materialize refuse.
         let forged_lineage_payload = fork_grant_payload_digest(
@@ -2349,7 +2305,6 @@ mod tests {
             Err(MaterializeRefuse::ConsentKeyUnknown)
         );
 
-        // Cross-stream: attacker seals a proof against a *private* table that
         // binds their own key to the victim StoreId, then materializes against
         // the real sealed store table — key_id mismatch must refuse.
         let mut attacker_table = PredecessorConsentTable::new();
@@ -2586,7 +2541,6 @@ mod tests {
             Err(AncestorReadRefuse::EntitlementKeyUnknown)
         );
 
-        // Cross-stream: attacker seals a proof against a *private* table that
         // binds their own key to the victim StoreId, then constructs against
         // the real sealed store table — key_id mismatch must refuse.
         let mut attacker_table = AncestorEntitlementTable::new();

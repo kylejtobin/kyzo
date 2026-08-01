@@ -38,7 +38,6 @@ use std::fmt::Debug;
 use std::iter;
 use std::sync::Arc;
 
-/// Seats for [`StoredRA::prefix_join_batched`] (tx stays a separate door arg).
 pub(crate) struct StoredPrefixJoinBatched<'a> {
     pub(crate) left: BatchIter<'a>,
     pub(crate) join_indices: (Vec<usize>, Vec<usize>),
@@ -50,7 +49,6 @@ pub(crate) struct StoredPrefixJoinBatched<'a> {
 
 /// A scan of a stored relation at the current time, through the landed
 /// scan surface of `runtime/relation.rs` (every method takes the
-/// transaction to read; see that module's routing note for temp
 /// relations).
 #[derive(Debug)]
 pub struct StoredRA {
@@ -72,7 +70,6 @@ impl StoredRA {
     /// order, grouped into batches. A facts keyspace resolves
     /// bitemporally (its as-of scan seeks, so it cannot be fed a flat raw
     /// byte stream) and its resolved rows are flattened into batches; the
-    /// zero-mint raw path remains for algorithm-state keyspaces, and
     /// extending it to as-of resolution needs a raw seek scan on the
     /// storage contract — the columnar leg's next contract change.
     pub(crate) fn iter_batched<'a>(
@@ -112,14 +109,12 @@ impl StoredRA {
     }
 
     /// The session's current-state segment for this relation at THIS
-    /// snapshot's generation — served if [`Generation::classify`] keeps
     /// the sealed handle, built and installed on a STABLE miss (the build
     /// pays the same storage scan the read would have paid, plus one dense
     /// flatten; every subsequent scan at the same generation skips LSM
     /// iteration and memcmp decode entirely).
     ///
     /// `None` on any decline: either [`Segment::build`]'s (the relation is
-    /// too large for the `u32` offset encoding) or
     /// [`SegmentEngine::should_build`]'s (this miss hasn't yet proven the
     /// generation is holding still). Either way the caller falls back to
     /// an unsegmented scan or point probe. That `Option` is acceleration
@@ -155,7 +150,6 @@ impl StoredRA {
     /// segment when `segments` carries an engine: the point-lookup case and
     /// the plain (unbounded) prefix case both become a binary search over
     /// the dense decoded buffer instead of a bitemporal seek — see
-    /// [`segment_at`](Self::segment_at) for the once-per-instantiation
     /// generation/build (so the probe loop itself pays zero synchronization)
     /// and `engines/segments.rs`'s module docs for why a served segment is
     /// current-state-sound. The BOUNDED prefix case (residual filter bounds
@@ -496,7 +490,6 @@ impl StoredWithValidityRA {
 // Issue #82: the rebuild gate (`engines/segments.rs`'s `should_build`),
 // exercised through the real `StoredRA::iter_batched` production path
 // rather than the engine in isolation — proving the gate's contract holds
-// for the code the OLTP mixed-op caller actually runs, not just its
 // building block.
 // ─────────────────────────────────────────────────────────────────────────
 #[cfg(test)]
@@ -732,7 +725,6 @@ mod segment_gate_tests {
     /// read-runs of varying length (so both the gated-out fallback and the
     /// built-and-served path are exercised many times, in an order neither
     /// this test nor the gate controls), a segment-context read must be
-    /// byte-identical to a segments-off read, and both must match an
     /// independently maintained model — never a run of the same machine
     /// checked against itself.
     #[test]

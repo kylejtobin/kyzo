@@ -106,18 +106,15 @@
 //!
 //! **Essence**: compilation turns a *proven program* (the
 //! [`StratifiedMagicProgram`] tier — stratified, demand-rewritten, entry
-//! proven present) into an *executable plan* — for each rule, a left-deep
 //! tree of relational-algebra operators (`query/ra.rs`) whose iteration IS
 //! the rule's evaluation. [`compile_magic_rule_body`] walks the rule's
 //! body atoms in order, growing the tree left-to-right: each atom either
 //! joins a new row source onto everything bound so far (rule stores,
 //! stored relations, index scans), filters (predicates, negation), or
 //! appends a computed column (unification). Variables seen earlier join by
-//! name; fresh right-side symbols are generated for repeats so the joiner
 //! is always positional underneath. After the walk, dead columns are
 //! eliminated, the head's symbols are proven bound (an unbound head symbol
 //! is a typed refusal), and the columns are reordered to the head — so the
-//! plan's output frame equals the rule head, position for position.
 //!
 //! Index selection: a stored-relation atom consults
 //! `RelationHandle::choose_index` with each argument position's use
@@ -159,7 +156,6 @@ use kyzo_model::program::symbol::{Symbol, SymbolKind};
 use kyzo_model::value::DataValue;
 
 /// How the compile tier uses each argument position of a stored-relation
-/// atom, for index selection. Owns [`RelationHandle::choose_index`] so the
 /// catalog seat does not import this type (avoids a session↔exec cycle).
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum IndexPositionUse {
@@ -230,8 +226,6 @@ impl RelationHandle {
         chosen
     }
 
-    /// Resolve the `IndexKind::Temporal` posting index for a `Valid`-axis
-    /// `@delta` clause, if this relation has one attached — story #62
     /// chunk 4's read-side seam. `None` for every other clause shape
     /// (`@delta_sys`, `@spans`, a plain read, or a `Valid`-axis `@delta` whose
     /// base relation has no posting index yet): `DeltaRA::iter_batched` falls
@@ -418,7 +412,6 @@ impl MagicInlineRule {
     ///
     /// A negated occurrence's entry is never actually selected for delta
     /// narrowing in practice — negation always reads totals
-    /// (`NegJoin::iter_batched` never consults `delta_from` for its own
     /// right side), and stratification guarantees a negated dependency is
     /// complete strictly below, so its delta is empty by the time this
     /// body runs and `eval.rs`'s dispatch loop skips it (`!has_delta()`).
@@ -898,7 +891,6 @@ impl MagicInlineRule {
                     ret = ret.filter(p.clone())?;
                 }
                 MagicAtom::Search(sa) => {
-                    // Join semantics for an already-bound output column: the
                     // search emits into a fresh variable and an equality filter
                     // joins it to the existing binding — the same discipline as
                     // a repeated variable in a relation application.

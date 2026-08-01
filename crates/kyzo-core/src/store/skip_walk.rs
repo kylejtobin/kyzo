@@ -10,7 +10,6 @@
 //! The bitemporal skip-scan walk — ONE implementation, generic over the
 //! backend's seek primitive, driving a SINGLE positioned cursor across the
 //! whole scan rather than reopening a fresh range per version step. This
-//! module previously drove `storage/fjall.rs`, `storage/temp.rs`, and
 //! `storage/sim.rs` through a stateless `seek_first(lower, upper)` seam
 //! that each backend implemented by opening a brand-new bounded range and
 //! taking its first item — cheap for `temp`/`sim`'s `BTreeMap`, but on
@@ -20,9 +19,7 @@
 //! every single version step even though the fact being resolved rarely
 //! changes. The walk over `data::bitemporal::check_key_for_bitemporal`
 //! (the resolution kernel this module never reimplements, only calls) is
-//! unchanged: seek to the next candidate key, peek its polarity from its
 //! value, let the kernel decide (emit or not) and hand back the next seek
-//! bound, then advance strictly past the key just examined — a corrupt
 //! key or value surfaces as `Err` WITHOUT advancing, so a scan cannot
 //! step over bytes it could not judge.
 //!
@@ -57,7 +54,6 @@
 //! `open_skip_cursor` runs once, never once per version.
 //!
 //! Degenerate bounds (`lower >= upper`) never reach a cursor at all:
-//! [`SkipWalk::next`]'s own loop guard (below) returns `None` before ever
 //! calling `seek` when `next_bound >= upper`, so `open_skip_cursor` and
 //! `seek` are free to assume a well-formed, non-empty range.
 //!
@@ -69,7 +65,6 @@
 //! `FjallSkipCursor` → `fjall::SeekIter` / `TrackedSeekIter::seek` (see
 //! `store/fjall.rs`). Bitemporal skip walks and the Leapfrog Triejoin
 //! first cut ([`leapfrog_intersect_3`]) both consume this seam. Drop+rebuild
-//! as the sole join/scan advance is deleted law (decisions.md seat 99).
 //!
 //! ## The walk (`SkipWalk`)
 //!
@@ -83,7 +78,6 @@
 //! 2. Calls `cursor.seek(&next_bound)`. `None` ends the scan;
 //!    `Some(Err(e))` surfaces the error WITHOUT moving `next_bound` — the
 //!    next poll re-seeks the identical (already-known-bad) range and
-//!    re-yields the same error, so a caller that keeps polling past an
 //!    `Err` cannot silently skip bytes it never judged.
 //! 3. Peeks the row's [`ClaimPolarity`](crate::store::time::ClaimPolarity)
 //!    from its value (`claim_polarity_of_value`) and hands `(key, polarity,
@@ -114,11 +108,9 @@
 //!
 //! **`storage/fjall.rs`**: `FjallSkipCursor<S>` wraps either seek-iterator
 //! fjall hands back — a read tx's `fjall::SeekIter` (itself a thin
-//! `SnapshotNonce`-holding wrapper around `lsm_tree::SeekableRangeIter`,
 //! whose `Standard` arm is the real `TreeIter`), or a write tx's
 //! `fjall::TrackedSeekIter`, which additionally records each `seek` step's
 //! SSI read-conflict span (precise per step, promoted to one covering
-//! mark past a step-count threshold). `open_skip_cursor` guards `lower >=
 //! upper` itself (never letting an inverted range reach fjall's conflict
 //! manager, which panics on one at commit — the same guard `raw_range`
 //! already applies to the plain range-scan path) and otherwise calls
@@ -129,7 +121,6 @@
 //! fixed upper bound; `seek` is `self.map.range((Included(target),
 //! Excluded(upper))).next()` — a fresh `Range` per call, which for a
 //! `BTreeMap` already is the real O(log n) seek this walk needs (there is
-//! no stable-Rust primitive to hold a `BTreeMap` cursor across calls
 //! cheaper than this).
 //!
 //! **`storage/sim.rs`**: `open_skip_cursor` itself does nothing — there is
@@ -138,7 +129,6 @@
 //! is fidelity, not speed: `SimReadSkipCursor`/`SimWriteSkipCursor` keep
 //! doing the DST bookkeeping (`ctx.yield_turn()`, `ctx.check_read_fault(..)`,
 //! `track_range(..)` for the write side) ONCE PER SEEK STEP, inside
-//! `seek`, exactly as the old per-step `seek_first` did — collapsing it
 //! into `open_skip_cursor` would silently narrow the fault-injection and
 //! scheduling-interleaving surface the sim exists to stress down to one
 //! decision point per walk instead of one per version step.
@@ -155,7 +145,6 @@ use kyzo_model::value::Tuple;
 /// rather than rebuilt. `target` is always non-decreasing across calls on
 /// the same cursor (the walk only ever moves forward); a cursor may
 /// assume this and is never asked to seek backward.
-///
 /// This is the Store live-seek primitive the Free-Join / LFTJ evaluator
 /// path consumes (seat 99). Production fjall wiring:
 /// [`crate::store::fjall::FjallSkipCursor`].
@@ -240,7 +229,6 @@ impl<C: SkipCursor> SkipWalk<C> {
 /// current honest kernel exercises; [`advance_past`] is tested directly,
 /// as its own law, precisely because that unreachability is a property of
 /// today's algebra, not a proof obligation this driver gets to assume.
-///
 /// `candidate_bound` is trusted ONLY if it strictly exceeds `examined`;
 /// otherwise the byte-successor of `examined` (`examined ++ 0x00`, the
 /// smallest key strictly greater under memcmp order) is the unconditional
@@ -258,7 +246,6 @@ fn advance_past(examined: &[u8], candidate_bound: Vec<u8>) -> Vec<u8> {
 /// Leapfrog Triejoin first cut: intersect three ordered unary relations
 /// by live [`SkipCursor::seek`] (Ngo/Veldhuizen LFTJ leapfrog on one
 /// variable). Emits keys present in all three, in memcmp order.
-///
 /// This is the executable Free-Join milestone (seat 99) — not a planner
 /// replacement, not an AGM-triangle CI theorem. Full Free-Join (binary +
 /// WCOJ unification) remains `[research-open]`.
@@ -398,7 +385,6 @@ mod tests {
 
     const REL: RelationId = match RelationId::new(9) {
         Some(id) => id,
-        //  9 < CAP is a static fact; diverging arm keeps the expect-meter off.
         None => loop {},
     };
 
@@ -633,7 +619,6 @@ mod tests {
                 }
             }
             assert!(saw_err, "hostile bytes must surface as a typed Err");
-            // Polling again re-yields (does not silently move past) the error.
             assert!(w.next().ok_or_else(|| miette!("walk next"))?.is_err());
         }
 

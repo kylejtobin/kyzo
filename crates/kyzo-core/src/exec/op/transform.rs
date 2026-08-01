@@ -101,7 +101,6 @@ impl ReorderRA {
 
 /// Keep only tuples satisfying every compiled predicate.
 ///
-/// One owner for residual filters: binding indices are filled in place
 /// (`fill_binding_indices_and_compile`); evaluation reads the same field.
 pub struct FilteredRA {
     pub parent: Box<RelAlgebra>,

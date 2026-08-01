@@ -671,7 +671,6 @@ fn add_vecs(args: &[DataValue]) -> Result<DataValue> {
 }
 
 fn mul_vecs(args: &[DataValue]) -> Result<DataValue> {
-    // CozoDB originally recursed into `add_vecs` here (`v1*v2*v3` → `(v1+v2)*v3`).
     // Fixed to recurse into multiplication; deliberate deviation.
     fold_vecs(
         "mul",

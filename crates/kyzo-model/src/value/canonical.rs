@@ -538,21 +538,29 @@ pub proof fn lemma_bytes_prefix_free(s: Seq<u8>, t: Seq<u8>)
 /// Where the escaped body in `p` ends: the first `0x00 0x00`. This is the
 /// reader of [`enc_bytes`], and it is exact because [`esc`] never emits that
 /// pair, so the terminator `enc_bytes` appends is the first one this meets.
-pub open spec fn delim_end(p: Seq<u8>) -> int
+/// Adds `k` to a reading. `None` propagates.
+pub open spec fn after(r: Option<nat>, k: nat) -> Option<nat> {
+    match r {
+        Some(n) => Some((n + k) as nat),
+        None => None,
+    }
+}
+
+pub open spec fn delim_end(p: Seq<u8>) -> Option<nat>
     decreases p.len()
 {
-    if p.len() < 2 { -1 }
+    if p.len() < 2 { None }
     else if p[0] == STRUCT_ESC {
-        if p[1] == STRUCT_ESC { 2 }
-        else if p[1] == 0xFFu8 { let r = delim_end(p.skip(2)); if r < 0 { -1 } else { 2 + r } }
-        else { -1 }
+        if p[1] == STRUCT_ESC { Some(2nat) }
+        else if p[1] == 0xFFu8 { after(delim_end(p.skip(2)), 2nat) }
+        else { None }
     } else {
-        let r = delim_end(p.skip(1)); if r < 0 { -1 } else { 1 + r }
+        after(delim_end(p.skip(1)), 1nat)
     }
 }
 
 pub proof fn lemma_delim_bounded(p: Seq<u8>)
-    ensures delim_end(p) >= 0 ==> 2 <= delim_end(p) <= p.len()
+    ensures match delim_end(p) { Some(n) => 2 <= n <= p.len(), None => true }
     decreases p.len()
 {
     if p.len() >= 2 {
@@ -567,7 +575,7 @@ pub proof fn lemma_delim_bounded(p: Seq<u8>)
 /// LOCALITY for the escaped body: the terminator is inside the body, so bytes
 /// after it cannot move it.
 pub proof fn lemma_delim_local(a: Seq<u8>, b: Seq<u8>)
-    requires is_prefix(a, b), 0 <= delim_end(a) <= a.len()
+    requires is_prefix(a, b), delim_end(a) is Some
     ensures delim_end(b) == delim_end(a)
     decreases a.len()
 {
@@ -587,7 +595,7 @@ pub proof fn lemma_delim_local(a: Seq<u8>, b: Seq<u8>)
 
 /// The escaped form measures itself exactly.
 pub proof fn lemma_delim_end_of_enc_bytes(s: Seq<u8>)
-    ensures delim_end(enc_bytes(s)) == enc_bytes(s).len()
+    ensures delim_end(enc_bytes(s)) == Some(enc_bytes(s).len() as nat)
     decreases s.len()
 {
     let q = enc_bytes(s);
@@ -826,29 +834,37 @@ pub open spec fn shape_sz(s: Shape) -> nat
 
 /// Where the shape ends in `p`, or negative if `p` does not open with one.
 /// Total: every shape and every byte sequence has an answer, never a panic.
-pub open spec fn shape_end(g: Branches, s: Shape, p: Seq<u8>) -> int
+pub open spec fn shape_end(g: Branches, s: Shape, p: Seq<u8>) -> Option<nat>
     decreases p.len(), shape_sz(s)
 {
     match s {
-        Shape::Fixed(n) => if p.len() >= n { n as int } else { -1 },
+        Shape::Fixed(n) => if p.len() >= n { Some(n as nat) } else { None },
         Shape::Delimited => delim_end(p),
         Shape::Product(a, b) => {
-            let j = shape_end(g, *a, p);
-            if j < 0 || j > p.len() { -1 } else {
-                let k = shape_end(g, *b, p.skip(j));
-                if k < 0 { -1 } else { j + k }
+            match shape_end(g, *a, p) {
+                None => None,
+                // `j > p.len()` cannot arise — `lemma_shape_bounded` proves it —
+                // but a spec function cannot invoke a lemma, and without the
+                // bound Verus cannot show `p.skip(j)` shrinks.
+                Some(j) => if j > p.len() { None } else {
+                    after(shape_end(g, *b, p.skip(j as int)), j)
+                }
             }
         }
         Shape::Sum(bs) => sum_end(g, *bs, p),
         Shape::Tagged => sum_end(g, g, p),
         Shape::Row(e) => {
-            if p.len() == 0 { -1 }
-            else if p[0] == STRUCT_END { 1 }
+            if p.len() == 0 { None }
+            else if p[0] == STRUCT_END { Some(1nat) }
             else {
-                let j = shape_end(g, *e, p);
-                if j <= 0 || j > p.len() { -1 } else {
-                    let r = shape_end(g, Shape::Row(e), p.skip(j));
-                    if r < 0 { -1 } else { j + r }
+                match shape_end(g, *e, p) {
+                    None => None,
+                    // Both bounds are termination conditions, not validation.
+                    // `j == 0` leaves `p.skip(0) == p`, so the measure does not
+                    // fall; `j > p.len()` leaves `p.skip(j)` unconstrained.
+                    Some(j) => if j == 0 || j > p.len() { None } else {
+                        after(shape_end(g, Shape::Row(e), p.skip(j as int)), j)
+                    }
                 }
             }
         }
@@ -856,14 +872,14 @@ pub open spec fn shape_end(g: Branches, s: Shape, p: Seq<u8>) -> int
 }
 
 /// One lead byte selects a branch of `bs`, which reads what follows it.
-pub open spec fn sum_end(g: Branches, bs: Branches, p: Seq<u8>) -> int
+pub open spec fn sum_end(g: Branches, bs: Branches, p: Seq<u8>) -> Option<nat>
     decreases p.len(), 0nat
 {
-    if p.len() == 0 { -1 }
+    if p.len() == 0 { None }
     else {
         match branch_of(bs, p[0]) {
-            None => -1,
-            Some(t) => { let r = shape_end(g, t, p.skip(1)); if r < 0 { -1 } else { 1 + r } }
+            None => None,
+            Some(t) => after(shape_end(g, t, p.skip(1)), 1nat),
         }
     }
 }
@@ -925,23 +941,27 @@ pub open spec fn wf_grammar(g: Branches) -> bool { keys_marked(g) && wf_branches
 // --- boundedness and locality, by structural induction ---
 
 pub proof fn lemma_shape_bounded(g: Branches, s: Shape, p: Seq<u8>)
-    ensures shape_end(g, s, p) >= 0 ==> shape_end(g, s, p) <= p.len()
+    ensures match shape_end(g, s, p) { Some(n) => n <= p.len(), None => true }
     decreases p.len(), shape_sz(s)
 {
     match s {
         Shape::Delimited => { lemma_delim_bounded(p); }
         Shape::Product(a, b) => {
             lemma_shape_bounded(g, *a, p);
-            let j = shape_end(g, *a, p);
-            if 0 <= j <= p.len() { lemma_shape_bounded(g, *b, p.skip(j)); }
+            match shape_end(g, *a, p) {
+                Some(j) => { lemma_shape_bounded(g, *b, p.skip(j as int)); }
+                None => {}
+            }
         }
         Shape::Sum(bs) => { lemma_sum_bounded(g, *bs, p); }
         Shape::Tagged => { lemma_sum_bounded(g, g, p); }
         Shape::Row(e) => {
             if p.len() > 0 && p[0] != STRUCT_END {
                 lemma_shape_bounded(g, *e, p);
-                let j = shape_end(g, *e, p);
-                if 0 < j <= p.len() { lemma_shape_bounded(g, Shape::Row(e), p.skip(j)); }
+                match shape_end(g, *e, p) {
+                    Some(j) => { if j > 0 { lemma_shape_bounded(g, Shape::Row(e), p.skip(j as int)); } }
+                    None => {}
+                }
             }
         }
         _ => {}
@@ -949,7 +969,7 @@ pub proof fn lemma_shape_bounded(g: Branches, s: Shape, p: Seq<u8>)
 }
 
 pub proof fn lemma_sum_bounded(g: Branches, bs: Branches, p: Seq<u8>)
-    ensures sum_end(g, bs, p) >= 0 ==> 1 <= sum_end(g, bs, p) <= p.len()
+    ensures match sum_end(g, bs, p) { Some(n) => 1 <= n <= p.len(), None => true }
     decreases p.len(), 0nat
 {
     if p.len() > 0 {
@@ -967,7 +987,7 @@ pub proof fn lemma_sum_bounded(g: Branches, bs: Branches, p: Seq<u8>)
 /// of [`wf_shape`]: lead-marking is what makes a reading unique, not what makes
 /// it local.
 pub proof fn lemma_shape_local(g: Branches, s: Shape, a: Seq<u8>, b: Seq<u8>)
-    requires is_prefix(a, b), 0 <= shape_end(g, s, a) <= a.len()
+    requires is_prefix(a, b), shape_end(g, s, a) is Some
     ensures shape_end(g, s, b) == shape_end(g, s, a)
     decreases a.len(), shape_sz(s)
 {
@@ -975,11 +995,15 @@ pub proof fn lemma_shape_local(g: Branches, s: Shape, a: Seq<u8>, b: Seq<u8>)
         Shape::Delimited => { lemma_delim_local(a, b); }
         Shape::Product(x, y) => {
             lemma_shape_bounded(g, *x, a);
-            let j = shape_end(g, *x, a);
-            lemma_shape_local(g, *x, a, b);
-            lemma_prefix_skip(a, b, j);
-            lemma_shape_bounded(g, *y, a.skip(j));
-            lemma_shape_local(g, *y, a.skip(j), b.skip(j));
+            match shape_end(g, *x, a) {
+                Some(j) => {
+                    lemma_shape_local(g, *x, a, b);
+                    lemma_prefix_skip(a, b, j as int);
+                    lemma_shape_bounded(g, *y, a.skip(j as int));
+                    lemma_shape_local(g, *y, a.skip(j as int), b.skip(j as int));
+                }
+                None => {}
+            }
         }
         Shape::Sum(bs) => { lemma_sum_local(g, *bs, a, b); }
         Shape::Tagged => { lemma_sum_local(g, g, a, b); }
@@ -987,11 +1011,15 @@ pub proof fn lemma_shape_local(g: Branches, s: Shape, a: Seq<u8>, b: Seq<u8>)
             lemma_prefix_index(a, b, 0);
             if a[0] != STRUCT_END {
                 lemma_shape_bounded(g, *e, a);
-                let j = shape_end(g, *e, a);
-                lemma_shape_local(g, *e, a, b);
-                lemma_prefix_skip(a, b, j);
-                lemma_shape_bounded(g, Shape::Row(e), a.skip(j));
-                lemma_shape_local(g, Shape::Row(e), a.skip(j), b.skip(j));
+                match shape_end(g, *e, a) {
+                    Some(j) => {
+                        lemma_shape_local(g, *e, a, b);
+                        lemma_prefix_skip(a, b, j as int);
+                        lemma_shape_bounded(g, Shape::Row(e), a.skip(j as int));
+                        lemma_shape_local(g, Shape::Row(e), a.skip(j as int), b.skip(j as int));
+                    }
+                    None => {}
+                }
             }
         }
         _ => {}
@@ -999,7 +1027,7 @@ pub proof fn lemma_shape_local(g: Branches, s: Shape, a: Seq<u8>, b: Seq<u8>)
 }
 
 pub proof fn lemma_sum_local(g: Branches, bs: Branches, a: Seq<u8>, b: Seq<u8>)
-    requires is_prefix(a, b), 0 <= sum_end(g, bs, a) <= a.len()
+    requires is_prefix(a, b), sum_end(g, bs, a) is Some
     ensures sum_end(g, bs, b) == sum_end(g, bs, a)
     decreases a.len(), 0nat
 {
@@ -1081,26 +1109,26 @@ pub proof fn theorem_grammar_wf()
 pub open spec fn tag_shape(t: u8) -> Option<Shape> { branch_of(grammar(), t) }
 
 /// Where tag `t`'s body ends in `p`.
-pub open spec fn body_end(t: u8, p: Seq<u8>) -> int {
+pub open spec fn body_end(t: u8, p: Seq<u8>) -> Option<nat> {
     match tag_shape(t) {
         Some(sh) => shape_end(grammar(), sh, p),
-        None => -1,
+        None => None,
     }
 }
 
 /// A body the tag's shape measures exactly: the kind's mint produced it.
-pub open spec fn valid_body(t: u8, k: Seq<u8>) -> bool { body_end(t, k) == k.len() }
+pub open spec fn valid_body(t: u8, k: Seq<u8>) -> bool { body_end(t, k) == Some(k.len() as nat) }
 
 /// A tag whose body is a row of values.
 pub open spec fn is_row_tag(t: u8) -> bool { tag_shape(t) == Some(row(Shape::Tagged)) }
 
-pub open spec fn scan(e: Seq<u8>) -> int { shape_end(grammar(), Shape::Tagged, e) }
+pub open spec fn scan(e: Seq<u8>) -> Option<nat> { shape_end(grammar(), Shape::Tagged, e) }
 
 /// Peel the tag. Every completeness proof in the value tree is this step once.
 pub proof fn lemma_scan_peel(t: u8, body: Seq<u8>)
     ensures scan(seq![t] + body) == match tag_shape(t) {
-        Some(sh) => { let r = shape_end(grammar(), sh, body); if r < 0 { -1int } else { 1 + r } }
-        None => -1int,
+        Some(sh) => after(shape_end(grammar(), sh, body), 1nat),
+        None => None,
     }
 {
     let e = seq![t] + body;
@@ -1115,18 +1143,18 @@ pub proof fn lemma_scan_peel(t: u8, body: Seq<u8>)
 }
 
 /// A complete encoding: the grammar consumes it exactly.
-pub open spec fn complete(x: Seq<u8>) -> bool { scan(x) == x.len() }
+pub open spec fn complete(x: Seq<u8>) -> bool { scan(x) == Some(x.len() as nat) }
 
-pub open spec fn scan_row_bytes(e: Seq<u8>) -> int {
+pub open spec fn scan_row_bytes(e: Seq<u8>) -> Option<nat> {
     shape_end(grammar(), row(Shape::Tagged), e)
 }
 
 proof fn lemma_scan_bounded(e: Seq<u8>)
-    ensures scan(e) >= 0 ==> 1 <= scan(e) <= e.len()
+    ensures match scan(e) { Some(n) => 1 <= n <= e.len(), None => true }
 { lemma_sum_bounded(grammar(), grammar(), e); }
 
 proof fn lemma_scan_local(a: Seq<u8>, b: Seq<u8>)
-    requires is_prefix(a, b), scan(a) >= 0
+    requires is_prefix(a, b), scan(a) is Some
     ensures scan(b) == scan(a)
 { lemma_scan_bounded(a); lemma_shape_local(grammar(), Shape::Tagged, a, b); }
 
@@ -1155,7 +1183,7 @@ pub proof fn lemma_complete_is_tagged(x: Seq<u8>)
 {
     lemma_scan_bounded(x);
     theorem_grammar_wf();
-    assert(sum_end(grammar(), grammar(), x) == x.len());
+    assert(sum_end(grammar(), grammar(), x) == Some(x.len() as nat));
     assert(branch_of(grammar(), x[0]) is Some);
     lemma_marked_key(grammar(), x[0]);
 }
@@ -1281,7 +1309,7 @@ proof fn lemma_complete_row_is_family(r: Seq<Seq<u8>>, s: Seq<Seq<u8>>)
 /// A row of complete encodings is itself scanned exactly, whatever follows it.
 proof fn lemma_scan_row_of_row(r: Seq<Seq<u8>>, rest: Seq<u8>)
     requires all_complete(r)
-    ensures scan_row_bytes((cat(r) + seq![STRUCT_END]) + rest) == cat(r).len() + 1
+    ensures scan_row_bytes((cat(r) + seq![STRUCT_END]) + rest) == Some((cat(r).len() + 1) as nat)
     decreases r.len()
 {
     let buf = (cat(r) + seq![STRUCT_END]) + rest;
@@ -1298,7 +1326,7 @@ proof fn lemma_scan_row_of_row(r: Seq<Seq<u8>>, rest: Seq<u8>)
         assert(buf[0] != STRUCT_END);
         lemma_prefix_of_self_plus(head, tail_buf);
         lemma_scan_local(head, buf);
-        assert(scan(buf) == head.len());
+        assert(scan(buf) == Some(head.len() as nat));
         assert(buf.skip(head.len() as int) =~= tail_buf);
         lemma_all_complete_tail(r);
         lemma_scan_row_of_row(r.drop_first(), rest);
@@ -1317,7 +1345,7 @@ pub proof fn lemma_enc_complete(v: Val)
         Val::S(t, k) => {
             lemma_scan_peel(t, k);
             assert(valid_body(t, k));
-            assert(body_end(t, k) == k.len());
+            assert(body_end(t, k) == Some(k.len() as nat));
         }
         Val::L(t, es) => {
             lemma_enc_seq_complete(es);
@@ -1685,8 +1713,8 @@ fn refuse<'a>(reason: Reason, at: &'a [u8]) -> (r: Refusal<'a>)
 pub(crate) fn delim_scan<'a>(p: &'a [u8]) -> (r: Result<usize, Refusal<'a>>)
     ensures
         match r {
-            Ok(n) => delim_end(p@) == n as int && n <= p.len(),
-            Err(_) => delim_end(p@) < 0,
+            Ok(n) => delim_end(p@) == Some(n as nat) && n <= p.len(),
+            Err(_) => delim_end(p@) is None,
         },
 {
     let mut i: usize = 0;
@@ -1694,8 +1722,7 @@ pub(crate) fn delim_scan<'a>(p: &'a [u8]) -> (r: Result<usize, Refusal<'a>>)
     while i < p.len()
         invariant
             0 <= i <= p@.len(),
-            delim_end(p@) == if delim_end(p@.skip(i as int)) < 0 { -1int }
-                             else { i + delim_end(p@.skip(i as int)) },
+            delim_end(p@) == after(delim_end(p@.skip(i as int)), i as nat),
         decreases p.len() - i
     {
         proof { assert(p@.skip(i as int)[0] == p@[i as int]); }
@@ -1706,7 +1733,7 @@ pub(crate) fn delim_scan<'a>(p: &'a [u8]) -> (r: Result<usize, Refusal<'a>>)
         proof { assert(p@.skip(i as int)[1] == p@[i as int + 1]); }
         if p[i] == STRUCT_ESC {
             if p[i + 1] == STRUCT_ESC {
-                proof { assert(delim_end(p@.skip(i as int)) == 2); }
+                proof { assert(delim_end(p@.skip(i as int)) == Some(2nat)); }
                 return Ok(i + 2);
             }
             if p[i + 1] != 0xFF {
@@ -1735,7 +1762,7 @@ pub const MAX_DEPTH: u32 = 128;
 pub(crate) fn shape_scan<'a>(g: &Branches, s: &Shape, p: &'a [u8], depth: u32) -> (r: Result<usize, Refusal<'a>>)
     ensures
         match r {
-            Ok(n) => shape_end(*g, *s, p@) == n as int && n <= p.len(),
+            Ok(n) => shape_end(*g, *s, p@) == Some(n as nat) && n <= p.len(),
             Err(_) => true,
         },
     decreases p@.len(), shape_sz(*s)
@@ -1775,8 +1802,7 @@ pub(crate) fn shape_scan<'a>(g: &Branches, s: &Shape, p: &'a [u8], depth: u32) -
                     0 <= at <= p.len(),
                     depth < MAX_DEPTH,
                     *s == Shape::Row(*e),
-                    shape_end(*g, *s, p@) == if shape_end(*g, *s, p@.skip(at as int)) < 0 { -1int }
-                                             else { at + shape_end(*g, *s, p@.skip(at as int)) },
+                    shape_end(*g, *s, p@) == after(shape_end(*g, *s, p@.skip(at as int)), at as nat),
                 decreases p.len() - at
             {
                 if at >= p.len() {
@@ -1809,7 +1835,7 @@ pub(crate) fn shape_scan<'a>(g: &Branches, s: &Shape, p: &'a [u8], depth: u32) -
 pub(crate) fn sum_scan<'a>(g: &Branches, bs: &Branches, p: &'a [u8], depth: u32) -> (r: Result<usize, Refusal<'a>>)
     ensures
         match r {
-            Ok(n) => sum_end(*g, *bs, p@) == n as int && n <= p.len(),
+            Ok(n) => sum_end(*g, *bs, p@) == Some(n as nat) && n <= p.len(),
             Err(_) => true,
         },
     decreases p@.len(), 0nat
@@ -1836,7 +1862,7 @@ pub(crate) fn sum_scan<'a>(g: &Branches, bs: &Branches, p: &'a [u8], depth: u32)
 pub fn scan_value<'a>(p: &'a [u8]) -> (r: Result<usize, Refusal<'a>>)
     ensures
         match r {
-            Ok(n) => scan(p@) == n as int && n <= p.len(),
+            Ok(n) => scan(p@) == Some(n as nat) && n <= p.len(),
             Err(_) => true,
         },
 {
@@ -1924,7 +1950,7 @@ impl Body {
 
     #[verifier::type_invariant]
     closed spec fn wf_body(self) -> bool {
-        shape_end(grammar(), self.shape@, self.bytes@) == self.bytes@.len()
+        shape_end(grammar(), self.shape@, self.bytes@) == Some(self.bytes@.len() as nat)
     }
 
     /// Exactly these bytes. The width is a fact about the vector, so a body of
@@ -1996,8 +2022,8 @@ impl Body {
             assert(bytes@.len() > 0 && bytes@[0] == k);
             assert(bytes@.skip(1) =~= vi);
             assert(branch_of(bs@, bytes@[0]) == Some(si));
-            assert(shape_end(grammar(), si, bytes@.skip(1)) == vi.len());
-            assert(sum_end(grammar(), bs@, bytes@) == 1 + vi.len());
+            assert(shape_end(grammar(), si, bytes@.skip(1)) == Some(vi.len() as nat));
+            assert(sum_end(grammar(), bs@, bytes@) == Some((1 + vi.len()) as nat));
         }
         Body { bytes, shape: Ghost(Shape::Sum(Box::new(bs@))) }
     }
@@ -2072,7 +2098,7 @@ impl Body {
         }
         proof {
             assert(src@.take(src.len() as int) =~= v.view());
-            assert(scan(bytes@) == bytes@.len());
+            assert(scan(bytes@) == Some(bytes@.len() as nat));
         }
         Body { bytes, shape: Ghost(Shape::Tagged) }
     }

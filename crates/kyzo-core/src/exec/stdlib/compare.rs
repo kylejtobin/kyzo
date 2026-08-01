@@ -23,7 +23,6 @@ pub(crate) fn op_assert(args: &[DataValue]) -> Result<DataValue> {
 }
 
 /// Expression equality / inequality seat (copy_detector — op_eq / op_neq).
-/// NUMERIC for numbers (1 == 1.0, exact beyond 2^53), identity elsewhere.
 fn eq_values(a: &DataValue, b: &DataValue) -> bool {
     match (a, b) {
         (DataValue::Num(x), DataValue::Num(y)) => NumericOrd::of(*x) == NumericOrd::of(*y),

@@ -91,7 +91,6 @@ impl NonceLeaseFloors {
 }
 
 /// Inputs required to privately mint a [`CheckpointSeal`].
-///
 /// Binding list (minimum, §26): StoreId; CryptoDomain; cut FenceEpoch;
 /// state root at cut; final WAL hash of the covered prefix; checkpoint
 /// manifest digest; FormatVersion; Catalog generation at cut; retained-object
@@ -135,7 +134,6 @@ pub struct CheckpointSealParts {
 }
 
 /// Prefix authority transfer artifact. Privately minted; truncate consumes it.
-///
 /// Dump without a seal stays disposable. Restore/open against a seal that
 /// fails any bound digest → [`SealRefuse::SealMismatch`] — never silent prefer-dump.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -162,7 +160,6 @@ pub struct CheckpointSeal {
 
 impl CheckpointSeal {
     /// Privately mint a seal after replay verification + retention coverage.
-    ///
     /// Callers must have verified that replay of the covered prefix reproduces
     /// the checkpoint exactly. Epoch-spanning seals are Unconstructible here:
     /// `parts.crypto_domain.fence_epoch` must equal `parts.fence_epoch`.
@@ -281,7 +278,6 @@ impl CheckpointSeal {
     }
 
     /// Verify every bound digest against an observed reconstruction.
-    ///
     /// Any mismatch → [`SealRefuse::SealMismatch`]. Never silent prefer-dump.
     pub fn verify(&self, observed: &CheckpointSealParts) -> Result<(), SealRefuse> {
         let expected = seal_digest_from_parts(observed)?;
@@ -309,7 +305,6 @@ impl CheckpointSeal {
     }
 
     /// Encode this seal under the one [`encode_checkpoint_seal`] constructor (seat 59/26).
-    ///
     /// Bound digests that survive into sealed bytes are the deep-reachability
     /// surface the crypto-shred campaign searches — never a second encoder.
     pub fn encode_transcript(&self) -> Result<CanonicalTranscript, SealRefuse> {
@@ -356,7 +351,6 @@ impl CheckpointSeal {
 }
 
 /// Consume a covering [`CheckpointSeal`] against a [`TruncateLedger`].
-///
 /// Truncation without consuming a seal is Unconstructible — there is no
 /// seal-free overload. Crash-mid-truncate converges: the ledger records the
 /// spent seal digest; retry with the same seal → [`SealRefuse::SealAlreadyConsumed`]
@@ -498,7 +492,6 @@ fn checkpoint_seal_transcript_parts(parts: &CheckpointSealParts) -> CheckpointSe
 }
 
 /// Binding digest: one SHA-256 over the ONE [`encode_checkpoint_seal`] byte stream.
-///
 /// Not a field-by-field hasher — the transcript is the serializer; this is only
 /// `H_canonical` over those sealed bytes (same shape as key-commitment).
 fn seal_digest_from_parts(parts: &CheckpointSealParts) -> Result<SealDigest, SealRefuse> {

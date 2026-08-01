@@ -175,7 +175,6 @@ pub struct ParseError {
 #[diagnostic(code(parser::unexpected_rule))]
 pub(crate) struct UnexpectedRule(#[label] pub(crate) SourceSpan);
 
-/// Map a pest parse failure into the spanned [`ParseError`].
 fn pest_to_parse_error(err: pest::error::Error<Rule>) -> ParseError {
     let span = match err.location {
         InputLocation::Pos(p) => SourceSpan::new(p, 0),

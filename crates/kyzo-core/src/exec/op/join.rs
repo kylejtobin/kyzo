@@ -141,16 +141,12 @@ pub(crate) fn push_join_premises(
 /// A native batched prefix/point-lookup join against a stored relation
 /// (current or as-of): shared by [`StoredRA`] and [`StoredWithValidityRA`],
 /// whose row-at-a-time `prefix_join`s differ only in which storage method
-/// builds the per-row match iterator (plain vs. as-of, plus the point-
 /// lookup sub-case only `StoredRA` has) — captured once, at construction,
 /// in `probe`.
 ///
-/// The left side arrives pre-batched: no `Tuple` is ever minted for a left
 /// row, since `probe` is handed a `&[DataValue]` slice straight out of the
-/// batch buffer. Every accepted match is written once, directly into the
 /// output batch ([`push_joined_row`]). A left row whose matches overflow
 /// one output batch resumes exactly where it left off on the next
-/// `next()` call: `active` holds the in-flight match iterator across
 /// calls, so an output-batch boundary never re-scans anything.
 pub(crate) struct PrefixProbeBatchJoin<'a> {
     pub(crate) left: BatchIter<'a>,
@@ -214,7 +210,6 @@ pub(crate) fn batch_join_current_left_row<'a>(
 }
 
 /// Shared batched prefix-join `Iterator::next` scaffold (copy_detector).
-/// One authority for both [`PrefixProbeBatchJoin`] and temp-store prefix join.
 ///
 /// `next_active` normalizes each join's probe-iterator item shape into
 /// `Option<Result<Item>>` so Result-yielding and plain-yielding probes share
@@ -459,7 +454,6 @@ pub struct InnerJoin {
     pub(crate) to_eliminate: BTreeSet<Symbol>,
     pub span: SourceSpan,
     /// When true, each right-side grounding row is appended to the premise
-    /// channel for the joined output (one positive body literal). Index
     /// acceleration joins leave this false so only the base-relation join
     /// of a covering/back-join plan contributes a premise.
     pub(crate) capture_right_as_premise: bool,
@@ -570,7 +564,6 @@ impl InnerJoin {
     ///   side is consumed as batches ([`RelAlgebra::iter_batched`]) and each
     ///   left row drives the same storage probe the row-at-a-time path
     ///   drives, via [`PrefixProbeBatchJoin`] /
-    ///   [`TempStorePrefixBatchJoin`] — no `Tuple` minted for a left row,
     ///   and every joined row built once, straight into the output batch.
     ///
     /// Every other shape — a `Fixed` right side, and any non-prefix
@@ -717,7 +710,6 @@ impl InnerJoin {
     /// The general join, batch-native: materialize the right side ONCE into
     /// a sorted, deduplicated run keyed join-columns-first (consumed as
     /// batches — no right `Tuple` round-trips through an iterator), then
-    /// drive it with left batches. No `Tuple` is minted for a left row: the
     /// probe prefix is built per row from the batch slice, the run is
     /// binary-searched, and every joined row is written once, straight into
     /// the output batch. Replaces the row-at-a-time
@@ -788,7 +780,6 @@ impl InnerJoin {
 
 /// The general join's batch executor: a sorted, deduplicated right run
 /// probed by left batch rows. `run_idx == usize::MAX` marks "no run in
-/// flight for the current left row"; an in-flight run resumes across
 /// output-batch boundaries without re-searching.
 struct MaterializedBatchJoin<'a> {
     left: BatchIter<'a>,

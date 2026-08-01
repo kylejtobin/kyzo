@@ -83,8 +83,6 @@ impl LineIndex {
             .partition_point(|&s| s <= byte_offset);
         let line = if idx == 0 { 0 } else { idx - 1 };
         let line_start = self.line_starts[line];
-        // Count UTF-16 units in u32 — LSP positions are u32; stop at the last
-        // representable column instead of Err→MAX costume.
         let character = utf16_units_in(&text[line_start..byte_offset]);
         let line_u32 = match u32::try_from(line) {
             Ok(n) => n,

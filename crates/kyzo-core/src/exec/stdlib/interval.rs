@@ -146,8 +146,6 @@ pub(crate) fn op_make_interval(args: &[DataValue]) -> Result<DataValue> {
     )))
 }
 
-/// Extracts both arguments as `Interval`s for a two-interval predicate op, or
-/// a typed error naming which argument was wrong — never a panic.
 fn two_intervals(op: &str, args: &[DataValue]) -> Result<(Interval, Interval)> {
     let a = args[0].get_interval().ok_or_else(|| {
         miette!(

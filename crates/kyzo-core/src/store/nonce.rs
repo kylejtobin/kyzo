@@ -84,7 +84,6 @@ pub enum DomainCounterRefuse {
 }
 
 /// Durable counter-block lease for AEAD. Reserve-before-encrypt by construction.
-///
 /// Only constructor consumes a durably-reserved counter block — volatile
 /// reservation is Unconstructible. Encrypt takes a [`NonceLease`]; unused
 /// remainder burns; crash mid-lease resumes strictly above the highest
@@ -102,7 +101,6 @@ pub struct NonceLease {
 
 impl NonceLease {
     /// Mint a lease over an already-durable reserved counter block.
-    ///
     /// `ceiling` must be strictly above `floor`. The encrypt door takes the
     /// returned lease — there is no volatile/raw nonce constructor.
     pub(crate) fn mint(
@@ -175,7 +173,6 @@ pub enum NonceLeaseRefuse {
 }
 
 /// Pure nonce derivation: `Nonce = H(MintDomain, DomainCounter, CryptoDomain, IncarnationId)`.
-///
 /// Signature unfrozen until campaigns green — this is the provisional pure fn.
 pub fn nonce(
     domain: MintDomain,

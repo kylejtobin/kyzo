@@ -322,10 +322,6 @@ fn i64_to_usize(n: i64) -> Result<usize> {
     usize::try_from(n).map_err(|_| miette!("i64 {n} does not fit usize"))
 }
 
-// ---------------------------------------------------------------------------
-// Projection kind — `K` of the shared build→seal→query machine (#305).
-// ---------------------------------------------------------------------------
-
 /// HNSW as a projection kind: one `K` of
 /// [`ProjectionBuilder`](crate::project::projection::ProjectionBuilder) /
 /// [`Sealed`](crate::project::projection::Sealed).
@@ -338,10 +334,6 @@ fn i64_to_usize(n: i64) -> Result<usize> {
 pub(crate) struct Hnsw;
 
 impl ProjectionKind for Hnsw {}
-
-// ---------------------------------------------------------------------------
-// The manifest: the index's persisted description.
-// ---------------------------------------------------------------------------
 
 /// Neighbour degree `m` for HNSW graph construction. Proven `m >= 2` so
 /// `1/ln(m)` (the level multiplier) is always finite — `m = 1` would yield
@@ -703,10 +695,6 @@ pub(crate) fn hnsw_index_metadata(base: &StoredRelationMetadata) -> StoredRelati
     StoredRelationMetadata { keys, non_keys }
 }
 
-// ---------------------------------------------------------------------------
-// Typed errors.
-// ---------------------------------------------------------------------------
-
 /// A zero vector was submitted to a cosine-metric index. Refused typed at
 /// insert (and query) time: cosine distance is undefined for the zero
 /// vector, and refusing it here is what makes NaN unrepresentable in this
@@ -740,10 +728,6 @@ pub(crate) struct VectorDimMismatch {
 #[error("vector dimension exceeds the wire u32 bound")]
 #[diagnostic(code(index::hnsw::dimension_exceeds_u32))]
 pub(crate) struct VectorDimensionExceedsU32;
-
-// ---------------------------------------------------------------------------
-// VectorId: which vector of which base row.
-// ---------------------------------------------------------------------------
 
 /// The identity of one indexed vector: a base row's key columns, the
 /// position of the vector field in the base row's full tuple, and — when
@@ -786,10 +770,6 @@ impl VectorId {
 pub(crate) struct HnswVectorCacheMiss {
     pub(crate) id: VectorId,
 }
-
-// ---------------------------------------------------------------------------
-// HnswRow: the index relation's row schema, as a sum type.
-// ---------------------------------------------------------------------------
 
 /// The canary's layer slot: out of band, since real layers are `<= 0`.
 const CANARY_LAYER: i64 = 1;
@@ -1215,10 +1195,6 @@ impl HnswRow {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// IndexVec: a vector proven fit for distance computation.
-// ---------------------------------------------------------------------------
 
 /// A vector ADMITTED to an HNSW index: proven to have the manifest's
 /// dimension and element type, all components finite, and — when the metric
@@ -1687,10 +1663,6 @@ fn normalize_unit(v: &[f64]) -> Option<Vec<f64>> {
     Some(v.iter().map(|x| x / n).collect())
 }
 
-// ---------------------------------------------------------------------------
-// The vector cache: admitted vectors by id, loaded from the base relation.
-// ---------------------------------------------------------------------------
-
 /// Cache of admitted vectors for one operation. Loading a vector from the
 /// base relation re-proves it through [`IndexVec::admit`], so a corrupt or
 /// index-incompatible stored vector is a typed error at the read, never a
@@ -1781,10 +1753,6 @@ impl<'m> VectorCache<'m> {
         Ok(self.get(a)?.dist(self.get(b)?, self.manifest.distance))
     }
 }
-
-// ---------------------------------------------------------------------------
-// Graph reads.
-// ---------------------------------------------------------------------------
 
 /// The current entry point of the index: the bottom (most negative
 /// populated) layer and the vector whose row sorts first there. `None`
@@ -2059,10 +2027,6 @@ fn select_neighbours_heuristic<T: ReadTx>(
     }
     Ok(ret)
 }
-
-// ---------------------------------------------------------------------------
-// Graph writes.
-// ---------------------------------------------------------------------------
 
 /// Write a fresh vector's node rows at every layer in
 /// `bottom_layer..=top_layer` and (re)write the canary to record the new
@@ -2598,10 +2562,6 @@ fn remove_vec<T: WriteTx>(
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Vamana (DiskANN) — #376 T11 helpers. ONE put door: hnsw_put → put_vector.
-// ---------------------------------------------------------------------------
-
 pub(crate) const VAMANA_LAYER: i64 = 0;
 const VAMANA_DEFAULT_ALPHA: f64 = 1.2;
 
@@ -2776,10 +2736,6 @@ fn vamana_set_out_neighbours<T: WriteTx>(
     .write(tx, idx, base_key_len)?;
     Ok(())
 }
-
-// ---------------------------------------------------------------------------
-// The engine's entry points.
-// ---------------------------------------------------------------------------
 
 /// Index one base-relation row: extract the manifest's vector fields
 /// (single vectors and lists of vectors), admit each — **a zero vector
@@ -3898,10 +3854,6 @@ fn hnsw_knn_forced(
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests: the engine's executable law.
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

@@ -34,7 +34,6 @@
 //! is therefore a **normal aggregation** that buffers and builds at
 //! finalization.
 //!
-//! [`TDigest::merge`] is still provided, for combining shard digests, under
 //! a canonical deterministic policy (concatenate centroids, sort by mean,
 //! re-run the same sweep). It is deterministic and commutative, so a fixed
 //! reduction *tree* is reproducible — but it is deliberately **not** claimed
@@ -63,7 +62,6 @@ struct Centroid {
 
 /// A finalized t-digest: sorted centroids plus the exact min and max (kept
 /// separately so the extreme quantiles are exact anchors). Empty digests
-/// hold [`None`] for min/max — never `f64::NAN` as an absence sentinel.
 #[derive(Clone, PartialEq, Debug)]
 pub(crate) struct TDigest {
     compression: f64,
@@ -164,7 +162,6 @@ impl TDigest {
     /// The estimated value at quantile `q ∈ [0, 1]`. Interpolates between
     /// centroid centers in rank space, with the exact min and max as the
     /// `q = 0` and `q = 1` anchors. A pure function of the digest.
-    /// Empty digests return [`None`] — never `f64::NAN` as absence.
     pub(crate) fn quantile(&self, q: f64) -> Option<f64> {
         let (Some(min), Some(max)) = (self.min, self.max) else {
             return None;
@@ -580,7 +577,6 @@ mod tests {
         assert!(TDigest::from_values(&vals, 100.0).is_err());
     }
 
-    /// PINNED-LITERAL fingerprint for a fixed input: any drift of the build
     /// algorithm, the scale function, or the serialization fails loudly.
     #[test]
     fn pinned_digest_fingerprint() -> Result<()> {

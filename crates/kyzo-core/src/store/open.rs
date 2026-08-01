@@ -26,7 +26,6 @@ use super::commit_cap::SnapshotFork;
 use super::epoch::{CryptoDomain, FenceEpoch};
 
 /// Sealed Store identity digest — genesis / fork-minted, never path/URL.
-///
 /// Path/URL is rebindable location only. Rename/move preserves identity.
 /// Restore preserves readable identity; write continuity requires matching
 /// [`WriteAuthority`].
@@ -57,7 +56,6 @@ pub enum StoreOpenVerb {
 }
 
 /// TAG-ratcheted open capability: one Store identity scope, closed verb family.
-///
 /// Privately constructed — never from a filesystem path alone. A capability
 /// that names two Store ids is Unconstructible. Transport may authenticate;
 /// it never authorizes open. [`WriteAuthority`] remains a distinct affine token.
@@ -85,7 +83,6 @@ impl StoreOpen {
 }
 
 /// Genesis-sealed StagingTTL in dense CommitOrdinals.
-///
 /// Post-genesis mutation is Unconstructible (no setter). Full object-slot
 /// semantics live in `store/objects.rs` (T10); genesis only seals the ordinal count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -97,14 +94,12 @@ impl StagingTtl {
         Self(ordinals)
     }
 
-    /// Ordinal count.
     pub fn ordinals(self) -> u64 {
         self.0
     }
 }
 
 /// Human-operable durable size class sealed at genesis (decisions.md §88).
-///
 /// At ceiling writes refuse StoreFull; Engine may compose splits as workflow.
 /// Store never silent-auto-splits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -125,7 +120,6 @@ pub enum EntropyArm {
 }
 
 /// Host selection of which `StableCommitCap` arm genesis seals.
-///
 /// The closed sum with per-arm [`SnapshotFork`] declaration is seated in
 /// `store/commit_cap.rs`. Genesis seals the arm *choice* config-once;
 /// this type is injection only — not a second commit-door definition.
@@ -145,7 +139,6 @@ pub enum StableCommitCapArm {
 }
 
 /// Config-once genesis parameters injected from the host composition root.
-///
 /// No post-genesis setters for RecoveryMatrix / StagingTtl / size class /
 /// entropy arm / StableCommitCap arm — mutation is Unconstructible.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -327,7 +320,6 @@ pub enum GenesisRefuse {
 /// Genesis construction: seals FenceEpoch::genesis, CryptoDomain, optional
 /// RecoveryMatrix, ordinal StagingTtl, size class, entropy arm, and the
 /// host-selected StableCommitCap arm. Mints StoreId, StoreOpen, WriteAuthority.
-///
 /// Identity is the sealed digest of genesis params — never a filesystem path.
 /// There is no public path-taking open.
 pub fn genesis(params: GenesisParams) -> GenesisSealed {
@@ -352,7 +344,6 @@ pub fn genesis(params: GenesisParams) -> GenesisSealed {
 }
 
 /// Open an existing Store by presenting a [`StoreOpen`] capability.
-///
 /// Path-only open has no constructor — [`open_path_only`] is the typed refuse
 /// door for that ask. [`StoreOpenVerb::Write`] at this door →
 /// [`GenesisRefuse::WriteVerbAtOpenDoor`] (write resume needs [`WriteAuthority`]).

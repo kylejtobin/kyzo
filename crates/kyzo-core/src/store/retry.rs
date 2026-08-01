@@ -25,7 +25,6 @@ use crate::store::{
 };
 
 /// Session/query refusal carried mid-attempt.
-///
 /// Wraps [`miette::Report`] without `thiserror`'s `#[error(transparent)]` on
 /// Report (that path demands `as_dyn_error`, which Report does not satisfy).
 /// Construct only via [`RetryError::session`] / [`RetryError::session_report`]
@@ -42,7 +41,6 @@ impl std::fmt::Display for SessionRefuse {
 impl std::error::Error for SessionRefuse {}
 
 /// Typed non-retryable refusal inside a conflict-retry attempt.
-///
 /// Conflict vs fatal is decided only by [`RetryError`] variant — never by
 /// diagnostic code or string identity. There is no [`miette::Report`] erase
 /// channel here: commit fatals are [`CommitIo`] / [`CommitCorruption`];
@@ -50,7 +48,6 @@ impl std::error::Error for SessionRefuse {}
 /// refusals enter only through [`Self::Session`] via an explicit constructor
 /// (never `From<Report>` on [`RetryError`], so `?` on `miette::Result` cannot
 /// silently erase into this channel).
-///
 /// Not a miette Diagnostic: a manual [`From`] into [`miette::Report`] owns
 /// the lift so Diagnostic-derive cannot fight it.
 #[derive(Debug, thiserror::Error)]
@@ -89,12 +86,10 @@ pub enum StorageOpFailure {
 }
 
 /// Typed channel into the conflict-retry loop: conflict (rerun) or fatal.
-///
 /// Construct via [`From<ConflictError>`] / [`From<CommitFailure>`] /
 /// [`From<StorageOpFailure>`], or [`RetryError::session`] for session-tier
 /// Diagnostics. There is no `From<miette::Report>` — attempt bodies cannot
 /// `?` a `miette::Result` into this channel.
-///
 /// Not a miette Diagnostic: [`From<RetryError> for Report`] is the sole lift.
 #[derive(Debug, thiserror::Error)]
 pub enum RetryError {
@@ -186,19 +181,16 @@ pub(crate) fn put_attempt(
 
 /// Run `attempt` until it commits without conflict, retrying HOT (no
 /// pause between attempts).
-///
 /// `attempt` must be a complete transaction cycle — create, read/write,
 /// commit — so each retry sees a fresh snapshot. Non-conflict errors
 /// propagate immediately. `max_attempts` bounds pathological contention;
 /// exhausting it returns the final [`crate::store::ConflictError`].
 /// Zero attempts are unrepresentable: the budget is [`NonZeroUsize`] at the
 /// API, not a runtime check after mint.
-///
 /// Attempt errors are [`RetryError`]: conflict vs fatal is decided only by
 /// matching [`RetryError::Conflict`] / [`RetryError::Fatal`]. Typed
 /// [`CommitFailure`] / [`ConflictError`] / [`StorageOpFailure`] enter through
 /// [`From`]; session Reports only through [`RetryError::session_report`].
-///
 /// Hot retry is for harnesses whose conflicts are injected or simulated
 /// (the DST campaigns): pausing there wastes wall-clock on races that
 /// virtual time already resolves. Real concurrent sessions retry through
@@ -268,7 +260,6 @@ fn backoff(n: usize) {
         std::thread::yield_now();
     } else {
         let ms = 1u64 << (n - 3).min(6); // 1ms .. 64ms
-        // park_timeout is a scheduler yield with a bound — not sleep-as-happens-before.
         std::thread::park_timeout(std::time::Duration::from_millis(ms));
     }
 }

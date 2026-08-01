@@ -52,7 +52,6 @@ pub(crate) struct SorterNotInHead {
 /// Collect the result store into a vector sorted by the `:order` clauses.
 ///
 /// Exact upstream semantics: clauses compare in order; the first non-equal
-/// comparison decides, reversed for `SortDir::Dsc`; full ties preserve the
 /// store's canonical order (stable sort), keeping the output deterministic.
 pub(crate) fn sort_and_collect(
     original: &EpochStore,

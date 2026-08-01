@@ -45,7 +45,6 @@ fn no_params() -> BTreeMap<Symbol, DataValue> {
 }
 
 fn db() -> Result<Engine<FjallStorage>> {
-    // One probe door with language_fix (copy_detector).
     Engine::<FjallStorage>::compose_temp_fjall().map_err(|e| miette!("engine: {e}"))
 }
 
@@ -68,8 +67,6 @@ impl Hasher for FnvHasher {
         let mut h = self.0;
         for &b in bytes {
             h ^= u64::from(b);
-            // Same FNV-1a prime mix as kyzo_model::value::kind::json::fnv1a64 —
-            // Wrapping expresses mod 2^64 without a wrapping_* method call.
             h = (std::num::Wrapping(h) * std::num::Wrapping(0x0000_0100_0000_01B3)).0;
         }
         self.0 = h;
@@ -113,9 +110,6 @@ fn main() -> Result<()> {
     let db = db()?;
     let mut combined = FnvHasher::new();
 
-    // Composite key `{a, b}` — multi-edge graph (museum probe used `{a => b}`,
-    // which collapses duplicate sources; that was a workload defect, not a
-    // digest pin we must preserve).
     run(
         &db,
         "?[a, b] <- [[1,2],[2,3],[3,4],[4,2],[2,5],[5,6],[6,3],[7,7]] :create edge {a, b}",

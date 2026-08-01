@@ -22,7 +22,6 @@
 use super::open::StableCommitCapArm;
 
 /// Whether live process/snapshot fork is inside this arm's failure model.
-///
 /// Omission is not exclusion — every [`StableCommitCap`] arm declares exactly
 /// one of these. `Yes` arms require misuse-resistant AEAD (e.g. AES-SIV) as a
 /// condition of the arm; nonce repeat degrades to message-equality leak only.
@@ -42,7 +41,6 @@ impl SnapshotFork {
 }
 
 /// Closed sum of production commit-proof arms.
-///
 /// The SweepDoor barrier *is* the arm's commit proof. Kit pass alone never
 /// mints production [`super::sweep::Committed`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -61,7 +59,6 @@ pub enum StableCommitCap {
 
 impl StableCommitCap {
     /// Lift the genesis-sealed host arm choice into the closed sum.
-    ///
     /// Consumes [`StableCommitCapArm`] — does not redefine host injection.
     /// SnapshotFork is already the closed sum on the arm (no bool lift).
     pub fn from_arm(arm: StableCommitCapArm) -> Self {
@@ -90,7 +87,6 @@ impl StableCommitCap {
 }
 
 /// Optional host witness that a fork-generation changed mid-session.
-///
 /// Density-local: reminting [`super::authority::IncarnationId`] on generation
 /// change makes mid-session uniqueness Unconstructible *for that arm only* —
 /// not a global remote-freshness authority.

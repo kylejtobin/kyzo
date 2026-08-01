@@ -9,19 +9,16 @@
 
 //! CanonicalTranscript: the one signed-byte law (decisions.md §59, §81).
 //!
-//! Owns: [`CanonicalTranscript`], golden vector fixtures under `store/golden/`,
 //! unknown-version refuse door, deep sealed-artifact residual-secret scrub
 //! ([`refuse_residual_secret_bytes`] / §64/§65).
 //!
 //! Bans: sealed Unicode normalization surfaces (bytes and typed ids only);
-//! map encodings without duplicate-key refusal; allocation before bounds
 //! checks; a second serialization path for sealed artifacts; residual
 //! DEK / KEK / plaintext ShredSalt bytes surviving in sealed transcript bytes
 //! after shred.
 //!
 //! Encoding checklist as law: field ids and ordering; integer width /
 //! signedness / endianness; optional/default encoding; length bounds and
-//! recursion limits before allocation; hash / signature / key-id / domain-label
 //! encodings; AEAD nonce and AAD transcript fields; unknown version refuses;
 //! migration epochs anchor upgrades via [`FormatVersion`].
 
@@ -31,7 +28,6 @@ use super::open::StoreId;
 
 
 /// Fixed-width 32-byte digest / key-id / hash field on the transcript wire.
-///
 /// Distinct from store/crypto [`Digest`] (CMT-1 commitment class) — this is the
 /// CanonicalTranscript field carrier. Wrap at the encode edge via [`Digest32::admit`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -370,7 +366,6 @@ pub enum TranscriptRefuse {
 }
 
 /// In-progress builder — the sole construction path for sealed transcript bytes.
-///
 /// A second serialization path for sealed artifacts is Unconstructible: types
 /// that seal under this law offer no serde / alternate encoder surface.
 #[derive(Debug)]
@@ -562,7 +557,6 @@ impl CanonicalTranscript {
     /// Deep sealed-artifact scrub (§64/§65): refuse if any shredded secret
     /// needle (DEK / KEK / plaintext ShredSalt bytes) is still reachable inside
     /// these sealed transcript bytes.
-    ///
     /// Empty needles are a no-op Ok. Needle length zero is ignored (not a
     /// secret). Residual hits refuse as [`TranscriptRefuse::Corrupt`] — the
     /// production door the crypto-shred reachability campaign exercises.
@@ -680,7 +674,6 @@ pub const SEALED_ARTIFACT_KINDS: &[SealedArtifactKind] = &[
 ];
 
 /// Production scrub over arbitrary sealed-artifact bytes (§64/§65).
-///
 /// Refuses when any non-empty needle from `shredded_secret_needles` appears as
 /// a contiguous substring of `sealed_bytes`. Used by transcript parse sites,
 /// CheckpointSeal encode, and the crypto-shred deep reachability DST.
@@ -711,7 +704,6 @@ pub fn refuse_residual_secrets_in_all_sealed_kinds(
     sealed_transcripts: &[CanonicalTranscript],
     shredded_secret_needles: &[&[u8]],
 ) -> Result<(), TranscriptRefuse> {
-    // Exhaustiveness: adding a SealedArtifactKind without updating this match
     // fails to compile — keep SEALED_ARTIFACT_KINDS in lockstep.
     fn kinds_complete(kind: SealedArtifactKind) {
         match kind {
@@ -858,12 +850,10 @@ pub const ADMISSION_CERTIFICATE_DOMAIN_LABEL: &[u8] = b"kyzo.admission_certifica
 pub const WRAPPED_SHRED_SALT_AAD_DOMAIN_LABEL: &[u8] = b"WSS1";
 
 /// Independently derived golden for [`SealedArtifactKind::KeyCommit`] (seat 59).
-///
 /// Hex is hand-derived from the CanonicalTranscript wire format
 /// (MAGIC/version/field tags/be u64/digest32/bytes) for the normative fixture —
 /// never captured by calling [`encode_key_commitment`] and pasting its output.
 /// Production [`encode_key_commitment`] must match this derivation.
-///
 /// Normative fixture: key-id starts `08 01 8b…`, store-id starts `02 8c 8d…`,
 /// fence_epoch = 0, domain label `KEY_COMMIT`.
 pub const KEY_COMMIT_GOLDEN_VEC: &str = r#"
@@ -874,11 +864,9 @@ pub const KEY_COMMIT_GOLDEN_VEC: &str = r#"
 "#;
 
 /// Independently derived golden for [`SealedArtifactKind::WrappedShredSalt`] (seat 59).
-///
 /// Hex is hand-derived from the CanonicalTranscript wire format for the normative
 /// fixture — never captured by calling [`encode_wrapped_shred_salt_aad`].
 /// Production [`encode_wrapped_shred_salt_aad`] must match this derivation.
-///
 /// Normative fixture: store-id `[0x11; 32]`, fence_epoch = 0, segment = 0,
 /// domain label `WSS1`.
 pub const WRAPPED_SHRED_SALT_AAD_GOLDEN_VEC: &str = r#"
@@ -1047,7 +1035,6 @@ fn append_recovery_matrix_fields(
 }
 
 /// Mint the CMT-1 key-commitment transcript: domain-label + key-id + CryptoDomain.
-///
 /// This is the ONE sealed-byte constructor for AEAD key-commitment (seat 59).
 /// A hand-rolled `KEY_COMMIT_DOMAIN_v1 ‖ key ‖ …` layout is Unconstructible.
 pub fn encode_key_commitment(
@@ -1057,7 +1044,6 @@ pub fn encode_key_commitment(
     let mut b = CanonicalTranscriptBuilder::new(FormatVersion::CURRENT)?;
     b.append_u64(FieldId::ARTIFACT_KIND, SealedArtifactKind::KeyCommit.tag())?;
     b.append_bytes(FieldId::FORMAT_VERSION, &FormatVersion::CURRENT.as_bytes())?;
-    // key-id (DEK / KEK opening key) — PRIMARY_DIGEST field encoding.
     b.append_digest32(FieldId::PRIMARY_DIGEST, key_id)?;
     // CryptoDomain.store_id
     b.append_digest32(
@@ -1070,7 +1056,6 @@ pub fn encode_key_commitment(
 }
 
 /// Mint the WrappedShredSalt KEK-wrap AAD transcript: domain-label + store + epoch + segment.
-///
 /// This is the ONE sealed-byte constructor for shred-salt wrap AAD (seat 59).
 /// A hand-rolled `"WSS1" ‖ store_id ‖ fence_epoch ‖ segment` layout is Unconstructible.
 pub fn encode_wrapped_shred_salt_aad(
@@ -1253,7 +1238,6 @@ pub fn encode_recovery_grant_payload(
     successor_identity_seed: &Digest32,
     key_material_commitment: &Digest32,
 ) -> Result<CanonicalTranscript, TranscriptRefuse> {
-    // FieldIds must be non-decreasing: named store + identity/key before epoch pair.
     encode_recovery_scoped_transcript(
         RECOVERY_GRANT_PAYLOAD_DOMAIN_LABEL,
         &[
@@ -1393,7 +1377,6 @@ pub fn encode_recovery_write_token(
     successor_identity_seed: &Digest32,
     key_material_commitment: &Digest32,
 ) -> Result<CanonicalTranscript, TranscriptRefuse> {
-    // FieldIds must be non-decreasing: identity/key before epoch pair.
     encode_recovery_scoped_transcript(
         RECOVERY_WRITE_TOKEN_DOMAIN_LABEL,
         &[
@@ -1487,7 +1470,6 @@ pub fn encode_state_root_head(
 }
 
 /// Encode a chained state-root bind transcript (former `chain_bind`).
-///
 /// `link_kind`: 1=Ordinary, 2=Recovery, 3=Fork.
 pub fn encode_chained_state_root(
     content_root: &Digest32,
@@ -1533,7 +1515,6 @@ pub struct LeaveIsFreeIncarnationTranscriptPart {
 }
 
 /// Encode a leave-is-free pack content-root transcript (former `pack_content_root`).
-///
 /// `pack_kind` is the former tag bytes: `seal_and_suffix` or `full_wal`.
 pub fn encode_leave_is_free_pack(
     pack_kind: &[u8],

@@ -154,7 +154,6 @@ impl InputAtomNormalize for InputAtom {
 
 pub(crate) type SchemaLookup<'f> = dyn Fn(&str) -> Result<StoredRelationMetadata> + 'f;
 
-/// Catalog lookup for search-atom resolution: the full [`RelationHandle`],
 /// not just the schema (a search needs indices and manifests).
 ///
 /// `RelationHandle` lives in `session::catalog` — search resolution needs

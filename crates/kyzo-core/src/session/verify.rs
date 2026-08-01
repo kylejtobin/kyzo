@@ -34,7 +34,6 @@
 //! [`verify`] independently recomputes a plaintext-canonical [`StateRoot`]
 //! from store contents and compares it to the stored [`RootChain`] tip via
 //! [`as_of_root`] / [`roots_equal_at_cut`]. The expected digest is always
-//! looked up from the chain; the observed digest is always a cold rescan —
 //! a caller-supplied root is never an input to this door. Separate from
 //! query-answer `::verify`.
 
@@ -72,9 +71,7 @@ use kyzo_model::program::rule::{
 };
 use kyzo_model::value::{DataValue, Tuple, ValidityTs};
 
-// ─────────────────────────────────────────────────────────────────────────
 // Root tamper evidence (#289)
-// ─────────────────────────────────────────────────────────────────────────
 
 /// Outcome of root tamper-evidence [`verify`]: intact chain match, or a
 /// reproducible mismatch between the stored tip and an independent rescan.
@@ -92,15 +89,12 @@ pub enum RootVerifyOutcome {
 /// Tamper-evidence door: independently recompute the store's plaintext-
 /// canonical content root and compare it to the stored [`RootChain`] at
 /// `cut` via [`as_of_root`].
-///
 /// Authority split (load-bearing):
 /// - **expected** — only from [`as_of_root`] / [`RootChain`] (stored prior);
 /// - **observed** — only from a cold [`state_root`] rescan of `tx`.
-///
 /// A caller-supplied [`StateRoot`] is not a parameter of this door and
 /// cannot become the expected digest. Forged / swapped store bytes surface
 /// as [`RootVerifyOutcome::Tampered`].
-///
 /// Live caller: [`crate::session::db::Engine::verify_root_chain`].
 pub(crate) fn verify(
     tx: &impl ReadTx,
@@ -133,9 +127,6 @@ pub(crate) fn verify(
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// Query-answer ::verify — provenance door
-// ─────────────────────────────────────────────────────────────────────────
 
 /// Outcome of one provenance-backed `::verify` run. Never a bare bool: a
 /// MATCH, a budgeted refusal, a reproducible MISMATCH bundle, or a named
@@ -715,7 +706,6 @@ mod tests {
             RootVerifyOutcome::Intact { .. }
         ));
 
-        // Attacker restores an older internally-consistent backup (v1 bytes).
         let rolled = write_state(&state_v1)?;
         let rolled_content =
             StateRoot::from_merkle(state_root(&rolled.read_tx()?, merkle_budget()?)?);
@@ -737,7 +727,6 @@ mod tests {
             }
         }
 
-        // Same rolled-back bytes still Intact at the older cut they match.
         match verify(&rolled.read_tx()?, &chain, o1, merkle_budget()?)? {
             RootVerifyOutcome::Intact { root } => {
                 assert_eq!(root, as_of_root(&chain, o1)?);

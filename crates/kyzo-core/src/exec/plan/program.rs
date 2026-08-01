@@ -183,7 +183,6 @@ pub struct NormalFormInlineRule {
 /// (which normalization passes through untouched).
 ///
 /// `Fixed` holds the model [`FixedRuleApply`] (name + arity declaration —
-/// no `Arc<dyn FixedRule>`). The live impl binds at magic time.
 #[derive(Debug)]
 pub(crate) enum NormalFormRulesOrFixed {
     Rules { rules: Vec<NormalFormInlineRule> },
@@ -260,7 +259,6 @@ impl NormalFormProgram {
         &self.rules
     }
 
-    /// Whether `::set_options` disabled the magic-sets rewrite for this
     /// query. Travels to [`StratifiedNormalFormProgram`] at stratification.
     pub(crate) fn disable_magic_rewrite(&self) -> bool {
         self.disable_magic_rewrite
@@ -274,7 +272,6 @@ impl NormalFormProgram {
             .chain(std::iter::once((&self.entry_name, &self.entry)))
     }
 
-    /// Consume into parts, for the stratifier's final distribution of rule
     /// sets into strata. Consumption, not construction: this cannot mint a
     /// new tier value.
     pub(crate) fn into_parts(
@@ -439,7 +436,6 @@ impl AdornmentMark {
     }
 }
 
-/// An adornment: for each argument position, [`AdornmentMark::Bound`] or
 /// [`AdornmentMark::Free`]. Rendered `b`/`f` in debug output.
 pub type Adornment = Vec<AdornmentMark>;
 
@@ -586,7 +582,6 @@ impl MagicRulesOrFixed {
 }
 
 /// A fixed-rule application in the magic tier: in-memory arguments are now
-/// named by [`MagicSymbol`]. Keeps the live [`FixedRule`] impl — engine bind.
 pub struct MagicFixedRuleApply {
     pub fixed_handle: FixedRuleHandle,
     pub rule_args: Vec<MagicFixedRuleRuleArg>,
@@ -618,7 +613,6 @@ pub(crate) struct WrongFixedRuleOptionError {
     pub(crate) help: WrongFixedRuleOptionHelp,
 }
 
-/// Named help for [`WrongFixedRuleOptionError`] — String identity is
 /// unrepresentable; every construction site picks a variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WrongFixedRuleOptionHelp {
@@ -778,7 +772,6 @@ pub struct MagicRelationApplyAtom {
 }
 
 impl MagicAtom {
-    /// One authority for Relation / NegatedRelation construction (copy_detector).
     pub fn relation_apply(name: Symbol, args: Vec<Symbol>, negated: bool) -> Self {
         let atom = MagicRelationApplyAtom {
             name,
@@ -793,7 +786,6 @@ impl MagicAtom {
         }
     }
 
-    /// One authority for Rule / NegatedRule construction (copy_detector).
     pub fn rule_apply(name: MagicSymbol, args: Vec<Symbol>, negated: bool) -> Self {
         let atom = MagicRuleApplyAtom {
             name,
@@ -836,7 +828,6 @@ pub struct StratifiedMagicProgram {
 
 impl StratifiedMagicProgram {
     /// Test/harness door: named rule strata → execution-order magic program
-    /// (copy_detector — one seat for compile_tests / DST builders).
     pub fn from_named_rule_strata(
         strata: Vec<Vec<(MagicSymbol, Vec<MagicInlineRule>)>>,
     ) -> Result<Self> {
@@ -900,7 +891,6 @@ mod tests {
         InputInlineRulesOrFixed::Rules { rules }
     }
 
-    /// A normalizer for exercising the total desugar in isolation: every
     /// body becomes a single empty conjunction, well-ordering is identity.
     struct TrivialNormalizer;
 

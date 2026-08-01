@@ -14,7 +14,6 @@
 //! Every lowered row carries the source [`RecordId`].
 //!
 //! Crossing / federation receive (#270 T1/T3): a foreign record may lower only
-//! after [`crate::store::replica::validate_crossing_before_lower`] mints
 //! [`CrossingValidated`]. [`lower_after_crossing`] seals rows under the
 //! token's `origin_schema_cut` ([`OriginSealedLowering`]) — local Catalog
 //! cuts cannot reshape it; kind mismatch refuses in release builds.
@@ -38,7 +37,6 @@ use sha2::{Digest, Sha256};
 use super::{KyzoRecord, SemanticSurface};
 
 /// Named semantic-surface tag for projection encoding — not a bare i64.
-///
 /// Symmetric [`SurfaceTag::encode`] / [`SurfaceTag::decode`] round-trip.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum SurfaceTag {
@@ -96,10 +94,8 @@ impl SurfaceTag {
 }
 
 /// Lower a record into the closed six-dimension projection set.
-///
 /// Recomputes from typed fields on every call. Same record → same rows/bytes.
 /// Every row carries [`RecordId`] so projections resolve home (#268 T3).
-///
 /// **Local / same-store path only.** Crossing receive must use
 /// [`lower_after_crossing`] after [`validate_crossing_before_lower`].
 pub(crate) fn lower_record(record: &KyzoRecord) -> RecordLowering {
@@ -113,7 +109,6 @@ pub(crate) fn lower_record(record: &KyzoRecord) -> RecordLowering {
 }
 
 /// Build a crossing envelope from an admitted record + its certificate.
-///
 /// Evidence demand follows semantic surface: interpreted surfaces declare
 /// evidence required; [`SemanticSurface::None`] does not.
 pub(crate) fn crossing_envelope_from_record(
@@ -150,7 +145,6 @@ pub(crate) fn crossing_envelope_from_record(
 }
 
 /// Lowering sealed under the origin schema cut (#270 T3 / seat 69).
-///
 /// Equality and [`OriginSealedLowering::replay_digest`] include the cut —
 /// carrying-but-ignoring `origin_schema_cut` is deleted. A different local
 /// Catalog cut cannot reshape this via [`OriginSealedLowering::under_local_cut`].
@@ -225,7 +219,6 @@ impl OriginSealedLowering {
 }
 
 /// Lower a crossing record only after full contract validation (#270 T1/T3).
-///
 /// Requires [`CrossingValidated`] from [`validate_crossing_before_lower`].
 /// Consumes `origin_schema_cut` to seal [`OriginSealedLowering`] — kind
 /// mismatch refuses in release (not `debug_assert`); local Catalog
@@ -243,7 +236,6 @@ pub(crate) fn lower_after_crossing(
         return Err(CrossingRefuse::RecordIdentityMismatch);
     }
     // Consume origin_schema_cut: seal lowering under it (not a local Catalog cut).
-    // under_local_cut / replay_digest constrain meaning to this cut in release.
     let origin_schema_cut = validated.origin_schema_cut();
     let custody_key = validated.custody().key();
     let rows = lower_record(record);
@@ -749,7 +741,6 @@ mod tests {
         let mut scopes = ScopeManifestTable::new();
         scopes.set(scope, ScopeManifestStatus::Verified);
 
-        // Claim with None surface → evidence not required.
         let envelope = super::crossing_envelope_from_record(
             &record,
             &cert,
@@ -848,7 +839,6 @@ mod tests {
             sign_admission_parts(&parts_a, &key).map_err(|e| miette!("sign A: {e}"))?;
         let cert_a = mint_admission_certificate(parts_a).map_err(|e| miette!("mint A: {e}"))?;
 
-        // B: different claim content → distinct content digest / local_id.
         let record_b = admit_kind(construct::claim(
             StatementSubject::new(DataValue::from("intruder")),
             crate::data::statement::StatementPredicate::new("part_of")
@@ -905,7 +895,6 @@ mod tests {
             "different content must make PromotionMeaning diverge"
         );
 
-        // Same-content replay: re-bind from identical record+cert → equal.
         let meaning_a_again = record_a.promotion_meaning(&cert_a, tenant);
         assert_eq!(
             prove_promotion_replay(&meaning_a, &meaning_a_again),
@@ -977,7 +966,6 @@ mod tests {
             "token must seal A's certificate record digest"
         );
 
-        // B: a DIFFERENT Claim record that never passed crossing validation.
         let b = admit_kind(construct::claim(
             StatementSubject::new(DataValue::from("intruder")),
             crate::data::statement::StatementPredicate::new("part_of")
@@ -1050,7 +1038,6 @@ mod tests {
         scopes.set(scope, ScopeManifestStatus::Verified);
 
         // Envelope claims Entity while record is Claim — validate would pass
-        // envelope-vs-cert; lower_after_crossing must still refuse KindMismatch.
         let mismatched = CrossingEnvelope::new(CrossingEnvelopeParts {
             kind: CrossingKind::Entity,
             schema_version: *cert.protocol_version(),

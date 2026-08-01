@@ -113,10 +113,6 @@ use kyzo_model::program::symbol::Symbol;
 use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::value::DataValue;
 
-// ---------------------------------------------------------------------------
-// Config.
-// ---------------------------------------------------------------------------
-
 /// How a [`Gazetteer`] folds case while matching.
 ///
 /// Engine complete; query host `rules::gazetteer` is [OPEN] (stub module).
@@ -136,10 +132,6 @@ impl GazetteerConfig {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Typed errors.
-// ---------------------------------------------------------------------------
 
 /// A dictionary entity carried an empty surface form. A zero-width pattern
 /// matches at every position and cannot yield a truthful span, so it is a
@@ -164,10 +156,6 @@ pub(crate) struct GazetteerEmptySurface {
 #[diagnostic(code(index::gazetteer::build_failed))]
 pub(crate) struct GazetteerBuildFailed;
 
-// ---------------------------------------------------------------------------
-// The dictionary relation's schema.
-// ---------------------------------------------------------------------------
-
 /// The canonical dictionary shape: one key column `entity` of the given type,
 /// one non-key `surfaces` column of `List<String>`. The lifecycle tier can
 /// mint the relation from this; [`compile_dictionary`] expects exactly this
@@ -190,10 +178,6 @@ pub(crate) fn gazetteer_dict_metadata(entity_type: ColType) -> StoredRelationMet
         }],
     }
 }
-
-// ---------------------------------------------------------------------------
-// Compiled automaton.
-// ---------------------------------------------------------------------------
 
 /// A dictionary compiled into a matchable automaton. Built by
 /// [`compile_dictionary`]; matched by [`Gazetteer::tag`]. Immutable once
@@ -368,10 +352,6 @@ impl Gazetteer {
         self.entities_by_pattern.len()
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests: the engine's executable law.
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

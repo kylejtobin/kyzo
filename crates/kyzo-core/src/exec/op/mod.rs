@@ -122,7 +122,6 @@
 //!
 //! The delta discipline (the seam contract of `query/eval.rs::RuleBody`):
 //! `iter` takes `delta_rule: Option<AtomOccurrence>`; when it names
-//! occurrence `k`, **only** the one [`TempStoreRA`] built for that body
 //! position reads its store's *delta* instead of its total — every OTHER
 //! occurrence, including another occurrence of the same store, reads its
 //! total — while negation ([`NegJoin`]) always reads totals regardless.
@@ -192,7 +191,6 @@ pub(crate) use transform::{FilteredRA, ReorderRA, UnificationKind, UnificationRA
 pub(crate) type TupleIter<'a> = Box<dyn Iterator<Item = Result<Tuple>> + 'a>;
 
 /// The batched **filter** (+ column elimination) operator. Consumes its
-/// parent's batch stream and, for each batch, applies the residual
 /// predicates row by row over the contiguous buffer with one reused stack,
 /// then drops eliminated columns. A batch that is wholly rejected is not
 /// emitted (the loop pulls the next parent batch) — an operator never yields
@@ -262,7 +260,6 @@ impl Iterator for BatchFilter<'_> {
 )]
 pub(crate) struct PlanInvariantError(pub(crate) &'static str);
 
-/// A row decoded from a stored relation was shorter than a column the plan
 /// needs to read from it. `decode_tuple_from_kv`'s arity is only a capacity
 /// hint (`data/tuple.rs`) — the decoded length comes from the stored bytes,
 /// so a truncated or corrupt stored value yields a short row. Reading past
@@ -280,8 +277,6 @@ pub struct StoredRowTooShortError(
     #[label] pub(crate) SourceSpan,
 );
 
-/// Typed lookup for "every referenced rule has a store" (upstream panic
-/// sites: three `stores.get(..)` panic-on-miss in this file).
 pub(crate) fn epoch_store_of<'m>(
     stores: &'m BTreeMap<MagicSymbol, EpochStore>,
     key: &MagicSymbol,
@@ -323,7 +318,6 @@ pub(crate) fn mark_unused_bindings(
 }
 
 /// Mark unused bindings, extend `used` with keep-alive symbols, recurse into
-/// `child` — ONE seat for NegJoin / FilteredRA / UnificationRA (copy_detector).
 pub(crate) fn eliminate_child_temp_vars(
     child: &mut RelAlgebra,
     mark_bindings: impl IntoIterator<Item = Symbol>,
@@ -341,7 +335,6 @@ pub(crate) fn eliminate_child_temp_vars(
 // The operator tree
 // ─────────────────────────────────────────────────────────────────────────
 
-/// One node of a compiled rule body. See the module docs for the essence;
 /// see each payload type for its semantics.
 ///
 /// Index search (HNSW/FTS/LSH) is the landed `Search` variant below —
@@ -373,7 +366,6 @@ pub enum RelAlgebra {
     /// Append one computed column (`binding = expr`), or one row per list
     /// element (`binding in expr`).
     Unification(Box<UnificationRA>),
-    /// An index search (HNSW/FTS/LSH): for each parent row, evaluate the
     /// query expression, run the engine's pure search once, and append each
     /// result row (base row + the engine's extra columns).
     Search(Box<SearchRA>),
@@ -404,7 +396,6 @@ impl RelAlgebra {
     }
 
     /// Resolve every symbol reference inside this tree's expressions to a
-    /// tuple position for `Expr::eval`. Called once,
     /// at the end of `compile_magic_rule_body`; iteration never resolves a
     /// name again.
     pub(crate) fn fill_binding_indices_and_compile(&mut self) -> Result<()> {
@@ -683,7 +674,6 @@ impl RelAlgebra {
     /// row source — neither has join semantics as an RHS.)
     ///
     /// Does **not** capture the right row as a provenance premise; use
-    /// [`Self::join_capturing_premise`] for positive body literals.
     pub(crate) fn join(
         self,
         right: RelAlgebra,
@@ -755,7 +745,6 @@ impl RelAlgebra {
     /// stored-relation scan, or any of the three time-travel shapes
     /// (as-of, `@spans`, `@delta`/`@delta_sys`) are all accepted — story
     /// #86 closed `NegationOverTimeTravelError`, the last refusal here,
-    /// once the operator tier grew a serving strategy for each; anything
     /// else is a typed invariant error (the compiler never builds it).
     pub(crate) fn neg_join(
         self,
@@ -792,7 +781,6 @@ impl RelAlgebra {
         })))
     }
 
-    /// Mark for elimination every column not in `used`, recursively; the
     /// tuples shed the columns during iteration (`eliminate_from_tuple`).
     pub(crate) fn eliminate_temp_vars(&mut self, used: &BTreeSet<Symbol>) -> Result<()> {
         match self {
@@ -1164,7 +1152,6 @@ mod tests {
         Ok(())
     }
 
-    /// `InnerJoin::iter_batched`'s unit-left fast path must NOT fire for a
     /// data-bearing singleton Fixed left: `is_unit` requires empty bindings,
     /// not just a single row. Today the compiler only ever seeds `unit`, so
     /// no compiled plan reaches this shape through the current compiler —
@@ -1421,7 +1408,6 @@ mod tests {
 
         // …and a time-travel scan as negation RHS now CONSTRUCTS (story
         // #86 lifted `NegationOverTimeTravelError`, upstream's abort site
-        // for this exact shape): it becomes `NegRight::StoredWithValidity`,
         // not a refusal.
         let vld_scan = RelAlgebra::relation(
             vec![sym("k"), sym("at")],
@@ -1446,13 +1432,11 @@ mod tests {
     // ─────────────────────────────────────────────────────────────────────
     // Batched GENERAL join (non-unit left): the batched path must
     // reproduce the iterator path's output exactly — same rows, same
-    // order — for the native prefix-join case (`InnerJoin::iter_batched`'s
     // dispatch to `StoredRA`/`TempStoreRA`/`StoredWithValidityRA`
     // `prefix_join_batched`).
     // ─────────────────────────────────────────────────────────────────────
 
     /// A general join (Stored point-lookup on the right) at the three
-    /// sizes that matter for a batched left: one under `BATCH_ROWS`, one
     /// exactly `BATCH_ROWS`, and one that overflows into a second left
     /// batch. Half the left keys have no right-side match, so the probe's
     /// miss path is exercised too. Iterator and batched outputs must be

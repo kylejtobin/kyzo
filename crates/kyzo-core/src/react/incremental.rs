@@ -501,10 +501,6 @@ pub(crate) enum IncrementalRejection {
     Recursive,
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// Translation: a real compiled query -> this module's IR
-// ─────────────────────────────────────────────────────────────────────────
-//
 // `data::program::MagicAtom` (the magic-set-rewritten tier, one stratum
 // short of the final `RelAlgebra` lowering) is the right source, not
 // `RelAlgebra` itself: by the time atoms reach `RelAlgebra`, negation has

@@ -63,10 +63,6 @@ use kyzo_model::program::op::{OP_GE, OP_LT, OP_MOD};
 use kyzo_model::program::span::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 
-// ---------------------------------------------------------------------------
-// Local schema helpers (the draft's live in `mod tests`; kept private there).
-// ---------------------------------------------------------------------------
-
 fn col(name: &str, coltype: ColType) -> ColumnDef {
     ColumnDef {
         name: Symbol::new(name, SourceSpan::empty()),
@@ -78,10 +74,6 @@ fn col(name: &str, coltype: ColType) -> ColumnDef {
 fn input_handle(name: &str, metadata: StoredRelationMetadata) -> InputRelationHandle {
     InputRelationHandle::from_metadata(name, metadata)
 }
-
-// ---------------------------------------------------------------------------
-// Deterministic vector/row generation.
-// ---------------------------------------------------------------------------
 
 /// A reproducible f64 in [-1, 1) (24 bits of entropy, so every value is
 /// exactly representable at f32 precision too).
@@ -126,10 +118,6 @@ fn seeded_permutation(rows: &[Tuple], seed: u64) -> Vec<Tuple> {
     }
     out
 }
-
-// ---------------------------------------------------------------------------
-// Schema / manifest parameterized on dimension (the draft's helpers are dim-2).
-// ---------------------------------------------------------------------------
 
 fn hbase_metadata(dim: usize) -> StoredRelationMetadata {
     StoredRelationMetadata {
@@ -192,16 +180,6 @@ fn hsetup(
     tx.commit().map_err(|e| miette!("{e}"))?;
     Ok((base, idx, m))
 }
-
-// ---------------------------------------------------------------------------
-// FilterSpec: one predicate, TWO independent realizations.
-//   - `bytecode()` drives the ENGINE (compiled, over the appended output row).
-//   - `passes()`   drives the ORACLE (native Rust, over the base row).
-// The engine's filter sees base row `++ [field, field_idx, distance, vector]`
-// (draft `hnsw_knn` contract). Our filters reference only the key column
-// (tuple_pos 0), unaffected by the appended columns — but the harness is shaped
-// so a distance-referencing filter is a one-line addition.
-// ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy, Debug)]
 enum FilterSpec {
@@ -330,10 +308,6 @@ fn filter_at_selectivity(target: f64, striped: bool) -> FilterSpec {
 /// The four canonical bands the review named: 1%, 10%, 50%, 90%.
 const SELECTIVITY_BANDS: [f64; 4] = [0.01, 0.10, 0.50, 0.90];
 
-// ---------------------------------------------------------------------------
-// Ground-truth oracle: exact filtered k-nearest by full linear scan.
-// ---------------------------------------------------------------------------
-
 /// The exact filtered nearest neighbours of `q` among `rows`, as ordered keys
 /// (nearest first). Distance is the manifest metric through `IndexVec` (matches
 /// the engine's arithmetic exactly); ties broken by ascending key so the order
@@ -363,10 +337,6 @@ fn brute_force_filtered_knn(
     scored.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
     Ok(scored.into_iter().take(k).map(|(_, key)| key).collect())
 }
-
-// ---------------------------------------------------------------------------
-// Recall meter.
-// ---------------------------------------------------------------------------
 
 /// Recall@k = |engine ∩ truth| / min(k, |truth|).
 fn recall_at_k(engine_keys: &[i64], truth_keys: &[i64], k: usize) -> f64 {
@@ -491,13 +461,6 @@ const P2_K: usize = 10;
 const P2_EF: usize = 32;
 const P2_CORPUS_SEED: u64 = 7;
 const P2_QUERY_SEED: u64 = 99;
-
-// ---------------------------------------------------------------------------
-// The instruments as tests. Recall assertions AGAINST the new path are Phase 2
-// (they need the new entry point). Phase 1 proves the ropes are sound: the
-// sweep hits its bands, the oracle is exact and total-ordered, the determinism
-// comparator bites, and the baseline table computes end-to-end.
-// ---------------------------------------------------------------------------
 
 /// The sweep generator lands each band within tolerance over a real corpus.
 #[test]
@@ -1114,13 +1077,6 @@ fn engine_ordering_is_total_under_ties() -> Result<()> {
     );
     Ok(())
 }
-
-// ---------------------------------------------------------------------------
-// Story #87 — the min(k, matches) law, generatively and adversarially, plus
-// the thread-count determinism obligation and the filter-matches-everything
-// differential against the unfiltered baseline (the "old post-filter path,
-// proven answer-identical" requirement).
-// ---------------------------------------------------------------------------
 
 /// THE LAW, generatively: for any filter and any `k`, a filtered search
 /// returns exactly `min(k, M)` rows and every returned row satisfies the
@@ -1945,11 +1901,6 @@ fn graph_plan_tie_break_at_k_boundary_is_thread_count_invariant() -> Result<()> 
     }
     Ok(())
 }
-
-// ---------------------------------------------------------------------------
-// Story #376 T13 — filtered-ANN-under-churn first milestone.
-// New code: no `.unwrap()`, no lossy `as` casts (Claude whip).
-// ---------------------------------------------------------------------------
 
 const T13_N: i64 = 200;
 const T13_DIM: usize = 16;

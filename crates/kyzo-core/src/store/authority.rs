@@ -73,7 +73,6 @@ impl Entropy {
 }
 
 /// Durable incarnation identity: `(OpenOrdinal, Entropy)`.
-///
 /// WAL-headed, seal-bound, included in leave-is-free packs. Historical
 /// recycle inside one WAL lineage is Unconstructible — mint only via
 /// [`IncarnationMintCap`].
@@ -96,10 +95,8 @@ impl IncarnationId {
 }
 
 /// Session-only mint capability for [`IncarnationId`].
-///
 /// Obtained when opening with matching [`WriteAuthority`]. Never exported,
 /// never serialized, never present in packs (decisions.md §65).
-///
 /// No `Serialize` / `Deserialize` — serialization of MintCap is Unconstructible.
 #[derive(Debug)]
 pub struct IncarnationMintCap {
@@ -164,7 +161,6 @@ impl WriteTokenId {
 
 
 /// Immutable affine signing capability that alone authorizes the SweepDoor.
-///
 /// Minted at genesis / recovery / fork. Lives in the client keystore or HSM
 /// beside the root KEK — never in Store artifacts or leave-is-free packs,
 /// never `derive(KEK, …)`. No mutable watermark; all mutable floors live in
@@ -207,7 +203,6 @@ impl WriteAuthority {
 }
 
 /// Sealed FROST group verifying key for recovery quorum (RFC 9591).
-///
 /// Distinct class from WriteAuthority. This is the **group** verifying key
 /// from `frost-ed25519` (ZcashFoundation) — not an enumerated per-custodian
 /// ed25519 key. Custodian shares live off-artifact; only this group key is
@@ -228,7 +223,6 @@ impl RecoveryPublicKey {
 }
 
 /// Optional FROST recovery matrix sealed at genesis only.
-///
 /// Seals a FROST (RFC 9591 / `frost-ed25519`) **group verifying key** plus
 /// threshold metadata (`threshold` = min_signers, `max_signers` = n) so
 /// proactive share refresh (`frost_ed25519::keys::refresh`) can be seated
@@ -260,7 +254,6 @@ pub enum RecoveryMatrixRefuse {
 
 impl RecoveryMatrix {
     /// Seal a FROST recovery matrix at genesis. No post-genesis mutation path.
-    ///
     /// `group_verifying_key` must deserialize as a `frost-ed25519` VerifyingKey
     /// (RFC 9591 group key). Enumerated N-of-M ed25519 custodian public keys
     /// are condemned — threshold crypto is FROST only.
@@ -307,7 +300,6 @@ impl RecoveryMatrix {
 }
 
 /// Process-local address fence: one writer among Engines sharing one token.
-///
 /// Not protection against `cp -r` — local mutex only → [`AddressFenceRefuse::StoreFenced`].
 #[derive(Debug)]
 pub struct AddressFence {
@@ -337,7 +329,6 @@ impl AddressFenceKey {
 }
 
 /// Process-local registry of held fences (one claim per store address).
-///
 /// Interior mutability is the stated concurrency need: multiple Engine
 /// handles in one process share the fence table.
 #[derive(Debug)]
@@ -370,12 +361,10 @@ impl AddressFenceTable {
     }
 
     /// Release a held fence (Drop path for orderly unlock).
-    ///
     /// Poisoned mutex → no-op release (process already crashed a holder);
     /// never panics on the Drop path.
     pub fn release(&self, fence: AddressFence) {
         let key = fence_key(fence.store_id, &fence.token_id);
-        // Poisoned mutex → no-op release (process already crashed a holder).
         if let Ok(mut held) = self.held.lock() {
             held.remove(&key);
         }

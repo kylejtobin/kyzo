@@ -115,7 +115,6 @@ fn sat_add_i64(a: i64, b: i64) -> i64 {
     match a.checked_add(b) {
         Some(v) => v,
         None if b > 0 => {
-            // Published saturating climb for harness time coords.
             i64::MAX
         }
         None => {
@@ -133,11 +132,6 @@ use kyzo_oracle::{
 };
 
 use crate::gauntlet::{MEET_OPS, Rng, lit, named, v, x, y, z};
-
-// ════════════════════════════════════════════════════════════════════════
-// CAPABILITY 3 — sys-axis generative coverage: the unified temporal
-// oracle's OWN internal consistency, generatively.
-// ════════════════════════════════════════════════════════════════════════
 
 #[derive(Debug, Clone)]
 struct TemporalGenParams {
@@ -302,8 +296,6 @@ fn program_grid(history: &[Event], axis: Axis) -> Vec<i64> {
         })
         .collect();
     pts.push(i64::MIN);
-    // Not `i64::MAX` itself: it is `OPEN_END`/`AsOf::current()`'s shared
-    // sentinel, never a real stored coordinate.
     pts.push(i64::MAX - 1);
     pts.sort_unstable();
     pts.dedup();
@@ -352,7 +344,6 @@ fn grid_differential_over_generated_temporal_programs() {
                 for &fixed_valid in &[match history.first() {
                         Some(e) => e.valid(),
                         None => {
-                            // Empty history — valid epoch 0.
                             0
                         }
                     }, 0] {
@@ -471,7 +462,6 @@ fn diff_composition_law_holds_with_randomized_bounds_over_generated_histories() 
         let fixed_valid = match history.first() {
                         Some(e) => e.valid(),
                         None => {
-                            // Empty history — valid epoch 0.
                             0
                         }
                     };
@@ -589,8 +579,6 @@ fn per_literal_asof_pushdown_matches_independent_single_coordinate_resolution() 
         "expected hundreds of pushdown-consistency cases, ran {cases}"
     );
 }
-
-// ── Hand mutants (three pairs) ───────────────────────────────────────────
 
 fn resolve_erase_as_retract_bug(history: &[Event], key: &Tuple, at: AsOf) -> Option<Tuple> {
     let mut instants: Vec<i64> = history
@@ -862,11 +850,6 @@ fn mutant_weakening_the_grid_to_stored_coordinates_only_blinds_it_to_a_short_end
          (without={caught_without_ticks}, with={caught_with_ticks})"
     );
 }
-
-// ════════════════════════════════════════════════════════════════════════
-// CAPABILITY 4 — refusal-lift generator: temporal negation, recursion,
-// both aggregation families over historical bases.
-// ════════════════════════════════════════════════════════════════════════
 
 fn gen_temporal_existential_history(
     rng: &mut Rng,

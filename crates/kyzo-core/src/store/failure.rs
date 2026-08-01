@@ -27,7 +27,6 @@ use super::objects::ObjectRef;
 use super::open::StoreId;
 
 /// Inclusive byte-range identity for a quarantined keyspace slice (§50).
-///
 /// Scoped by table/keyspace identity so misplaced-but-intact blocks are
 /// caught (§49). Ordinary tenant queries never see quarantine metadata (§82).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -72,7 +71,6 @@ impl QuarantineRange {
 }
 
 /// Mint a quarantine range for carriage into [`FailureLattice`] (§50).
-///
 /// Public door for scoped checksum-mismatch reports. Never escalates to
 /// whole-store [`FailureLattice::Poisoned`].
 pub fn mint_quarantine(keyspace: KeyspaceId, start: Vec<u8>, end: Vec<u8>) -> QuarantineRange {
@@ -80,7 +78,6 @@ pub fn mint_quarantine(keyspace: KeyspaceId, start: Vec<u8>, end: Vec<u8>) -> Qu
 }
 
 /// Vendor-shaped scoped checksum mismatch carried into the lattice (§50/§52).
-///
 /// fjall must not import kyzo-core: the boundary maps a scoped fault into this
 /// carriage; [`FailureLattice`] is the authority. A scoped mismatch never
 /// becomes whole-store Poisoned.
@@ -164,7 +161,6 @@ impl KeyspaceId {
 }
 
 /// Closed failure lattice (§52).
-///
 /// - Quarantined-only → reads/writes outside ranges OK; quarantined ranges refuse.
 /// - Poisoned → operator recover/verify only.
 /// - Both → Poisoned dominates while quarantine metadata is retained for diagnosis.
@@ -235,7 +231,6 @@ impl FailureLattice {
     }
 
     /// Absorb a vendor carriage report into this lattice (§50/§52).
-    ///
     /// Scoped mismatch → quarantine; unknown-invariant → Poisoned. Ordinary
     /// scoped checksum mismatch never alone yields Poisoned.
     pub fn report(self, carriage: CarriageReport) -> FailureLattice {
@@ -324,7 +319,6 @@ impl DebtLedger {
 }
 
 /// Unforgeable capability for operator health / quarantine / failure topology (§82).
-///
 /// Same pattern as [`crate::store::open::StoreOpen`]: private field, mint only
 /// via [`OperatorCap::mint`] (`pub(crate)`). Composition-root / host only —
 /// ordinary tenant doors have **no path** to mint or pass this token. A free
@@ -356,7 +350,6 @@ pub enum TenantBlindRefuse {
 }
 
 /// Operator-surface metric refuse — authority absent or Cap door required (§82).
-///
 /// Wired-complete or typed refuse: never a pub-raw zero standing in for an
 /// unbuilt seat-44 / seat-22 / seat-36 feed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
@@ -380,7 +373,6 @@ pub enum OperatorHealthRefuse {
 }
 
 /// Point-in-time storage counters carried on the operator ephemeral surface.
-///
 /// Distinct from the fjall `StorageStats` type so the failure seat never
 /// imports the backend — operators project these as relation rows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -412,7 +404,6 @@ impl StorageStatsSnapshot {
 
 /// Ephemeral engine counters queryable as relations on the sealed operator
 /// surface (§82): in-flight tx + storage-stats only.
-///
 /// Compaction-debt renders from the one [`DebtLedger`]; index-status renders
 /// from [`crate::session::generation::IndexStatus`] — neither is duplicated
 /// here as a second counter.
@@ -451,7 +442,6 @@ impl EphemeralEngineState {
 }
 
 /// Operator-sealed health surface (§82) — tenant-blind.
-///
 /// Ephemeral engine state is queryable as relations on this sealed operator
 /// door. Debt ledger, last-verify digest, and quarantine are **private**:
 /// Cap-gated doors set them; render doors project them. Reclaimable /
@@ -565,7 +555,6 @@ impl OperatorHealthSurface {
     }
 
     /// Select quarantine ranges — requires [`OperatorCap`] (§82).
-    ///
     /// Without Cap this method is unreachable: Cap-absent doors never obtain
     /// an [`OperatorCap`] to pass. The private `quarantine` field is not a
     /// public leak.
@@ -576,7 +565,6 @@ impl OperatorHealthSurface {
 
 impl FailureLattice {
     /// Inspect failure topology — requires [`OperatorCap`] (§82).
-    ///
     /// Cap-absent callers cannot invoke this; tenant projectors refuse before
     /// reaching here ([`TenantBlindRefuse::FailureTopologyForbidden`]).
     pub fn topology_for(&self, _cap: &OperatorCap) -> &FailureLattice {
@@ -585,7 +573,6 @@ impl FailureLattice {
 }
 
 /// Closed StoreRefuse ledger — the Refused claim-tag ledger in types (§42+).
-///
 /// Every Store-door refuse in the 07 refused ledger lands here. Session-door
 /// admission refuses (footprint / admit / composition) and Engine starts-or-not
 /// refuses stay exclusive to their seats — never merged into this enum.
@@ -803,7 +790,6 @@ mod tests {
         // Different keyspace is unaffected (same key bytes still serve).
         assert!(lattice.admit_key(other_ks, b"b").is_ok());
 
-        // Unknown-invariant alone → whole-store Poisoned; no user key serves.
         let poisoned = FailureLattice::Healthy
             .report(CarriageReport::UnknownInvariant(UnknownInvariantCarriage));
         assert!(matches!(

@@ -32,7 +32,6 @@
 //!    and feeds it into the engine's filter-aware HNSW path
 //!    (`Hnsw::knn` → `hnsw_knn_filtered`). That path is ACORN-shaped:
 //!    predicate-agnostic graph walk (Design V — expand through
-//!    filter-failing nodes for connectivity; admit only matches into the
 //!    result), with selective filters routed to exact scan and a load-bearing
 //!    scan fallback so `min(k, M)` is a result-set guarantee, not a recall
 //!    hope. Soft "post-filter a distance-only candidate pool" is deleted.

@@ -120,10 +120,6 @@ use kyzo_model::program::symbol::Symbol;
 use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::value::{DataValue, ScanBound, Tuple};
 
-// ---------------------------------------------------------------------------
-// Projection kind — `K` of the shared build→seal→query machine (#305).
-// ---------------------------------------------------------------------------
-
 /// Geospatial index as a projection kind: one `K` of
 /// [`ProjectionBuilder`](crate::project::projection::ProjectionBuilder) /
 /// [`Sealed`](crate::project::projection::Sealed).
@@ -137,10 +133,6 @@ use kyzo_model::value::{DataValue, ScanBound, Tuple};
 pub(crate) struct Spatial;
 
 impl ProjectionKind for Spatial {}
-
-// ---------------------------------------------------------------------------
-// Format constants (on-disk).
-// ---------------------------------------------------------------------------
 
 /// Bits of precision per coordinate dimension. **This is a format decision.**
 /// Two 32-bit quantized coordinates interleave into one 64-bit Morton code — a
@@ -167,11 +159,6 @@ const LON_MAX: f64 = 180.0;
 const SPLIT_BUDGET: usize = 1024;
 
 const DEG_TO_RAD: f64 = std::f64::consts::PI / 180.0;
-
-// ---------------------------------------------------------------------------
-// Typed errors (admission + query boundary policy). Corruption reuses the
-// shared `IndexRowCorrupt`.
-// ---------------------------------------------------------------------------
 
 /// Which geographic coordinate axis a typed spatial refusal names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -264,10 +251,6 @@ pub(crate) struct CoordNotNumber {
     pub(crate) field: usize,
     pub(crate) got: CoordNotNumberObserved,
 }
-
-// ---------------------------------------------------------------------------
-// GeoPoint: a coordinate proven fit for the curve.
-// ---------------------------------------------------------------------------
 
 /// A coordinate ADMITTED to the index: finite, `lat ∈ [-90,90]`,
 /// `lon ∈ [-180,180]`. Fields are private; [`admit`](Self::admit) is the sole
@@ -367,12 +350,6 @@ fn quantize(v: f64, lo: f64, hi: f64) -> u32 {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Morton (Z-order) codec. lat → even bit positions, lon → odd. Explicit magic
-// masks; big-endian on the wire (see the module docs). Decode is for tests /
-// verification — the hot path never needs it (exact lat/lon are stored).
-// ---------------------------------------------------------------------------
-
 /// Spread the 32 bits of `x` so that bit `i` lands at bit `2i` (even positions).
 fn spread32(x: u32) -> u64 {
     let mut x = u64::from(x);
@@ -404,10 +381,6 @@ fn morton_encode(qx: u32, qy: u32) -> u64 {
 fn morton_decode(code: u64) -> (u32, u32) {
     (compact32(code), compact32(code >> 1))
 }
-
-// ---------------------------------------------------------------------------
-// The manifest and the index relation's schema.
-// ---------------------------------------------------------------------------
 
 /// The persisted description of one spatial index. Serialized (msgpack, struct
 /// maps) as the payload of the base relation's `IndexKind::Spatial` catalog
@@ -449,10 +422,6 @@ pub(crate) fn spatial_index_metadata(base: &StoredRelationMetadata) -> StoredRel
         ],
     )
 }
-
-// ---------------------------------------------------------------------------
-// Index maintenance.
-// ---------------------------------------------------------------------------
 
 /// Read the point named by the manifest out of one base-relation tuple, admitted.
 fn extract_point(tuple: &[DataValue], manifest: &SpatialIndexManifest) -> Result<GeoPoint> {
@@ -538,10 +507,6 @@ pub(crate) fn spatial_del<T: WriteTx>(
     tx.del(&key_bytes)
 }
 
-// ---------------------------------------------------------------------------
-// Bounding box: a query region proven fit for a range scan.
-// ---------------------------------------------------------------------------
-
 /// A non-wrapping lat/lon query box, both corners admitted and ordered
 /// (`lat_lo ≤ lat_hi`, `lon_lo ≤ lon_hi`). Fields are private; [`admit`](Self::admit)
 /// is the sole constructor. A box crossing the antimeridian is refused at
@@ -617,10 +582,6 @@ impl BoundingBox {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Curve range decomposition (recursive quadtree / LITMAX-BIGMIN).
-// ---------------------------------------------------------------------------
 
 /// A query box in quantized integer coordinates (inclusive on all four sides).
 #[derive(Debug, Clone, Copy)]
@@ -705,10 +666,6 @@ fn decompose_cell(level: u32, x0: u64, y0: u64, qbox: &QBox, out: &mut Vec<(u64,
     decompose_cell(level - 1, x0 + half, y0 + half, qbox, out);
 }
 
-// ---------------------------------------------------------------------------
-// Row decode.
-// ---------------------------------------------------------------------------
-
 /// One decoded index posting: the base row's key columns and the exact point.
 struct Posting {
     src_key: Tuple,
@@ -776,10 +733,6 @@ fn fetch_base(
     })
 }
 
-// ---------------------------------------------------------------------------
-// Bounding-box range query.
-// ---------------------------------------------------------------------------
-
 /// Every posting whose exact point lies in `bbox`, decoded, in ascending
 /// `(curve, src_key)` order — the natural order of scanning the merged Morton
 /// ranges. Shared by [`spatial_range_query`] and the k-NN ring scan.
@@ -827,10 +780,6 @@ fn spatial_range_query_body(
         .map(|p| fetch_base(tx, base, idx, p.src_key.as_slice()))
         .collect()
 }
-
-// ---------------------------------------------------------------------------
-// k-nearest-neighbour by expanding ring.
-// ---------------------------------------------------------------------------
 
 /// Whether spatial k-NN appends the distance column (P038 — sum, not bool).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1098,10 +1047,6 @@ fn spatial_knn_body(
         })
         .collect()
 }
-
-// ---------------------------------------------------------------------------
-// Tests: the engine's executable law.
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

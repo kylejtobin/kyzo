@@ -24,7 +24,6 @@ use crate::store::replica::{
 };
 
 /// Admitted record identity — derived view of the record content digest.
-///
 /// Private field: no public / anonymous constructor. One 32-byte value with
 /// the digest; [`RecordId`] does not store a second copy on the record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -32,7 +31,6 @@ pub struct RecordId([u8; 32]);
 
 impl RecordId {
     /// Admission-only derived view of the record content digest.
-    ///
     /// Call site law: only [`crate::session::admit::admit_record`] (and
     /// readers of an already-admitted digest).
     pub(crate) fn view_of(digest: RecordContentDigest) -> Self {
@@ -45,7 +43,6 @@ impl RecordId {
     }
 
     /// Federation-stable namespaced identity (#270 T2).
-    ///
     /// Binds this local id with origin authority, tenant, and content so
     /// distinct origins never collapse into one. Custody still keys through
     /// [`crate::store::replica::ReplicaKey`] — one authority, not a fork.

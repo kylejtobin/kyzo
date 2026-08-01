@@ -43,10 +43,8 @@ pub(crate) struct BatchRowOutOfRange {
 /// engine's currency is the positional tuple, the predicate/unification VM
 /// (`Expr::eval`) reads one `&[DataValue]` row at a time, and the batched
 /// scan (`BatchScanFilter`) decodes raw key/value bytes through one scratch
-/// `Tuple` (inline, no heap allocation for the common arity-<=3 row) and
 /// copies its values once into the flattened buffer — no per-row `Vec` or
 /// heap-backed row buffer survives past that copy. A columnar layout
-/// remains possible if a future profile justifies it; row-major is what
 /// serves the VM and the scan as they exist today.
 ///
 /// **Order is load-bearing.** A batch is an order-preserving window over the
@@ -63,7 +61,6 @@ pub(crate) struct Batch {
     /// Row end offsets into `values`: row `i` is `offsets[i-1]..offsets[i]`
     /// (row 0 starts at 0).
     offsets: Vec<usize>,
-    /// Positive-literal grounding rows collected so far for each batch row,
     /// in body order. `None` when the caller did not ask for premises
     /// (`want_premises` false) — operators must not allocate or touch this
     /// channel in that case. When `Some`, length equals [`Self::len`].
@@ -96,7 +93,6 @@ impl Batch {
         Ok(self.row_at(i))
     }
 
-    /// Infallible view for an index already proven `< len` (e.g. by
     /// iterating `0..self.len()`).
     fn row_at(&self, i: usize) -> &[DataValue] {
         let start = if i == 0 { 0 } else { self.offsets[i - 1] };
@@ -163,7 +159,6 @@ impl Batch {
         self.offsets.push(self.values.len());
     }
 
-    /// Premises already collected for row `i`, or empty when this batch is
     /// not tracking (`premises` is `None`).
     pub(crate) fn row_premises(&self, i: usize) -> Vec<Tuple> {
         match &self.premises {
@@ -351,7 +346,6 @@ impl<I: Iterator<Item = Result<(Slice, Slice)>>> Iterator for BatchScanFilter<I>
                     Some(Ok((k, v))) => {
                         if let Err(e) = batch.push_with(|buf| {
                             // `decode_key_into`/`extend_tuple_from_v` are
-                            // `Tuple`-typed (they `.push` one `DataValue` at
                             // a time), so the row decodes into a scratch
                             // `Tuple` first — inline, no heap allocation for
                             // the common arity-<=3 row — then its values
@@ -365,7 +359,6 @@ impl<I: Iterator<Item = Result<(Slice, Slice)>>> Iterator for BatchScanFilter<I>
                             buf.extend(row);
                             Ok(())
                         }) {
-                            // Decode refused; nothing was committed.
                             self.pending_err = Some(e);
                             break;
                         }

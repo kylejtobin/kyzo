@@ -61,7 +61,6 @@ impl ContentHash {
 
 
 /// Store-identity-prefixed durable object reference.
-///
 /// Cross-Store resolve → refuse (ObjectRefForeignStore). Bare keys without
 /// Store prefix are Unconstructible.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -354,7 +353,6 @@ impl StagingToken {
 }
 
 /// Logical object naming: Pending or Durable.
-///
 /// Exactly these two arms — delete_meter requires `Pending | Durable`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ObjectSlot {
@@ -438,7 +436,6 @@ impl VolatilePending {
 }
 
 /// Physical mid stage: permanence in flight; inherits `expires_at`.
-///
 /// Before cut: confirm or reclaim. At/past cut: reclaim only.
 /// Ordinary read of a candidate is not licensed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -464,7 +461,6 @@ impl PermanenceCandidate {
         self.token
     }
 
-    /// Content hash.
     pub fn content_hash(&self) -> ContentHash {
         self.content_hash
     }
@@ -494,7 +490,6 @@ impl PermanenceCandidate {
 }
 
 /// Product of sealed durability dimensions — never a total-order ladder.
-///
 /// Dominance = every dimension ≥. Soft `SingleCopy ≤ ReplicatedN ≤ CrossRegion`
 /// ladders are deleted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -607,7 +602,6 @@ impl BackendContract {
 }
 
 /// Witness that staged bytes became Durable under a sealed class.
-///
 /// `mint` is constructor-guarded Unconstructible when `cut ≥ expires_at`.
 /// Repair requires dominating class (or explicit [`Downgrade`]) and
 /// content-hash-identical bytes.
@@ -639,7 +633,6 @@ impl PermanenceWitness {
     }
 
     /// Seal a permanence witness from already-proven parts (campaign / trust door).
-    ///
     /// Does not re-check StagingTTL — that law lives on [`PermanenceWitness::mint`].
     pub fn from_sealed(
         object_ref: ObjectRef,
@@ -657,7 +650,6 @@ impl PermanenceWitness {
 
     /// Repair path: re-stage content-hash-verified identical bytes under a
     /// dominating class (or after explicit Downgrade).
-    ///
     /// Incomparable proposal → [`ObjectRefuse::IncomparableClasses`] carrying
     /// both classes (seat 22) — never a panic.
     pub fn repair(
@@ -703,7 +695,6 @@ impl PermanenceWitness {
         self.object_ref
     }
 
-    /// Content hash.
     pub fn content_hash(&self) -> ContentHash {
         self.content_hash
     }
@@ -804,12 +795,10 @@ impl ReclaimCertificate {
         self.store_id
     }
 
-    /// Object id.
     pub fn object_id(self) -> ObjectId {
         self.object_id
     }
 
-    /// Certificate digest.
     pub fn digest(self) -> Digest32 {
         self.digest
     }
@@ -844,14 +833,12 @@ impl RetentionCertificate {
         self.covers_through
     }
 
-    /// Certificate digest.
     pub fn digest(self) -> Digest32 {
         self.digest
     }
 }
 
 /// Resolve a logical slot against the current cut / Store scope.
-///
 /// STAGED PENDING OPERATOR: declared-fn seat candidate — external call sites
 /// should migrate to [`ObjectSlot::resolve`].
 pub fn resolve(
@@ -872,7 +859,6 @@ pub enum ResolvedObject {
 }
 
 /// Store-owned GC for Durable bytes under a covering retention certificate.
-///
 /// STAGED PENDING OPERATOR: declared-fn seat candidate — prefer
 /// [`ObjectRef::gc_under`].
 pub fn gc_durable(
@@ -884,7 +870,6 @@ pub fn gc_durable(
 }
 
 /// Reclaim a PermanenceCandidate (lawful any time) or VolatilePending.
-///
 /// STAGED PENDING OPERATOR: declared-fn seat candidate — prefer
 /// [`PermanenceCandidate::reclaim_under`].
 pub fn reclaim_candidate(
@@ -895,7 +880,6 @@ pub fn reclaim_candidate(
 }
 
 /// Closed object-store driver trait — put/get/delete/list only.
-///
 /// Direct backend API calls bypassing this trait are banned (§15).
 /// Orphan put without a prior committed ObjectSlot/Record naming is
 /// Unconstructible at the Store door (federation cannot invent refs).

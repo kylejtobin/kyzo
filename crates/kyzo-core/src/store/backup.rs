@@ -60,7 +60,6 @@ const MAGIC: &[u8; 8] = b"KYZODMP2";
 
 /// Durable in-progress mark written before any dump pairs land, cleared only
 /// after the final [`Storage::sync`] of a successful restore (seat 26 / #374 T11).
-///
 /// Non-empty reserved key (fjall/lsm-tree reject empty keys). The leading NUL
 /// plus `kyzo.` namespace keeps it outside normal relation-prefixed dump pairs
 /// (8-byte relation id prefix) so it never collides with restored data.
@@ -107,7 +106,6 @@ pub struct DumpClockFloorViolation {
 /// to call this before a snapshot exists, so the snapshot-then-floor
 /// order the proof below depends on cannot be reordered by a future edit,
 /// exactly like [`FjallStorage::stamp_after_snapshot`](crate::store::fjall::FjallStorage).
-///
 /// PROOF the recorded floor bounds every stamp `_snapshot` can show: a
 /// write transaction mints its system stamp — and bumps the clock's
 /// floor-tracking atomic to that value — strictly before its commit can
@@ -121,7 +119,6 @@ pub struct DumpClockFloorViolation {
 /// the snapshot opens is `>=` every stamp that snapshot can show. (A floor
 /// that ends up higher than strictly necessary is harmless: the restore
 /// target just starts its own minting further ahead than it had to.)
-///
 /// Reading the floor BEFORE the snapshot broke this: a writer could mint
 /// AND commit entirely between the two reads, landing a row the snapshot
 /// (opened after) correctly includes while carrying a stamp the
@@ -197,13 +194,11 @@ pub fn dump_storage<S: Storage>(db: &S, path: impl AsRef<Path>) -> Result<()> {
     w.write_all(&version).into_diagnostic()?;
     // SNAPSHOT FIRST, FLOOR SECOND — see `floor_after_snapshot`'s doc
     // comment for the full proof. Reversing this order (floor, then
-    // snapshot) is the historical bug: a writer landing between the two
     // reads could commit a row the snapshot includes while carrying a
     // stamp the already-read floor never accounted for.
     let tx = db.read_tx()?;
     // The dump carries the source's system-clock floor: system stamps in
     // the dumped history must never be re-mintable by the restore
-    // target, or new writes could land AT or BELOW imported instants and
     // be shadowed by history.
     let floor = floor_after_snapshot(db, &tx)?;
     w.write_all(&floor.raw().to_be_bytes()).into_diagnostic()?;
@@ -237,7 +232,6 @@ pub fn dump_storage<S: Storage>(db: &S, path: impl AsRef<Path>) -> Result<()> {
 }
 
 /// Refuse when `db` still carries a restore-in-progress mark.
-///
 /// This is the completeness gate: a crash-interrupted restore reopened by a
 /// plain admit/open must not be presented as a smaller complete store.
 pub fn admit_complete_store<S: Storage>(db: &S) -> Result<()> {
@@ -249,7 +243,6 @@ pub fn admit_complete_store<S: Storage>(db: &S) -> Result<()> {
 }
 
 /// Open a fjall store and refuse if a restore-in-progress mark is present.
-///
 /// Prefer this over bare [`new_fjall_storage`] when admitting a path that may
 /// have been a restore target — bare open alone cannot see the mark's meaning.
 pub fn open_complete_store(path: impl AsRef<Path>) -> Result<FjallStorage> {
@@ -285,7 +278,6 @@ fn clear_restore_in_progress<S: Storage>(db: &S) -> Result<()> {
 }
 
 /// Apply dump pairs after the in-progress mark is already durable.
-///
 /// Not [`Storage::batch_put`]: that door refuses non-empty targets, and the
 /// mark must land *before* any pair so a mid-import crash stays distinguishable.
 fn put_restore_pairs<'a, S: Storage>(
@@ -314,12 +306,10 @@ fn put_restore_pairs<'a, S: Storage>(
 }
 
 /// Restore a dump produced by [`dump_storage`] into the storage.
-///
 /// This door restores a **KYZODMP2** portable dump only. Foreign leave-is-free
 /// packs are not admitted here — that path is [`import_leave_is_free`] under
 /// [`ImportCapability`] + chain/root verify (seat 80 / #359). Blind leave-is-free
 /// import without the ceremony is Unconstructible on this door.
-///
 /// The target must be **empty** and must not be accessed concurrently. Before
 /// any dump pair is applied, a durable in-progress mark is synced; that mark
 /// is cleared only after the restored pairs are synced. A crash-interrupted
@@ -354,7 +344,6 @@ pub fn restore_storage<S: Storage>(db: &S, path: impl AsRef<Path>) -> Result<()>
             FormatVersion::CURRENT,
         );
     }
-    // Raise the target's clock floor to the source's BEFORE importing:
     // the target must never mint a stamp at or below any instant in the
     // imported history, or new writes could be shadowed by it.
     let mut floor_bytes = [0u8; 8];
@@ -363,13 +352,11 @@ pub fn restore_storage<S: Storage>(db: &S, path: impl AsRef<Path>) -> Result<()>
     db.raise_clock_floor(kyzo_model::value::ValidityTs::of_micros(
         i64::from_be_bytes(floor_bytes),
     ))?;
-    // Mark durable *before* any dump pair — crash after this point leaves a
     // store that admit_complete_store refuses, not a costume-complete prefix.
     mark_restore_in_progress(db)?;
     db.sync()?;
     let iter = std::iter::from_fn(move || read_pair(&mut r).transpose());
     put_restore_pairs(db, Box::new(iter))?;
-    // Pairs applied; sync before clearing the mark so a crash between apply
     // and clear still reopens as incomplete (conservative; discard-and-re-run).
     db.sync()?;
     clear_restore_in_progress(db)?;
@@ -515,7 +502,6 @@ pub enum PackRefuse {
     Shredded,
     /// Origin StoreId already has a sealed trusted root; a different root
     /// cannot overwrite it.
-    ///
     /// First registration wins. Same root re-register is idempotent Ok on
     /// [`OriginRootRegistry::insert`]. Rotation is a separate explicit verb
     /// — never silent overwrite via insert.
@@ -574,7 +560,6 @@ impl LeaveIsFreePack {
     /// needle (DEK / KEK / plaintext shred-salt bytes) is still reachable
     /// inside pack-reachable sealed bytes — payload, each
     /// [`WrappedShredSalt`] ciphertext, and incarnation entropy.
-    ///
     /// Empty needles are a no-op Ok. Needle length zero is ignored (not a
     /// secret). Residual hits refuse as [`PackRefuse::ResidualSecretMaterial`]
     /// — the production door the crypto-shred deep reachability campaign
@@ -594,7 +579,6 @@ impl LeaveIsFreePack {
     }
 
     /// Deterministic content digest of this pack's sealed bytes/fields.
-    ///
     /// Content root = SHA-256 of the ONE [`encode_leave_is_free_pack`]
     /// [`CanonicalTranscript`](crate::store::transcript::CanonicalTranscript)
     /// bytes — never a hand-rolled field hasher (seat 59).
@@ -637,7 +621,6 @@ impl LeaveIsFreePack {
     }
 
     /// Claimed origin [`StoreId`] carried by this pack (first wrapped salt domain).
-    ///
     /// Ceremony trust is never taken from this claim alone — [`OriginRootRegistry`]
     /// must already hold a trusted root for this id (seat 80 / #374 T7).
     pub fn claimed_origin_store_id(&self) -> Result<StoreId, PackRefuse> {
@@ -649,7 +632,6 @@ impl LeaveIsFreePack {
 
     /// Independent [`ReplicaCutRecompute`] derived solely from this pack's
     /// sealed fields — never from a peer-delivered root (seat 80).
-    ///
     /// Crate-visible recompute only — unusable as the ceremony `local` anchor
     /// ([`ImportCapability::after_chain_root_verify`] always refuses bare cuts).
     /// Mint via [`OriginRootRegistry::after_chain_root_verify`].
@@ -662,7 +644,6 @@ impl LeaveIsFreePack {
             Some(w) => w.crypto_domain().fence_epoch(),
             None => crate::store::epoch::FenceEpoch::genesis(store_id),
         };
-        // Leave-is-free cut ordinal is the first dense successor of ZERO —
         // pack identity is content-bound; ordinal is cut protocol, not history length.
         let ordinal = CommitOrdinal::ZERO
             .successor()
@@ -678,7 +659,6 @@ impl LeaveIsFreePack {
     }
 
     /// Independently recompute this pack's chain root at the leave-is-free cut.
-    ///
     /// [`import_verify`] gates admission on `observed == capability.bound_root()`.
     pub fn recompute_root(&self) -> Result<StateRoot, PackRefuse> {
         Ok(self
@@ -690,18 +670,15 @@ impl LeaveIsFreePack {
 
 /// Receiver-held sealed registry: origin [`StoreId`] → trusted chain root at a
 /// known cut (seat 80 / #374 T7).
-///
 /// Established out-of-band when the receiver first accepts that origin. The
 /// leave-is-free PACK never supplies the trust root — ceremony `local` resolves
 /// here only.
-///
 /// **External visibility (DELIBERATE, #359 / #375 T5):** not re-exported from
 /// `store` — crate-internal ceremony only. This is fail-closed product state
 /// for external leave-is-free import, not unfinished wiring. External callers
 /// reach only [`ImportCapability::after_chain_root_verify`] (hard-refuse) and
 /// [`ImportCapability::unverified`]; both yield
 /// [`PackRefuse::ForeignHistoryUnverified`] on [`import_leave_is_free`].
-///
 /// [`Self::insert`] is operator/genesis-scoped: untrusted or peer input must
 /// never reach it unvalidated. Seal-once per StoreId — first root wins;
 /// same root re-register is idempotent; a different root refuses
@@ -722,7 +699,6 @@ impl OriginRootRegistry {
     }
 
     /// Register the trusted chain root for an origin StoreId (operator/genesis door).
-    ///
     /// Seal-once per StoreId: first root wins; same root → idempotent Ok;
     /// different root → [`PackRefuse::TrustRootAlreadySealed`] (never silent
     /// overwrite). Untrusted/peer input must not reach this door unvalidated.
@@ -744,7 +720,6 @@ impl OriginRootRegistry {
 
     /// Import ceremony: `local` from this registry for the pack's claimed origin;
     /// `peer` is the pack's independently recomputed root; require equivalence.
-    ///
     /// - origin not registered → [`PackRefuse::ForeignHistoryUnverified`]
     /// - pack root ≠ registered trusted root → [`PackRefuse::ForeignHistoryUnverified`]
     pub fn after_chain_root_verify(
@@ -755,7 +730,6 @@ impl OriginRootRegistry {
         let Some(trusted) = self.get(origin) else {
             return Err(PackRefuse::ForeignHistoryUnverified);
         };
-        // peer: pack's own independently recomputed root (never the local anchor).
         let peer = pack.recompute_root()?;
         if !roots_equal_at_cut(trusted, peer) {
             return Err(PackRefuse::ForeignHistoryUnverified);
@@ -779,7 +753,6 @@ const HYGIENE_FORBIDDEN_MARKERS: &[&[u8]] = &[
 /// boundaries. WA / KEK / plaintext salt / AuditKey / MintCap presence after
 /// this point is a Spec violation — those types have no field on the pack, and
 /// payload bytes are scanned for their domain markers.
-///
 /// Raw shredded-secret byte needles (DEK / KEK / plaintext shred salt) are
 /// scrubbed by [`LeaveIsFreePack::refuse_residual_secrets`] — a separate
 /// production door exercised after shred with known secret material.
@@ -818,11 +791,9 @@ fn contains_slice(haystack: &[u8], needle: &[u8]) -> bool {
 
 /// Import verify ceremony (§80): foreign dumps only under capability + chain /
 /// root verify. Blind import is a second write door for forged belief.
-///
 /// Sealed struct — never a public enum variant or bool standing in for verify
 /// authority. Ambient / silent verified is Unconstructible. Verified without a
 /// bound root is Unconstructible.
-///
 /// **External leave-is-free import — DELIBERATE fail-closed (#359 / #375 T5):**
 /// the only public mint door ([`Self::after_chain_root_verify`]) hard-refuses
 /// every call with [`PackRefuse::ForeignHistoryUnverified`].
@@ -839,13 +810,11 @@ pub struct ImportCapability {
 
 impl ImportCapability {
     /// Public / external mint door — **DELIBERATE hard-refuse** (#359 / #375 T5).
-    ///
     /// Two bare [`ReplicaCutRecompute`]s are never a trust source (seat 80 /
     /// #374 T7). Self-anchoring a pack by comparing its own cut to itself is
     /// Unconstructible as Verified. This door always returns
     /// [`PackRefuse::ForeignHistoryUnverified`] — fail-closed product state for
     /// external leave-is-free import, not unfinished wiring.
-    ///
     /// Crate-internal ceremony (when a host eventually wires it) is
     /// [`OriginRootRegistry::after_chain_root_verify`]; that type is not
     /// re-exported from `store`.
@@ -875,7 +844,6 @@ impl ImportCapability {
 }
 
 /// Whether retained objects named by the cut are present for restore (§79/§80).
-///
 /// Closed sum — green-incomplete restore is Unconstructible.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ObjectsCompleteness {
@@ -886,7 +854,6 @@ pub enum ObjectsCompleteness {
 }
 
 /// Run the import verify ceremony over a leave-is-free pack.
-///
 /// Requires a bound [`ImportCapability`]. Externally, that capability is
 /// Unconstructible — public [`ImportCapability::after_chain_root_verify`]
 /// hard-refuses (#359 / #375 T5 fail-closed). Crate-internal mint is
@@ -926,11 +893,9 @@ pub fn import_verify(
 }
 
 /// Production leave-is-free import door (seat 80 / #359).
-///
 /// Runs [`import_verify`] then admits the pack under the verified ceremony.
 /// There is no blind side door — unverified / unbound capability refuses
 /// [`PackRefuse::ForeignHistoryUnverified`].
-///
 /// **External callers (#375 T5):** fail-closed by design — no re-exported
 /// registry, public mint hard-refuses — so this door always refuses foreign
 /// history until a host explicitly wires a trust door. Not unfinished wiring.
@@ -1110,7 +1075,6 @@ mod tests {
 }
 
 /// Seat 80 — foreign-dump import verify ceremony.
-///
 /// Board Check filters `backup::import_verify`: capability + trusted-origin
 /// chain/root verify, forged/unanchored → [`PackRefuse::ForeignHistoryUnverified`],
 /// silent import Unconstructible (no free Verified mint from pack self-cut).
@@ -1477,7 +1441,6 @@ mod restore_integrity {
         let dir = tempfile::tempdir().into_diagnostic()?;
         let tgt_path = dir.path().join("restore_tgt");
         // RAII scope: the interrupted store's fjall lock must release
-        // before the bare reopen below can bind the same directory.
         {
             let db = new_fjall_storage(&tgt_path)?;
 
@@ -1509,7 +1472,6 @@ mod restore_integrity {
 
         // Bare fjall open still binds the directory (bytes are there) —
         // completeness is the admit door, not substrate open. Scoped so its
-        // lock releases before the plain reopen below.
         {
             let bare = new_fjall_storage(&tgt_path)?;
             {
@@ -1531,7 +1493,6 @@ mod restore_integrity {
         }
 
         // Plain reopen-as-complete refuses.
-        // match (not unwrap_err): Ok(FjallStorage) is not Debug.
         let reopen_err = match open_complete_store(&tgt_path) {
             Err(e) => e,
             Ok(_) => return Err(miette!("open_complete_store must refuse a partial restore")),
@@ -1559,7 +1520,6 @@ mod restore_integrity {
         dump_storage(&src, &dump)?;
 
         let tgt_path = dir.path().join("tgt");
-        // RAII scope: tgt's fjall lock must release before the complete
         // reopen below binds the same directory.
         {
             let tgt = new_fjall_storage(&tgt_path)?;

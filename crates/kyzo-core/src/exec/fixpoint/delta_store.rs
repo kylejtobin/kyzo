@@ -43,16 +43,13 @@
 //!
 //! - `total` holds every tuple the rule has derived in any epoch so far;
 //! - `delta` holds exactly the tuples that are *new as of the latest
-//!   epoch's merge* — a new key for a regular store, a new group or a
 //!   changed meet value for a meet store.
 //!
 //! Each epoch, eval joins at least one body atom of every recursive rule
 //! against a `delta` instead of a `total` (see `query/eval.rs` and the
 //! delta-driven iterators in `query/ra.rs`), merges each rule's freshly
 //! derived tuples back in with [`EpochStore::merge_in`], and stops when no
-//! store has a delta ([`EpochStore::has_delta`] is false for all). Because
 //! a tuple enters `delta` exactly when it first enters `total`, and a
-//! derivation whose premises are all old was already produced in an
 //! earlier epoch, the iteration reaches **the same fixpoint as naive
 //! evaluation** — that equivalence is the semi-naive law, and empty deltas
 //! everywhere are the termination certificate.
@@ -129,19 +126,16 @@ struct LevelInvariantError(&'static str);
 // ─────────────────────────────────────────────────────────────────────────
 // The level tier: a rule's total as sealed sorted runs
 // ─────────────────────────────────────────────────────────────────────────
-//
 // A rule's TOTAL is a stack of immutable sorted levels, one sealed per
 // epoch barrier (plus compaction products). Between barriers nothing
 // mutates, so every scan is a dense walk and every probe a binary search
 // — the shape the semi-naive inner loop wants, instead of pointer-chasing
 // a tree that is rebalancing under an insert-heavy fixpoint.
-//
 // THE DELTA IS THE NEWEST LEVEL: a tuple enters a level exactly when the
 // barrier admits it, so the level and the epoch's delta are the same
 // bytes (flag-refresh rows are the one exception — present in the level
 // to carry the refreshed flag, marked so delta iteration skips them).
 // Shadowing resolves duplicates across levels: the NEWEST level owning a
-// key (Normal) or a group (Meet) speaks for it; compaction merges levels
 // newest-wins and drops shadowed copies. Meet folds happen AT the
 // barrier: the folded value is written into the new level and older
 // copies of the group are shadowed — a group's value is always whole in
@@ -673,8 +667,6 @@ impl EpochStore {
     }
 
     /// The epoch barrier: seal the epoch's out-store as a new level —
-    /// admitting what is genuinely new (per key for normal rules; per
-    /// changed fold for meet rules), reporting every admission to `sink`
     /// in canonical order — then compact levels of comparable size so the
     /// stack stays logarithmic.
     pub(crate) fn merge_in<S: AdmissionSink>(
@@ -768,7 +760,6 @@ impl EpochStore {
         Ok(Admitted(admitted))
     }
 
-    /// Whether anything new was derived in the epoch just merged. All
     /// stores answering `false` is the fixpoint.
     pub(crate) fn has_delta(&self) -> bool {
         match &self.kind {
@@ -1076,7 +1067,6 @@ fn compact_normal(levels: &mut LevelStack<NormalLevel>) -> Result<()> {
     Ok(())
 }
 
-/// As [`compact_normal`], for meet levels: newest group value wins whole.
 fn compact_meet(_spec: &MeetSpec, levels: &mut LevelStack<MeetLevel>) -> Result<()> {
     levels.compact_while(
         |older, newer| newer.groups.len() * 2 >= older.groups.len(),
@@ -1172,7 +1162,6 @@ fn meet_ranged<'s>(
                         }
                     }
                 }
-                // `best` was chosen from win_idx's peek of `key`, so a missing
                 // winner is unrepresentable under Peekable's contract — end the
                 // stream rather than panic.
                 let (k, v) = winner?;
@@ -1186,7 +1175,6 @@ fn meet_ranged<'s>(
         ))
     } else {
         // Interleaved: derive head-tuple rows from each picked level's
-        // groups; a row speaks only if no newer level owns its group.
         let derived: Vec<Vec<Tuple>> = picked
             .iter()
             .map(|l| {
@@ -1367,7 +1355,6 @@ impl AdmissionSink for () {
 /// Per-tuple limiter disposition in a [`RegularTempStore`].
 ///
 /// Named token (not a bare `bool`): a row either participates in the entry
-/// rule's returned set, or was derived past `:limit` and joins only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LimiterSkip {
     /// Within `:limit` — joins and early-returned rows.
@@ -1413,7 +1400,6 @@ impl RegularTempStore {
     }
 }
 
-/// The value-part placeholder for a [`TupleInIter::Values`] whose whole
 /// row is its key (a regular store's admitted tuple, and a suffix-layout
 /// meet store's group key): still `DataValue`-shaped, since the meet path
 /// is unconverted this chunk (`MeetAggrStore`/`MeetLevel` stay as-is; see
@@ -1427,7 +1413,6 @@ impl RegularTempStore {
     pub(crate) fn wrap(self) -> TempStore {
         TempStore::Normal(self)
     }
-    /// Tests if a key already exists in the store. A slice probe: the
     /// eval seam dedups batch-resident rows without minting them.
     pub fn exists(&self, key: &[DataValue]) -> bool {
         let probe = OwnBareKey::encode(key);
@@ -1500,7 +1485,6 @@ impl HeadPos {
 /// key), `val_positions` the meet-aggregated positions — both [`HeadPos`]
 /// in ascending head order, and together a partition of `0..arity`.
 /// Upstream cozo (and the store this replaces) required the aggregated
-/// positions to form a *suffix* so the group key was a byte prefix of the
 /// encoded tuple; this layout groups by the projection onto
 /// `key_positions` **wherever they sit** — position 0, interleaved, or
 /// split across the head — matching the oracle's full positional meet
@@ -1548,7 +1532,6 @@ impl MeetLayout {
     /// The meet values of a head tuple: its projection onto the aggregated
     /// positions, in head order (aligned one-to-one with `meets`), each
     /// wrapped as [`MeetAccum::Value`]. Production admit folds through
-    /// `init_val` instead; this stays for layout round-trip tests only.
     #[cfg(test)]
     fn project_vals(&self, row: &[DataValue]) -> Vec<MeetAccum> {
         self.val_positions
@@ -1610,7 +1593,6 @@ impl MeetLayout {
     }
 }
 
-/// A store for rules whose heads carry only meet (semilattice)
 /// aggregations: tuples are grouped by their non-aggregated positions
 /// (wherever they sit — see [`MeetLayout`]) and the aggregated positions
 /// are folded through the meet operations as rows arrive.
@@ -1618,7 +1600,6 @@ impl MeetLayout {
 /// Delta discipline: a group is in the delta when it is new, or when a
 /// merge *changed* its folded value — as reported by
 /// [`MeetAggrObj::update`]'s changed flag. That flag is therefore
-/// load-bearing for termination and completeness both ways: a false
 /// "unchanged" reaches a premature fixpoint (the changed value never
 /// propagates through the recursion — the original's inverted `and`/`or`
 /// flags had exactly this bug, fixed in `data/aggr.rs` and pinned by
@@ -1699,7 +1680,6 @@ impl MeetAggrStore {
     /// group, the out-store value only descends, so `meet(total, out[g])`
     /// only descends, so admissibility flips `false → true` at most once and
     /// never back. Each admitted group therefore contributes exactly one
-    /// `true` here, matching `merge_in`'s one `admitted += 1` for it. (The
     /// plain path gets this free because its out-store only ever holds
     /// genuinely-new tuples; the meet out-store holds re-derived unchanged
     /// groups too, which is precisely why counting `len` overcounts and
@@ -1731,8 +1711,6 @@ impl MeetAggrStore {
         Ok(now_admissible && !was_admissible)
     }
     /// Build a meet store from a rule head's aggregation spec: one entry
-    /// per head position, [`HeadAggrSlot::Plain`] for grouping positions,
-    /// [`HeadAggrSlot::Aggregated`] for aggregated ones. Compilation only
     /// routes rules whose aggregations are all meets here
     /// (`Aggregation::is_meet`); a normal-only aggregation in the spec is
     /// an engine bug and is refused with an error rather than unwrapped.
@@ -1766,7 +1744,6 @@ impl MeetAggrStore {
     /// again returns `false` and changes nothing.
     ///
     /// Structural guarantee: `tuple` has the arity of the rule head this
-    /// store was built from (`key_positions + val_positions` partition it),
     /// because eval only puts a rule's own head tuples here — the projection
     /// below cannot go out of bounds on user data.
     ///
@@ -1829,7 +1806,6 @@ impl MeetAggrStore {
 // TempStore and EpochStore
 // ─────────────────────────────────────────────────────────────────────────
 
-/// One epoch's worth of derived tuples for one rule: regular or
 /// meet-aggregated, matching how the rule's head aggregates.
 #[derive(Debug)]
 pub(crate) enum TempStore {
@@ -1844,7 +1820,6 @@ impl TempStore {}
 // ─────────────────────────────────────────────────────────────────────────
 
 /// A view of one stored tuple, in whichever representation its store
-/// currently uses: the key part and (for meet stores) the value part,
 /// exposed as one logical tuple without concatenating.
 ///
 /// Story #77: both stores' KEYS are memcmp bytes now
@@ -1858,7 +1833,6 @@ impl TempStore {}
 /// probes, the provenance/trials iteration surfaces) working over ONE
 /// type regardless of which
 /// store produced the row and which layout (suffix or interleaved) it
-/// used. The consequence: `try_get`/`try_into_tuple`/iteration return OWNED
 /// `DataValue`s, never `&'a DataValue` — a byte-backed key has nothing to
 /// reference; decoding produces a value, not a borrow. Byte-backed rows
 /// were sealed at an encode door before reaching this view.
@@ -1889,7 +1863,6 @@ pub enum TupleInIter<'a> {
 }
 
 impl<'a> TupleInIter<'a> {
-    /// Construct a view over an already-interleaved (key-part, value-part,
     /// skip) triple — the non-suffix meet path, where `key`/`val` are
     /// `DataValue` projections of a fully rebuilt logical row.
     pub(crate) fn new(key: &'a [DataValue], val: &'a [DataValue], skip: LimiterSkip) -> Self {
@@ -1966,7 +1939,6 @@ impl TupleInIter<'_> {
         }
     }
     /// Total comparison against a plain slice, through `DataValue`'s total
-    /// order — for a byte-backed key, through the memcmp bytes of an
     /// encoded PROBE instead: `encode_tuple_bare`'s order-embedding law
     /// makes that byte comparison exactly `DataValue`'s slice order,
     /// without decoding the stored side at all where the whole row is
@@ -2402,7 +2374,6 @@ mod tests {
 
     /// The same contract at the `meet_put` level: a fold that moves the
     /// value reports `true`, a fold that doesn't reports `false` —
-    /// exercised for both a lattice where the bug lived (`or`) and an
     /// always-correct one (`min`).
     #[test]
     fn meet_put_changed_flag() -> Result<()> {
@@ -2540,7 +2511,6 @@ mod tests {
         Tuple::from_vec(vec![val, DataValue::from(group)])
     }
 
-    /// [`MeetLayout`] projections and their inverse round-trip for an
     /// interleaved layout (a grouping column between two meet columns): the
     /// key and value projections partition the row and `interleave` rebuilds
     /// it exactly, leaving no `Null`. This is the layout proof the whole
@@ -2616,7 +2586,6 @@ mod tests {
         Ok(())
     }
 
-    /// The determinism-critical seam: for a non-suffix layout the group-key
     /// order and the head-tuple order genuinely differ, and admissions are
     /// reported in **group-key** order (the `by_group` iteration the merge
     /// barrier and provenance witnesses depend on), while the scan surface
@@ -2692,10 +2661,8 @@ mod tests {
     }
 
     // ── adversarial reviewer attacks (adopted from the hostile pass) ──────
-    //
     // P036: no by_row twin. The scan surface of a sealed meet store must
     // equal `{ interleave(k, v) : (k, v) ∈ groups }` in head-tuple order
-    // for every regime; the out-store's by_group is the sole authority.
 
     /// P036: `by_group` is the sole MeetAggrStore authority — every group
     /// interleaves to a head tuple that `exists` recognizes.
@@ -2794,7 +2761,6 @@ mod tests {
     }
 
     /// ATTACK 1: empty group key (all positions aggregated) — the group key
-    /// is the empty tuple, one group total; exists() answers for any probe;
     /// scans see the single interleaved row.
     #[test]
     fn rev_meet_all_aggregated_single_group() -> Result<()> {

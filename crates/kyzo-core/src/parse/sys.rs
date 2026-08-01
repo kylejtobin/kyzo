@@ -607,7 +607,6 @@ impl BuildHnswConfig for HnswConfigBuilder<Set, Set, Set> {
     }
 }
 
-// ── Compile-fail proofs ────────────────────────────────────────────────────
 //
 // `build()` — carried by each config's build trait — is ABSENT on every
 // INCOMPLETE builder instantiation: "a config missing a required field cannot

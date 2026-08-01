@@ -20,7 +20,6 @@
 //! mistyped parameter, or a binding that is not a plain variable is a typed,
 //! spanned refusal at that boundary, never a downstream surprise.
 //!
-//! A search atom evaluates as "a search is a join": for each parent row the
 //! query expression is evaluated against that row, the engine's
 //! [`RelationIndexSearch`](crate::project::projection::RelationIndexSearch)
 //! door runs once, and each result row (the full base row plus the
@@ -319,7 +318,6 @@ impl ExprAsSearchBinding for Expr {
     }
 }
 
-/// Ephemeral resolve context: owns the modality option bag for one
 /// [`resolve_search`] call after [`SearchInput::modality`] is lowered.
 struct SearchResolve {
     span: SourceSpan,
@@ -495,7 +493,6 @@ pub(crate) fn resolve_search(
             let bind_field_idx = params.take_var(&Symbol::new("bind_field_idx", span))?;
             let bind_distance = params.take_var(&Symbol::new("bind_distance", span))?;
             let bind_vector = params.take_var(&Symbol::new("bind_vector", span))?;
-            // One bind encoding (P038): HnswBindSlot sum pack for the engine;
             // symbols for the RA frame — both from the same Option set.
             use crate::project::vector::hnsw::HnswBindSlot;
             let slot = |o: &Option<_>| {

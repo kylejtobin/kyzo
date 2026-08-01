@@ -14,7 +14,6 @@
 //! admission live in [`super::contract`].
 //!
 //! [`Applied`](super::sweep::Applied) / [`Committed`](super::sweep::Committed)
-//! mint moved to [`super::sweep`] — the SweepDoor wraps [`WriteTx::commit`] /
 //! [`WriteTx::commit_durable`] as the first StableCommitCap arm's physical
 //! apply. Adapter `commit` returns `()` on successful apply; only the
 //! SweepDoor mints the durability proofs ([`Applied`](super::sweep::Applied)
@@ -48,11 +47,9 @@ pub use super::sweep::{Applied, Committed};
 /// A transaction commit failed because a concurrently committed transaction
 /// modified something this one READ (a point read or a scanned range) or
 /// WROTE (a `put` or `del` key).
-///
 /// Reads and writes are the conflict surface: a write-write race aborts its
 /// second committer (first-committer-wins). A commit with an empty write set
 /// still never aborts.
-///
 /// **Retryable**: rerun the whole transaction. Prefer matching
 /// [`CommitFailure::Conflict`] on the commit outcome, or feeding
 /// [`CommitFailure`] / [`ConflictError`] into [`super::retry::RetryError`] via
@@ -104,7 +101,6 @@ impl std::error::Error for BackendIoError {
 }
 
 /// Structured IO refusal during commit (or `commit_durable`'s fsync).
-///
 /// For [`WriteTx::commit_durable`]: if the commit applied and only the fsync
 /// failed, the transaction IS committed (visible, process-crash durable) —
 /// [`Self::FjallSync`] / [`Self::SimInjectedFsyncAfterCommit`] report the
@@ -193,7 +189,6 @@ pub trait ReadTx: Sealed + Sync {
     /// encoding, is ascending semantic order). `lower` is inclusive, `upper`
     /// exclusive; a degenerate range (`lower >= upper`) is EMPTY — never an
     /// error, never a panic.
-    ///
     /// Conflict tracking (in a write transaction): the WHOLE requested
     /// range counts as read the moment the scan is opened, even if the
     /// iterator is dropped early — the conservative choice, and the one
@@ -244,7 +239,6 @@ pub trait ReadTx: Sealed + Sync {
     /// advancing — every subsequent poll re-yields the error, so a scan
     /// cannot silently step over bytes it could not judge (engine callers
     /// stop at the first `Err`).
-    ///
     /// Two-axis time travel is a mandatory part of the KyzoDB storage
     /// contract.
     fn range_skip_scan_tuple<'a>(
@@ -274,7 +268,6 @@ pub trait ReadTx: Sealed + Sync {
 /// `()` on apply success; durability proofs are minted only by
 /// [`super::sweep::SweepDoor`] — [`Applied`](super::sweep::Applied) from
 /// non-fsync seal, [`Committed`](super::sweep::Committed) after backing fsync.
-///
 /// MVCC semantics: `commit` must fail with [`CommitFailure::Conflict`] —
 /// discarding all of the transaction's changes — if anything this
 /// transaction READ (a point read or a scanned range) or WROTE (a `put` or
@@ -283,7 +276,6 @@ pub trait ReadTx: Sealed + Sync {
 /// history): a write-write race aborts its second committer,
 /// first-committer-wins. A commit with an empty write set never aborts — a
 /// read-only Open commit certifies nothing.
-///
 /// Consequence for engine code: insert-if-absent / uniqueness races on a
 /// key are detected by the write itself — the losing racer aborts with the
 /// typed conflict even if it never read the key. Logic that depends on the
@@ -301,11 +293,9 @@ pub trait WriteTx: ReadTx {
     /// Set a key to a value, overwriting any existing value at that exact
     /// key. The key joins the conflict surface: a concurrent committed write
     /// to it aborts this transaction's commit.
-    ///
     /// Seat 8: `key`/`val` are ordered storage currency only — this door
     /// never constructs or embeds a [`crate::session::admit::KyzoRecord`].
     /// Record meaning is minted solely at admission (`admit_record`).
-    ///
     /// Seat 34: committed bitemporal **facts** are not rewritten in place.
     /// A correction mints a new `(valid, sys)` key and leaves prior keys
     /// intact — see [`crate::session::admit::supersession`]. Raw `put` on
@@ -320,7 +310,6 @@ pub trait WriteTx: ReadTx {
     /// Delete every key in `[lower, upper)` visible to this transaction —
     /// both snapshot data and the transaction's own writes. After commit, no
     /// key in the range that was visible to this transaction survives.
-    ///
     /// The range counts toward conflict detection like any read: a
     /// concurrent commit into it conflicts this transaction. Degenerate
     /// bounds (`lower >= upper`) denote the empty interval: they delete
@@ -344,7 +333,6 @@ pub trait WriteTx: ReadTx {
     /// SweepDoor seals durable. Does **not** mint
     /// [`Committed`](super::sweep::Committed) — that is
     /// [`SweepDoor::seal_durable`](super::sweep::SweepDoor::seal_durable).
-    ///
     /// Failure semantics: if the apply succeeds but the fsync then fails,
     /// the transaction IS applied — visible, process-crash durable, not
     /// yet power-cut durable. The error is [`CommitFailure::Io`], reporting

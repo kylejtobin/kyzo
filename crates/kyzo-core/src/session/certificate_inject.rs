@@ -10,7 +10,6 @@
 //!
 //! Production `::verify` / [`Engine`] expose no forge or sabotage hook —
 //! seat 8 makes certificate construction at that door Unconstructible.
-//! Seat 59's law is the mutation campaign: seal a golden artifact, perturb
 //! it, and assert the checker surfaces mismatch — not a production API.
 //!
 //! This module is re-exported only through [`crate::oracle_harness`]. Cap2
@@ -19,7 +18,6 @@
 //!
 //! Soft-green refuse: the injector never returns `"mismatch"` without a
 //! real [`verify_proof`] rejection of a mutated tree that differs from the
-//! sealed golden. An identity "fault" or a checker that accepts corruption
 //! panics here — the trials corpus cannot green on a silent wrong accept.
 
 use std::collections::BTreeSet;
@@ -36,7 +34,6 @@ use crate::session::verify::{MismatchProgram, VerifyOutcome};
 use kyzo_model::value::{DataValue, Tuple, ValidityTs};
 
 /// Structural fault the trials injector applies to a sealed golden proof.
-///
 /// Each variant produces a certificate the production [`verify_proof`]
 /// checker rejects — the same checker `SysOp::Verify` uses before rendering
 /// NamedRows status `"mismatch"`.
@@ -65,7 +62,6 @@ impl CertificateFault {
 /// Seal a golden two-step path certificate, inject `fault`, run the
 /// production [`verify_proof`] checker, and return the NamedRows
 /// `::verify` emits for a certificate mismatch.
-///
 /// Mechanical failure modes (must go red, not soft-green):
 /// - golden fails to verify → panic before mutation;
 /// - mutation is a no-op (tree unchanged) → panic;

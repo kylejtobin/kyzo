@@ -58,11 +58,9 @@
 //! The catalog: the store's knowledge of its own relations.
 //!
 //! Every stored relation is described by one row in the system keyspace
-//! ([`RelationId::SYSTEM`]), keyed by a [`SystemKey`] and holding a
 //! msgpack-serialized [`RelationHandle`]. A handle is a *decoded catalog
 //! row* — knowledge, not authority: it tells the engine how to read and
 //! write a relation's keyspace, but the store's bytes remain the truth, and
-//! a handle is only ever as current as the snapshot it was read from.
 //!
 //! The catalog operations ([`create_relation`], [`get_relation`],
 //! [`list_relations`], [`destroy_relation`], …) speak directly to the
@@ -88,7 +86,6 @@
 //! - **Index manifests** (HNSW / FTS / LSH) are operator-tier substances
 //!   that have landed: [`IndexKind::Hnsw`]/`Fts`/`Lsh` carry their real
 //!   manifest payloads (`session/ops.rs`'s `::hnsw|fts|lsh create`
-//!   populates them), which was the catalog wire-format change the
 //!   pinned-bytes test below forces to be deliberate.
 //! - **`as_named_rows`** (the original's handle-to-`NamedRows` view) lands
 //!   with the session tier that owns `NamedRows`.
@@ -153,13 +150,10 @@ use kyzo_model::value::{
     scan_key_upper_projected,
 };
 
-// ---------------------------------------------------------------------------
 // Catalog capability (decisions.md §1) — interpreter, not a byte owner.
-// ---------------------------------------------------------------------------
 
 /// Sole interpretive schema capability: as-of schema evaluation and
 /// admission-gating of schema-mutating Records.
-///
 /// Owns no bytes, no fsync path, no counters. Schema Records are Store
 /// facts; Catalog is their interpreter. Sealed — no public common
 /// super-type with Store or Engine.
@@ -176,12 +170,9 @@ impl Catalog {
     }
 }
 
-// ---------------------------------------------------------------------------
 // The system keyspace, typed.
-// ---------------------------------------------------------------------------
 
 /// A key in the system catalog keyspace (`RelationId::SYSTEM`).
-///
 /// The CozoDB original kept three key shapes in this keyspace by
 /// convention: `[Null]` for the id counter, `[Null, "STORAGE_VERSION"]` for
 /// a version byte, and `[Str name]` for each relation's serialized handle —
@@ -190,7 +181,6 @@ impl Catalog {
 /// sorting below all relation rows) and makes the shapes a closed type:
 /// this enum is the only minter of system keys, so no fourth shape can
 /// appear by accident.
-///
 /// **Where `STORAGE_VERSION` went.** The kernel's
 /// [`FormatVersion`](crate::FormatVersion) — stamped into every store at
 /// open (`storage/fjall.rs`) and into every dump — is THE version concept
@@ -231,7 +221,6 @@ pub(crate) struct RelationIdSpaceExhausted;
 
 /// The successor of an allocated relation id, or a typed error at the end
 /// of the 48-bit id space. The original's `RelationId::new` panicked here.
-///
 /// `RelationId::raw_decode` owns the single bounds check for the id space;
 /// routing through it keeps one source of truth for the bound. (Landing
 /// note: this wants to be `RelationId::try_next` beside the type in
@@ -242,12 +231,8 @@ fn next_relation_id(cur: RelationId) -> Result<RelationId> {
     RelationId::raw_decode(&next.to_be_bytes()).map_err(|_| RelationIdSpaceExhausted.into())
 }
 
-// ---------------------------------------------------------------------------
-// Indices, by reference.
-// ---------------------------------------------------------------------------
 
 /// A reference to an index attached to a stored relation.
-///
 /// The CozoDB original embedded a full copy of each index's
 /// `RelationHandle` (and manifest) inside the parent handle, and kept the
 /// copies coherent across rename/drop by hand. Here an index is referenced
@@ -332,7 +317,6 @@ impl IndexRef {
 }
 
 /// What species of index an [`IndexRef`] names.
-///
 /// MIGRATION RECORD (search-operator tier): `Hnsw`, `Fts`, and `Lsh` began
 /// as unit variants — typed attachment points with no payload. They gained
 /// their manifests (and `Lsh` its inverse-relation name) when the search
@@ -359,7 +343,6 @@ pub enum IndexKind {
     /// posting relation is itself an ordinary bitemporal `Facts` keyspace
     /// — a window read is an as-of read of postings, with no separate
     /// correction logic.
-    ///
     /// Scan-shaped, not search-shaped: unlike `Hnsw`/`Fts`/`Lsh` (each a
     /// user-named, engine-probed search structure with its own manifest),
     /// `Temporal` carries no manifest and is maintained through the same
@@ -429,16 +412,12 @@ impl IndexKind {
 #[cfg(test)]
 pub(crate) const TEMPORAL_POSTING_LEADING_COLUMN: &str = "_posting_valid";
 
-// ---------------------------------------------------------------------------
-// Constraints, mirrored onto every relation they read.
-// ---------------------------------------------------------------------------
 
 /// An integrity constraint attached to a stored relation: a named denial
 /// rule held as sealed [`InputProgram`] substance — never re-parsed at
 /// enforcement or catalog decode. The admit door is [`ConstraintRef::parse`],
 /// so a source that would fail its own parse can never become a
 /// `ConstraintRef` and therefore can never be stored on a [`RelationHandle`].
-///
 /// The same `ConstraintRef` (same name, same program) is written into the
 /// catalog row of **every** stored relation the body reads — an FK
 /// constraint `deny child-without-parent` sits on both the child and the
@@ -446,7 +425,6 @@ pub(crate) const TEMPORAL_POSTING_LEADING_COLUMN: &str = "_posting_valid";
 /// inserting a child row. The constraint's identity is its globally unique
 /// name; the mutation pipeline dedups by name when several touched
 /// relations carry the same constraint.
-///
 /// The catalog stores `{ name, program }` — sealed substance is the store
 /// form. Decode admits the program through [`InputProgram::new`]; it does
 /// not call `parse_script`.
@@ -515,18 +493,14 @@ impl Debug for ConstraintRef {
     }
 }
 
-// ---------------------------------------------------------------------------
 // The relation handle.
-// ---------------------------------------------------------------------------
 
 /// A stored relation, as the catalog knows it: a decoded catalog row.
-///
 /// Possessing a handle is knowledge, not authority — it describes how to
 /// encode keys and values for the relation's keyspace and what the schema
 /// promises, but it is only as current as the snapshot it was decoded from;
 /// the store's bytes remain the truth. Handles are re-read from the
 /// catalog per transaction, never cached across commits.
-///
 /// The serialized form of this struct (msgpack, struct maps) **is the
 /// on-disk catalog row format**; see the module docs and the pinned-bytes
 /// test.
@@ -567,7 +541,6 @@ pub(crate) enum Residency {
 /// decode. The admit door is [`Trigger::parse`], which parses at
 /// construction, so a source that would fail its own parse can never become
 /// a `Trigger` and therefore can never be stored on a [`RelationHandle`].
-///
 /// The parsed `program`'s write validity stays SYMBOLIC (`WriteValidity::Now`
 /// resolves at fire time against the firing session's instant), so the
 /// substance is independent of the `cur_vld` it was parsed under.
@@ -695,7 +668,6 @@ impl<'de> serde::Deserialize<'de> for RelationHandle {
             keyspace_kind: KeyspaceKind,
         }
         let wire = Wire::deserialize(deserializer)?;
-        // RelationId / Trigger / ConstraintRef / InputProgram each refuse on
         // their own admission doors during nested deserialize.
         Ok(RelationHandle {
             name: Symbol::new(wire.name, SourceSpan::empty()),
@@ -747,7 +719,6 @@ struct StoredRelArityMismatch {
 }
 
 /// # The catalog serialization boundary (RULED, not incidental)
-///
 /// Row VALUES are the value plane's job: canonical `DataValue` encodings
 /// (`data::value::canonical`), byte-order == value-order, no serde. Catalog
 /// METADATA — a relation's schema, access level, index manifests, triggers
@@ -756,13 +727,11 @@ struct StoredRelArityMismatch {
 /// never a memcmp value order (catalog rows are looked up by name, never
 /// range-scanned by value order). msgpack (serde struct maps) is the right
 /// tool for that, and this module is its ONE door.
-///
 /// The boundary is SEALED so it can never become a second value authority:
 /// [`CatalogRecord`] has a private supertrait, so only types declared in
 /// this module can be serialized through it. `DataValue`, `Tuple`, and any
 /// row value CANNOT implement `CatalogRecord`, so no row value can ever be
 /// routed through msgpack. (A compile-fail proof asserts this.)
-///
 /// Corruption is typed ([`RelationDeserError`]); the whole store is stamped
 /// with [`FormatVersion`](crate::FormatVersion), which a mismatched decoder
 /// refuses at the door.
@@ -1029,10 +998,7 @@ impl RelationHandle {
             }
         );
         let slot = |ts: ValidityTs| StoredValiditySlot::new(ts).as_datavalue();
-        // Zero-clone: the tuple's key columns plus the two bitemporal
-        // slots, encoded straight to bytes in one pass — every fact write
         // (put/update/remove alike) goes through this, so the
-        // materialize-then-encode `Vec<DataValue>` it replaced was a second
         // allocation and a second pass over every row in the bulk-write
         // path.
         Ok(encode_key_with_suffix(
@@ -1045,10 +1011,8 @@ impl RelationHandle {
     /// Write the fact's Assert row at the valid coordinate, stamped with
     /// the transaction's system instant — the one-stop fact write for any
     /// tier holding a row and a write transaction.
-    ///
     /// #268 T3: mints through [`RelationRowAdmit`] / [`AdmitRecordParts::admit`]
     /// before the store put — no anonymous durable door.
-    ///
     /// When called without an Engine session, genesis-mints live admission
     /// seats at the door (real [`genesis`], never placeholder fills).
     /// Test / harness fact-write door. Production mutation goes through
@@ -1131,7 +1095,6 @@ impl RelationHandle {
 
     /// Write the fact's Retract row at the valid coordinate — revision,
     /// not erasure.
-    ///
     /// #268 T3: mints Invalidation through [`SugarRetractAdmit`] /
     /// [`AdmitRecordParts::admit`] before the store put.
     /// Test / harness fact-retract door. Production mutation goes through
@@ -1180,7 +1143,6 @@ impl RelationHandle {
         // The stored value opens with its polarity byte, then — for an
         // assertion — the non-key columns' canonical encodings. The
         // relation id is NOT repeated here: it is already the key's
-        // 8-byte prefix, so carrying it in the value too would be pure
         // redundancy.
         let mut ret = Vec::with_capacity(1 + 16 * (tuple.len() - start));
         ret.push(polarity.encode());
@@ -1220,10 +1182,7 @@ impl RelationHandle {
     }
 
     // -- the scan surface, against the kernel's transaction species -------
-    //
     // Every method takes the transaction to read; none of them routes.
-    // Temp-store routing is the session tier's job (see the module docs):
-    // for a temp handle the session passes its temp store's transaction to
     // these same methods.
 
     /// The inclusive lower bound of this relation's keyspace: the empty
@@ -1293,7 +1252,6 @@ impl RelationHandle {
     /// The fact's current row at the coordinate, if asserted: the first
     /// (and by resolution, only) hit of a bitemporal probe under the
     /// fact's full key-column prefix — the versioned format's point read.
-    /// Returns the LOGICAL row.
     pub(crate) fn current_row(
         &self,
         tx: &impl ReadTx,
@@ -1312,10 +1270,7 @@ impl RelationHandle {
             }
         );
         let key_cols = &key_cols[0..len];
-        // Zero-clone: this probe runs on EVERY mutated row (the SSI
-        // uniqueness/conflict probe `put_into_relation` etc. cannot skip),
         // so the intermediate `Vec<DataValue>` the upper bound used to
-        // build (key columns copied, then `Bot` pushed) was one whole heap
         // allocation per row that carried no information the direct
         // encode below doesn't already have.
         let lower = scan_key_lower(self.id, key_cols, &[]);
@@ -1552,9 +1507,7 @@ impl RelationHandle {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Catalog operations.
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Diagnostic, Error)]
 #[error("Cannot create relation {0} as one with the same name already exists")]
@@ -1609,7 +1562,6 @@ pub(crate) fn relation_exists(tx: &impl ReadTx, name: &str) -> Result<bool> {
 }
 
 /// Read and decode a relation's catalog row.
-///
 /// The original took a `lock: bool` to opt into a locked read; under the
 /// kernel's SSI every read in a write transaction is conflict-tracked, so
 /// the read itself is the lock and the parameter has nothing left to mean.
@@ -1622,7 +1574,6 @@ pub(crate) fn get_relation(tx: &impl ReadTx, name: &str) -> Result<RelationHandl
 
 /// Every relation in the persistent catalog, in name order (index
 /// relations — `{base}:{index}` — included).
-///
 /// The scan starts at `[Str ""]`: the id counter encodes as `[Null]` and
 /// `Null` orders before `Str` in the memcmp encoding, so the counter row
 /// sits below the scan by construction (the design the original relied on,
@@ -1630,7 +1581,6 @@ pub(crate) fn get_relation(tx: &impl ReadTx, name: &str) -> Result<RelationHandl
 pub(crate) fn list_relations(tx: &impl ReadTx) -> Result<Vec<RelationHandle>> {
     let lower = SystemKey::Relation("").encode();
     // The exclusive upper bound is the next relation prefix; SYSTEM is id
-    // zero, so its successor is always in range.
     let upper = match RelationId::SYSTEM.next() {
         Some(id) => id.raw_encode(),
         None => miette::bail!("RelationId::SYSTEM successor unrepresentable"),
@@ -1645,9 +1595,7 @@ pub(crate) fn list_relations(tx: &impl ReadTx) -> Result<Vec<RelationHandle>> {
 
 /// Allocate the next relation id: a transactional read-modify-write of the
 /// [`SystemKey::IdCounter`] row.
-///
 /// ## Concurrency story, stated plainly
-///
 /// The kernel is full SSI and conflict-tracks this read (present *or*
 /// absent). Two transactions that both allocate see the same counter, both
 /// write its successor, and exactly one commits; the other fails with the
@@ -1698,7 +1646,6 @@ pub(crate) fn write_relation_row(tx: &mut impl WriteTx, handle: &RelationHandle)
 
 /// Destroy a stored relation: delete its catalog row and its whole
 /// keyspace, inside this transaction.
-///
 /// The original returned byte ranges for a deferred post-commit cleanup
 /// pass (a RocksDB-era shape); the kernel's [`WriteTx::del_range`] deletes
 /// both snapshot data and the transaction's own writes, so destruction is
@@ -1777,7 +1724,6 @@ pub(crate) fn set_relation_triggers(
     write_relation_row(tx, &original)
 }
 
-/// Set a relation's human-readable description.
 pub(crate) fn describe_relation(
     tx: &mut impl WriteTx,
     name: &str,
@@ -1790,7 +1736,6 @@ pub(crate) fn describe_relation(
 
 /// Rename a stored relation: move its catalog row. The relation's id — and
 /// therefore its whole keyspace — is untouched; only the name key changes.
-///
 /// Refuses while indices are attached: index relations are cataloged as
 /// `{base}:{index}`, so a coherent rename must move their rows too. That
 /// lands with the operator tier that owns index lifecycles (the original
@@ -1825,9 +1770,7 @@ pub(crate) fn rename_relation(tx: &mut impl WriteTx, old: &Symbol, new: &Symbol)
     tx.put(&new_row_key, &rel.encode()?)
 }
 
-// ─────────────────────────────────────────────────────────────────────────
 // Engine sys-op doors for catalog-facing system ops
-// ─────────────────────────────────────────────────────────────────────────
 
 impl<S: Storage> Engine<S> {
     /// `::relations` — list stored relations.
@@ -1974,9 +1917,6 @@ impl<S: Storage> Engine<S> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Tests: the catalog's executable law.
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -2273,10 +2213,8 @@ mod tests {
         tx.commit()?;
 
         let mut tx = db.write_tx()?;
-        // ReadOnly < Normal: destruction refused.
         let err = destroy_relation(&mut tx, "guarded").unwrap_err();
         assert!(err.downcast_ref::<InsufficientAccessLevel>().is_some());
-        // ReadOnly < Protected: trigger changes refused.
         let err = set_relation_triggers(
             &mut tx,
             &Symbol::new("guarded", SourceSpan::new(0, 0)),
@@ -2389,7 +2327,6 @@ mod tests {
             KeyspaceKind::Facts,
         )?;
         let vts_of = |ts: i64| ValidityTs::of_micros(ts);
-        // k=1 asserted at valid t=10, retracted at valid t=20, through
         // the handle's own fact writers.
         rel.put_fact(&mut tx, &[DataValue::from(1)], vts_of(10), SourceSpan::new(0, 0))?;
         rel.retract_fact(&mut tx, &[DataValue::from(1)], vts_of(20), SourceSpan::new(0, 0))?;
@@ -2436,7 +2373,6 @@ mod tests {
             stored.prove_compatible_input(&bad, Put).is_err(),
             "fix-on-port: dependent column types are checked in the whole-schema proof"
         );
-        // Removal/update: dependents need not be provided...
         let keys_only = input_handle("s", vec![col("k", ColType::Int)], vec![]);
         stored
             .prove_compatible_input(&keys_only, RemoveOrUpdate)
@@ -2464,7 +2400,6 @@ mod tests {
         tx.commit()?;
 
         // A source that is not a valid single program: refused, and because
-        // the parse happens before any catalog write, nothing lands even
         // within the (uncommitted) transaction.
         let mut tx = db.write_tx()?;
         set_relation_triggers(
@@ -2612,7 +2547,6 @@ mod tests {
             want,
             "system-now, valid-200 must see the retroactive claim"
         );
-        // Swapped (sys=200, valid=now): at system time 200 µs the record
         // did not exist; a parser that swapped coordinates would return
         // the row here and the empty set above.
         let rows = db

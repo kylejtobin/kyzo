@@ -182,7 +182,6 @@ impl ReadTx for TempTx {
     ) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
         if lower >= upper {
             // Degenerate bounds denote the empty interval (the kernel
-            // contract; BTreeMap::range would panic on start > end).
             return Box::new(std::iter::empty());
         }
         self.scan_pairs(|map| {
@@ -291,10 +290,8 @@ impl WriteTx for TempTx {
 
 impl Drop for TempTx {
     fn drop(&mut self) {
-        // Session-embedded scratch is vacuous: the session's lifetime *is*
         // the transaction. Explicit commit/abort still spend Open for the
         // standalone WriteTx species tests; Drop must not bomb an embedded
-        // session temp that was never separately committed.
         self.map.take();
     }
 }
@@ -310,7 +307,6 @@ mod tests {
 
     const REL: RelationId = match RelationId::new(7) {
         Some(id) => id,
-        //  7 < CAP is a static fact; diverging arm keeps the expect-meter off.
         None => loop {},
     };
 
@@ -442,7 +438,6 @@ mod tests {
         for k in [bk(1, 20, 1), bk(1, 10, 1)] {
             t.put(&k, &bv(ClaimPolarity::Assert))?;
         }
-        // valid=10: the first candidate (ts=20) is in the future, so the
         // loop re-seeks to exactly `valid(10)` — which must land on it.
         assert_eq!(
             scan_at(&t, 10)?,
@@ -452,7 +447,6 @@ mod tests {
         assert_eq!(scan_at(&t, 20)?, vec![(1, 20)], "newest at 20");
         assert_eq!(scan_at(&t, 15)?, vec![(1, 10)], "newest at or before 15");
         // The SYSTEM axis is inclusive the same way: two system versions
-        // of one instant, queried exactly at the older one's stamp.
         let mut t = TempTx::new();
         t.put(&bk(1, 10, 10), &bv(ClaimPolarity::Assert))?;
         t.put(&bk(1, 10, 20), &bv(ClaimPolarity::Retract))?;
@@ -503,7 +497,6 @@ mod tests {
     }
 
     // ---------- three-way differential (adopted review pin) ----------
-    //
     // `TempTx` vs the real fjall backend vs the `sim` DST model, driven by
     // identical seeded op streams and identical time-travel scenarios. Any
     // disagreement is a finding. Sized to run in seconds (the review harness
@@ -617,7 +610,6 @@ mod tests {
             14 => Op::ScanCount(gen_key(rng), gen_key(rng)),
             15 => Op::Total,
             // Named exhaustiveness arm: SimRng::below(16) contract is 0..16.
-            // Out-of-contract residue collapses to Total (read-only probe) so
             // a contract break cannot mutate — never `_ =>`.
             _below_16_contract_break @ 16..=u64::MAX => Op::Total,
         }
@@ -766,7 +758,6 @@ mod tests {
         // a too-short key, a full-length key whose slot tag is clobbered,
         // extreme timestamps, a value missing its polarity byte, an
         // unknown polarity byte, and a garbage rmp payload (hits only on
-        // emit).
         let (lower, upper) = rel_bounds();
         let hostile_short: Vec<u8> = [&REL.raw().to_be_bytes()[..], &[0x41, 0x42, 0x43]].concat();
         let mut hostile_sys_tag = bk(5, 100, 1);

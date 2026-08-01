@@ -11,7 +11,6 @@
 //! that can be checked offline. A suspect store gets a *report*, not a chain
 //! of mystery query failures — corruption is diagnosed, never discovered.
 //!
-//! This is CATALOG-AWARE. The store holds three distinct value formats, and a
 //! verifier that decoded them all one way would either false-flag a healthy
 //! store or, worse, silently pass corruption — a partial verifier reported as
 //! "storage verification" is worse than none. So it reconstructs the relation
@@ -36,7 +35,6 @@
 //! ## Pins (re-homed from storage/tests.rs)
 //!
 //! `verify_storage_catches_a_corrupt_value` and the injected-corruption walk
-//! pin that BadTag surfaces and THE WALK CONTINUES past the wound.
 //!
 //! ## Spec extend (§49/§50)
 //!
@@ -49,7 +47,6 @@
 //! [`deep_verify_storage`] re-derives each index kind **from base-relation
 //! facts** and diffs those expected digests against stored index row content.
 //! A walk that only re-reads/re-decodes the index proves self-consistency, not
-//! correctness — that trap is deleted here. Operator schedule + queryable
 //! last-result/staleness live on the session observe surface.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -77,7 +74,6 @@ use sha2::{Digest, Sha256};
 use super::digest_domain::DigestDomain;
 
 /// Domain-separated checksum over (keyspace, block, payload).
-///
 /// Owned identity for [`KeyspaceScopedChecksum::digest`] — never a bare
 /// `[u8; 32]`. Bytes are produced only by [`KeyspaceScopedChecksum::compute`]
 /// under the `kyzo.keyspace_scoped_checksum.v1` domain tag.
@@ -89,7 +85,6 @@ const _: [u8; std::mem::size_of::<KeyspaceScopedChecksumDigest>()] = [0u8; std::
 const _: [u8; std::mem::align_of::<KeyspaceScopedChecksumDigest>()] = [0u8; std::mem::align_of::<[u8; 32]>()];
 
 /// Table/keyspace-scoped checksum identity (§49).
-///
 /// Binds keyspace identity + logical block so misplaced-but-intact data is
 /// caught. A store-global-only checksum is banned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -127,7 +122,6 @@ impl KeyspaceScopedChecksum {
         self.block
     }
 
-    /// Checksum digest.
     pub fn digest(self) -> KeyspaceScopedChecksumDigest {
         self.digest
     }
@@ -269,7 +263,6 @@ enum RelKind {
 
 /// Walk every pair in the store and verify key decodability, VALUE
 /// decodability in each entry's true codec (catalog-aware), and ordering.
-///
 /// Read-only, snapshot-consistent, and total: corrupt pairs are recorded and
 /// the walk continues — one bad page must not hide the rest of the damage.
 pub fn verify_storage<S: Storage>(db: &S) -> Result<VerifyReport> {
@@ -278,9 +271,6 @@ pub fn verify_storage<S: Storage>(db: &S) -> Result<VerifyReport> {
     let mut prev_key: Option<Slice> = None;
 
     // The typed taxonomy, reconstructed from the catalog as the ordered scan
-    // crosses `RelationId::SYSTEM` (id 0, which sorts before every data
-    // relation): `RelationId` → its typed `RelKind`. Complete before the first
-    // non-system entry, and the SOLE input to per-row value dispatch.
     let mut taxonomy: BTreeMap<RelationId, RelKind> = BTreeMap::new();
 
     for pair in tx.total_scan() {
@@ -295,7 +285,6 @@ pub fn verify_storage<S: Storage>(db: &S) -> Result<VerifyReport> {
 
         // The KEY is uniform across every entry kind (relation prefix +
         // canonical column bytes + fixed-width bitemporal tail), so a
-        // non-decoding key is unambiguous structural corruption. Resolve the
         // entry to a typed `RelKind`, then verify its value in that kind's
         // codec — the dispatch is a `match` on the type, never a string test.
         let error: Option<VerifyWalkFailure> = match decode_tuple_from_key(&k, 16) {
@@ -359,9 +348,6 @@ pub fn verify_storage<S: Storage>(db: &S) -> Result<VerifyReport> {
     Ok(report)
 }
 
-// ---------------------------------------------------------------------------
-// Deep-verify (§51): re-derive each index kind from base facts, diff stored
-// ---------------------------------------------------------------------------
 
 /// Why one index's re-derived content disagreed with stored bytes.
 #[derive(Debug, Clone, PartialEq)]
@@ -409,7 +395,6 @@ pub struct IndexMismatch {
 }
 
 /// Domain-separated digest of a [`DeepVerifyReport`].
-///
 /// Owned identity for operator last-result persistence — never a bare
 /// `[u8; 32]`. Bytes are produced only by [`DeepVerifyReport::digest`] under
 /// the `kyzo.deep_verify_report.v1` domain tag.
@@ -428,7 +413,6 @@ impl DeepVerifyDigest {
 }
 
 /// Domain-separated digest of one index row's content for set-diff (§51).
-///
 /// Owned identity for expected/stored deep-verify sets — never a bare
 /// `[u8; 32]`. Bytes are produced only by [`digest_bytes`] under the
 /// `kyzo.index_row_digest.v1` domain tag.
@@ -588,8 +572,6 @@ impl IndexKind {
         base: &RelationHandle,
         idx: &RelationHandle,
     ) -> Result<Option<IndexMismatch>> {
-    // Re-derive every posting from every stored base VERSION (not as-of
-    // current) — same rebuildability law as temporal backfill.
     let keys_len = base.metadata.keys.len();
     let mut expected = BTreeSet::new();
     for pair in base.scan_all_raw(tx) {
@@ -671,8 +653,6 @@ impl IndexKind {
         idx: &RelationHandle,
     ) -> Result<Option<IndexMismatch>> {
     // HNSW graph edges are not uniquely determined by base facts alone in a
-    // byte-stable way without a full deterministic rebuild; deep-verify
-    // re-derives the NODE MEMBERSHIP set: every current base key must appear
     // as a layer-0 node identity, and every stored node must name a live base
     // key. That is derived from base facts, not a re-decode of the index as
     // authority.
@@ -931,7 +911,6 @@ impl IndexRef {
 
 /// Deep-verify (§51): catalog-aware walk, then re-derive each index kind from
 /// base-relation facts and diff against stored index content digests.
-///
 /// This is NOT a re-read/re-decode of the index as authority — expected
 /// content is freshly derived from base facts, then compared to what the
 /// index keyspace actually holds.
@@ -1107,7 +1086,6 @@ mod tests {
             }
             let idx_id = idx_id.ok_or_else(|| miette!("idx id"))?;
 
-            // Phantom index row: projects v=99 for a key that was never a base
             // fact. Valid polarity + canonical bytes → decode/order walk passes.
             let phantom_key_cols = [
                 DataValue::from(99i64),

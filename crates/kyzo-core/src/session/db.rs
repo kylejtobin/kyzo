@@ -59,14 +59,12 @@
 
 //! The Engine admission door: from a script string to result rows.
 //!
-//! [`Engine`] holds Store and Catalog capabilities by composition — never
 //! owns Store doors, never persists. [`Engine::run_script`] parses a script
 //! and runs it: a query compiles (normalize → stratify → magic-sets →
 //! relational-algebra plan) and evaluates semi-naively over the session's
 //! transaction, a mutation additionally writes its result set back through
 //! the mutation pipeline, and a system op reads or edits the catalog. The
 //! result is a [`NamedRows`]. The fused `Db` / `Db::new(storage)` ambient
-//! bag is deleted (decisions.md §1).
 
 // Carried obligation: clippy-collapsible-if-drift — record at this seat.
 
@@ -133,7 +131,6 @@ pub(crate) const DEFAULT_EPOCH_CEILING: u32 = 1_000_000;
 /// seconds of continuous same-fact races — at 32 it was reachable by
 /// three writers under a loaded machine, which is contention working,
 /// not failing.
-///
 /// [`ConflictError`]: crate::store::ConflictError
 const MAX_COMMIT_ATTEMPTS: NonZeroUsize = match NonZeroUsize::new(128) {
     Some(n) => n,
@@ -142,7 +139,6 @@ const MAX_COMMIT_ATTEMPTS: NonZeroUsize = match NonZeroUsize::new(128) {
 };
 
 /// Closed Engine admission refuse taxonomy (decisions.md §42/§43).
-///
 /// The seven production panic-shapes that lived as separate structs on the
 /// fused `Db` bag are named variants of one enum at the single Engine
 /// admission door. Store debt/backpressure stays exclusive to
@@ -224,7 +220,6 @@ pub(crate) enum EngineRefuse {
 /// join that fans out, not merely a slow successor chain) can exhaust memory
 /// in a handful of epochs — far before any epoch ceiling would ever fire,
 /// since that ceiling bounds iteration count, not per-iteration volume.
-///
 /// `50_000_000` is not a round guess:
 /// - it is the EXACT ceiling `bench_api.rs`'s own `generous_budget()`
 ///   already arms for bulk bench workloads in this engine — reused, not
@@ -245,7 +240,6 @@ pub(crate) enum EngineRefuse {
 /// - it is still ~14,000x the largest volume this codebase's OWN test
 ///   suite derives under default options (a few thousand rows), so it adds
 ///   no friction there either.
-///
 /// A query that never reaches a fixpoint (admits at least one net-new tuple
 /// every epoch, by definition) is *structurally guaranteed* to cross this
 /// ceiling — and be refused with a named, typed dimension — at or before
@@ -304,13 +298,11 @@ impl ScriptOptions {
 }
 
 /// Engine: sole Record admission + evaluation + projection orchestration.
-///
 /// Holds Store (`S: Storage`) and [`Catalog`] capabilities by composition
 /// only — never owns Store doors, never persists. Cloning shares the same
 /// Store handle, Catalog capability, and registries (behind `Arc`), so
 /// callbacks and fixed rules registered on one clone are visible on the
 /// others.
-///
 /// The fused `Db` / `Db::new(storage)` ambient bag is deleted; callers must
 /// supply Store and Catalog explicitly via [`Engine::compose`].
 pub struct Engine<S> {
@@ -353,7 +345,6 @@ pub(crate) struct RunQuerySeats<'a, S: Storage> {
 
 impl<S: Storage> Engine<S> {
     /// Compose an Engine from Store and Catalog capabilities.
-    ///
     /// Not `new(storage)`: that fused constructor is deleted. Engine never
     /// mints Catalog from Store alone — both capabilities are required.
     /// Live admission seats are genesis-minted here so Stored sugar can
@@ -494,9 +485,7 @@ impl<S: Storage> Engine<S> {
         crate::session::verify::verify(&tx, &chain, cut, budget)
     }
 
-    // ─────────────────────────────────────────────────────────────────────
     // Script entry
-    // ─────────────────────────────────────────────────────────────────────
 
     /// Parse and run a script with default evaluation options.
     pub fn run_script(
@@ -520,9 +509,6 @@ impl<S: Storage> Engine<S> {
         match parse_script(payload, &params, cur_vld)? {
             Script::Query(prog) => self.execute_single(prog, cur_vld, &options),
             // The parsed `::…` script validated as syntax; the engine-typed
-            // lift (`crate::parse::sys`) admits it into a `SysOp` — sealing
-            // index configs and admitting tokenizers — before dispatch. The
-            // whole payload is the sys script, so it re-parses cleanly.
             Script::Sys(_) => {
                 let op =
                     crate::parse::sys::lift(crate::parse::parse_sys(payload, &params, cur_vld)?)?;
@@ -541,8 +527,6 @@ impl<S: Storage> Engine<S> {
         cur_vld: ValidityTs,
         options: &ScriptOptions,
     ) -> Result<NamedRows> {
-        // Temp-relation store ops (`:create _t {…}` etc.) are refused, not
-        // routed: `needs_write_lock` deliberately excludes temporaries, and
         // the read path ignores `store_relation`, so without this check the
         // mutation would be SILENTLY dropped (hostile-review finding F2).
         // The refusal stands until multi-script sessions land — in this
@@ -583,7 +567,6 @@ impl<S: Storage> Engine<S> {
                 // Integrity constraints: the denial check. Every constraint
                 // of every relation this transaction mutated (user writes
                 // and trigger writes alike) is evaluated against the
-                // post-write state; a non-empty result is a typed refusal
                 // and the whole transaction rolls back.
                 if let Err(e) = self.enforce_constraints(&mut tx, cur_vld) {
                     tx.abort_write();
@@ -600,9 +583,7 @@ impl<S: Storage> Engine<S> {
                 if let Err(e) = tx.commit_write() {
                     return Err(RetryError::from(e));
                 }
-                // Post-commit only: retirements are durable, so their
                 // segments and generation slots leave the engine now (a
-                // rolled-back destroy never reaches this line).
                 for rel in &retired {
                     self.segments
                         .evict(*rel)
@@ -619,9 +600,7 @@ impl<S: Storage> Engine<S> {
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────
     // The query pipeline
-    // ─────────────────────────────────────────────────────────────────────
 
     /// Compile a program against the session's read surface and evaluate it
     /// semi-naively, returning the raw result store, the entry head, and the
@@ -641,9 +620,6 @@ impl<S: Storage> Engine<S> {
         let head = program.get_entry_out_head_or_default()?;
 
         // One cancel lifecycle shared by the budget (checked at epoch
-        // barriers), every fixed rule's `CancelFlag` (checked inside long
-        // algorithms), and every search atom (checked once per search
-        // invocation), so a cancelled or deadline-exceeded query stops
         // them all. `_auth` is retained for a future `::kill` door.
         let (_auth, cancel) = CancelAuthority::arm();
 
@@ -654,8 +630,6 @@ impl<S: Storage> Engine<S> {
         let magic = strat.magic_sets_rewrite(&view)?;
         let compiled = stratified_magic_compile(store, magic)?;
         // ONE machine: vectorized execution end to end, judged by the
-        // naive oracle. (The row-at-a-time twin was deleted; criterion on
-        // a loaded 32-core box had it losing or tying everywhere it was
         // measured against the batch pipeline.)
         let eval_prog =
             crate::exec::plan::compile::bind_for_eval(&compiled, store, segments, &mut |app| {
@@ -663,7 +637,6 @@ impl<S: Storage> Engine<S> {
             })?;
 
         // Eval applies take/skip only when the query is not sorted; a sorted
-        // query must see every row before ordering (upstream's rule).
         let limit = if out_opts.sorters.is_empty() {
             RowLimit {
                 num_to_take: out_opts.num_to_take(),
@@ -760,7 +733,6 @@ impl<S: Storage> Engine<S> {
             trigger_depth,
         } = seats;
         let options = tx.options.clone();
-        // Pre-mutation preconditions on the output relation.
         if let Some((meta, op, _, _)) = &program.out_opts().store_relation {
             let exists = tx.get_relation(&meta.name.name()).is_ok();
             match op {
@@ -790,7 +762,6 @@ impl<S: Storage> Engine<S> {
         // Segments are COMMITTED-state mirrors; a write session's queries
         // (including trigger and constraint evaluation) read the tx's own
         // uncommitted view, so the segment context is OFF here — typed
-        // dirty-read protection, pinned by the constraint suite.
         let (result, limited, head, out_opts) = self.compile_and_eval(
             &tx.store,
             &tx.temp,
@@ -826,7 +797,6 @@ impl<S: Storage> Engine<S> {
                     rows.into_iter(),
                 )?;
                 // A mutation reports a small status unless `:returning` asked
-                // for the rows, which the mutation pipeline routed through the
                 // collector.
                 if ret == ReturnMutation::Returning {
                     returning_rows(callback_collector, &meta.name.name())
@@ -860,9 +830,7 @@ impl<S: Storage> Engine<S> {
         materialize(rows, &head)
     }
 
-    // ─────────────────────────────────────────────────────────────────────
     // System ops
-    // ─────────────────────────────────────────────────────────────────────
 
     fn run_sys_op(
         &self,
@@ -878,7 +846,6 @@ impl<S: Storage> Engine<S> {
             SysOp::RemoveConstraint(name) => self.sys_remove_constraint(&name),
             SysOp::ListConstraints => self.sys_list_constraints(),
 
-            // Catalog (session/catalog.rs).
             SysOp::ListRelations => self.sys_list_relations(),
             SysOp::ListColumns(name) => self.sys_list_columns(&name),
             SysOp::ListFixedRules => self.sys_list_fixed_rules(),
@@ -891,7 +858,6 @@ impl<S: Storage> Engine<S> {
             }
             SysOp::SetAccessLevel(names, level) => self.sys_set_access_level(names, level),
 
-            // Index / operator lifecycle (session/ops.rs).
             SysOp::Compact => self.sys_compact(),
             SysOp::MerkleRoot(rel) => self.sys_merkle_root(rel.as_ref(), options),
             SysOp::ListIndices(name) => self.sys_list_indices(&name),
@@ -901,7 +867,6 @@ impl<S: Storage> Engine<S> {
             SysOp::CreateMinHashLshIndex(cfg) => self.sys_create_minhash_lsh_index(&cfg),
             SysOp::RemoveIndex(rel, idx) => self.sys_remove_index(&rel, &idx),
 
-            // Jobs / verify (already delegated).
             SysOp::ListRunning => {
                 crate::session::jobs::run_job_op(crate::session::jobs::JobSysOp::ListRunning)
             }
@@ -910,7 +875,6 @@ impl<S: Storage> Engine<S> {
                     pid: pid.get(),
                 })
             }
-            // Query-answer `::verify` — provenance door (session/verify.rs).
             SysOp::Verify(prog) => {
                 let outcome = self.verify_input_program(*prog, cur_vld, options)?;
                 Ok(outcome.into_named_rows())
@@ -1022,13 +986,10 @@ fn returning_rows(collector: &CallbackCollector, relation: &str) -> Result<Named
     Ok(NamedRows::try_new(headers, rows)?)
 }
 
-// ─────────────────────────────────────────────────────────────────────────
 // The session transaction
-// ─────────────────────────────────────────────────────────────────────────
 
 /// One session: a backend transaction `T` plus a private scratch store for
 /// temp (`_`-prefixed) relations.
-///
 /// The species law: catalog reads and scans need only [`ReadTx`]; every
 /// mutation method requires `T: WriteTx`, so a mutation on a read session is
 /// a compile error. The session owns its transaction — no borrowed `'s`
@@ -1095,7 +1056,6 @@ impl<T: ReadTx> SessionTx<T> {
     /// format's point read (a bitemporal probe under the fact's key
     /// prefix, resolved with the newest system knowledge), replacing
     /// exact-key reads for relation rows.
-    ///
     /// `valid` is the write's OWN target instant — "the row this write
     /// supersedes" must mean "whatever governed the instant being
     /// written", not some unrelated later instant a different write
@@ -1109,7 +1069,6 @@ impl<T: ReadTx> SessionTx<T> {
     /// so this is byte-for-byte the old "newest ever" behavior whenever no
     /// write anywhere has used `@` — only an explicit historical or
     /// future-dated `@` write can make the two diverge.
-    ///
     /// Under SSI in a write transaction the probe conflict-tracks its
     /// range — the WHOLE fact-key prefix, independent of `valid` — so
     /// uniqueness races on the fact abort one racer regardless of which
@@ -1148,7 +1107,6 @@ impl<T: WriteTx> SessionTx<T> {
 
     /// Commit the persistent write tx and spend the session scratch Open.
     /// Consumes `self` so Drop cannot bomb either side.
-    ///
     /// #375 T1 / seat 25: routes through the Engine's live
     /// [`LiveSweepHandle`] — `admit(OperationKey, RequestDigest)` →
     /// StableCommitCap NativeFsyncProof barrier → terminal IdempotencyMemo —
@@ -1296,9 +1254,7 @@ impl<T: WriteTx> SessionTx<T> {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
 // The session view: what the query tier reads from a session
-// ─────────────────────────────────────────────────────────────────────────
 
 /// The read surface of one session, as the query tier consumes it: the
 /// kernel transaction for stored relations, the scratch store for temp
@@ -1524,7 +1480,6 @@ mod tests {
     /// only ever refuses inputs the epoch barrier (fed by the real,
     /// unaffected global total) would ALSO refuse — so this downcasts to the
     /// typed refusal and pins the exact dimension AND spend.
-    ///
     /// A chain of `N=10` directed edges (`i -> i+1`, sourced from a 10-edge
     /// path) gives two independently useful, empirically confirmed counts
     /// (`ShortestPathDijkstra`'s row count is exactly `N*(N+1)`, verified by
@@ -1536,7 +1491,6 @@ mod tests {
     ///   to cross ONE `OUTPUT_STRIDE` (64) mid-run check (at put #64, having
     ///   stored 63 rows), but under 128, so no SECOND check ever happens
     ///   inside the rule's own run.
-    ///
     /// With `ceiling = 70`:
     /// - Correct baseline: the one mid-run check sees `spent = 10 + 63 =
     ///   73 > 70` — refuses immediately, typed `InFlightDerivations`,
@@ -1648,7 +1602,6 @@ mod tests {
         let err = db
             .run_script("?[x] := x = 2222222000*867076028303", no_params())
             .expect_err("an i64-overflowing literal product must refuse cleanly");
-        // The op's `IntegerOverflow` is raised inside constant folding
         // (`Expr::eval` via `Expr::partial_eval`), which wraps every op
         // error as `EvalRaisedError` (its message, not its type, survives
         // — in the struct's own help string, not its fixed `Display`) —
@@ -1683,7 +1636,6 @@ mod tests {
         .map_err(|e| miette!("create+insert: {e}"))?;
 
         // Transitive closure: a recursive rule with a join against the stored
-        // relation, driven semi-naively.
         let out = db
             .run_script(
                 "
@@ -1952,7 +1904,6 @@ mod tests {
         // A low explicit ceiling (well under the true ~999_000 spend)
         // refuses — a single epoch's join here materializes rows faster
         // than the epoch barrier, so the mid-epoch `InFlightDerivations`
-        // guard (checked every `INTERRUPT_STRIDE` derivations, see
         // `eval::InterruptTicker`) trips first; either way it is the SAME
         // armed derived-tuple ceiling that stops it, never a silent hang.
         let low_opts = ScriptOptions {
@@ -2061,7 +2012,6 @@ mod db_battery {
             "expected key-exists refusal, got {err:?}"
         );
 
-        // :ensure passes on a matching row, refuses a mismatch.
         db.run_script("?[a, b] <- [[1, 11]] :ensure sal {a, b}", no_params())
             .map_err(|e| miette!(":ensure matching row: {e}"))?;
         db.run_script("?[a, b] <- [[1, 12]] :ensure sal {a, b}", no_params())
@@ -2176,7 +2126,6 @@ mod db_battery {
             err.to_string().contains("cannot be stored to yet"),
             "expected the typed temp-relation refusal, got: {err}"
         );
-        // The refusal really was a refusal: nothing half-created.
         db.run_script("?[a] := *_scratch[a]", no_params())
             .expect_err("the temp relation must not exist after the refusal");
         Ok(())

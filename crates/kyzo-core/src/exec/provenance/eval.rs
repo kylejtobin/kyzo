@@ -36,7 +36,6 @@ use kyzo_model::value::Tuple;
 // ─────────────────────────────────────────────────────────────────────────
 
 /// The first witness of one admitted tuple: which rule of its set derived
-/// it first this epoch, from which premise rows. `None` for rows without a
 /// per-row derivation: normal-aggregation folds (their support is a whole
 /// group), fixed-rule output, and the meet identity row.
 #[derive(Debug, Clone, PartialEq)]
@@ -74,14 +73,12 @@ impl WitnessTable {
 }
 
 /// The pending witnesses of one rule set's epoch: candidate tuple (full
-/// tuple for a regular store, group key for a meet store) → first
 /// derivation. Built during (possibly parallel) rule evaluation, each map
 /// owned by its own rule set; consumed at the sequential merge barrier.
 pub(crate) type PendingWitnesses = BTreeMap<Tuple, (DerivationId, Vec<Tuple>)>;
 
 /// How a pending-witness map is keyed for one store at the merge barrier.
 /// Meet groups project onto [`HeadPos`]s; regular stores key on the full
-/// tuple. An `Option` residual for Meet key positions is unrepresentable (P025).
 pub(crate) enum WitnessKeyMode<'a> {
     FullTuple,
     MeetGroup(&'a [HeadPos]),
@@ -105,7 +102,6 @@ impl AdmissionSink for WitnessBinder<'_> {
         let derivation = match self.key_mode {
             WitnessKeyMode::FullTuple => self.pending.get(&full).cloned(),
             // Project the admitted head tuple onto the grouping positions to
-            // recover the group key the pending map was recorded under — the
             // same projection eval used at derivation and the store used to
             // fold, so a non-suffix layout binds exactly as a suffix one.
             WitnessKeyMode::MeetGroup(positions) => self
@@ -126,7 +122,6 @@ impl AdmissionSink for WitnessBinder<'_> {
 // Provenance: the derivation graph over a completed fixpoint
 // ─────────────────────────────────────────────────────────────────────────
 
-/// Provenance was requested where it cannot be honestly computed. Typed:
 /// the engine refuses rather than returning a graph with silent gaps.
 #[derive(Debug, Error, Diagnostic)]
 #[error("provenance unavailable for '{store}': {reason}")]
@@ -164,7 +159,6 @@ pub(crate) type ProvNode = (PremiseSource, Tuple);
 ///   store a body premises that is absent (dropped by lifetimes, or never
 ///   retained) is a typed [`ProvenanceUnsupported`] refusal.
 /// - Every `Rule`-sourced premise row is verified to be in its store's
-///   total — a mismatch is an invariant error, never a silently wrong
 ///   graph. `Fact`-sourced rows are attested by the body that read them;
 ///   the independent certificate checker re-verifies them from the model.
 /// - `derivation_ceiling` arms the enumeration (grounded derivations can

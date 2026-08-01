@@ -23,8 +23,6 @@
 //!   write-write race abort its second committer. The marking read is a
 //!   `contains_key` issued AFTER the write, so it resolves in the
 //!   transaction's own memtable — no disk I/O — while still registering in
-//!   the conflict manager. A commit with an empty write set returns before
-//!   the oracle runs — it never aborts and certifies nothing about what was
 //!   read.
 //! - **Read-your-own-writes** — the write transaction overlays its write set
 //!   over a consistent snapshot taken at creation.
@@ -41,8 +39,6 @@
 //!   (the row's polarity peeked from its value), touching one stored
 //!   version per distinct fact in the common case. On a write tx, each
 //!   step marks the precise sub-range it resolved rather than the whole
-//!   scan up front, promoting to one covering mark past a step-count
-//!   threshold (PostgreSQL SIREAD-lock granularity promotion — see
 //!   `fjall::TrackedSeekIter`'s doc, vendored in `vendor/fjall`).
 //!
 //! The transaction species are distinct types: [`FjallReadTx`] cannot write
@@ -205,7 +201,6 @@ pub struct StorageStats {
 }
 
 /// LSM tuning: a model-tuned per-keyspace policy (issue #118 task 4).
-///
 /// **Design decision — one data keyspace, not a point/temporal split.** The
 /// Monkey/Dostoevsky literature assumes point-lookup data and append-heavy
 /// history live in physically distinct regions that can each get their own
@@ -221,7 +216,6 @@ pub struct StorageStats {
 /// advances), not a write-time fact, so yesterday's "current" row would
 /// need to physically migrate keyspaces the moment it is superseded —
 /// exactly the mid-flight format surgery the storage contract forbids.
-///
 /// So the split this model wants already exists, just one axis down: LSM
 /// **levels**, not keyspaces. Ordinary compaction ages a fact's superseded
 /// versions down into deeper levels while its current version (and hot,
@@ -265,7 +259,6 @@ mod tuning {
 
     /// Model-tuned policy for the main "kyzo" data keyspace: every point
     /// get, as-of scan, and full scan this engine ever runs lands here.
-    ///
     /// - **Monkey** filter allocation (`monkey_bits_per_key`, above), with
     ///   the three shallowest (highest bits-per-key, cheapest in absolute
     ///   bytes, checked on every probe) filter blocks PINNED — Monkey's
@@ -290,7 +283,6 @@ mod tuning {
     ///   expensive merge, rather than merging eagerly — already exists at
     ///   this fork's shallowest level: `l0_threshold` is how many flushed
     ///   runs L0 tolerates before merging into L1.
-    ///
     ///   The bench (issue #118 task-4 commit's tuning table) tried
     ///   `l0_threshold(8)` (stock's full double) with a growing
     ///   `level_ratio_policy` and a 4→16 KiB block-size ramp together: it
@@ -323,7 +315,6 @@ mod tuning {
     ///   seek across whatever as-of/full-history reads do land that deep
     ///   at production scale, at no measured cost here. `level_ratio_policy`
     ///   stays stock — see above.
-    ///
     /// `opts.max_memtable_size_bytes` / `opts.table_target_size_bytes`
     /// override the flush/compaction unit size (both `None` in
     /// production: fjall's stock 64 MiB serves a real store fine — an
@@ -377,7 +368,6 @@ mod tuning {
 
 /// Open (or create) a fjall-backed storage at the given path with default
 /// options.
-///
 /// A fresh store is stamped with the on-disk format version; opening a store
 /// written with a different format version is an error, not silent corruption.
 pub fn new_fjall_storage(path: impl AsRef<Path>) -> Result<FjallStorage> {
@@ -425,7 +415,6 @@ pub fn new_fjall_storage_with(
 ) -> Result<FjallStorage> {
     let mut builder = OptimisticTxDatabase::builder(path);
     // Stock default only if BOTH the caller and the RAM floor come up
-    // empty (off Linux; see `quarter_system_ram_bytes`) — a named
     // platform gap, not a silently wrong number.
     if let Some(bytes) = opts.cache_size_bytes.or_else(quarter_system_ram_bytes) {
         builder = builder.cache_size(bytes);
@@ -491,7 +480,6 @@ pub fn new_fjall_storage_with(
 }
 
 /// The fjall storage engine.
-///
 /// `Clone` is cheap and shallow: clones are handles to the **same store**,
 /// sharing one commit oracle — SSI conflict detection spans all clones and
 /// all threads. This is what makes handing a clone to each worker thread
@@ -524,7 +512,6 @@ impl FjallStorage {
     fn stamp_after_snapshot(&self, _snapshot: &OptimisticWriteTx) -> Result<ValidityTs> {
         // One guard around mint AND persist: inserts land in mint order,
         // so the newest persisted watermark is always the largest minted
-        // stamp (see `watermark_lock`).
         let stamp = {
             let watermark_guard = self
                 .watermark_lock
@@ -562,7 +549,6 @@ impl Storage for FjallStorage {
                 .map_err(|_| miette!("watermark lock poisoned"))?;
             self.clock.raise_floor(floor.raw());
             // Persist the CLOCK's floor, not the argument: raise_floor is a
-            // max, so a stale (lower) argument must not regress the disk.
             self.meta
                 .insert(SYSTEM_CLOCK_WATERMARK_KEY, self.clock.floor().to_be_bytes())
                 .map_err(FjallRefuse::PersistWatermark)?;
@@ -583,15 +569,10 @@ impl Storage for FjallStorage {
         // SNAPSHOT FIRST, MINT SECOND — that ordering alone carries THE
         // serialization invariant (contract v3): if this transaction can
         // read another's write, its stamp strictly exceeds that writer's.
-        // Proof: fjall's own `write_tx()` takes its commit oracle's lock
         // while opening the snapshot, so a writer is visible here only if
         // its commit fully preceded this snapshot; that writer minted its
-        // stamp before its commit, hence before this snapshot, hence
-        // before this mint — and the clock is strictly monotone. Minting
-        // BEFORE the snapshot broke this (a rival could mint later and
         // commit sooner, and our write landed at a smaller stamp than a
         // write we read — shadowed forever, a lost update with zero
-        // conflicts; pinned by
         // `concurrent_increments_lose_nothing_at_the_storage_layer`).
         // The watermark persists non-transactionally — a floor, not a
         // record.
@@ -613,14 +594,12 @@ impl Storage for FjallStorage {
         // the stamps they carry and no transaction machinery runs. The
         // precondition making that sound — a fresh, otherwise-idle store —
         // is refused here, not just documented: importing into a store
-        // holding data is the one shape under which an unstamped import
         // could race a live minting writer.
         {
             // The probe's upper bound must clear every real key. Every key
             // begins with an 8-byte relation id strictly below the
             // EXCLUSIVE allocation ceiling `RelationId::CAP`, so its first
             // byte stays below 0xFF — proven at compile time so a future
-            // id-cap bump cannot silently turn a full store invisible to
             // this check.
             const {
                 // Const type-law: CAP above 0xFF<<56 fails compilation, never panic.
@@ -630,7 +609,6 @@ impl Storage for FjallStorage {
             }
             // Existence alone: the raw `Guard`s are dropped unmaterialized —
             // not even `key()` is called — so the probe costs no decode at
-            // all, just "is there a first item."
             let probe = self.db.read_tx();
             if raw_range(&probe, &self.ks, &[], &[0xff; 9])
                 .next()
@@ -654,7 +632,6 @@ impl Storage for FjallStorage {
                 Ok(()) => {}
                 Err(Conflict) => {
                     // Under the exclusive-access precondition this is caller
-                    // error, but it still surfaces as the typed conflict.
                     return Err(ConflictError.into());
                 }
             }
@@ -743,14 +720,10 @@ fn raw_range<'a, R: Readable>(
     lower: &[u8],
     upper: &[u8],
 ) -> impl Iterator<Item = Guard> + 'a {
-    // Degenerate-bounds guard, at the single choke point every range scan,
     // skip scan, and del_range pass through. The contract says `[lower,
-    // upper)` with `lower >= upper` is simply EMPTY — but the bounds must
     // never reach fjall: a write transaction records the requested bounds
     // verbatim in its conflict manager and replays them through
     // `BTreeSet::range` at COMMIT time, which panics on an inverted range —
-    // inside the commit oracle, while holding the global write-serialize
-    // lock, poisoning the whole store for every later transaction. An
     // inverted range is answered here (empty, nothing tracked) and fjall
     // never sees it. Skipping the read tracking is sound: an empty range
     // has no phantoms to protect against.
@@ -1388,7 +1361,6 @@ mod tests {
 
     #[test]
     fn format_version_rejects_noncanonical_and_v4_boundary() -> Result<()> {
-        // Parse law: non-canonical spelling refuses; older stamps parse so the
         // reopen guard can NAME them in the mismatch Err.
         assert!(FormatVersion::parse(b"6").is_ok());
         assert!(FormatVersion::parse(b"06").is_err());
@@ -1401,7 +1373,6 @@ mod tests {
             assert!(db.read_tx().is_ok(), "fresh store must accept a read_tx");
         }
 
-        // Adversary: rewrite the meta stamp to an older-but-parseable version.
         {
             use fjall::{KeyspaceCreateOptions, OptimisticTxDatabase, PersistMode};
             let raw = OptimisticTxDatabase::builder(dir.path()).open().map_err(|e| miette!("fjall: {e}"))?;

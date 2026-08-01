@@ -30,7 +30,6 @@
 //! `execute_relation` receives the evaluated rows and the `:put`/`:rm`/…
 //! operation, coerces each row through the relation's declared column
 //! types, writes through the session, maintains plain/temporal indices,
-//! and collects old/new rows for triggers and callbacks.
 
 use std::collections::BTreeSet;
 
@@ -86,21 +85,17 @@ use sha2::{Digest, Sha256};
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
-// ─────────────────────────────────────────────────────────────────────────
 // Spec admission monopoly (§8/§10–§13/§61/§77/§90) — seats beside the
 // carried mutation pipeline below. Store modules cannot mint KyzoRecord.
 // Sugar and every durable user-visible write mint through admit_record —
 // there is no second door (#268 T3; absorbed #269).
-// ─────────────────────────────────────────────────────────────────────────
 
 /// Admitted record identity — minted only by [`admit_record`] (#268 T3).
-///
 /// Defined in [`crate::session::record_id`]; re-exported here so the
 /// admission seat remains the discoverable authority surface.
 pub use crate::session::record_id::RecordId;
 
 /// Proof that a durable fact write passed [`admit_record`].
-///
 /// Opaque capability: only [`admit_record`] (via [`KyzoRecord::durable_write_permit`])
 /// mints it. Call sites that require this token cannot anonymously put.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -116,7 +111,6 @@ impl AdmittedDurableWrite {
 }
 
 /// Semantic surface for indexed interpretation (§12).
-///
 /// [`SemanticSurface::None`] refuses index build (`NoSemanticSurface`) —
 /// forcing surfaces on every record corrupts embedding meaning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -182,14 +176,12 @@ impl EvidenceCoordinates {
         self.hash
     }
 
-    /// Provenance digest.
     pub fn provenance(&self) -> ProvenanceDigest {
         self.provenance
     }
 }
 
 /// Placement constraint for geography / residency (§77).
-///
 /// Private closed sum: no-policy is [`Placement::Unrestricted`]. A
 /// region-bound write names exactly one [`RegionId`] — never an empty-Vec
 /// or zero-fill sentinel.
@@ -202,7 +194,6 @@ pub(crate) enum Placement {
 }
 
 /// Ingest shape at the admission door (§11/§17/§90).
-///
 /// Illegal combinations are unconstructable — one variant, not two bools.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IngestShape {
@@ -260,7 +251,6 @@ struct LiveAdmissionChain {
 
 /// Engine-held live admission seats — genesis StoreId, write token (SweepDoor),
 /// distinct ed25519 signing seed, and advancing root / commit / scope spine.
-///
 /// Signing seed ≠ write_token; authorizing_key_id is the verifying public key
 /// bytes (never equal to the seed). Affine SweepDoor open still consumes a
 /// moved [`WriteAuthority`] elsewhere.
@@ -361,7 +351,6 @@ impl LiveAdmissionSeats {
             ChainLinkKind::Ordinary,
         ) else {
             // Typed genesis fields always encode under CanonicalTranscript; if encode
-            // refuses, seats still form with an empty chain (append skipped).
             return Self {
                 store_id,
                 write_token,
@@ -461,7 +450,6 @@ impl LiveAdmissionSeats {
     }
 
     /// Capture [`LiveCertificateInputs`] from these seats + a live catalog clock.
-    ///
     /// Signs with the genesis-registered origin key (receiver-resolvable in
     /// [`Self::authorizing_keys`]) — never an unregistered ephemeral key.
     pub(crate) fn certificate_inputs(
@@ -487,7 +475,6 @@ impl LiveAdmissionSeats {
     }
 
     /// Persist + verify a minted certificate on the admit path (not mint-and-drop).
-    ///
     /// Advances `root_chain` / `origin_commit` so subsequent certs bind a real
     /// post-state tip. Gap: SweepDoor durable `Committed` ordinals remain the
     /// history-authoritative floor — seats advance the admission cert spine
@@ -571,12 +558,10 @@ pub struct LiveCertificateInputs {
 
 impl LiveCertificateInputs {
     /// Live door: sign with a registered authorizing key a receiver can resolve.
-    ///
     /// `authorizing_key` must be able to sign, and `registered_keys` must
     /// resolve its verifying id to the same public material — otherwise
     /// loud-refuses [`AdmitRefuse::UnregisteredAuthorizingKey`]. Never mints
     /// a fresh unregistered ephemeral key per record (#374 T4).
-    ///
     /// [`WriteAuthority`] alone is not signing material — it only binds the
     /// open store identity at the door.
     pub(crate) fn from_live(
@@ -668,14 +653,11 @@ impl SchemaCutDigest {
 }
 
 /// Privately constructed Record — admission monopoly (§8/§93).
-///
 /// No public constructor. Store/decode modules cannot mint this type.
-///
 /// Statement body lives as one [`StatementBody`] value object on this one
 /// record. ONTOK variants are constructions over that kernel
 /// ([`crate::data::statement::construct`]), not a second record type
 /// (#268 T1 / purity-hold; seats 8/10/11).
-///
 /// Content identity is stored once as [`RecordContentDigest`];
 /// [`KyzoRecord::record_id`] is a derived view of that same 32 bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -731,7 +713,6 @@ impl KyzoRecord {
         self.core.statement.predicate()
     }
 
-    /// Statement value.
     pub fn value(&self) -> &StatementValue {
         self.core.statement.value()
     }
@@ -752,7 +733,6 @@ impl KyzoRecord {
     }
 
     /// Type-entailed deterministic lowering to the closed six-dimension set.
-    ///
     /// Recomputes from typed fields every call — never memoized (#268 T2).
     /// **Local / same-store path.** Crossing receive must use
     /// [`KyzoRecord::lower_crossing`] after
@@ -762,7 +742,6 @@ impl KyzoRecord {
     }
 
     /// Lower only after full crossing-contract validation (#270 T1/T3).
-    ///
     /// Requires [`CrossingValidated`] — kind/schema/authority/context/
     /// evidence/status/capabilities already checked; missing declared
     /// evidence refused typed, not silently dropped. Seals rows under
@@ -775,7 +754,6 @@ impl KyzoRecord {
     }
 
     /// Validate the full crossing contract then lower (#270 T1/T3).
-    ///
     /// Runs [`crate::store::replica::validate_crossing_before_lower`] then
     /// [`Self::lower_crossing`]. Missing declared evidence →
     /// [`AdmitRefuse::Crossing`] wrapping
@@ -844,7 +822,6 @@ pub(crate) struct ValidateAndLowerCrossingSeats<'a> {
 }
 
 /// Inputs for the admission door (private mint path).
-///
 /// [`RecordCore`] is shared with [`KyzoRecord`]; certificate `record_digest`
 /// is that core digest by construction. Certificate fields come only from
 /// [`LiveCertificateInputs`] — never placeholder fills.
@@ -927,7 +904,6 @@ pub enum AdmitRefuse {
     #[diagnostic(code(session::admit::missing_live_admission_context))]
     MissingLiveAdmissionContext,
     /// Live certificate mint without a receiver-resolvable authorizing key.
-    ///
     /// Ephemeral unregistered signing keys are condemned (#374 T4) — the door
     /// refuses rather than mint a certificate no peer can verify.
     #[error(
@@ -956,7 +932,6 @@ pub enum AdmitRefuse {
 /// Admit a Record through the monopoly door: placement, evidence, surface,
 /// secret-key, ingest-shape checks, then mint [`AdmissionCertificate`] +
 /// [`KyzoRecord`] from live certificate inputs.
-///
 /// **This is the only KyzoRecord mint.** Sugar and every durable user-visible
 /// write must call here — there is no second door (#268 T3).
 pub(crate) fn admit_record(
@@ -970,7 +945,6 @@ pub(crate) fn admit_record(
     if let Some(kind) = parts.secret_in_indexed_key {
         return Err(AdmitRefuse::SecretInIndexedKey { kind });
     }
-    // Placement::Unrestricted always passes. Placement::Region names the
     // write's geography — the closed sum is the policy (no empty-Vec / zero sentinel).
     match parts.placement {
         Placement::Unrestricted | Placement::Region(_) => {}
@@ -998,11 +972,9 @@ pub(crate) fn admit_record(
     Ok((record, certificate))
 }
 
-// ─────────────────────────────────────────────────────────────────────────
 // Sugar → admit_record (#268 T3). Relational :put/:insert/:update/:rm hide
 // the envelope but mint through the one seam. Temps / index postings are
 // not records (source: kr-is-mandatory-durable-write-authority).
-// ─────────────────────────────────────────────────────────────────────────
 
 impl RecordContentDigest {
     /// Shared sugar-relation row digest scaffold — domain tag and optional prior
@@ -1113,7 +1085,6 @@ pub(crate) fn admit_sugar_relation_row(
 }
 
 /// Seat 34 — correction as supersession without overwrite.
-///
 /// A correction is a new admitted record superseding the prior by
 /// [`RecordId`]; the prior stays committed. As-of a pre-correction cut
 /// replays the original. There is no rewrite API on committed facts.
@@ -1158,7 +1129,6 @@ pub(crate) fn admit_sugar_retract(
 }
 
 /// ONTOK construct → [`admit_record`] doors.
-///
 /// Wires `construct::{event,state,role,concept,rule,derivation,context_record}`
 /// (and the other kinds) into the monopoly admission seam — no dead surface.
 pub(crate) mod admit_construct {
@@ -1615,8 +1585,6 @@ impl<T: WriteTx> SessionTx<T> {
                 }
                 // A `:replace` preserves the relation's put/rm triggers
                 // across the swap (they are carried onto the fresh handle
-                // below); the replace triggers fire now, once, against the
-                // pre-swap handle.
                 if old_handle.has_triggers() {
                     replaced_old_triggers = Some((
                         old_handle.put_triggers.clone(),
@@ -1643,8 +1611,6 @@ impl<T: WriteTx> SessionTx<T> {
                         }
                     })?;
                 }
-                // In-transaction destruction: catalog row and keyspace go
-                // together; an abort rolls both back (no deferred ranges).
                 self.destroy_relation(&meta.name.name())?;
             }
         }
@@ -1659,14 +1625,11 @@ impl<T: WriteTx> SessionTx<T> {
             self.write_catalog_row(&relation_store)?;
         }
         // Register the touched relation's integrity constraints for the
-        // pre-commit denial check (deduped by name across the transaction).
-        // `Ensure`/`EnsureNot` only read; every other op mutates. Trigger
         // recursion funnels through here too, so a trigger's writes are
         // subject to constraints exactly like the user's.
         if !matches!(op, RelationOp::Ensure | RelationOp::EnsureNot) {
             self.note_constraints(&relation_store);
             // Segment soundness: every mutated relation's id is drained
-            // into a generation bump BEFORE the commit (runtime/db.rs).
             self.touched_relations.insert(relation_store.id);
         }
         let InputRelationHandle {
@@ -1854,7 +1817,6 @@ impl<T: WriteTx> SessionTx<T> {
             // The valid coordinate: an unspecified `@` defaults to the
             // transaction's own system stamp — snapshot-monotone, so a
             // retrying writer can never land its update at an instant an
-            // already-committed writer has shadowed (wall-clock script
             // time is NOT monotone across retries; the stamp is). A
             // `@`-carrying mutation instead asserts the row at the
             // instant its own clause names, per row if the clause names
@@ -1883,7 +1845,6 @@ impl<T: WriteTx> SessionTx<T> {
             // keys — the fact-range READ this probe conflict-tracks is
             // the only thing that makes a same-fact race abort one racer
             // instead of losing an update. It also asserts absence for
-            // insertion and yields the transition's old row for indices
             // and triggers — resolved AT THIS WRITE'S OWN `valid`, not
             // "ever": what this write supersedes is whatever governed the
             // instant it targets, never an unrelated later instant.
@@ -1940,7 +1901,6 @@ impl<T: WriteTx> SessionTx<T> {
 
             // #268 T3 / CLUSTER D: Stored sugar mints through admit_record under
             // the Engine's live StoreId + CatalogGeneration + RootChain +
-            // WriteAuthority token — never placeholders.
             if matches!(relation_store.residency(), Residency::Stored) {
                 self.admit_stored_relation_row(db, relation_store, extracted.as_slice(), valid)?;
             }
@@ -2043,7 +2003,6 @@ impl<T: WriteTx> SessionTx<T> {
             // The row being updated must already exist AT THIS WRITE'S
             // OWN `valid`: a bitemporal point read of the fact, resolved
             // at that instant, yielding its logical row — the value an
-            // unspecified (non-key) column carries forward is whatever
             // held at THAT instant, never a later write's belief.
             let old_kv: Tuple =
                 match self.current_row_routed(relation_store, new_kv.as_slice(), valid, span)? {
@@ -2098,7 +2057,6 @@ impl<T: WriteTx> SessionTx<T> {
                 }
             }
 
-            // #268 T3 / CLUSTER D: live admission — no placeholders.
             if matches!(relation_store.residency(), Residency::Stored) {
                 self.admit_stored_relation_row(db, relation_store, new_kv.as_slice(), valid)?;
             }
@@ -2221,13 +2179,11 @@ impl<T: WriteTx> SessionTx<T> {
                 }
             }
             // Retraction is revision, not erasure: a Retract row at the
-            // coordinate, never a physical delete.
             let val = relation_store.encode_bitemporal_val_for_store(
                 extracted.as_slice(),
                 ClaimPolarity::Retract,
                 span,
             )?;
-            // #268 T3 / CLUSTER D: live retract admission — no placeholders.
             if matches!(relation_store.residency(), Residency::Stored) {
                 self.admit_stored_retract(db, relation_store, extracted.as_slice(), valid)?;
             }
@@ -2235,7 +2191,6 @@ impl<T: WriteTx> SessionTx<T> {
         }
 
         // Triggers and callbacks. Note the asymmetry preserved from the
-        // original: `_new` for rm triggers carries KEY columns only.
         if need_to_collect && !new_tuples.is_empty() {
             let k_bindings = relation_store
                 .metadata
@@ -2253,7 +2208,6 @@ impl<T: WriteTx> SessionTx<T> {
             );
 
             if !relation_store.rm_triggers.is_empty() {
-                // Cascade, bounded: firing at the ceiling is a typed
                 // refusal that aborts the transaction whole — never a
                 // silent stop with the mutation kept.
                 if trigger_depth >= MAX_TRIGGER_CASCADE_DEPTH {
@@ -2265,7 +2219,6 @@ impl<T: WriteTx> SessionTx<T> {
                 for trigger in &relation_store.rm_triggers {
                     // The trigger substance is already parsed — clone the
                     // stored program and inject the mutation's rows. No
-                    // fire-time re-parse of source exists any more.
                     let mut program = trigger.program().clone();
 
                     program.make_const_rule("_new", k_bindings.clone(), &new_tuples)?;
@@ -2413,9 +2366,7 @@ impl<T: WriteTx> SessionTx<T> {
                     })
                 }
                 Some(row) => {
-                    // Logical-row comparison: the ensure asserts the fact's
                     // CURRENT columns, not any particular stored version.
-                    // `:ensure` can never carry a `@` clause (refused at
                     // parse time), so "current" here always means the
                     // newest instant ever recorded, unconditionally.
                     if row != extracted {
@@ -2466,7 +2417,6 @@ impl<T: WriteTx> SessionTx<T> {
                 .iter()
                 .map(|ex| ex.extract_data(&tuple, cur_vld))
                 .try_collect()?;
-            // `:ensure_not` can never carry a `@` clause (refused at
             // parse time): "current" always means the newest instant
             // ever recorded, unconditionally.
             if self
@@ -2522,7 +2472,6 @@ impl<T: WriteTx> SessionTx<T> {
         );
 
         if !relation_store.put_triggers.is_empty() {
-            // Cascade, bounded: firing at the ceiling is a typed refusal
             // that aborts the transaction whole — never a silent stop with
             // the mutation kept.
             if trigger_depth >= MAX_TRIGGER_CASCADE_DEPTH {
@@ -2534,7 +2483,6 @@ impl<T: WriteTx> SessionTx<T> {
             for trigger in &relation_store.put_triggers {
                 // The trigger substance is already parsed — clone the
                 // stored program and inject the mutation's rows. No
-                // fire-time re-parse of source exists any more.
                 let mut program = trigger.program().clone();
 
                 program.make_const_rule("_new", kv_bindings.clone(), &new_tuples)?;
@@ -2577,7 +2525,6 @@ impl<T: WriteTx> SessionTx<T> {
     /// given). Plain and Temporal indices — both scan-shaped, both
     /// maintained through the same mirror-row seam below — are handled
     /// here; manifest kinds are the operator tier's typed seam.
-    ///
     /// `pub(crate)`, not merely `fn`: story #62 chunk 4's read-side
     /// differential (`query/ra/temporal.rs`'s test module) drives this
     /// exact primitive directly, the same way this file's own
@@ -2624,31 +2571,18 @@ impl<T: WriteTx> SessionTx<T> {
                     let idx_handle =
                         self.get_relation(index.relation_name(&relation_store.name).as_str())?;
                     // Postings mirror the base's EVENT, never a Plain-style
-                    // transition. `Plain` fires both `old` (Retract) and
                     // `new` (Assert) because its mirror row is payload-
-                    // mapped: the two can carry different data and land at
                     // DIFFERENT mirror keys (the mapper can include
-                    // non-key columns). A posting's key is base-key-only
-                    // (`temporal_posting_tuple` never looks past
                     // `row[..keys_len]`), and every call site here resolves
-                    // `old_kv` at THIS WRITE'S OWN `valid` — so whenever
                     // both are `Some` (a `:put` overwrite or `:update` on
-                    // an existing key), `old` and `new` compose to the
                     // IDENTICAL posting key at the IDENTICAL coordinate.
                     // Firing both would silently let the Assert clobber
-                    // the Retract inside this same transaction — a wasted,
-                    // SSI-tracked write, not two events (hostile-review
-                    // finding, story #62). The base itself writes exactly
                     // ONE row per mutation: Assert for put/update (the
-                    // prior payload just becomes an older SYS version of
                     // the same instant, never a second event), Retract for
                     // remove — so the posting mirrors exactly that one
-                    // event, unconditionally on `new_kv`'s presence. This
                     // single-fire shape is a write-AMPLIFICATION invariant
-                    // (content-equivalent to the old dual-fire shape under
                     // the caller invariants above, so no byte-content test
                     // can guard it): the guard is the write-count law test
-                    // `temporal_index_write_count_law_holds_for_every_mutation_kind`.
                     match new_kv {
                         Some(new) => {
                             self.temporal_index_write(
@@ -2695,7 +2629,6 @@ impl<T: WriteTx> SessionTx<T> {
     /// index kinds (a mapper projection for `Plain`, the
     /// leading-Validity posting shape for `Temporal`) — never the write
     /// path itself.
-    ///
     /// Index postings are not KyzoRecords (#268 T3 / kr-is-mandatory-
     /// durable-write-authority): temps, index postings, and planner state
     /// do not mint through [`admit_record`]. Application sugar does.
@@ -2819,9 +2752,7 @@ impl IndexKind {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
 // Row extraction: result tuples → typed column values
-// ─────────────────────────────────────────────────────────────────────────
 
 enum DataExtractor {
     DefaultExtractor(Expr, NullableColType),
@@ -2836,7 +2767,6 @@ impl DataExtractor {
                 .wrap_err_with(|| format!("when processing tuple {tuple:?}"))?,
             DataExtractor::IndexExtractor(i, typ) => {
                 // Law 5: a result row shorter than the header is a typed
-                // error, not an index panic.
                 let v = tuple.get(*i).ok_or_else(|| {
                     miette::miette!("result row {tuple:?} is shorter than the query head")
                 })?;
@@ -3046,7 +2976,6 @@ mod live_certificate_verifiability {
         .expect_err("unregistered key must not open the live door");
         assert_eq!(err, AdmitRefuse::UnregisteredAuthorizingKey);
 
-        // Public-only table material cannot sign — refuse, do not mint ephemeral.
         let mut keys = AuthorizingKeyTable::new();
         keys.insert(key.clone());
         let public_only = keys
@@ -3184,7 +3113,6 @@ mod live_certificate_verifiability {
             .attach_verified(&record, cert)
             .expect_err("origin cert must not attach on a foreign store");
         // Foreign store_id is unknown on the destination key table → ScopeUnknown
-        // (not AuthenticityFailed: verification never reaches the signature check).
         assert_eq!(err, AdmitRefuse::Replica(ReplicaRefuse::ScopeUnknown));
         assert_eq!(
             foreign.root_chain()?.links().len(),
@@ -3339,7 +3267,6 @@ mod bulk_write_tests {
     );
 
     /// Lossless `usize` → `u64` for fingerprint length prefixes (pointer width ≤ 64).
-    ///
     /// Same door as `session/footprint` / `store/merkle`: no `as` cast, no
     /// `TryFrom::expect` on a total widen.
     #[inline]
@@ -3367,7 +3294,6 @@ mod bulk_write_tests {
         db.run_script(&fresh, no_params())
             .map_err(|e| miette!("bulk insert: {e}"))?;
 
-        // Re-put 200 of those keys with a different value: exercises the
         // probe's FOUND branch (`current_row` returns `Some`) through the
         // same encoder.
         let mut updates = String::from("?[k, v] <- [");
@@ -3417,14 +3343,9 @@ mod bulk_write_tests {
              counter and the relation's own catalog row)"
         );
 
-        // MEANING ANCHOR. Before pinning the raw bytes, prove they carry
         // the correct v5 content by DECODING the store back through the
         // public query path and checking the workload's current state:
-        // keys 0..200 hold `i*7` (re-put), keys 200..400 hold `i*3`
         // (initial), keys 400..500 are retracted (absent). If the
-        // key/value encoding were wrong, the bytes could still hash to a
-        // stable-but-meaningless value; this makes the pin a witness over
-        // format-CORRECT bytes, not an implementation snapshot.
         let live = db
             .run_script("?[k, v] := *w{k, v}", no_params())
             .map_err(|e| miette!("scan back: {e}"))?
@@ -3447,7 +3368,6 @@ mod bulk_write_tests {
 
         // The whole-store byte fingerprint: a drift witness over the v5
         // canonical key+value format (independently pinned by the value
-        // round-trip/order laws and `number::format_v1_golden_vectors`).
         // A change to the bulk-write key/value encoding must keep this equal
         // or land a FormatVersion bump explaining why it cannot.
         let mut hasher_input = Vec::new();
@@ -3461,10 +3381,8 @@ mod bulk_write_tests {
         let digest = sha2::Sha256::digest(&hasher_input);
         let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
         // Regenerated for #299 T5: the 800 fact rows and the id-counter row
-        // are byte-identical; only the single catalog row moved, because the
         // `RelationHandle` wire format lost its redundant `is_temp` field
         // (residency is now derived from the name). The meaning anchor above
-        // proves the fact key/value encoding is unchanged.
         assert_eq!(
             hex, "6babc59f2f44b9f8a2b21e08295f7c35da2cd25c41fba44252584ccda6f20b3c",
             "store bytes for the seeded bulk workload changed"
@@ -3696,7 +3614,6 @@ mod trigger_cache_battery {
         let out = db
             .run_script("?[a, b] := *edge[a, b]", no_params())
             .map_err(|e| miette!("scan: {e}"))?;
-        // The old three rows are gone; only the replacement survives.
         assert_eq!(int_rows(&out)?, vec![vec![9, 9]]);
         Ok(())
     }

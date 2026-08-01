@@ -75,9 +75,6 @@ pub fn import_relations(
         if rows.headers().is_empty() {
             continue;
         }
-        // Column names come from the caller's JSON, the same as the
-        // relation name, and are spliced into the same query — the same
-        // grammar-shaped validation applies.
         for col in rows.headers() {
             validate_identifier(col.name())?;
         }
@@ -130,9 +127,6 @@ mod tests {
 
     #[test]
     fn rejects_script_injection_attempts() {
-        // Each of these tries to smuggle extra script syntax through a
-        // "relation name" — closing the pattern early, starting a second
-        // statement, or escaping the identifier position entirely.
         for hostile in [
             "person} <- [[1]] :put other {x",
             "person {x: 1}",

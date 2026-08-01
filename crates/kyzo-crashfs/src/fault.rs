@@ -39,8 +39,6 @@ use std::collections::HashMap;
 
 use crate::identity::{op_identity, wrap_add, wrap_mul};
 
-// Both mix doors are live in the identity module (sim uses wrap_add; fault uses wrap_mul).
-// Name the pair here so the crashfs lib unit keeps the full door set reachable.
 const _: fn(u64, u64) -> u64 = wrap_add;
 const _: fn(u64, u64) -> u64 = wrap_mul;
 
@@ -196,7 +194,6 @@ fn occurrence_floor() -> u64 {
 pub fn glob_match(pattern: &str, text: &str) -> bool {
     let pat: Vec<char> = pattern.chars().collect();
     let txt: Vec<char> = text.chars().collect();
-    // Standard two-pointer glob match with backtracking on the last `*`.
     let (mut pi, mut ti) = (0usize, 0usize);
     let (mut star_pi, mut star_ti) = (None::<usize>, 0usize);
     while ti < txt.len() {
@@ -329,8 +326,6 @@ pub fn decide_write_outcome(
         Some(Fault::TornSeq) => WriteOutcome::Dropped,
         Some(Fault::TornOp) => {
             if len < 2 {
-                // Nothing to split; a one-byte (or empty) write torn-op
-                // degrades to a clean write rather than a phantom split.
                 WriteOutcome::Clean
             } else {
                 let split_at =

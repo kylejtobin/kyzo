@@ -125,7 +125,6 @@ fn test_mul() -> Result<()> {
         DataValue::from(i64::MAX)
     );
     assert!(op_mul(&[DataValue::from(i64::MAX), DataValue::from(2)]).is_err());
-    // Regression for fuzz artifact crash-f1ef21a6c4f99a02f719c5bde2689bb158df629f:
     // parse-time constant folding of this literal product panicked with
     // "attempt to multiply with overflow" in debug builds and silently
     // wrapped in release builds; it must now be a clean typed error.
@@ -146,7 +145,6 @@ fn f64_vec(xs: &[f64]) -> Result<DataValue> {
 }
 
 // Regression for the upstream bug where multiplying three or more vectors
-// recursed into vector *addition* for the prefix: `v1 * v2 * v3` computed
 // `(v1 + v2) * v3`. Multiplication must multiply.
 #[test]
 fn test_mul_vecs_multiplies() -> Result<()> {
@@ -459,7 +457,6 @@ fn test_inv_trig() -> Result<()> {
     Ok(())
 }
 
-/// The same silent-poison shape `DivisionByZero` fixed for `div`/`mod`:
 /// every partial math op with a restricted domain now refuses an
 /// out-of-domain input with a typed `domain_error`, never a quiet `NaN`
 /// (or, at a domain boundary that diverges, a quiet infinity).

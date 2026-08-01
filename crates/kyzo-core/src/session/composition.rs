@@ -16,7 +16,6 @@
 //! CompositionId; compensations under a different CompositionId.
 //!
 //! `CompositionId = H(principal, client_operation_id, canonical_composition_digest)`.
-//! Caller-durable before the first Store step; Engine may echo, never source.
 
 use sha2::{Digest, Sha256};
 
@@ -26,7 +25,6 @@ use crate::store::sweep::CommitOrdinal;
 use crate::store::transcript::Digest32;
 
 /// Client-rooted composition identity (§38).
-///
 /// Engine-minted CompositionId is Unconstructible — only [`CompositionId::derive`]
 /// from caller-durable intent exists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -34,7 +32,6 @@ pub struct CompositionId([u8; 32]);
 
 impl CompositionId {
     /// Derive from caller-durable principal + client_operation_id + digest.
-    ///
     /// Fresh processes re-derive the same id from the same client intent.
     pub fn derive(
         principal: &[u8],
@@ -144,7 +141,6 @@ impl CompositionStep {
 }
 
 /// Multi-store conflict in a composition (§53) — Engine owns this refuse.
-///
 /// Store knows only one address's local law.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
 pub enum CompositionRefuse {

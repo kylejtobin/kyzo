@@ -22,14 +22,12 @@
 //! straight to the newest version at or before an `AsOf` coordinate and
 //! then splices past every OLDER version of the same fact — it never
 //! enumerates a fact's full history. [`SpansRA`] needs the opposite: every
-//! stored point-event for a fact, because a maximal-run sweep must see
 //! every breakpoint (every distinct valid instant) before it can decide
 //! where one run ends and the next begins.
 //!
 //! No storage-tier primitive yields "every version of one key" today — the
 //! contract requires only ordered range scans plus the as-of skip scan
 //! (see `storage/mod.rs`'s doc and `data/bitemporal.rs`). Adding one is out
-//! of reach for this chunk: `runtime/relation.rs` (the natural home for
 //! such a method) carries another builder's uncommitted fix awaiting its
 //! own verdict, so this module builds the raw multi-version scan directly
 //! against the public storage contract (`ReadTx::range_scan` over the
@@ -50,8 +48,6 @@
 //! for that one key complete before the scan advances to the next key's
 //! first row. This is the "buffering strategy per fact key" the brief
 //! calls a real design decision: the alternative (materialize the WHOLE
-//! relation's raw event log before sweeping any key) was rejected as an
-//! avoidable O(relation) working set for no compensating benefit.
 //!
 //! [`DeltaRA`] needs no such buffering: axis-parameterized diff is defined
 //! as the set difference of two already-RESOLVED snapshots
@@ -94,7 +90,6 @@
 //! ## The posting-index fast path (story #62 chunk 4)
 //!
 //! When the compile tier resolves an `IndexKind::Temporal` posting index
-//! for this relation (`query/compile.rs`, the `Delta`-clause arm — the
 //! `Valid` axis only; `@delta_sys` has no posting to accelerate off,
 //! since the posting's leading column orders by valid instant, not
 //! system version), `DeltaRA.posting` is `Some`, and `iter_batched` takes
@@ -126,7 +121,6 @@
 //!    them: a candidate whose row is identical at both endpoints (a
 //!    redundant re-assert, or a correction with no net effect — exactly
 //!    why the candidate set can have false positives) contributes
-//!    `Minus(f)` and `Plus(f)` for the same tuple, which `compose` cancels
 //!    to nothing, the same guarantee the naive path's set-difference gives
 //!    by construction — `compose` finally has its first real production
 //!    caller instead of being the tested-but-unused law story #77 left it
@@ -159,7 +153,6 @@ use kyzo_model::value::{StorageKey, Tuple, TupleT, decode_tuple_from_key};
 /// here and one built from `laws::SignedFact` sort identically. `pub`
 /// (not `pub(crate)`): story #61's `Db::register_standing` surfaces
 /// this directly as `StandingQuery::apply_pending`'s delta vocabulary —
-/// the one name for "a signed delta fact" in this engine, not
 /// duplicated under a second, standing-query-specific name.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SignedFact {
@@ -221,14 +214,12 @@ pub(crate) fn compose(
 /// system snapshot `sys` (default the record's current belief,
 /// `i64::MAX`), `iv` bound to the produced [`Interval`]. Only the valid
 /// axis is exposed today (issue #62's ratified surface: system time keeps
-/// its own simpler versioning algebra) — see the module doc for why the
 /// operator still buffers a full per-fact version set regardless of axis.
 #[derive(Debug)]
 pub struct SpansRA {
     /// The base relation's key and payload bindings, plus one trailing
     /// binding for the produced interval — never folded into the base
     /// columns, so relation-arity checks against the base columns are
-    /// unaffected (the same shape `SearchAtom::own_bindings` uses for a
     /// search's engine-appended columns).
     pub bindings: Vec<Symbol>,
     pub(crate) storage: RelationHandle,
@@ -259,7 +250,6 @@ pub struct DeltaRA {
     pub(crate) to: AsOf,
     pub span: SourceSpan,
     /// Scan strategy: [`DeltaScan::Accelerated`] when compile resolved an
-    /// `IndexKind::Temporal` posting for this clause (`Valid` axis only);
     /// [`DeltaScan::Naive`] otherwise (including a fresh relation with no
     /// posting index yet).
     pub(crate) scan: DeltaScan,
@@ -279,7 +269,6 @@ const SIGN_MINUS: i64 = -1;
 /// one resolved snapshot) to populate `laws::Program::histories` for
 /// as-of/validity queries — this is the one primitive that decodes raw
 /// bitemporal rows without resolving them, so it is reused, not
-/// re-derived, exactly as this module's own doc argues for itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RawVersion {
     Assert {
@@ -329,10 +318,8 @@ pub(crate) fn relation_keyspace_bounds(storage: &RelationHandle) -> (Vec<u8>, Ve
     (lower, upper)
 }
 
-/// Split a raw bitemporal row into its key-prefix bytes (for grouping),
 /// decoded key columns, and [`RawVersion`]. `key_len` is the relation's
 /// key arity — used both as a decode-size hint and to prove the decoded
-/// key matches the relation's own shape (a mismatch is corruption, refused
 /// rather than trusted).
 pub(crate) fn decode_raw_version(
     key: &[u8],
@@ -398,7 +385,6 @@ pub(crate) fn decode_raw_version(
     Ok((key[..prefix_len].to_vec(), full, version))
 }
 
-/// The governing tuple for one fact's already-collected version set, at
 /// `(at_valid, at_sys)`: among instants at or before `at_valid`, newest
 /// first, the newest version at or before `at_sys` governs that instant;
 /// `Assert` holds (`key ++ payload`), `Retract` settles absent (no
@@ -538,7 +524,6 @@ struct SpansScanBatches<'a> {
 impl<'a> SpansScanBatches<'a> {
     /// Collect every raw row sharing one fact's key-prefix bytes, starting
     /// from `first` (already pulled from `raw`), leaving the first row of
-    /// the NEXT group (if any) in `self.pending_key`.
     fn collect_group(&mut self, first: (Slice, Slice)) -> Result<(Tuple, Vec<RawVersion>)> {
         let (prefix, key, first_ver) = decode_raw_version(&first.0, &first.1, self.key_len)?;
         let mut group = vec![first_ver];
@@ -642,7 +627,6 @@ impl DeltaRA {
     }
 
     /// Naive by design (per the ruling that landed this operator — the
-    /// O(changes) posting-index acceleration was always chunk 4's scope):
     /// resolve both endpoints as full snapshots through the existing as-of
     /// scan, and set-difference them. O(whole relation), twice.
     fn patch_naive(&self, tx: &impl ReadTx) -> Result<BTreeSet<SignedFact>> {
@@ -675,7 +659,6 @@ impl DeltaRA {
     /// finally given a real production caller: a candidate whose row is
     /// IDENTICAL at both endpoints (a redundant re-assert, or an
     /// Erase-transparent correction with no net effect) contributes
-    /// `Minus(f)` and `Plus(f)` for the same tuple `f`, which `compose`'s
     /// tally cancels to nothing — exactly what the naive path's
     /// `from_set.difference(to_set)`/`to_set.difference(from_set)` pair
     /// achieves by construction, here achieved through the shared algebra
@@ -912,7 +895,6 @@ mod tests {
         Ok(())
     }
 
-    /// Rows as `(k, val, start, end)` where `end` is `None` for a
     /// genuinely OPEN run (`Hi::PosUnbounded`) — asserted directly, never
     /// converted to the old `i64::MAX` sentinel. `@spans` starts are always
     /// finite, so a missing start is a bug, not an open end.
@@ -1222,7 +1204,6 @@ mod tests {
     // a posting index attached to their relation would silently stay
     // empty. These tests drive `SessionTx` directly instead — the same
     // level `runtime/mutate.rs`'s own `temporal_index_tests` module
-    // drives it at, `update_indices` widened to `pub(crate)` for exactly
     // this cross-module reuse.
     // ─────────────────────────────────────────────────────────────────
 

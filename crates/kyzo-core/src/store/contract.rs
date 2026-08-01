@@ -28,7 +28,6 @@
 //! - **Isolation is SSI, and READS AND WRITES are the conflict surface** —
 //!   every read, range, and written key in a write transaction is
 //!   conflict-tracked, and commit aborts if anything this transaction READ
-//!   (a point read or a scanned range) or WROTE (a `put` or `del` key) was
 //!   modified by a transaction committed after this one's snapshot. A
 //!   write-write race is therefore first-committer-wins: the second
 //!   committer aborts with the typed conflict and reruns on a fresh
@@ -45,8 +44,6 @@
 //!   races on the same key abort the losing racer even when it never read
 //!   the key — a blind `put` cannot silently swallow a concurrent insert.
 //!   Reading inside the transaction is still how logic *observes* current
-//!   state; write validation guarantees the race is detected, not that the
-//!   old value was seen.
 //! - **Bulk import is outside the conflict surface.** [`Storage::batch_put`]
 //!   requires exclusive access by precondition and applies its writes
 //!   blind; it is a restore/import side door, not a transaction.
@@ -55,7 +52,6 @@
 //!   global lock. Reads, scans, and computation run genuinely concurrently
 //!   across threads; the commit pipeline is the throughput ceiling.
 //! - **Long-lived read transactions delay version GC** (LSM versions and
-//!   oracle bookkeeping are retained while any snapshot that old is open).
 //!   Keep analytical readers and backup dumps in mind under sustained writes.
 //! - **As-of scans inside write transactions** mark conservatively coarse
 //!   read ranges (one per seek step); prefer read transactions for
@@ -67,10 +63,8 @@
 //!   sealed, the contract validated READS only: a blind write-write race
 //!   (neither side read the key) committed both sides, serialized as
 //!   last-writer-wins. That is serializable — it is an anomaly only when
-//!   logic depended on the old value, which requires a read, and reads were
 //!   validated — but it made uniqueness patterns depend on caller
 //!   discipline ("uniqueness needs a read") instead of on the contract. The
-//!   maintainer ruled that discipline-shaped guarantee an open weakness;
 //!   commit now validates written keys exactly like read keys, and the
 //!   write-write race aborts its second committer with the typed,
 //!   retryable [`ConflictError`](super::tx::ConflictError). For the record: FoundationDB- and
@@ -78,8 +72,6 @@
 //!   a deliberate throughput feature there); PostgreSQL SSI and
 //!   TiKV/Percolator abort write-write races. KyzoDB sides with the latter.
 //! - **v3 — time travel is bitemporal (story #69 ruling: mandatory
-//!   bitemporality, one format with no past).** The single-axis skip scan
-//!   (newest version at or before one validity) is replaced by the
 //!   two-axis [`ReadTx::range_skip_scan_tuple`](super::tx::ReadTx::range_skip_scan_tuple): every versioned key ends
 //!   with a valid-instant slot and a system-version slot (flags pinned;
 //!   `check_key_for_bitemporal` refuses flag-bearing slots), and a row's
@@ -96,8 +88,6 @@
 //!   Proof from the order alone: a writer is visible in my snapshot only
 //!   if its commit preceded my snapshot (the backend's own snapshot
 //!   machinery is atomic with respect to commits); that writer minted
-//!   before it committed, hence before my snapshot, hence before my
-//!   mint — and the clock is strictly monotone. Minting BEFORE the
 //!   snapshot broke this (a rival could mint later yet commit sooner and
 //!   be read, and our write landed at a smaller stamp than a write we
 //!   read — shadowed forever, a lost update with zero conflicts; found
@@ -110,11 +100,9 @@
 //!   exception: `batch_put` (bulk import) is OUTSIDE this surface — it
 //!   preserves imported stamps and mints nothing, which is sound only
 //!   into a fresh store, so both backends REFUSE a non-empty target, and
-//!   restore raises the target's clock floor to the dump's before
 //!   importing (a target can never re-mint an imported instant).
 //! - **v4 — the as-of skip scan seeks one cursor per walk, never reopens
 //!   (story #118 task 1 ruling).** [`ReadTx::range_skip_scan_tuple`](super::tx::ReadTx::range_skip_scan_tuple)'s
-//!   per-version-step behavior changed, not its resolution semantics: all
 //!   three backends now drive [`skip_walk::SkipWalk`](super::skip_walk::SkipWalk) over one cursor
 //!   opened ONCE per walk (`OpenSkipCursor::open_skip_cursor`) and
 //!   repositioned forward per step (`SkipCursor::seek`), instead of the
@@ -126,10 +114,7 @@
 //!   driver so the one theorem
 //!   (`skip_walk_matches_independent_oracle_over_2000_seeded_histories`,
 //!   `skip_walk_opens_exactly_one_cursor_per_walk`) covers every backend.
-//!   No caller-visible semantics moved: the resolved tuples, their order,
-//!   and the bitemporal resolution rule are unchanged; see `skip_walk.rs`'s
 //!   module doc for the full per-backend wiring and the termination
-//!   guarantee.
 
 use std::fmt;
 
@@ -225,7 +210,6 @@ impl FormatVersion {
     /// row is one O(1) slice and scalar fields are fixed-width slots the
     /// columnar engine gathers without a parser. One format per version —
     /// an older store refuses to open, it is never migrated in place.
-    ///
     /// v4 (story #62) adds ONE new memcmp tag — the first-class `Interval`
     /// `DataValue` (`data/memcmp.rs::INTERVAL_TAG`) — with every existing
     /// tag, field layout, and key shape untouched. Decision: bump anyway,
@@ -243,7 +227,6 @@ impl FormatVersion {
     /// sealed catalog door only. A v4 store's values are unreadable under
     /// v5's decoder, so the stamp turns any pre-existing store into a
     /// refuse-to-open rather than a silent misread.
-    ///
     /// v6: catalog constraints and triggers persist sealed InputProgram
     /// substance (msgpack), not re-parseable source strings; decode admits
     /// each program through `InputProgram::new`. A v5 catalog row that
@@ -290,8 +273,6 @@ pub(crate) mod sealed {
     // as `store::sim`) is admitted under `cfg(test)` only: the seal exists
     // to keep FOREIGN backends from implementing the contract, and the
     // simulator is not a second backend — it is the contract's own test
-    // double, compiled solely into the test harness and never into the
-    // shipped library. "One backend by decree" still holds for everything
     // that ships.
     #[cfg(any(test, feature = "bench-internals"))]
     impl Sealed for super::super::sim::SimStorage {}
@@ -302,7 +283,6 @@ pub(crate) mod sealed {
 }
 
 /// A storage engine: hands out transactions and supports bulk import.
-///
 /// Concurrent writes are a core requirement, not an option: many write
 /// transactions proceed in parallel from different threads, and conflicts
 /// are resolved at commit time — never by blocking writers against each
@@ -344,7 +324,6 @@ pub trait Storage: Send + Sync + Clone + sealed::Sealed {
     ) -> Result<()>;
 
     /// Force everything committed so far to durable storage (fsync).
-    ///
     /// Durability levels, stated precisely: a successful [`WriteTx::commit`]
     /// survives a *process* crash (the write reaches OS buffers before commit
     /// returns); surviving a *power cut* additionally requires `sync()` or a

@@ -9,7 +9,6 @@
 //! Session-test row assertions — ONE seat for `NamedRows` → `i64` vectors.
 //!
 //! Every session suite that asserted query results as int matrices used to
-//! paste the same map/sort body. That was a second authority by copy-paste
 //! (copy_detector). Callers import from here; they do not re-own the decode.
 
 use crate::data::json::NamedRows;

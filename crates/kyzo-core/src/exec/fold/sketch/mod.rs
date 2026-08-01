@@ -14,7 +14,6 @@
 //! approximately — while staying **exactly as deterministic as the rest of
 //! the engine**: the same input multiset produces byte-identical sketch
 //! contents and hence an identical estimate, on every platform and
-//! toolchain. That is the admission test for this capability, and it drives
 //! every design choice here.
 //!
 //! ## What determinism costs, and how each sketch pays it
@@ -226,7 +225,6 @@ mod tests {
     }
 
     /// Boundary lengths around the 32-byte stripe and the 8/4/1-byte tail
-    /// paths are all deterministic (regression guard for the index
     /// arithmetic in the tail).
     #[test]
     fn xxh64_all_length_paths_deterministic() {

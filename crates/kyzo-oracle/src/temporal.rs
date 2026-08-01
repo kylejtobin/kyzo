@@ -471,10 +471,6 @@ mod tests {
             ev_erase(key.clone(), 0, 1),
             ev_assert(key.clone(), pay(10), 5, 2),
         ];
-        // After erase of the first assert, fall-through finds nothing until
-        // the second assert — but erase is transparent at its own instant
-        // only when an older assert still governs; here the erased version
-        // was the only one at valid=0, so resolve at 0..5 is None.
         assert_eq!(resolve(&history, &key, AsOf::current_at(0)), None);
         assert_eq!(
             resolve(&history, &key, AsOf::current_at(5)),

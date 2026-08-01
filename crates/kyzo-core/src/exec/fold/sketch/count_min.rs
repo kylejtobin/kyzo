@@ -235,7 +235,6 @@ mod tests {
         DataValue::from(i)
     }
 
-    /// A seeded Zipf-ish stream: element `i` appears `weight(i)` times, for a
     /// spread of frequencies to test the overestimate bound against.
     fn build(
         distinct: i64,
@@ -309,7 +308,6 @@ mod tests {
         Ok(())
     }
 
-    /// MONOID LAWS for the merge: commutative, associative, identity. Merge
     /// then estimate must equal summing the streams.
     #[test]
     fn merge_is_a_commutative_monoid() -> Result<()> {
@@ -356,7 +354,6 @@ mod tests {
         let mut aa = a.clone();
         aa.merge(&a)?;
         assert_ne!(aa, a, "merge(a, a) == a: Count-Min must not be idempotent");
-        // Concretely, the counter for a present item doubles.
         assert_eq!(aa.estimate(&val(0)), 2 * a.estimate(&val(0)));
         Ok(())
     }
@@ -410,7 +407,6 @@ mod tests {
         Ok(())
     }
 
-    /// PINNED-LITERAL fingerprint for a fixed input: hash-seed or layout
     /// drift fails loudly.
     #[test]
     fn pinned_sketch_fingerprint() -> Result<()> {

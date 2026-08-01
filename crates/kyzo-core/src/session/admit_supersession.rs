@@ -40,7 +40,6 @@ use super::{
 };
 
 /// Motive of a supersession link — correction or semantic deletion (#270 T4).
-///
 /// Semantic deletion kinds map to [`CrossingStatus`] variants that refuse
 /// live lowering. Correction has no deletion status (as-of still replays).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -57,7 +56,6 @@ pub enum SupersessionKind {
 
 impl SupersessionKind {
     /// Crossing status this motive seals onto the prior's federation surface.
-    ///
     /// [`None`] for correction (prior remains historically readable via as-of).
     /// Semantic deletions map onto the closed [`CrossingStatus`] deletion set.
     pub fn crossing_status(self) -> Option<CrossingStatus> {
@@ -76,7 +74,6 @@ impl SupersessionKind {
 }
 
 /// Closed semantic-deletion kinds — Invalidation / Tombstone / RetentionRedaction.
-///
 /// Each is a supersession-shaped record admitted through this seat — never a
 /// message-delete / erase-bytes door (#270 T4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -110,7 +107,6 @@ impl SemanticDeletionKind {
 }
 
 /// Auditable link: successor admitted record supersedes prior by identity.
-///
 /// Minted only when a correction or semantic deletion attaches through
 /// [`seal_supersession`] / [`seal_semantic_deletion`] — never by rewriting
 /// prior committed bytes or message-deleting them.
@@ -184,7 +180,6 @@ pub(crate) fn admit_correction(
     keys_len: usize,
     valid: ValidityTs,
 ) -> Result<(KyzoRecord, AdmissionCertificate), AdmitRefuse> {
-    // One-door: same [`super::admit_relation_row_through_record`] seam as
     // sugar assert. Independence is the correction digest (binds `prior`)
     // plus the successor≠prior refuse — not a parallel admission path.
     let (record, cert) = super::admit_relation_row_through_record(
@@ -204,7 +199,6 @@ pub(crate) fn admit_correction(
 
 /// Admit a semantic deletion record — Invalidation / Tombstone /
 /// RetentionRedaction — as supersession without message-delete (#270 T4).
-///
 /// Uses the ONTOK Invalidation construction (the statement-kernel deletion
 /// kind) with a digest that binds [`SemanticDeletionKind`] + prior. Does not
 /// touch prior committed bytes.
@@ -249,7 +243,6 @@ pub(crate) fn admit_semantic_deletion(
 }
 
 /// Attach a correction certificate and seal the supersession link.
-///
 /// Advances dense [`CommitOrdinal`] on the admission spine for the
 /// successor. Prior identity is retained on the link — never erased.
 pub(crate) fn seal_supersession(
@@ -268,7 +261,6 @@ pub(crate) fn seal_supersession(
 }
 
 /// Attach a semantic-deletion certificate and seal the supersession link.
-///
 /// Same append-only law as correction: prior stays committed; the deletion
 /// is a new record. Crossing status is the kind's [`CrossingStatus`].
 pub(crate) fn seal_semantic_deletion(
@@ -312,7 +304,6 @@ fn seal_supersession_kind(
 /// Live-path correction: admit successor → seal supersession → **append**
 /// a new bitemporal fact key. The prior key is not deleted, rewritten, or
 /// overwritten — seat 34.
-///
 /// `prior` must be the [`RecordId`] of the already-committed fact this
 /// correction supersedes.
 pub(crate) fn append_corrected_fact(
@@ -498,7 +489,6 @@ mod tests {
 
         assert_ne!(link.prior(), link.successor());
 
-        // As-of valid 150: after original @100, before correction @200.
         let at_150 = db
             .run_script("?[price] := *quote{id, price @ 150}", no_params())
             .map_err(|e| miette!("as-of 150: {e}"))?;
@@ -508,7 +498,6 @@ mod tests {
             "as-of pre-correction must replay the ORIGINAL value exactly"
         );
 
-        // As-of after correction sees the superseding value.
         let at_250 = db
             .run_script("?[price] := *quote{id, price @ 250}", no_params())
             .map_err(|e| miette!("as-of 250: {e}"))?;
@@ -534,7 +523,6 @@ mod tests {
         let (db, _link) =
             admit_correction_through_store(0x2680_0006, ValidityTs::of_micros(100))?;
 
-        // As-of valid 150 (latest knowledge): the correction at valid 100 must
         // win over the original at valid 100 (later system-time supersedes).
         let at_150 = db
             .run_script("?[price] := *quote{id, price @ 150}", no_params())
@@ -790,8 +778,6 @@ mod tests {
         )
         .map_err(|e| miette!("seal tombstone: {e}"))?;
 
-        // Store bytes unchanged by admission alone — semantic deletion never
-        // message-deletes. Append path (retract) would add a Retract row; the
         // prior Assert key must still exist either way.
         let rtx = db.store.read_tx().map_err(|e| miette!("read after: {e}"))?;
         let after: Vec<(Vec<u8>, Vec<u8>)> = rtx
@@ -823,7 +809,6 @@ mod tests {
 
     #[test]
     fn append_correction_uses_as_of_skip_scan_not_rewrite() -> Result<()> {
-        // Point-read as-of on the live store path (not script sugar alone).
         let db = open_engine(SimStorage::new(0x2680_0006))?;
         db.run_script(
             "?[id, price] <- [[1, 100]] :create quote {id => price} @ 100",

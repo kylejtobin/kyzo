@@ -118,7 +118,6 @@ impl NegJoin {
                     "asof_neg_mat_join"
                 }
             }
-            // No prefix probe exists for a derived scan yet (pushdown into
             // `@spans`/`@delta` is chunk 4's posting-index work — the
             // module doc on `RelAlgebra::filter`'s matching arm says the
             // same): the anti-join always materializes the whole right
@@ -130,7 +129,6 @@ impl NegJoin {
 }
 
 impl NegJoin {
-    /// One door for [`NegRight::Stored`] and [`NegRight::StoredWithValidity`]
     /// anti-join probes. Both read through the as-of skip-scan primitives
     /// (`skip_scan_prefix_projected` / `skip_scan_all`); current-state is
     /// `AsOf::current(MAX_VALIDITY_TS)` — the coordinate `scan_*` already
@@ -284,7 +282,6 @@ impl NegJoin {
                 left_to_prefix_indices,
             )?,
             // `@spans`/`@delta` right sides: no prefix-probe primitive
-            // exists for either yet (same chunk-4 gap `RelAlgebra::filter`
             // already lives with), so the anti-join always materializes
             // the derived relation whole — one pass through the same
             // production sweep/set-difference the POSITIVE read uses

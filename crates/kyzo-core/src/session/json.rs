@@ -50,12 +50,10 @@ impl<S: Storage> Engine<S> {
     /// that is always `Ok` at the Rust level — the ONE "JSON in, JSON out"
     /// entry point every binding (HTTP, WASM, C ABI) should call instead of
     /// reimplementing this shaping:
-    ///
     /// - success: `{"ok": true, "took": <seconds, omitted on wasm32>,
     ///   "headers": [...], "rows": [...], "next": ...}`
     /// - failure (bad params, parse error, budget refusal, conflict, ...):
     ///   [`format_error_as_json`]'s envelope, always `"ok": false`.
-    ///
     /// `params` must be a JSON object (`{"name": <value>, ...}`); anything
     /// else is reported through the same failure envelope, not a bare
     /// `Result` a caller could forget to check.

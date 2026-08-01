@@ -27,7 +27,6 @@ use crate::store::authority::IncarnationId;
 use crate::store::epoch::{EpochAdvanceRefuse, FenceEpoch};
 
 /// Opaque evidence that no live Fenced footprints remain in a [`FenceEpoch`].
-///
 /// Minted only by [`LiveFootprintTable::prove_epoch_clear`]. Caller-forged
 /// clear (bare epoch args, self-attestation) is Unconstructible — the type
 /// has no public free constructor.
@@ -50,7 +49,6 @@ pub enum AskShape {
     /// Full SSI; conflict is a terminal typed refuse carrying ranges.
     Optimistic,
     /// Sound-superset footprint sealed with Catalog generation.
-    ///
     /// [`Footprint::Underivable`] is Unconstructible here — sealed only via
     /// [`FencedFootprint::seal`].
     Fenced(FencedFootprint),
@@ -103,7 +101,6 @@ impl ByteRange {
 }
 
 /// Envelope ranges proven to be a sound superset of declared access (§36).
-///
 /// Under-approximating an Envelope is Unconstructible — the only constructor
 /// is [`SoundEnvelope::seal`], which refuses when `ranges` fail to cover
 /// every declared-access range.
@@ -114,7 +111,6 @@ pub struct SoundEnvelope {
 
 impl SoundEnvelope {
     /// Seal envelope ranges as a sound superset of `declared_access`.
-    ///
     /// Every declared range must be covered by at least one envelope range.
     /// Under-approximation → [`FootprintRefuse::UnderApproximatingEnvelope`].
     pub fn seal(
@@ -154,7 +150,6 @@ pub fn ranges_overlap(a: &[ByteRange], b: &[ByteRange]) -> bool {
 }
 
 /// Overlap adjudication between two footprints (§36).
-///
 /// Same-kind range / identity checks when decisive; cross-kind pairs that
 /// cannot prove disjointness are treated as overlapping (conservative refuse).
 pub fn footprints_overlap(a: &Footprint, b: &Footprint) -> bool {
@@ -176,13 +171,11 @@ pub fn footprints_overlap(a: &Footprint, b: &Footprint) -> bool {
         }
         (Footprint::Frontier(f1), Footprint::Frontier(f2)) => f1.edge == f2.edge,
         (Footprint::Underivable, _) | (_, Footprint::Underivable) => true,
-        // Cross-kind: cannot prove disjoint without a shared coordinate → overlap.
         _other => true,
     }
 }
 
 /// Adjudicate a candidate Fenced footprint against already-live shapes (§36).
-///
 /// Overlapping Fenced refuse at the door. Optimistic live shapes do not block.
 pub fn adjudicate_fenced_overlap<'a>(
     candidate: &FencedFootprint,
@@ -265,7 +258,6 @@ pub struct FencedFootprint {
 
 impl FencedFootprint {
     /// Seal a sound-superset footprint for Fenced admission.
-    ///
     /// [`Footprint::Underivable`] → refuse (Unconstructible at plan construction).
     pub fn seal(footprint: Footprint, catalog_generation: u64) -> Result<Self, FootprintRefuse> {
         match footprint {
@@ -321,7 +313,6 @@ impl SnapshotDigest {
 }
 
 /// Authenticated confirmation against the authority reachability projection (§36).
-///
 /// Minted only by the projection door — caller-forged confirmation is
 /// Unconstructible (no public constructor).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -332,7 +323,6 @@ pub struct ProjectionConfirmation {
 
 impl ProjectionConfirmation {
     /// Mint confirmation from the authority reachability projection.
-    ///
     /// Sole constructor — session/store projection seams only.
     pub(crate) fn mint(snapshot_digest: SnapshotDigest) -> Self {
         Self { snapshot_digest }
@@ -345,7 +335,6 @@ impl ProjectionConfirmation {
 }
 
 /// Apply accelerator against the authority projection.
-///
 /// Conclusive verdicts admit without confirmation. [`AcceleratorVerdict::Neither`]
 /// requires [`ProjectionConfirmation`] minted by the projection door;
 /// absent confirmation → [`FootprintRefuse::FrontierUnprovable`].
@@ -433,7 +422,6 @@ const _: () = {
 };
 
 /// Lossless `usize` → `u64` via little-endian `From<u8>` assemble.
-///
 /// Same door shape as the fixed-rule zone's width widens (`rules/convert`):
 /// no `as` cast (trips `as_cast`), no `TryFrom::expect` on a total widen.
 #[inline]
@@ -459,7 +447,6 @@ impl LiveFootprintTable {
     }
 
     /// Register a live footprint for the owning incarnation.
-    ///
     /// Fenced candidates are overlap-adjudicated against every other live
     /// Fenced shape (same key excluded — replacement is explicit via
     /// [`LiveInsert::Replaced`]). Overlapping Fenced → refuse. Silent
@@ -512,7 +499,6 @@ impl LiveFootprintTable {
     }
 
     /// Prove no live Fenced footprints remain in `fence_epoch`.
-    ///
     /// Sole mint of [`FootprintClearEvidence`]. Live Fenced →
     /// [`EpochAdvanceRefuse::EpochAdvanceBlocked`] — contentless self-attestation
     /// of clear is Unconstructible.

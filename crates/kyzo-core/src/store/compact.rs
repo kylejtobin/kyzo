@@ -10,15 +10,12 @@
 //! Deterministic compaction under encryption (decisions.md §45, §46, §47, §66).
 //!
 //! Owns: [`pace`] = f(debt), range-class commit-time classifier,
-//! [`MergeProof`], KV-separation threshold.
 //!
 //! Bans: wall-clock/CPU/IO inputs to pace (replay determinism dies);
 //! background reclassification of frozen↔current; ciphertext bit-identity
 //! as sealed compact identity.
 //!
-//! Carried: the large-value KV-separation byte threshold is measured (RUM
 //! benches), never dogma in either direction — inventing a constant without
-//! the campaign is forbidden (carried obligation `kv-separation-threshold`).
 
 use sha2::{Digest, Sha256};
 
@@ -45,7 +42,6 @@ pub struct CompactionPace {
 /// `pace = f(debt)` — pure function of committed-byte / reclaimable-debt
 /// quantities only. Wall-clock, CPU, and IO-util inputs are Unconstructible
 /// (absent from this signature).
-///
 /// Coefficients are sealed from WA/space-amp benches (same law as
 /// [`KvSeparationThreshold`]). Until that campaign greens, pace refuses —
 /// inventing placeholder coefficients is forbidden.
@@ -54,7 +50,6 @@ pub fn pace(_debt: CompactionDebt) -> Result<CompactionPace, CompactRefuse> {
 }
 
 /// Range class fixed at write from the bitemporal coordinate (§46).
-///
 /// Background heuristic reclassification of frozen↔current is Unconstructible.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RangeClass {
@@ -65,7 +60,6 @@ pub enum RangeClass {
 }
 
 /// Commit-time classifier: range class from the key’s bitemporal fact.
-///
 /// `written_at` is the commit ordinal that sealed the key; `frozen_before`
 /// is the Store’s frozen watermark. Classification is fixed at write —
 /// never reopened by a background worker.
@@ -127,7 +121,6 @@ impl AsRef<[u8]> for LineageHash {
 }
 
 /// Plaintext-canonical state root bound into a merged packet header.
-///
 /// Same meaning as [`super::merkle::StateRoot`] — not a second digest identity.
 pub type CompactStateRoot = super::merkle::StateRoot;
 
@@ -147,7 +140,6 @@ pub struct MergeProofParts {
 }
 
 /// Private proof that a merged packet was minted under §66 law.
-///
 /// Sealed / DST-replayable identity is over plaintext content + lineage
 /// hashes + state roots — never ciphertext. A compacted packet without
 /// lawful MergeProof lineage is Unconstructible (merged-packet constructor
@@ -165,7 +157,6 @@ pub struct MergeProof {
 
 impl MergeProof {
     /// Privately mint a MergeProof and the merged packet it authorizes.
-    ///
     /// Requires at least one input content hash. Empty merge is refused.
     pub(crate) fn mint(
         parts: MergeProofParts,
@@ -197,7 +188,6 @@ impl MergeProof {
         &self.input_content_hashes
     }
 
-    /// Lineage hash.
     pub fn lineage_hash(&self) -> LineageHash {
         self.lineage_hash
     }
@@ -224,7 +214,6 @@ impl MergeProof {
 }
 
 /// Merged packet — constructible only via [`MergeProof::mint`].
-///
 /// Salt regeneration under MergeProof does not change sealed identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MergedPacket {
@@ -241,7 +230,6 @@ impl MergedPacket {
         self.content_hash
     }
 
-    /// Lineage hash.
     pub fn lineage_hash(&self) -> LineageHash {
         self.lineage_hash
     }
@@ -263,7 +251,6 @@ impl MergedPacket {
 }
 
 /// KV-separation threshold seat — measured, never dogma.
-///
 /// The byte threshold is sealed from RUM benches (carried obligation). Until
 /// that campaign greens, this type carries the unmeasured marker only —
 /// inventing a production constant here is forbidden.

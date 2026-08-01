@@ -37,7 +37,6 @@ use miette::Result;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 
-/// Seats for [`TempStoreRA::prefix_join_batched`].
 pub(crate) struct TempPrefixJoinBatched<'a> {
     pub(crate) left: BatchIter<'a>,
     pub(crate) join_indices: (Vec<usize>, Vec<usize>),
@@ -104,7 +103,6 @@ impl TempStoreRA {
     /// Anti-join against this store. Always reads the TOTAL, never the
     /// delta — negation over a delta would resurrect rows already ruled
     /// out (the seam contract: "negated occurrences always read totals").
-    /// Prefix join: for each left tuple, prefix-scan this store on the
     /// join values. Reads the delta when `delta_rule` names this store.
     /// Batched form of [`prefix_join`](Self::prefix_join): the left side is
     /// consumed as batches — no `Tuple` is minted for a left row — and each
@@ -182,7 +180,6 @@ impl TempStoreRA {
 /// [`TempStoreRA::prefix_join_batched`]. Order matches the row-at-a-time
 /// path exactly: one probe per left row, in left-stream order, each
 /// yielding its store matches in the store's own (memcmp-ordered for
-/// stored relations, canonical for temp stores) order.
 struct TempStorePrefixBatchJoin<'a> {
     left: BatchIter<'a>,
     inner: &'a TempStoreRA,

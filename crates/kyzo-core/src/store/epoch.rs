@@ -22,7 +22,6 @@ use crate::session::footprint::{FootprintClearEvidence, LiveFootprintTable};
 
 /// Store-local fence epoch. Genesis is sealed into the genesis digest /
 /// [`CryptoDomain`] as a verification fact — fabric never mints write continuity.
-///
 /// Binds [`StoreId`]: [`FenceEpoch::genesis`] does not discard the identity —
 /// epoch counters are store-scoped verification facts, never free-floating u64s.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -69,7 +68,6 @@ impl FenceEpoch {
 }
 
 /// Sealed crypto domain: `(StoreId, FenceEpoch)`.
-///
 /// Separates DEK/nonce space per store×epoch. Dual-use lineage under one
 /// CryptoDomain → poison at chain-meet. StoreId is always the fence epoch's
 /// own binding — a disagreeing `store_id` witness cannot forge a dual-identity
@@ -103,7 +101,6 @@ impl CryptoDomain {
 }
 
 /// Same-principal live-token grant to advance [`FenceEpoch`] on the same StoreId.
-///
 /// Distinct from [`super::grants::RecoveryGrant`] and [`super::authority::WriteAuthority`].
 /// Fabric carries this message; it never mints write continuity.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,7 +130,6 @@ impl EpochGrant {
 }
 
 /// Witness that current-epoch current-incarnation Fenced footprints are clear.
-///
 /// Ordinary [`advance`] requires this. RecoveryGrant advance is IntentClear-exempt
 /// under epoch-indexed footprint law (decisions.md §36/§72).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,7 +140,6 @@ pub struct IntentClear {
 
 impl IntentClear {
     /// Attest that no live current-epoch Fenced footprints remain.
-    ///
     /// Consumes [`FootprintClearEvidence`] minted by
     /// [`LiveFootprintTable::prove_epoch_clear`] — bare `(StoreId, FenceEpoch)`
     /// self-attestation is Unconstructible. Store identity is taken from the
@@ -236,7 +231,6 @@ pub enum EpochAdvanceRefuse {
 
 /// Same-principal live-token advance: new CryptoDomain, same KEK, new IncarnationId
 /// at the next open — WriteAuthority remains the immutable signing capability.
-///
 /// Requires [`IntentClear`] (footprint-proven) and a live footprint table with
 /// no current-epoch Fenced rows — [`EpochAdvanceRefuse::EpochAdvanceBlocked`]
 /// when live Fenced footprints remain. Consumes the predecessor epoch counter

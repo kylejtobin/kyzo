@@ -126,7 +126,6 @@ impl TxnTimeRefuse {
 }
 
 /// Transaction time bound to a dense [`CommitOrdinal`] at the durable event.
-///
 /// Physical observation is optional for humans — order authority is the
 /// ordinal, never a shared wall clock. Minted only from a SweepDoor
 /// [`Committed`] proof (or an equivalent commit-door seal).
@@ -138,7 +137,6 @@ pub struct TxnTime {
 
 impl TxnTime {
     /// Mint transaction time from a SweepDoor [`Committed`] proof.
-    ///
     /// This is the sole public mint — client-supplied and Engine-before-append
     /// paths have no constructor (see [`TxnTimeRefuse`]).
     pub fn at_commit_door(committed: Committed) -> Self {
@@ -292,7 +290,6 @@ pub fn check_key_for_bitemporal(
     }
 
     // Bounds live in the claimed-bytes domain, exactly as in the
-    // single-axis kernel: only the tails were proven above, and blessing
     // the prefix into `StorageKey` would launder unproven bytes into a
     // type whose possession means provenance.
     let splice_both = |v: ValiditySlot, s: ValiditySlot| -> Vec<u8> {
@@ -311,9 +308,7 @@ pub fn check_key_for_bitemporal(
 
     if valid.timestamp() < as_of.valid() {
         // Instant newer than the valid coordinate (`Reverse` order:
-        // smaller means later). Seek to the newest instant at or before
         // `valid_at`, landing directly at the newest system version at or
-        // before `sys_at` inside whatever instant the seek finds.
         return Ok((
             None,
             splice_both(
@@ -324,7 +319,6 @@ pub fn check_key_for_bitemporal(
     }
     if sys.timestamp() < as_of.sys() {
         // Right instant, but this system version postdates the system
-        // coordinate: seek to the newest version at or before `sys_at`
         // within the SAME instant.
         return Ok((
             None,
@@ -339,19 +333,16 @@ pub fn check_key_for_bitemporal(
     match polarity {
         ClaimPolarity::Erase => {
             // Unrecorded at sys_at: this instant contributes nothing; the
-            // scan falls onto the fact's next older instant.
             Ok((None, splice_sys(TERMINAL_VALIDITY.into())))
         }
         ClaimPolarity::Retract => {
             // The fact is retracted from this instant on: absent at the
-            // coordinates. Skip every older version of the fact.
             Ok((
                 None,
                 splice_both(TERMINAL_VALIDITY.into(), TERMINAL_VALIDITY.into()),
             ))
         }
         ClaimPolarity::Assert => {
-            // A hit. Emit, then skip every older version of the fact.
             let hint = match size_hint {
                 Some(h) => h,
                 None => DEFAULT_SIZE_HINT,
@@ -371,7 +362,6 @@ pub fn check_key_for_bitemporal(
 /// the tag byte at this fixed offset is always `VLD_TAG` by construction,
 /// so `DataValue::decode_from_key` dispatches straight into that one
 /// branch — a fixed-offset slice plus a handful of field reads.
-///
 /// Used by integrity checks that must confirm a fact row's recorded stamp
 /// against some external bound (the dump path's clock-floor backstop,
 /// `storage/backup.rs`) without re-deriving the whole resolution algebra
@@ -429,7 +419,6 @@ mod tests {
 
     const REL: RelationId = match RelationId::new(7) {
         Some(id) => id,
-        //  7 < CAP is a static fact; diverging arm keeps the expect-meter off.
         None => loop {},
     };
 
@@ -555,7 +544,6 @@ mod tests {
             }
             rows.sort_unstable_by_key(|r| (r.0, r.1, r.2));
             // One row per (fact, valid, sys) coordinate, matching the
-            // store, where the key is unique — otherwise the map
             // (last-insert-wins) and the oracle (sees every row) would
             // judge different histories. Which colliding polarity survives
             // is an arbitrary deterministic pick per seed (`sort_unstable`
@@ -588,11 +576,8 @@ mod tests {
             (bikey(1, 10, 20), ClaimPolarity::Retract),
         ]
         .into();
-        // Before the correction was recorded: the assert governs.
         assert_eq!(facts_of(&skip_walk(&store, 15, 15)?)?, vec![1]);
-        // After: the retract governs — the fact is absent.
         assert_eq!(facts_of(&skip_walk(&store, 25, 15)?)?, Vec::<i64>::new());
-        // An erase instead of a retract falls through to... nothing older:
         // also absent, but by fall-through, not settlement.
         let store: BTreeMap<Vec<u8>, ClaimPolarity> = [
             (bikey(1, 10, 5), ClaimPolarity::Assert),
@@ -600,7 +585,6 @@ mod tests {
             (bikey(1, 0, 1), ClaimPolarity::Assert),
         ]
         .into();
-        // Erased at 10, so the older instant 0 shows through.
         assert_eq!(facts_of(&skip_walk(&store, 25, 15)?)?, vec![1]);
         // A RETRACT at 10 would instead settle the fact absent.
         let store: BTreeMap<Vec<u8>, ClaimPolarity> = [
@@ -715,7 +699,5 @@ mod tests {
         Ok(())
     }
 
-    // Oracle-vs-kernel temporal differential moved to
     // `kyzo-trials::time_travel` (`reverify_laws_resolve_mirrors_the_real_kernel_with_negative_timestamps`).
-    // kyzo-core must not import `kyzo_oracle`.
 }

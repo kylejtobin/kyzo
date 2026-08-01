@@ -67,7 +67,6 @@ pub struct WalRecord {
 
 impl WalRecord {
     /// Seal a record over `predecessor_hash` and `payload`.
-    ///
     /// Record hash is SHA-256 of the ONE [`encode_wal_record`] CanonicalTranscript
     /// — hand-rolled field hashing is Unconstructible.
     pub fn seal(predecessor_hash: WalHash, payload: WalPayload) -> Result<Self, WalRefuse> {
@@ -299,7 +298,6 @@ pub enum WalRefuse {
 }
 
 /// Replay the retained WAL suffix from durable segments alone.
-///
 /// Reconstructs Engine-visible state; memtables/SSTs wipe and rebuild as cache.
 /// Cross-segment: first record of segment N covers last hash of segment N−1.
 pub fn replay(store_id: StoreId, segments: &[WalSegment]) -> Result<WalReplayState, WalRefuse> {
@@ -495,7 +493,6 @@ mod tests {
     }
 
     /// Gapped segment_index under replay → SegmentGap.
-    ///
     /// Index 2 skips 1 — `open` accepts any index; replay refuses before records.
     #[test]
     fn replay_refuses_segment_gap() -> Result<()> {

@@ -13,7 +13,6 @@ use kyzo_model::program::op::OpDecl;
 use kyzo_model::value::DataValue;
 use miette::{Result, bail};
 
-/// Builtin op with declaration + body. Fields private — construct only via [`super::bind::bind_op`].
 #[derive(Clone)]
 pub struct BoundOp {
     decl: OpDecl,

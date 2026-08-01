@@ -39,7 +39,6 @@
 //! fixpoint with their own annotation store, out of this split's scope —
 //! see the capability design's PA3 boundary. Nothing here silently
 //! degrades into them: annotations are sealed products
-//! ([`BooleanAnn`] / [`TropicalAnn`]) so a kind mismatch does not compile,
 //! and the solver is armed with a pass ceiling ([`SolverBudget`]) so a
 //! non-stabilizing annotation chain refuses (typed) instead of hanging.
 //!
@@ -59,7 +58,6 @@
 //! Negation and non-meet aggregation are not semiring operations; at those
 //! boundaries the annotation collapses to "present" — the tuples of an
 //! aggregated or fixed-rule store enter the graph as ground facts
-//! (annotation `1`), and full provenance is claimed only for the positive
 //! plain-rule fragment above them. Stated, not smuggled.
 //!
 //! [`RuleBody`]: crate::exec::fixpoint::eval::RuleBody
@@ -90,7 +88,6 @@ pub(crate) struct SemiringOverflow {
     pub(crate) right: u64,
 }
 
-/// Which provenance budget dimension was exceeded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProvenanceBudgetDimension {
     /// Grounded-derivation enumeration while building the graph.
@@ -146,8 +143,6 @@ pub(crate) enum BadCertificate {
     CostMismatch,
 }
 
-/// Certificate extraction was asked for an underivable tuple (annotation
-/// `0` / infinite cost), or for a node the graph does not contain.
 #[derive(Debug, Error, Diagnostic, PartialEq, Eq)]
 #[diagnostic(code(provenance::no_derivation))]
 pub(crate) enum NoDerivation {
@@ -170,7 +165,6 @@ pub(crate) struct ProvenanceInvariantError(pub(crate) &'static str);
 // ─────────────────────────────────────────────────────────────────────────
 
 /// A tropical annotation: the cost of the cheapest known derivation, or
-/// [`Cost::Infinite`] for "none". The derived `Ord` is the tropical order
 /// (`Finite(a) < Finite(b)` iff `a < b`, every `Finite` below
 /// `Infinite`), which makes `⊕ = min` the lattice meet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -302,7 +296,6 @@ impl DerivationId {
 
 /// The grounded derivation hypergraph of one completed evaluation: ground
 /// nodes (annotation `1`) and rule applications. Nodes are keyed by the
-/// caller (`K` is `(PremiseSource, Tuple)` for the engine pipeline).
 ///
 /// DAG-by-construction (P104): edges are admitted only through
 /// [`Self::add_derivation`], which requires every premise already
@@ -318,7 +311,6 @@ pub(crate) struct DerivationGraph<K> {
     /// stratum, then store, then rule index, then the body's own
     /// deterministic iteration order).
     derivations: Vec<Derivation<K>>,
-    /// Nodes known for premise checks: facts ∪ declared ∪ derivation heads.
     known: BTreeSet<K>,
 }
 
@@ -472,7 +464,6 @@ impl SolverBudget {
 /// facts at `1` and everything else starting at `0`.
 ///
 /// `A` is the sealed product ([`BooleanAnn`] / [`TropicalAnn`]) — the
-/// algebra is fixed by the type parameter, so a kind mismatch cannot
 /// arise at the ops boundary.
 ///
 /// Deterministic by construction: the pass order is the derivation list's
@@ -605,7 +596,6 @@ pub(crate) fn extract_min_cost_proof<K: Ord + Clone + Debug>(
         if d.head != *target {
             continue;
         }
-        // Evaluate this edge at the solved costs; if it achieves the
         // node's cost it is a witness. Overflow here cannot achieve a
         // finite target cost, so treat it as "not this edge".
         let mut total = Some(d.weight.get());

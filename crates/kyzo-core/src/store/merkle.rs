@@ -7,7 +7,6 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! Chained state roots + cold Merkle accountability (decisions.md §56–§58).
 //!
 //! Owns (07 Spec spine): per-commit chained state root, [`as_of_root`],
 //! typed recovery/fork chain links, fork-equivalence via [`fork_point`],
@@ -15,7 +14,6 @@
 //! signed-state-root-head (STH) bodies, RFC-6962-style
 //! [`ConsistencyProof`] checking, and split-view detection on gossip
 //! ([`check_sth_gossip`]) so an equivocating Store is
-//! **Detected-on-gossip** before chains meet (Certificate Transparency model;
 //! seats 2/56/58/69). Fabric carriage of compact STHs seats in `replica`
 //! (NATS JetStream subject — never peer-dial, seat 92).
 //!
@@ -24,15 +22,12 @@
 //! leaving split-view Unexposed-until-chains-meet when two gossiped STHs
 //! disagree without a consistency proof.
 //!
-//! Also: a **cold, deterministic Merkle state root** over the ordered
 //! keyspace — plaintext-canonical, cipher-invariant leaf commitment the
 //! Spec chain binds.
 //!
-//! ## Cold root — what it is, and what it deliberately is not
 //!
 //! One root hash that is a *pure function of the committed `(key, value)`
 //! set* — a content address the whole store can be compared by. It is
-//! computed **cold**: a full ordered rescan of the range, folded into a
 //! Merkle tree, no incremental maintenance. The scan order *is* the
 //! canonical order, because the memcmp key encoding makes bytewise key
 //! order equal semantic value order (`data/memcmp.rs`); so two stores with
@@ -40,7 +35,6 @@
 //! write history that built them, and any single-byte difference in any key
 //! or value produces a different root.
 //!
-//! The **incremental** cold-path alternative (in-keyspace tree nodes) remains
 //! out of scope for the scan helper: fjall's commit order is internal and
 //! its serialize point is not a hook we own. The Spec per-commit chain
 //! ([`ChainedStateRoot`]) is minted at the SweepDoor durable event from
@@ -60,7 +54,6 @@
 //!
 //! The `0x00`/`0x01`/`0x02` domain tags are what stop a leaf hash from
 //! being reinterpreted as an interior node (the classic second-preimage on
-//! an undomained Merkle tree). They are pinned by golden vectors in the
 //! tests; flipping a tag is a mutation the tests catch.
 //!
 //! ## The tree shape is canonical (RFC 6962), computed streaming
@@ -190,8 +183,6 @@ impl MerkleAccumulator {
     /// Append the next leaf in key order.
     fn push_leaf(&mut self, hash: MerkleHash) {
         let mut node = (1u64, hash);
-        // Merge while the stack top is a subtree of the same size: it was
-        // pushed earlier, so it is the LEFT sibling of the node we hold.
         loop {
             let Some(&(top_size, _)) = self.stack.last() else {
                 break;
@@ -217,7 +208,6 @@ impl MerkleAccumulator {
                 empty_mth
             }
             Some((_, mut acc)) => {
-                // `acc` starts at the rightmost (smallest) peak; fold each
                 // peak to its left in as the left sibling.
                 for (_, left) in peaks {
                     acc = node_hash(&left, &acc);
@@ -311,7 +301,6 @@ impl StateRoot {
 }
 
 /// Typed link distinguishing ordinary commit, recovery advance, and fork.
-///
 /// Recovery advances seal a typed recovery link auditors can distinguish
 /// from ordinary advance. Fork links bind the shared fork-point root.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -348,7 +337,6 @@ pub struct ChainedStateRoot {
 
 impl ChainedStateRoot {
     /// Mint a chained root at the durable event (SweepDoor / epoch advance).
-    ///
     /// `predecessor_root` is the prior commit’s root (or genesis digest for
     /// the first mint in a CryptoDomain). Roots are plaintext-canonical.
     pub(crate) fn mint(
@@ -455,7 +443,6 @@ impl ForkPoint {
 }
 
 /// Domain-separated composition digest of meaning tip × WAL tip.
-///
 /// Owned identity for [`DurableCommitCut::composed`] — never a bare `[u8; 32]`.
 /// Bytes are produced only by [`compose_durable_cut`] under the
 /// `kyzo.durable_commit_cut.v1` domain tag.
@@ -474,7 +461,6 @@ impl DurableCutDigest {
 }
 
 /// One durable commit boundary: meaning-layer tip × WAL byte-chain tip.
-///
 /// Seat 24 (WAL hash chain) and seat 56 ([`RootChain`]) meet here — not as two
 /// independent chains that never compose. [`compose`](DurableCommitCut::compose)
 /// domain-separates both tips; breaking either bind breaks [`cuts_equal`].
@@ -605,7 +591,6 @@ impl RootChain {
 }
 
 /// Chain link covering `cut` — the mint whose root [`as_of_root`] returns.
-///
 /// Independent recomputation (session `verify`) needs the link's predecessor
 /// and mint metadata, not only the tip digest.
 pub fn link_at_cut(
@@ -624,7 +609,6 @@ pub fn link_at_cut(
 }
 
 /// State root at any committed transaction time (as-of root).
-///
 /// Current-only root as the sole accountability digest is deleted —
 /// as-of is a first-class surface (§57).
 pub fn as_of_root(chain: &RootChain, cut: CommitOrdinal) -> Result<StateRoot, MerkleChainRefuse> {
@@ -632,7 +616,6 @@ pub fn as_of_root(chain: &RootChain, cut: CommitOrdinal) -> Result<StateRoot, Me
 }
 
 /// Fork-equivalence: shared fork-point root without revealing post-fork content.
-///
 /// Equality at a cut = recomputed roots ([`replica_equivalence_at_cut`]).
 /// Path/URL equivalence claims are refused ([`refuse_path_url_sameness`]) —
 /// only independent root comparison / shared [`ForkPoint`] prove sameness.
@@ -649,7 +632,6 @@ pub fn roots_equal_at_cut(left: StateRoot, right: StateRoot) -> bool {
 }
 
 /// One replica's local mint material for independent recomputation at a cut.
-///
 /// Carries only what *this* instance observed (content from its ordered facts,
 /// predecessor from its local chain). A peer-delivered root is never a field —
 /// federation fabric carriage of facts stays `[OPEN]`; this is the
@@ -701,7 +683,6 @@ impl ReplicaCutRecompute {
 }
 
 /// Recompute-and-compare replica equivalence at a cut (seat 58).
-///
 /// Each side independently recomputes via [`ReplicaCutRecompute::recompute`];
 /// comparison is [`roots_equal_at_cut`] over those digests. Neither argument
 /// is a received/delivered root — a trust-the-peer costume cannot enter.
@@ -787,7 +768,6 @@ pub enum MerkleChainRefuse {
 // ── STH gossip / consistency (CT non-equivocation; seats 2/56/58/69) ──────
 
 /// Compact unsigned state-root head — the digest payload an STH carries.
-///
 /// Signed and carried on the NATS JetStream fabric by the replica gossip
 /// obligation ([`crate::store::replica`]); this type is the Merkle meaning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -846,7 +826,6 @@ impl StateRootHead {
 
     /// Compact signing / gossip body: SHA-256 of the ONE
     /// [`encode_state_root_head`] transcript bytes.
-    ///
     /// Hand-rolled field hashing of the head is Unconstructible — the
     /// transcript is the sole serializer; this digests its sealed bytes only.
     pub fn compact_digest(self) -> Result<Digest32, MerkleChainRefuse> {
@@ -863,7 +842,6 @@ impl StateRootHead {
 }
 
 /// Contiguous RootChain subsegment proving a newer head extends an older one.
-///
 /// Analogue of RFC 6962 consistency proofs over the Spec chained-root spine:
 /// recomputing [`as_of_root`] at both cuts on the proof chain must reproduce
 /// both heads. A split-view cannot forge a proof that binds divergent tips.
@@ -888,7 +866,6 @@ pub fn build_consistency_proof(
     if older.get() > newer.get() {
         return Err(MerkleChainRefuse::ConsistencyProofFailed);
     }
-    // Cover every link with ordinal in [older, newer] so as-of at both cuts works.
     let links: Vec<ChainedStateRoot> = chain
         .links()
         .iter()
@@ -900,7 +877,6 @@ pub fn build_consistency_proof(
     if links.is_empty() {
         return Err(MerkleChainRefuse::CutBeforeGenesis);
     }
-    // First link must be exactly at `older` (or the segment cannot name it).
     if links[0].commit_ordinal() != older {
         return Err(MerkleChainRefuse::ConsistencyProofFailed);
     }
@@ -933,7 +909,6 @@ pub fn verify_consistency_proof(
         };
     }
 
-    // First link must match `older` exactly; segment may sit mid-lineage.
     let first = proof
         .links()
         .first()
@@ -977,7 +952,6 @@ pub enum GossipConsistency {
 }
 
 /// Cross-check two gossiped state-root heads (Certificate Transparency gossip).
-///
 /// Same ordinal + divergent roots → [`MerkleChainRefuse::SplitViewDetected`].
 /// Unequal ordinals without a proof → [`MerkleChainRefuse::ConsistencyProofRequired`].
 /// Unequal ordinals with a failing proof → [`MerkleChainRefuse::SplitViewDetected`].
@@ -1019,7 +993,6 @@ pub fn check_sth_gossip(
 
 /// Chained root bind: SHA-256 of the ONE [`encode_chained_state_root`]
 /// transcript bytes (content ‖ predecessor ‖ link ‖ ordinal).
-///
 /// Hand-rolled `kyzo.chained_state_root.v1` field hashing is Unconstructible —
 /// the transcript is the sole serializer; this digests its sealed bytes only.
 fn chain_bind(
@@ -1041,12 +1014,8 @@ fn chain_bind(
 
 #[cfg(test)]
 mod tests {
-    //! The root's guarantees, proven — not asserted:
     //!
-    //! - **golden vectors** pin the exact SHA-256 bytes of the empty root, a
     //!   one-leaf root, and a two-leaf root (each recomputed here by hand
-    //!   from the domain-separated formula), so a changed domain tag or a
-    //!   changed leaf encoding is caught byte-for-byte;
     //! - the streaming accumulator is cross-checked against an **independent
     //!   recursive MTH** over shuffled inputs of every small size;
     //! - the **load-bearing** storage test: two real fjall stores with
@@ -1056,11 +1025,8 @@ mod tests {
     //!   store observed encrypted vs plaintext — the leaf commits to
     //!   canonical plaintext outside AEAD; ciphertext bytes are not the
     //!   leaf input;
-    //! - **valid-but-stale rollback** (§56–§58): an older internally-consistent
     //!   snapshot fails [`roots_equal_at_cut`] against the stored prior tip;
-    //! - **historical_edit** of a past [`ChainedStateRoot`]: every forward
     //!   chained root breaks — [`chain_bind`] covers the predecessor (proven);
-    //! - **point-in-time** [`as_of_root`] (§57): at a real past cut the returned
     //!   root equals that cut's [`StateRoot`] and differs from tip / later cuts;
     //! - **replica-equivalence** (§58): two instances replaying the same ordered
     //!   facts match by independent recompute-and-compare; a delivered root is
@@ -1068,7 +1034,6 @@ mod tests {
     //! - **STH gossip non-equivocation** (§2/56/58/69): an equivocating Store
     //!   showing divergent histories to two peers is
     //!   [`MerkleChainRefuse::SplitViewDetected`] via [`check_sth_gossip`]
-    //!   before chains meet; honest extension verifies under
     //!   [`ConsistencyProof`];
     //! - determinism across store reopen;
     //! - the typed refusals (scan ceiling, out-of-range relation id).
@@ -1090,16 +1055,11 @@ mod tests {
         NonZeroU64::new(1_000_000).ok_or_else(|| miette!("nonzero budget"))
     }
 
-    // ── golden vectors: LITERAL SHA-256 digests, computed off-tree from the
-    // domain-separated formula (see the module docs), pinned as hex so a
-    // changed domain tag or leaf encoding is caught byte-for-byte. These do
     // NOT reference the source `*_TAG` constants — a mutation to a tag must
-    // move the digest away from the literal, and a golden that reused the
     // const would move with it and hide the mutation.
 
     #[test]
     fn empty_root_is_pinned() -> Result<()> {
-        // SHA-256(0x02)
         assert_eq!(
             empty_hash().to_hex(),
             "dbc1b4c900ffe48d575b5da5c638040125f65db0fe3e24494b76ea986457d986"
@@ -1110,7 +1070,6 @@ mod tests {
 
     #[test]
     fn single_leaf_root_is_pinned() -> Result<()> {
-        // leaf = SHA-256(0x00 ‖ u64_be(3) ‖ "key" ‖ "val")
         let (k, v) = (b"key".as_slice(), b"val".as_slice());
         let golden = "f26135a572169d94e1cd659dc6e6ba89caddd4d1b0acc6fa87b3b9fed4045bc0";
         assert_eq!(leaf_hash(k, v).to_hex(), golden);
@@ -1126,7 +1085,6 @@ mod tests {
 
     #[test]
     fn two_leaf_root_is_pinned() -> Result<()> {
-        // l0 = leaf("a","1"), l1 = leaf("b","2"), root = SHA-256(0x01 ‖ l0 ‖ l1)
         let (k0, v0) = (b"a".as_slice(), b"1".as_slice());
         let (k1, v1) = (b"b".as_slice(), b"2".as_slice());
         assert_eq!(
@@ -1263,7 +1221,6 @@ mod tests {
         // Plaintext observation: leaf over canonical plaintext.
         let plaintext_root = root_of_pairs(&logical)?;
 
-        // Encrypted carriage: seal each value; open before the leaf (the
         // only lawful merkle input). Ciphertext body must not be the leaf.
         let mut opened_pairs = Vec::with_capacity(logical.len());
         for (i, (k, plaintext)) in logical.iter().enumerate() {
@@ -1459,8 +1416,6 @@ mod tests {
             "live tip prior equals as-of root at tip cut"
         );
 
-        // Attacker swaps an older internally-consistent state (v1 snapshot).
-        // Recompute: content root of the restored bytes is well-formed.
         let restored_content = StateRoot::from_merkle(root_of_pairs(&fx.state_v1)?);
         assert_eq!(
             restored_content, fx.content_v1,
@@ -1469,14 +1424,11 @@ mod tests {
         let stale_as_of = as_of_root(&fx.chain, fx.o1)?;
         assert_eq!(stale_as_of, root_at_v1);
 
-        // Detection: stored tip prior vs older cut — mismatch (§58).
         assert!(
             !roots_equal_at_cut(stored_prior, stale_as_of),
             "valid-but-stale rollback: stored tip prior ≠ as-of root of older cut"
         );
 
-        // Swap older content under the tip ordinal with the lawful predecessor:
-        // still ≠ stored tip (content changed; chain bind notices).
         let pred_at_o2 = as_of_root(&fx.chain, fx.o2)?;
         let forged_at_tip = ChainedStateRoot::mint(
             fx.store_id,
@@ -1491,7 +1443,6 @@ mod tests {
             "valid-but-stale rollback: older content rebound at tip ≠ stored prior"
         );
 
-        // Controls: same cut equals itself; tip equals tip.
         assert!(roots_equal_at_cut(stale_as_of, root_at_v1));
         assert!(roots_equal_at_cut(stored_prior, fx.chain.prior_root()));
 
@@ -1671,7 +1622,6 @@ mod tests {
             (b"k00".to_vec(), b"v0".to_vec()),
             (b"k01".to_vec(), b"v1".to_vec()),
         ];
-        // Edit past commit bytes — one value byte differs at the historical cut.
         let state_v1_edited: Vec<(Vec<u8>, Vec<u8>)> = vec![
             (b"k00".to_vec(), b"v0".to_vec()),
             (b"k01".to_vec(), b"vX".to_vec()),
@@ -1733,7 +1683,6 @@ mod tests {
         let honest_r2 = as_of_root(&honest, o2)?;
         let honest_r3 = as_of_root(&honest, o3)?;
 
-        // historical_edit past commit → rebind every forward link (same content).
         let mut edited = RootChain::empty();
         let e1 = ChainedStateRoot::mint(
             store_id,
@@ -1778,7 +1727,6 @@ mod tests {
             "historical_edit: forward chained root at o3 must break"
         );
 
-        // Chain verification: honest forward link cannot cover the edited past tip.
         let mut verify = RootChain::empty();
         verify.append(e1)?;
         assert_eq!(
@@ -1803,7 +1751,6 @@ mod tests {
         let store_id = StoreId::from_digest(crate::data::fixed_bytes::Bytes32([0x57; 32]));
         let fx = three_cut_mint_append_chain(store_id)?;
 
-        // Past cut: as_of_root equals the StateRoot minted at that cut.
         let as_of_o1 = as_of_root(&fx.chain, fx.o1)?;
         assert!(
             roots_equal_at_cut(as_of_o1, fx.cut_root_o1),
@@ -1817,7 +1764,6 @@ mod tests {
             "point-in-time: as_of_root at o2 equals that cut's StateRoot"
         );
 
-        // Past ≠ tip; past ≠ later cut — who-believed-what-when is cut-scoped.
         let tip_as_of = as_of_root(&fx.chain, fx.o3)?;
         assert!(
             roots_equal_at_cut(tip_as_of, fx.tip_root),
@@ -1889,7 +1835,6 @@ mod tests {
             GENESIS_ROOT,
             ChainLinkKind::Ordinary,
         )?)?;
-        // Skip o2 deliberately — gap between o1 and o3.
         chain.append(ChainedStateRoot::mint(
             store_id,
             fence,
@@ -2288,7 +2233,6 @@ mod tests {
             "B's independent recompute differs from A's delivered root"
         );
 
-        // Path/URL "same store" must refuse — location is not equivalence.
         let path_claim =
             PathUrlSamenessClaim::claim("/var/lib/kyzo/replica-a", "/var/lib/kyzo/replica-a");
         assert_eq!(path_claim.left_location(), path_claim.right_location());
@@ -2383,14 +2327,12 @@ mod tests {
             "breaking WAL tip at the boundary must break composed cut"
         );
 
-        // Control: a composition that omitted wal_final_hash would still match
         // when only the WAL tip changes — prove the bind covers WalHash.
         let meaning_only = {
             use sha2::{Digest, Sha256};
             let mut h = Sha256::new();
             DigestDomain::DurableCommitCut.absorb(&mut h);
             h.update(honest.meaning_root().as_bytes());
-            // deliberately omit wal_final_hash
             h.update(u64::to_be_bytes(ordinal.get()));
             let d: [u8; 32] = h.finalize().into();
             d
@@ -2565,7 +2507,6 @@ mod tests {
             "equivocating Store produced divergent tips at the same cut"
         );
 
-        // Detection BEFORE the two chains are ever merged/compared as full
         // histories — gossip of compact heads alone is enough.
         assert_eq!(
             check_sth_gossip(&head_a, &head_b, None),
@@ -2573,7 +2514,6 @@ mod tests {
             "split-view must be Detected-on-gossip, not Unexposed-until-chains-meet"
         );
 
-        // Control: identical observations are consistent.
         assert_eq!(
             check_sth_gossip(&head_a, &head_a, None),
             Ok(GossipConsistency::Identical)
